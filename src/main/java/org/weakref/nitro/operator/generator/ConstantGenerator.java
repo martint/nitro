@@ -11,12 +11,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.weakref.nitro.operator.generator;
 
-public class Main
+public class ConstantGenerator
+        implements Generator
 {
-    private Main() {}
+    private final long value;
 
-    public static void main(String[] args)
+    public ConstantGenerator(long value)
+    {
+        this.value = value;
+    }
+
+    @Override
+    public void next()
+    {
+    }
+
+    @Override
+    public long value()
+    {
+        return value;
+    }
+
+    @Override
+    public boolean isNull()
+    {
+        return false;
+    }
+
+    @Override
+    public void skip(int count)
     {
     }
 }
