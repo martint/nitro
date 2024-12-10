@@ -21,6 +21,7 @@ import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
+import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
@@ -72,7 +73,7 @@ public class TestOperators
                                                         List.of(
                                                                 new SequenceGenerator(0),
                                                                 new SequenceGenerator(100)))))))))
-                .matches(List.of(row(200L, 208L, 1020L, 5L)));
+                .matchesExactly(List.of(row(200L, 208L, 1020L, 5L)));
     }
 
     @Test
@@ -90,7 +91,7 @@ public class TestOperators
                                         List.of(
                                                 new SequenceGenerator(0),
                                                 new SequenceGenerator(100)))))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L, 100L),
                         row(1L, 101L),
                         row(2L, 102L),
@@ -114,7 +115,7 @@ public class TestOperators
                                         List.of(
                                                 new SequenceGenerator(0),
                                                 new SequenceGenerator(100)))))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L, 100L),
                         row(2L, 102L),
                         row(4L, 104L),
@@ -134,7 +135,7 @@ public class TestOperators
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0)))))))
-                .matches(List.of(row(15L)));
+                .matchesExactly(List.of(row(15L)));
     }
 
     @Test
@@ -148,7 +149,7 @@ public class TestOperators
                                 0,
                                 value -> value % 3 == 0,
                                 new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0)))))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L),
                         row(6L),
                         row(12L),
@@ -170,7 +171,7 @@ public class TestOperators
                                 List.of(0),
                                 List.of(v -> v / 3),
                                 new GeneratorOperator(10, 10, List.of(new SequenceGenerator(100)))))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L, 33L),
                         row(0L, 33L),
                         row(1L, 34L),
@@ -190,7 +191,7 @@ public class TestOperators
                 new AggregationOperator(
                         List.of(new CountAll()),
                         new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0))))))
-                .matches(List.of(row(50L)));
+                .matchesExactly(List.of(row(50L)));
     }
 
     @Test
@@ -200,7 +201,7 @@ public class TestOperators
                 new AggregationOperator(
                         List.of(new Min(0)),
                         new GeneratorOperator(50, 10, List.of(new SequenceGenerator(100))))))
-                .matches(List.of(row(100L)));
+                .matchesExactly(List.of(row(100L)));
     }
 
     @Test
@@ -211,7 +212,7 @@ public class TestOperators
                         5,
                         new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0))))))
                 .describedAs("Within first batch")
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L),
                         row(1L),
                         row(2L),
@@ -223,7 +224,7 @@ public class TestOperators
                         15,
                         new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0))))))
                 .describedAs("Middle of second batch")
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L),
                         row(1L),
                         row(2L),
@@ -245,7 +246,7 @@ public class TestOperators
                         15,
                         new GeneratorOperator(12, 10, List.of(new SequenceGenerator(0))))))
                 .describedAs("Beyond end of underlying sequence")
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(0L),
                         row(1L),
                         row(2L),
@@ -273,7 +274,7 @@ public class TestOperators
                                 List.of(
                                         new SequenceGenerator(0),
                                         new SequenceGenerator(100))))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(49L, 149L),
                         row(48L, 148L),
                         row(47L, 147L),
@@ -304,7 +305,7 @@ public class TestOperators
                                                 50,
                                                 10,
                                                 List.of(new SequenceGenerator(100))))))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(13L, 100L, 140L, 600L, 5L),
                         row(14L, 101L, 141L, 605L, 5L),
                         row(15L, 102L, 142L, 610L, 5L),
@@ -355,11 +356,138 @@ public class TestOperators
                         row(null, 30L, 300L),
                         row(4L, null, 400L),
                         row(5L, 50L, null)))))
-                .matches(List.of(
+                .matchesExactly(List.of(
                         row(1L, 10L, 100L),
                         row(2L, 20L, 200L),
                         row(null, 30L, 300L),
                         row(4L, null, 400L),
                         row(5L, 50L, null)));
+    }
+
+    @Test
+    void testNestedLoop()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        new ValuesOperator(
+                                1,
+                                List.of(
+                                        row(1L),
+                                        row(2L),
+                                        row(3L))),
+                        new ValuesOperator(
+                                1,
+                                List.of(
+                                        row(10L),
+                                        row(20L),
+                                        row(30L))))))
+                .matches(List.of(
+                        row(1L, 10L),
+                        row(1L, 20L),
+                        row(1L, 30L),
+                        row(2L, 10L),
+                        row(2L, 20L),
+                        row(2L, 30L),
+                        row(3L, 10L),
+                        row(3L, 20L),
+                        row(3L, 30L)));
+    }
+
+    @Test
+    void testNestedLoop1()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        new ValuesOperator(
+                                1,
+                                List.of(row(1L))),
+                        new GeneratorOperator(10, 5, List.of(new SequenceGenerator(0))))))
+                .matches(List.of(
+                        row(1L, 0L),
+                        row(1L, 1L),
+                        row(1L, 2L),
+                        row(1L, 3L),
+                        row(1L, 4L),
+                        row(1L, 5L),
+                        row(1L, 6L),
+                        row(1L, 7L),
+                        row(1L, 8L),
+                        row(1L, 9L)));
+    }
+
+    @Test
+    void testNestedLoop2()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        new GeneratorOperator(6, 2, List.of(new SequenceGenerator(0))),
+                        new GeneratorOperator(3, 1, List.of(new SequenceGenerator(10))))))
+                .matches(List.of(
+                        row(0L, 10L),
+                        row(0L, 11L),
+                        row(0L, 12L),
+                        row(1L, 10L),
+                        row(1L, 11L),
+                        row(1L, 12L),
+                        row(2L, 10L),
+                        row(2L, 11L),
+                        row(2L, 12L),
+                        row(3L, 10L),
+                        row(3L, 11L),
+                        row(3L, 12L),
+                        row(4L, 10L),
+                        row(4L, 11L),
+                        row(4L, 12L),
+                        row(5L, 10L),
+                        row(5L, 11L),
+                        row(5L, 12L)));
+    }
+
+    @Test
+    void testNestedLoop3()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        new GeneratorOperator(3, 1, List.of(new SequenceGenerator(0))),
+                        new GeneratorOperator(6, 2, List.of(new SequenceGenerator(10))))))
+                .matches(List.of(
+                        row(0L, 10L),
+                        row(0L, 11L),
+                        row(0L, 12L),
+                        row(0L, 13L),
+                        row(0L, 14L),
+                        row(0L, 15L),
+                        row(1L, 10L),
+                        row(1L, 11L),
+                        row(1L, 12L),
+                        row(1L, 13L),
+                        row(1L, 14L),
+                        row(1L, 15L),
+                        row(2L, 10L),
+                        row(2L, 11L),
+                        row(2L, 12L),
+                        row(2L, 13L),
+                        row(2L, 14L),
+                        row(2L, 15L)));
+    }
+
+    @Test
+    void testNestedLoopEmptyBuild()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        new GeneratorOperator(10, 2, List.of(new SequenceGenerator(0))),
+                        new ValuesOperator(1, List.of()))))
+                .matches(List.of());
+    }
+
+    @Test
+    void testNestedLoopEmptyProbe()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        new ValuesOperator(1, List.of()),
+                        new GeneratorOperator(10, 2, List.of(new SequenceGenerator(0))))))
+                .matches(List.of());
     }
 }

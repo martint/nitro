@@ -53,6 +53,11 @@ public class Mask
         return new Mask(positions, count);
     }
 
+    public int maxPosition()
+    {
+        return positions[count - 1];
+    }
+
     public int[] positions()
     {
         return positions;
@@ -81,6 +86,17 @@ public class Mask
         }
 
         return new Mask(Arrays.copyOf(positions, n), n);
+    }
+
+    public Mask last(int n)
+    {
+        if (n >= count) {
+            return this;
+        }
+
+        int[] positions = new int[n];
+        System.arraycopy(this.positions, count - n, positions, 0, n);
+        return new Mask(positions, n);
     }
 
     @Override

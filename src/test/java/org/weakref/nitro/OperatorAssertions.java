@@ -54,12 +54,20 @@ public class OperatorAssertions
             return this;
         }
 
-        public void matches(List<Row> expected)
+        public void matchesExactly(List<Row> expected)
         {
             List<Row> actual = toRows(operator);
             assertThat(actual)
                     .describedAs(description)
                     .containsExactlyElementsOf(expected);
+        }
+
+        public void matches(List<Row> expected)
+        {
+            List<Row> actual = toRows(operator);
+            assertThat(actual)
+                    .describedAs(description)
+                    .containsExactlyInAnyOrderElementsOf(expected);
         }
 
         public static List<Row> toRows(Operator operator)

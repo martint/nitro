@@ -45,4 +45,10 @@ public class LongVector
     {
         return values.length;
     }
+
+    @Override
+    public Vector copy()
+    {
+        return new LongVector(nulls.clone(), values.clone());
+    }
 }
