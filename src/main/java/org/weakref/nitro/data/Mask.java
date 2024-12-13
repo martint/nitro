@@ -21,6 +21,7 @@ public class Mask
 {
     private final int[] positions;
     private final int count;
+    private final boolean all;
 
     public static Mask all(int count)
     {
@@ -29,7 +30,7 @@ public class Mask
             positions[i] = i;
         }
 
-        return new Mask(positions, count);
+        return new Mask(positions, count, true);
     }
 
     public static Mask range(int start, int length)
@@ -39,18 +40,24 @@ public class Mask
             positions[i] = start + i;
         }
 
-        return new Mask(positions, length);
+        return new Mask(positions, length, start == 0);
     }
 
-    private Mask(int[] positions, int count)
+    private Mask(int[] positions, int count, boolean all)
     {
         this.positions = positions;
         this.count = count;
+        this.all = all;
     }
 
     public static Mask sparse(int[] positions, int count)
     {
-        return new Mask(positions, count);
+        return new Mask(positions, count, count == positions.length);
+    }
+
+    public boolean all()
+    {
+        return all;
     }
 
     public int maxPosition()
@@ -58,9 +65,10 @@ public class Mask
         return positions[count - 1];
     }
 
-    public int[] positions()
+    public int position(int index)
     {
-        return positions;
+        // TODO verify index < count
+        return positions[index];
     }
 
     public int count()
@@ -85,7 +93,7 @@ public class Mask
             return this;
         }
 
-        return new Mask(Arrays.copyOf(positions, n), n);
+        return new Mask(Arrays.copyOf(positions, n), n, false);
     }
 
     public Mask last(int n)
@@ -96,7 +104,7 @@ public class Mask
 
         int[] positions = new int[n];
         System.arraycopy(this.positions, count - n, positions, 0, n);
-        return new Mask(positions, n);
+        return new Mask(positions, n, false);
     }
 
     @Override

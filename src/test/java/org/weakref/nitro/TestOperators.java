@@ -34,6 +34,7 @@ import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -283,6 +284,41 @@ public class TestOperators
     }
 
     @Test
+    void aggregation()
+    {
+        assertThat(operator(
+                new AggregationOperator(
+                        List.of(
+                                new First(0),
+                                new Min(0),
+                                new Max(0),
+                                new Sum(0),
+                                new CountAll()),
+                        new GeneratorOperator(
+                                50,
+                                10,
+                                List.of(new SequenceGenerator(100))))))
+                .matchesExactly(List.of(row(100L, 100L, 149L, 6225L, 50L)));
+
+        assertThat(operator(
+                new AggregationOperator(
+                        List.of(
+                                new First(0),
+                                new Min(0),
+                                new Max(0),
+                                new Sum(0),
+                                new CountAll()),
+                        new FilterOperator(
+                                0,
+                                value -> value % 2 == 0,
+                                new GeneratorOperator(
+                                        50,
+                                        10,
+                                        List.of(new SequenceGenerator(100)))))))
+                .matchesExactly(List.of(row(100L, 100L, 148L, 3100L, 25L)));
+    }
+
+    @Test
     void testGroupedAggregation()
     {
         assertThat(operator(
@@ -320,7 +356,61 @@ public class TestOperators
 
     @Test
     @Disabled
-    void x()
+    void benchmarkNestedLoopJoin()
+    {
+        for (int i = 0; i < 10; i++) {
+            Operator operator = new AggregationOperator(
+                    List.of(
+                            new Sum(0),
+                            new Sum(1),
+                            new CountAll()),
+                    new NestedLoopJoinOperator(
+                            new GeneratorOperator(
+                                    1_000_000L,
+                                    10000,
+                                    List.of(new SequenceGenerator(100))),
+                            new GeneratorOperator(
+                                    1_000L,
+                                    10000,
+                                    List.of(new SequenceGenerator(100)))));
+
+            long start = System.nanoTime();
+            while (operator.hasNext()) {
+                operator.next();
+                for (int c = 0; c < operator.columnCount(); c++) {
+                    operator.column(c);
+                }
+            }
+            System.out.println((System.nanoTime() - start) / 1_000_000.0);
+        }
+    }
+
+    @Test
+    @Disabled
+    void benchmarkArraySum()
+    {
+        long[] values = new long[1_000_000_000];
+        for (int i = 0; i < values.length; i++) {
+            values[i] = ThreadLocalRandom.current().nextLong();
+        }
+
+        for (int i = 0; i < 10; i++) {
+            long start = System.nanoTime();
+
+            long sum = 0;
+            for (long value : values) {
+                sum += value;
+            }
+
+//            sum = Arrays.stream(values).sum();
+
+            System.out.println(sum + ": " + (System.nanoTime() - start) / 1_000_000.0);
+        }
+    }
+
+    @Test
+    @Disabled
+    void benchmarkAggregation()
     {
         for (int i = 0; i < 1000; i++) {
             Operator operator = new AggregationOperator(

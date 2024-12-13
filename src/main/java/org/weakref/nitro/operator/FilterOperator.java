@@ -81,8 +81,7 @@ public class FilterOperator
 
         ensureCapacity(mask.count());
         int maskSize = 0;
-        for (int i = 0; i < mask.count(); i++) {
-            int position = mask.positions()[i];
+        for (int position : mask) {
             if (!nulls[position] && filter.test(values[position])) {
                 maskPositions[maskSize] = position;
                 maskSize++;

@@ -43,7 +43,7 @@ public class Min
         LongVector stateVector = (LongVector) state;
         LongVector inputVector = (LongVector) columns.column(inputColumn);
 
-        for (int position : mask.positions()) {
+        for (int position : mask) {
             accumulate(stateVector, group, inputVector, position);
         }
     }
@@ -67,7 +67,7 @@ public class Min
         LongVector groupVector = (LongVector) groups;
         LongVector inputVector = (LongVector) columns.column(inputColumn);
 
-        for (int position : mask.positions()) {
+        for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
             accumulate(stateVector, group, inputVector, position);
         }

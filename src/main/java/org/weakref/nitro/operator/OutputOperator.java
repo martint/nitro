@@ -51,8 +51,7 @@ public class OutputOperator
                 columns.add(source.column(i));
             }
 
-            for (int maskIndex = 0; maskIndex < mask.count(); maskIndex++) {
-                int position = mask.positions()[maskIndex];
+            for (int position : mask) {
                 outputRow(columns, position);
             }
         }

@@ -44,7 +44,7 @@ public class CountAll
         LongVector stateVector = (LongVector) state;
         LongVector groupVector = (LongVector) groups;
 
-        for (int position : mask.positions()) {
+        for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
             accumulate(stateVector, group, 1);
         }

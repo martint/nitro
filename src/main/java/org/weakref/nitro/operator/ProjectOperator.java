@@ -83,7 +83,7 @@ public class ProjectOperator
         LongVector output = (LongVector) results[column];
 
         LongToLongFunction projection = projections.get(column);
-        for (int position : mask.positions()) {
+        for (int position : mask) {
             applyProjection(input, position, projection, output);
         }
 

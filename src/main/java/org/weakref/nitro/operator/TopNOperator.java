@@ -62,7 +62,7 @@ public class TopNOperator
         while (source.hasNext()) {
             Mask mask = source.next();
 
-            for (int position : mask.positions()) {
+            for (int position : mask) {
                 LongVector sortColumn = (LongVector) source.column(column);
                 if (sortColumn.nulls()[position]) {
                     // Skip nulls for now

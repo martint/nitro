@@ -64,7 +64,7 @@ public class GroupedAggregationOperator
             LongVector group = (LongVector) source.column(groupColumn);
 
             long previousMaxGroup = maxGroup;
-            for (int position : mask.positions()) {
+            for (int position : mask) {
                 maxGroup = toIntExact(Math.max(maxGroup, group.values()[position]));
             }
 

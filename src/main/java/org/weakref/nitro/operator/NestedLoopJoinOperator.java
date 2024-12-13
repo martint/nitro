@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -181,10 +182,8 @@ public class NestedLoopJoinOperator
         LongVector outputVector = (LongVector) output;
         LongVector inputVector = (LongVector) input;
 
-        for (int i = 0; i < length; i++) {
-            outputVector.values()[start + i] = inputVector.values()[position];
-            outputVector.nulls()[start + i] = inputVector.nulls()[position];
-        }
+        Arrays.fill(outputVector.values(), start, start + length, inputVector.values()[position]);
+        Arrays.fill(outputVector.nulls(), start, start + length, inputVector.nulls()[position]);
     }
 
     private void ensureCapacity(Vector[] columns, int column, int count)
@@ -249,13 +248,20 @@ public class NestedLoopJoinOperator
         int outputPosition = outputStart;
         int maskIndex = maskStart;
 
-        // TODO: optimize when mask == all
-        while (outputPosition < output.length() && maskIndex < mask.count()) {
-            int inputPosition = mask.positions()[maskIndex];
-            output.nulls()[outputPosition] = input.nulls()[inputPosition];
-            output.values()[outputPosition] = input.values()[inputPosition];
-            outputPosition++;
-            maskIndex++;
+        if (mask.all()) {
+            int length = Math.min(mask.count() - maskStart, output.length() - outputPosition);
+            System.arraycopy(input.nulls(), maskStart, output.nulls(), outputPosition, length);
+            System.arraycopy(input.values(), maskStart, output.values(), outputPosition, length);
+            outputPosition += length;
+        }
+        else {
+            while (outputPosition < output.length() && maskIndex < mask.count()) {
+                int inputPosition = mask.position(maskIndex);
+                output.nulls()[outputPosition] = input.nulls()[inputPosition];
+                output.values()[outputPosition] = input.values()[inputPosition];
+                outputPosition++;
+                maskIndex++;
+            }
         }
 
         return outputPosition - outputStart;

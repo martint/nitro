@@ -43,9 +43,24 @@ public class Sum
         LongVector stateVector = (LongVector) state;
         LongVector inputVector = (LongVector) columns.column(inputColumn);
 
-        for (int position : mask.positions()) {
-            accumulate(stateVector, group, inputVector, position);
+        boolean[] nulls = inputVector.nulls();
+        long[] values = inputVector.values();
+
+        long sum = 0;
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                sum += nulls[position] ? 0 : values[position];
+            }
         }
+        else {
+            for (int position : mask) {
+                sum += nulls[position] ? 0 : values[position];
+            }
+        }
+
+        stateVector.nulls()[group] = false;
+        stateVector.values()[group] += sum;
     }
 
     @Override
@@ -55,18 +70,24 @@ public class Sum
         LongVector groupVector = (LongVector) groups;
         LongVector inputVector = (LongVector) columns.column(inputColumn);
 
-        for (int position : mask.positions()) {
-            int group = toIntExact(groupVector.values()[position]);
-            accumulate(stateVector, group, inputVector, position);
+        if (mask.all()) {
+            for (int position = 0; position <= mask.maxPosition(); position++) {
+                int group = toIntExact(groupVector.values()[position]);
+                accumulate(stateVector, group, inputVector, position);
+            }
+        }
+        else {
+            for (int position : mask) {
+                int group = toIntExact(groupVector.values()[position]);
+                accumulate(stateVector, group, inputVector, position);
+            }
         }
     }
 
     private static void accumulate(LongVector state, int group, LongVector input, int position)
     {
-        if (!input.nulls()[position]) {
-            state.values()[group] += input.values()[position];
-            state.nulls()[group] = false;
-        }
+        state.nulls()[group] = false;
+        state.values()[group] += input.nulls()[position] ? 0 : input.values()[position];
     }
 
     @Override
