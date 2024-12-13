@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -25,23 +26,27 @@ import static java.lang.Math.toIntExact;
 public class GeneratorOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GeneratorOperator");
+
     private final int batchSize;
     private final List<Generator> generators;
     private final List<Vector> results;
 
     private final boolean[] filled;
+    private final Allocator allocator;
     private long remaining;
     private int currentBatchSize;
     private Mask mask;
 
-    public GeneratorOperator(long rowCount, int batchSize, List<Generator> generators)
+    public GeneratorOperator(Allocator allocator, long rowCount, int batchSize, List<Generator> generators)
     {
+        this.allocator = allocator;
         this.remaining = rowCount;
         this.batchSize = batchSize;
         this.generators = generators;
 
         results = generators.stream()
-                .map(_ -> (Vector) new LongVector(new boolean[batchSize], new long[batchSize]))
+                .map(_ -> allocator.allocate(ALLOCATION_CONTEXT, batchSize))
                 .toList();
 
         filled = new boolean[generators.size()];
@@ -105,5 +110,11 @@ public class GeneratorOperator
         }
 
         return result;
+    }
+
+    @Override
+    public void close()
+    {
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

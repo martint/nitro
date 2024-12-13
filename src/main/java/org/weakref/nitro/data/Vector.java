@@ -16,6 +16,4 @@ package org.weakref.nitro.data;
 public interface Vector
 {
     int length();
-
-    Vector copy();
 }

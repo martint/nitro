@@ -70,4 +70,10 @@ public class LimitOperator
     {
         return source.column(column);
     }
+
+    @Override
+    public void close()
+    {
+        source.close();
+    }
 }

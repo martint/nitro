@@ -13,8 +13,13 @@
  */
 package org.weakref.nitro;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -40,8 +45,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Execution(ExecutionMode.SAME_THREAD)
 public class TestOperators
 {
+    private final Allocator allocator = new Allocator();
+
+    @AfterAll
+    void tearDown()
+    {
+        System.out.println(allocator);
+    }
+
     @Test
     void testComplex()
     {
@@ -55,6 +70,7 @@ public class TestOperators
          */
         assertThat(operator(
                 new AggregationOperator(
+                        allocator,
                         List.of(
                                 new Min(0),
                                 new Max(0),
@@ -63,12 +79,14 @@ public class TestOperators
                         new LimitOperator(
                                 5,
                                 new ProjectOperator(
+                                        allocator,
                                         List.of(1),
                                         List.of(v -> v * 2),
                                         new FilterOperator(
                                                 0,
                                                 value -> value < 20 || value > 40,
                                                 new GeneratorOperator(
+                                                        allocator,
                                                         50,
                                                         10,
                                                         List.of(
@@ -87,6 +105,7 @@ public class TestOperators
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(
+                                        allocator,
                                         50,
                                         10,
                                         List.of(
@@ -111,6 +130,7 @@ public class TestOperators
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(
+                                        allocator,
                                         50,
                                         10,
                                         List.of(
@@ -132,10 +152,15 @@ public class TestOperators
     {
         assertThat(operator(
                 new AggregationOperator(
+                        allocator,
                         List.of(new CountAll()),
                         new LimitOperator(
                                 15,
-                                new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0)))))))
+                                new GeneratorOperator(
+                                        allocator,
+                                        50,
+                                        10,
+                                        List.of(new SequenceGenerator(0)))))))
                 .matchesExactly(List.of(row(15L)));
     }
 
@@ -149,7 +174,11 @@ public class TestOperators
                         new FilterOperator(
                                 0,
                                 value -> value % 3 == 0,
-                                new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0)))))))
+                                new GeneratorOperator(
+                                        allocator,
+                                        50,
+                                        10,
+                                        List.of(new SequenceGenerator(0)))))))
                 .matchesExactly(List.of(
                         row(0L),
                         row(6L),
@@ -167,11 +196,17 @@ public class TestOperators
     {
         assertThat(operator(
                 new GroupOperator(
+                        allocator,
                         0,
                         new ProjectOperator(
+                                allocator,
                                 List.of(0),
                                 List.of(v -> v / 3),
-                                new GeneratorOperator(10, 10, List.of(new SequenceGenerator(100)))))))
+                                new GeneratorOperator(
+                                        allocator,
+                                        10,
+                                        10,
+                                        List.of(new SequenceGenerator(100)))))))
                 .matchesExactly(List.of(
                         row(0L, 33L),
                         row(0L, 33L),
@@ -186,32 +221,16 @@ public class TestOperators
     }
 
     @Test
-    void testAggregation()
-    {
-        assertThat(operator(
-                new AggregationOperator(
-                        List.of(new CountAll()),
-                        new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0))))))
-                .matchesExactly(List.of(row(50L)));
-    }
-
-    @Test
-    void testMinAggregation()
-    {
-        assertThat(operator(
-                new AggregationOperator(
-                        List.of(new Min(0)),
-                        new GeneratorOperator(50, 10, List.of(new SequenceGenerator(100))))))
-                .matchesExactly(List.of(row(100L)));
-    }
-
-    @Test
     void testLimit()
     {
         assertThat(operator(
                 new LimitOperator(
                         5,
-                        new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0))))))
+                        new GeneratorOperator(
+                                allocator,
+                                50,
+                                10,
+                                List.of(new SequenceGenerator(0))))))
                 .describedAs("Within first batch")
                 .matchesExactly(List.of(
                         row(0L),
@@ -223,7 +242,11 @@ public class TestOperators
         assertThat(operator(
                 new LimitOperator(
                         15,
-                        new GeneratorOperator(50, 10, List.of(new SequenceGenerator(0))))))
+                        new GeneratorOperator(
+                                allocator,
+                                50,
+                                10,
+                                List.of(new SequenceGenerator(0))))))
                 .describedAs("Middle of second batch")
                 .matchesExactly(List.of(
                         row(0L),
@@ -245,7 +268,11 @@ public class TestOperators
         assertThat(operator(
                 new LimitOperator(
                         15,
-                        new GeneratorOperator(12, 10, List.of(new SequenceGenerator(0))))))
+                        new GeneratorOperator(
+                                allocator,
+                                12,
+                                10,
+                                List.of(new SequenceGenerator(0))))))
                 .describedAs("Beyond end of underlying sequence")
                 .matchesExactly(List.of(
                         row(0L),
@@ -263,13 +290,15 @@ public class TestOperators
     }
 
     @Test
-    void topN()
+    void testTopN()
     {
         assertThat(operator(
                 new TopNOperator(
+                        allocator,
                         5,
                         0,
                         new GeneratorOperator(
+                                allocator,
                                 50,
                                 10,
                                 List.of(
@@ -284,10 +313,11 @@ public class TestOperators
     }
 
     @Test
-    void aggregation()
+    void testAggregation()
     {
         assertThat(operator(
                 new AggregationOperator(
+                        allocator,
                         List.of(
                                 new First(0),
                                 new Min(0),
@@ -295,6 +325,7 @@ public class TestOperators
                                 new Sum(0),
                                 new CountAll()),
                         new GeneratorOperator(
+                                allocator,
                                 50,
                                 10,
                                 List.of(new SequenceGenerator(100))))))
@@ -302,6 +333,7 @@ public class TestOperators
 
         assertThat(operator(
                 new AggregationOperator(
+                        allocator,
                         List.of(
                                 new First(0),
                                 new Min(0),
@@ -312,6 +344,7 @@ public class TestOperators
                                 0,
                                 value -> value % 2 == 0,
                                 new GeneratorOperator(
+                                        allocator,
                                         50,
                                         10,
                                         List.of(new SequenceGenerator(100)))))))
@@ -323,6 +356,7 @@ public class TestOperators
     {
         assertThat(operator(
                 new GroupedAggregationOperator(
+                        allocator,
                         0,
                         List.of(
                                 new First(1), // key
@@ -331,13 +365,16 @@ public class TestOperators
                                 new Sum(2),
                                 new CountAll()),
                         new GroupOperator(
+                                allocator,
                                 0,
                                 new ProjectOperator(
+                                        allocator,
                                         List.of(0, 0, 1),
                                         List.of(
                                                 v -> v % 10 + 13,
                                                 v -> v),
                                         new GeneratorOperator(
+                                                allocator,
                                                 50,
                                                 10,
                                                 List.of(new SequenceGenerator(100))))))))
@@ -360,16 +397,20 @@ public class TestOperators
     {
         for (int i = 0; i < 10; i++) {
             Operator operator = new AggregationOperator(
+                    allocator,
                     List.of(
                             new Sum(0),
                             new Sum(1),
                             new CountAll()),
                     new NestedLoopJoinOperator(
+                            allocator,
                             new GeneratorOperator(
+                                    allocator,
                                     1_000_000L,
                                     10000,
                                     List.of(new SequenceGenerator(100))),
                             new GeneratorOperator(
+                                    allocator,
                                     1_000L,
                                     10000,
                                     List.of(new SequenceGenerator(100)))));
@@ -412,14 +453,16 @@ public class TestOperators
     @Disabled
     void benchmarkAggregation()
     {
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 10; i++) {
             Operator operator = new AggregationOperator(
+                    allocator,
                     List.of(
                             new Min(0),
                             new Max(0),
                             new Sum(0),
                             new CountAll()),
                     new GeneratorOperator(
+                            allocator,
                             100_000_000L,
                             10000,
                             List.of(new SequenceGenerator(100))));
@@ -439,6 +482,7 @@ public class TestOperators
     void testValues()
     {
         assertThat(operator(new ValuesOperator(
+                allocator,
                 3,
                 List.of(
                         row(1L, 10L, 100L),
@@ -459,13 +503,16 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
+                        allocator,
                         new ValuesOperator(
+                                allocator,
                                 1,
                                 List.of(
                                         row(1L),
                                         row(2L),
                                         row(3L))),
                         new ValuesOperator(
+                                allocator,
                                 1,
                                 List.of(
                                         row(10L),
@@ -488,10 +535,16 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
+                        allocator,
                         new ValuesOperator(
+                                allocator,
                                 1,
                                 List.of(row(1L))),
-                        new GeneratorOperator(10, 5, List.of(new SequenceGenerator(0))))))
+                        new GeneratorOperator(
+                                allocator,
+                                10,
+                                5,
+                                List.of(new SequenceGenerator(0))))))
                 .matches(List.of(
                         row(1L, 0L),
                         row(1L, 1L),
@@ -510,8 +563,9 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
-                        new GeneratorOperator(6, 2, List.of(new SequenceGenerator(0))),
-                        new GeneratorOperator(3, 1, List.of(new SequenceGenerator(10))))))
+                        allocator,
+                        new GeneratorOperator(allocator, 6, 2, List.of(new SequenceGenerator(0))),
+                        new GeneratorOperator(allocator, 3, 1, List.of(new SequenceGenerator(10))))))
                 .matches(List.of(
                         row(0L, 10L),
                         row(0L, 11L),
@@ -538,8 +592,9 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
-                        new GeneratorOperator(3, 1, List.of(new SequenceGenerator(0))),
-                        new GeneratorOperator(6, 2, List.of(new SequenceGenerator(10))))))
+                        allocator,
+                        new GeneratorOperator(allocator, 3, 1, List.of(new SequenceGenerator(0))),
+                        new GeneratorOperator(allocator, 6, 2, List.of(new SequenceGenerator(10))))))
                 .matches(List.of(
                         row(0L, 10L),
                         row(0L, 11L),
@@ -566,8 +621,9 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
-                        new GeneratorOperator(10, 2, List.of(new SequenceGenerator(0))),
-                        new ValuesOperator(1, List.of()))))
+                        allocator,
+                        new GeneratorOperator(allocator, 10, 2, List.of(new SequenceGenerator(0))),
+                        new ValuesOperator(allocator, 1, List.of()))))
                 .matches(List.of());
     }
 
@@ -576,8 +632,9 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
-                        new ValuesOperator(1, List.of()),
-                        new GeneratorOperator(10, 2, List.of(new SequenceGenerator(0))))))
+                        allocator,
+                        new ValuesOperator(allocator, 1, List.of()),
+                        new GeneratorOperator(allocator, 10, 2, List.of(new SequenceGenerator(0))))))
                 .matches(List.of());
     }
 }

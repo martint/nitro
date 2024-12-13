@@ -99,4 +99,10 @@ public class FilterOperator
             maskPositions = new int[size];
         }
     }
+
+    @Override
+    public void close()
+    {
+        source.close();
+    }
 }

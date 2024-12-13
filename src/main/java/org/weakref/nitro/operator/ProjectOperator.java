@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -23,6 +24,9 @@ import java.util.List;
 public class ProjectOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
+    private final Allocator allocator;
+
     private final Operator source;
     private final List<Integer> inputs;
     private final List<LongToLongFunction> projections;
@@ -31,8 +35,9 @@ public class ProjectOperator
     private final boolean[] filled;
     private Mask mask;
 
-    public ProjectOperator(List<Integer> inputs, List<LongToLongFunction> projections, Operator source)
+    public ProjectOperator(Allocator allocator, List<Integer> inputs, List<LongToLongFunction> projections, Operator source)
     {
+        this.allocator = allocator;
         this.source = source;
         this.inputs = inputs;
         this.projections = projections;
@@ -77,7 +82,7 @@ public class ProjectOperator
         filled[column] = true;
 
         // TODO: ensure current buffers have the right size for the batch
-        ensureCapacity(column, mask.count());
+        results[column] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, results[column], mask.count());
 
         LongVector input = (LongVector) source.column(inputs.get(column));
         LongVector output = (LongVector) results[column];
@@ -90,15 +95,6 @@ public class ProjectOperator
         return results[column];
     }
 
-    private void ensureCapacity(int column, int count)
-    {
-        LongVector block = (LongVector) results[column];
-
-        if (block == null || block.values().length < count) {
-            results[column] = new LongVector(new boolean[count], new long[count]);
-        }
-    }
-
     private static void applyProjection(LongVector input, int position, LongToLongFunction projection, LongVector output)
     {
         boolean isNull = input.nulls()[position];
@@ -109,5 +105,12 @@ public class ProjectOperator
     public interface LongToLongFunction
     {
         long apply(long value);
+    }
+
+    @Override
+    public void close()
+    {
+        source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

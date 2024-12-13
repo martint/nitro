@@ -19,12 +19,12 @@ public class LongVector
     private final boolean[] nulls;
     private final long[] values;
 
-    public LongVector(int size)
+    LongVector(int size)
     {
         this(new boolean[size], new long[size]);
     }
 
-    public LongVector(boolean[] nulls, long[] values)
+    LongVector(boolean[] nulls, long[] values)
     {
         this.nulls = nulls;
         this.values = values;
@@ -44,11 +44,5 @@ public class LongVector
     public int length()
     {
         return values.length;
-    }
-
-    @Override
-    public Vector copy()
-    {
-        return new LongVector(nulls.clone(), values.clone());
     }
 }

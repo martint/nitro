@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -23,15 +24,19 @@ import java.util.PriorityQueue;
 public class TopNOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TopNOperator");
+    private final Allocator allocator;
+
     private final int n;
     private final int column;
     private final Operator source;
 
-    private final LongVector[] result;
+    private final Vector[] result;
     private boolean done;
 
-    public TopNOperator(int n, int column, Operator source)
+    public TopNOperator(Allocator allocator, int n, int column, Operator source)
     {
+        this.allocator = allocator;
         this.n = n;
         this.column = column;
         this.source = source;
@@ -56,7 +61,7 @@ public class TopNOperator
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
 
         for (int i = 0; i < result.length; i++) {
-            result[i] = new LongVector(new boolean[n], new long[n]);
+            result[i] = allocator.allocate(ALLOCATION_CONTEXT, n);
         }
 
         while (source.hasNext()) {
@@ -106,7 +111,7 @@ public class TopNOperator
         while (!queue.isEmpty()) {
             Entry entry = queue.poll();
             for (int i = 0; i < result.length; i++) {
-                long[] values = result[i].values();
+                long[] values = ((LongVector) result[i]).values();
 
                 temp[i] = values[current];
                 values[current] = values[remap[entry.position]];
@@ -123,7 +128,7 @@ public class TopNOperator
     {
         for (int i = 0; i < result.length; i++) {
             Vector column = source.column(i);
-            result[i].values()[to] = ((LongVector) column).values()[from];
+            ((LongVector) result[i]).values()[to] = ((LongVector) column).values()[from];
         }
     }
 
@@ -139,7 +144,12 @@ public class TopNOperator
         return result[column];
     }
 
-    record Entry(long value, int position)
+    @Override
+    public void close()
     {
+        source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
+
+    record Entry(long value, int position) {}
 }

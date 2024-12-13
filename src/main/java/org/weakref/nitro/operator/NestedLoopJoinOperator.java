@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -25,8 +26,10 @@ import java.util.List;
 public class NestedLoopJoinOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NestedLoopJoinOperator");
     private static final int BATCH_SIZE = 1024;
 
+    private final Allocator allocator;
     private final Operator outer;
     private final Operator inner;
 
@@ -43,15 +46,18 @@ public class NestedLoopJoinOperator
     private int currentOuterPosition;
 
     private final Vector[] result;
+    private final Vector[] outerBuffer; // buffer to hold output from outer columns when replicating the same outer row for multiple inner rows
     private final Vector[] innerBuffer; // buffer to hold output from inner columns when replicating the same inner row for multiple outer rows
 
     private boolean done;
 
-    public NestedLoopJoinOperator(Operator outer, Operator inner)
+    public NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner)
     {
+        this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
         result = new Vector[outer.columnCount() + inner.columnCount()];
+        outerBuffer = new Vector[outer.columnCount()];
         innerBuffer = new Vector[inner.columnCount()];
     }
 
@@ -147,7 +153,7 @@ public class NestedLoopJoinOperator
             result[i] = outer.column(i);
         }
         for (int i = 0; i < inner.columnCount(); i++) {
-            ensureCapacity(innerBuffer, i, currentOuterMask.maxPosition() + 1);
+            innerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, innerBuffer[i], currentOuterMask.maxPosition() + 1);
             replicate(
                     innerBuffer[i],
                     0,
@@ -165,13 +171,15 @@ public class NestedLoopJoinOperator
 
         int outerColumnCount = outer.columnCount();
         for (int i = 0; i < outerColumnCount; i++) {
-            ensureCapacity(result, i, batchSize);
+            outerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, outerBuffer[i], batchSize);
             replicate(
-                    result[i],
+                    outerBuffer[i],
                     0,
                     batchSize,
                     outer.column(i),
                     currentOuterPosition);
+
+            result[i] = outerBuffer[i];
         }
         System.arraycopy(innerBatches.get(currentInnerBatch).columns(), 0, result, outerColumnCount, inner.columnCount());
         return batchSize;
@@ -184,15 +192,6 @@ public class NestedLoopJoinOperator
 
         Arrays.fill(outputVector.values(), start, start + length, inputVector.values()[position]);
         Arrays.fill(outputVector.nulls(), start, start + length, inputVector.nulls()[position]);
-    }
-
-    private void ensureCapacity(Vector[] columns, int column, int count)
-    {
-        LongVector vector = (LongVector) columns[column];
-
-        if (vector == null || vector.values().length < count) {
-            columns[column] = new LongVector(new boolean[count], new long[count]);
-        }
     }
 
     private void loadInnerIfNecessary()
@@ -231,11 +230,11 @@ public class NestedLoopJoinOperator
         }
     }
 
-    private static Vector[] allocateNewBatch(int columnCount)
+    private Vector[] allocateNewBatch(int columnCount)
     {
         Vector[] columns = new Vector[columnCount];
         for (int i = 0; i < columnCount; i++) {
-            columns[i] = new LongVector(BATCH_SIZE);
+            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, BATCH_SIZE);
         }
         return columns;
     }
@@ -276,6 +275,14 @@ public class NestedLoopJoinOperator
     public Vector column(int column)
     {
         return result[column];
+    }
+
+    @Override
+    public void close()
+    {
+        outer.close();
+        inner.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 
     // TODO: could geeneralize (call it Chunk?) this to have a Mask instead. Not needed for NLJ, but might be useful

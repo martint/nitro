@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
 public interface Operator
+        extends AutoCloseable
 {
     int columnCount();
 
@@ -43,4 +44,6 @@ public interface Operator
     void constrain(Mask mask);
 
     Vector column(int column);
+
+    void close();
 }

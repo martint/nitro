@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -23,6 +24,9 @@ import java.util.List;
 public class AggregationOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AggregationOperator");
+    private final Allocator allocator;
+
     private final Operator source;
     private final List<Accumulator> aggregations;
 
@@ -31,14 +35,15 @@ public class AggregationOperator
     private boolean filled;
     private boolean done;
 
-    public AggregationOperator(List<Accumulator> aggregations, Operator source)
+    public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
+        this.allocator = allocator;
         this.source = source;
         this.aggregations = aggregations;
 
         results = new LongVector[aggregations.size()];
         for (int i = 0; i < results.length; i++) {
-            results[i] = new LongVector(new boolean[1], new long[1]);
+            results[i] = allocator.allocate(ALLOCATION_CONTEXT, 1);
         }
     }
 
@@ -81,7 +86,7 @@ public class AggregationOperator
 
             Vector[] state = new Vector[aggregations.size()];
             for (int i = 0; i < state.length; i++) {
-                state[i] = new LongVector(new boolean[1], new long[1]);
+                state[i] = allocator.allocate(ALLOCATION_CONTEXT, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
             }
 
@@ -95,5 +100,12 @@ public class AggregationOperator
                 }
             }
         }
+    }
+
+    @Override
+    public void close()
+    {
+        source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

@@ -13,12 +13,12 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 
-import java.util.Arrays;
 import java.util.List;
 
 import static java.lang.Math.toIntExact;
@@ -26,14 +26,18 @@ import static java.lang.Math.toIntExact;
 public class GroupedAggregationOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupedAggregationOperator");
+    private final Allocator allocator;
+
     private final int groupColumn;
     private final List<Accumulator> aggregations;
     private final Operator source;
     private final Vector[] result;
     private boolean done;
 
-    public GroupedAggregationOperator(int groupColumn, List<Accumulator> aggregations, Operator source)
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
+        this.allocator = allocator;
         this.groupColumn = groupColumn;
         this.aggregations = aggregations;
         this.source = source;
@@ -68,19 +72,19 @@ public class GroupedAggregationOperator
                 maxGroup = toIntExact(Math.max(maxGroup, group.values()[position]));
             }
 
-            int newCapacity = computeCapacity(maxGroup + 1);
+            int newCapacity = Allocator.computeCapacity(maxGroup + 1);
             for (int i = 0; i < aggregations.size(); i++) {
                 Accumulator accumulator = aggregations.get(i);
 
-                states[i] = ensureCapacity(states[i], newCapacity);
+                states[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, states[i], newCapacity);
                 accumulator.initialize(states[i], toIntExact(previousMaxGroup + 1), toIntExact(maxGroup - previousMaxGroup));
                 accumulator.accumulate(states[i], group, mask, source::column);
             }
         }
 
-        int newCapacity = computeCapacity(maxGroup + 1);
+        int newCapacity = Allocator.computeCapacity(maxGroup + 1);
         for (int i = 0; i < result.length; i++) {
-            result[i] = ensureCapacity(result[i], newCapacity);
+            result[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, result[i], newCapacity);
         }
 
         for (int i = 0; i < result.length; i++) {
@@ -90,27 +94,6 @@ public class GroupedAggregationOperator
         done = true;
 
         return Mask.all(maxGroup + 1);
-    }
-
-    private static int computeCapacity(int size)
-    {
-        return (int) (size + size * (1 + 1.0 / (Math.log(size + 1) - 6)));
-    }
-
-    private static Vector ensureCapacity(Vector state, int capacity)
-    {
-        LongVector vector = (LongVector) state;
-
-        if (vector == null) {
-            vector = new LongVector(new boolean[capacity], new long[capacity]);
-        }
-        else if (vector.values().length < capacity) {
-            vector = new LongVector(
-                    Arrays.copyOf(vector.nulls(), capacity),
-                    Arrays.copyOf(vector.values(), capacity));
-        }
-
-        return vector;
     }
 
     @Override
@@ -123,5 +106,12 @@ public class GroupedAggregationOperator
     public Vector column(int column)
     {
         return result[column];
+    }
+
+    @Override
+    public void close()
+    {
+        source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

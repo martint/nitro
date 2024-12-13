@@ -91,6 +91,7 @@ public class OperatorAssertions
                     result.add(new Row(row));
                 }
             }
+            operator.close();
             return result;
         }
     }

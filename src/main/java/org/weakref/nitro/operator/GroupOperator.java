@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -23,6 +24,9 @@ import java.util.Map;
 public class GroupOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
+    private final Allocator allocator;
+
     private final int groupByColumn;
     private final Operator source;
 
@@ -31,8 +35,9 @@ public class GroupOperator
     private Mask mask;
     private LongVector result;
 
-    public GroupOperator(int groupByColumn, Operator source)
+    public GroupOperator(Allocator allocator, int groupByColumn, Operator source)
     {
+        this.allocator = allocator;
         this.groupByColumn = groupByColumn;
         this.source = source;
     }
@@ -76,7 +81,7 @@ public class GroupOperator
     private void doGroupingIfNeeded()
     {
         if (!filled && !mask.none()) {
-            ensureCapacity(mask.count());
+            result = (LongVector) allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, mask.count());
 
             LongVector column = (LongVector) source.column(groupByColumn);
 
@@ -100,10 +105,10 @@ public class GroupOperator
         }
     }
 
-    private void ensureCapacity(int count)
+    @Override
+    public void close()
     {
-        if (result == null || result.values().length < count) {
-            result = new LongVector(new boolean[count], new long[count]);
-        }
+        source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

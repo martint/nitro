@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.LongVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -23,15 +24,19 @@ import java.util.List;
 public class ValuesOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ValuesOperator");
+    private final Allocator allocator;
+
     private final Vector[] columns;
     private final int count;
     private boolean done;
 
-    public ValuesOperator(int columnCount, List<Row> rows)
+    public ValuesOperator(Allocator allocator, int columnCount, List<Row> rows)
     {
+        this.allocator = allocator;
         columns = new Vector[columnCount];
         for (int i = 0; i < columns.length; i++) {
-            columns[i] = new LongVector(rows.size());
+            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, rows.size());
         }
 
         for (int position = 0; position < rows.size(); position++) {
@@ -80,5 +85,11 @@ public class ValuesOperator
     public Vector column(int column)
     {
         return columns[column];
+    }
+
+    @Override
+    public void close()
+    {
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }
