@@ -26,6 +26,7 @@ import static java.lang.Math.toIntExact;
 public class GeneratorOperator
         implements Operator
 {
+    private static final int DEFAULT_BATCH_SIZE = 1024 * 10;
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GeneratorOperator");
 
     private final int batchSize;
@@ -37,6 +38,11 @@ public class GeneratorOperator
     private long remaining;
     private int currentBatchSize;
     private Mask mask;
+
+    public GeneratorOperator(Allocator allocator, long rowCount, List<Generator> generators)
+    {
+        this(allocator, rowCount, DEFAULT_BATCH_SIZE, generators);
+    }
 
     public GeneratorOperator(Allocator allocator, long rowCount, int batchSize, List<Generator> generators)
     {

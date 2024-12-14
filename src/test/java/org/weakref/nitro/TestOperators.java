@@ -14,7 +14,6 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
@@ -28,7 +27,6 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
-import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -39,7 +37,6 @@ import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -392,94 +389,7 @@ public class TestOperators
     }
 
     @Test
-    @Disabled
-    void benchmarkNestedLoopJoin()
-    {
-        for (int i = 0; i < 10; i++) {
-            Operator operator = new AggregationOperator(
-                    allocator,
-                    List.of(
-                            new Sum(0),
-                            new Sum(1),
-                            new CountAll()),
-                    new NestedLoopJoinOperator(
-                            allocator,
-                            new GeneratorOperator(
-                                    allocator,
-                                    1_000_000L,
-                                    10000,
-                                    List.of(new SequenceGenerator(100))),
-                            new GeneratorOperator(
-                                    allocator,
-                                    1_000L,
-                                    10000,
-                                    List.of(new SequenceGenerator(100)))));
-
-            long start = System.nanoTime();
-            while (operator.hasNext()) {
-                operator.next();
-                for (int c = 0; c < operator.columnCount(); c++) {
-                    operator.column(c);
-                }
-            }
-            System.out.println((System.nanoTime() - start) / 1_000_000.0);
-        }
-    }
-
-    @Test
-    @Disabled
-    void benchmarkArraySum()
-    {
-        long[] values = new long[1_000_000_000];
-        for (int i = 0; i < values.length; i++) {
-            values[i] = ThreadLocalRandom.current().nextLong();
-        }
-
-        for (int i = 0; i < 10; i++) {
-            long start = System.nanoTime();
-
-            long sum = 0;
-            for (long value : values) {
-                sum += value;
-            }
-
-//            sum = Arrays.stream(values).sum();
-
-            System.out.println(sum + ": " + (System.nanoTime() - start) / 1_000_000.0);
-        }
-    }
-
-    @Test
-    @Disabled
-    void benchmarkAggregation()
-    {
-        for (int i = 0; i < 10; i++) {
-            Operator operator = new AggregationOperator(
-                    allocator,
-                    List.of(
-                            new Min(0),
-                            new Max(0),
-                            new Sum(0),
-                            new CountAll()),
-                    new GeneratorOperator(
-                            allocator,
-                            100_000_000L,
-                            10000,
-                            List.of(new SequenceGenerator(100))));
-
-            long start = System.nanoTime();
-            while (operator.hasNext()) {
-                operator.next();
-                for (int c = 0; c < operator.columnCount(); c++) {
-                    operator.column(c);
-                }
-            }
-            System.out.println((System.nanoTime() - start) / 1_000_000.0);
-        }
-    }
-
-    @Test
-    void testValues()
+    void testConstantTable()
     {
         assertThat(operator(new ConstantTableOperator(
                 allocator,

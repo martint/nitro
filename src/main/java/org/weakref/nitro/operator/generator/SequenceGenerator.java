@@ -16,10 +16,21 @@ package org.weakref.nitro.operator.generator;
 public class SequenceGenerator
         implements Generator
 {
+    private final long start;
+    private final long max;
+
     private long current;
 
     public SequenceGenerator(long start)
     {
+        this(start, Long.MAX_VALUE);
+    }
+
+    public SequenceGenerator(long start, long max)
+    {
+        this.start = start;
+        this.max = max;
+
         current = start - 1;
     }
 
@@ -27,6 +38,9 @@ public class SequenceGenerator
     public void next()
     {
         current++;
+        if (current == max) {
+            current = start;
+        }
     }
 
     @Override
@@ -45,5 +59,8 @@ public class SequenceGenerator
     public void skip(int count)
     {
         current += count;
+        if (current >= max) {
+            current = start + (current - max);
+        }
     }
 }
