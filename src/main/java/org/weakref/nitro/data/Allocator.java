@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+// TODO: support hierarchical contexts
 public class Allocator
 {
     private final Map<Context, Stats> stats = new HashMap<>();
