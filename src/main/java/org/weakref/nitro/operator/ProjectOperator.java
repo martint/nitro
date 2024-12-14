@@ -81,8 +81,7 @@ public class ProjectOperator
 
         filled[column] = true;
 
-        // TODO: ensure current buffers have the right size for the batch
-        results[column] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, results[column], mask.count());
+        results[column] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, results[column], mask.maxPosition() + 1);
 
         LongVector input = (LongVector) source.column(inputs.get(column));
         LongVector output = (LongVector) results[column];
