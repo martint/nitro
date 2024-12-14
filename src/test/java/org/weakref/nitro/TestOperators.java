@@ -21,6 +21,7 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -30,7 +31,6 @@ import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
-import org.weakref.nitro.operator.ValuesOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
@@ -481,7 +481,7 @@ public class TestOperators
     @Test
     void testValues()
     {
-        assertThat(operator(new ValuesOperator(
+        assertThat(operator(new ConstantTableOperator(
                 allocator,
                 3,
                 List.of(
@@ -504,14 +504,14 @@ public class TestOperators
         assertThat(operator(
                 new NestedLoopJoinOperator(
                         allocator,
-                        new ValuesOperator(
+                        new ConstantTableOperator(
                                 allocator,
                                 1,
                                 List.of(
                                         row(1L),
                                         row(2L),
                                         row(3L))),
-                        new ValuesOperator(
+                        new ConstantTableOperator(
                                 allocator,
                                 1,
                                 List.of(
@@ -536,7 +536,7 @@ public class TestOperators
         assertThat(operator(
                 new NestedLoopJoinOperator(
                         allocator,
-                        new ValuesOperator(
+                        new ConstantTableOperator(
                                 allocator,
                                 1,
                                 List.of(row(1L))),
@@ -623,7 +623,7 @@ public class TestOperators
                 new NestedLoopJoinOperator(
                         allocator,
                         new GeneratorOperator(allocator, 10, 2, List.of(new SequenceGenerator(0))),
-                        new ValuesOperator(allocator, 1, List.of()))))
+                        new ConstantTableOperator(allocator, 1, List.of()))))
                 .matches(List.of());
     }
 
@@ -633,7 +633,7 @@ public class TestOperators
         assertThat(operator(
                 new NestedLoopJoinOperator(
                         allocator,
-                        new ValuesOperator(allocator, 1, List.of()),
+                        new ConstantTableOperator(allocator, 1, List.of()),
                         new GeneratorOperator(allocator, 10, 2, List.of(new SequenceGenerator(0))))))
                 .matches(List.of());
     }

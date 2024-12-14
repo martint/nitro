@@ -21,17 +21,17 @@ import org.weakref.nitro.data.Vector;
 
 import java.util.List;
 
-public class ValuesOperator
+public class ConstantTableOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ValuesOperator");
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ConstantTableOperator");
     private final Allocator allocator;
 
     private final Vector[] columns;
     private final int count;
     private boolean done;
 
-    public ValuesOperator(Allocator allocator, int columnCount, List<Row> rows)
+    public ConstantTableOperator(Allocator allocator, int columnCount, List<Row> rows)
     {
         this.allocator = allocator;
         columns = new Vector[columnCount];
