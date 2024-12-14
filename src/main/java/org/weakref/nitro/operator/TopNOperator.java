@@ -58,6 +58,7 @@ public class TopNOperator
     @Override
     public Mask next()
     {
+        // TODO: flat memory priority queue
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
 
         for (int i = 0; i < result.length; i++) {
