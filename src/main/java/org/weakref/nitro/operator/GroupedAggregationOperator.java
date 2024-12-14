@@ -62,17 +62,24 @@ public class GroupedAggregationOperator
     {
         Vector[] states = new LongVector[aggregations.size()];
 
-        int maxGroup = -1;
+        long maxGroup = -1;
         while (source.hasNext()) {
             Mask mask = source.next();
             LongVector group = (LongVector) source.column(groupColumn);
 
             long previousMaxGroup = maxGroup;
-            for (int position : mask) {
-                maxGroup = toIntExact(Math.max(maxGroup, group.values()[position]));
+            if (mask.all()) {
+                for (int position = 0; position <= mask.maxPosition(); position++) {
+                    maxGroup = Math.max(maxGroup, group.values()[position]);
+                }
+            }
+            else {
+                for (int position : mask) {
+                    maxGroup = Math.max(maxGroup, group.values()[position]);
+                }
             }
 
-            int newCapacity = Allocator.computeCapacity(maxGroup + 1);
+            int newCapacity = Allocator.computeCapacity(toIntExact(maxGroup + 1));
             for (int i = 0; i < aggregations.size(); i++) {
                 Accumulator accumulator = aggregations.get(i);
 
@@ -82,18 +89,16 @@ public class GroupedAggregationOperator
             }
         }
 
-        int newCapacity = Allocator.computeCapacity(maxGroup + 1);
+        int newCapacity = Allocator.computeCapacity(toIntExact(maxGroup + 1));
         for (int i = 0; i < result.length; i++) {
             result[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, result[i], newCapacity);
-        }
-
-        for (int i = 0; i < result.length; i++) {
-            result[i] = aggregations.get(i).result(maxGroup, states[i], result[i]);
+            result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i]);
         }
 
         done = true;
 
-        return Mask.all(maxGroup + 1);
+        // TODO: reuse mask if possible
+        return Mask.all(toIntExact(maxGroup + 1));
     }
 
     @Override
