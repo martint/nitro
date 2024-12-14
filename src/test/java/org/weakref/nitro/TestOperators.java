@@ -366,7 +366,7 @@ public class TestOperators
                                 0,
                                 new ProjectOperator(
                                         allocator,
-                                        List.of(0, 0, 1),
+                                        List.of(0, 0),
                                         List.of(
                                                 v -> v % 10 + 13,
                                                 v -> v),
