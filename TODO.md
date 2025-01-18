@@ -3,6 +3,7 @@
   * Avoid reallocating
 * Vectors
   * Do all vectors have nulls? How to represent?
+  * RLE, flat, dictionary
 * Operators
   * Equi-join
   * Filter
