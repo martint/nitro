@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator.generator;
 
 public class SequenceGenerator
-        implements Generator
+        implements I64Generator
 {
     private final long start;
     private final long max;
