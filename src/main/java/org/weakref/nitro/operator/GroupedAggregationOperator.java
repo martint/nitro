@@ -42,7 +42,7 @@ public class GroupedAggregationOperator
         this.aggregations = aggregations;
         this.source = source;
 
-        result = new I64Vector[aggregations.size()];
+        result = new Vector[aggregations.size()];
     }
 
     @Override
@@ -60,7 +60,7 @@ public class GroupedAggregationOperator
     @Override
     public Mask next()
     {
-        Vector[] states = new I64Vector[aggregations.size()];
+        Vector[] states = new Vector[aggregations.size()];
 
         long maxGroup = -1;
         while (source.hasNext()) {
