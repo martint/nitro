@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator.generator;
 
-public interface Generator
+public interface I64Generator
 {
     void next();
 

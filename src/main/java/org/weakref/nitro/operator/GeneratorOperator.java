@@ -17,7 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.generator.Generator;
+import org.weakref.nitro.operator.generator.I64Generator;
 
 import java.util.List;
 
@@ -30,8 +30,8 @@ public class GeneratorOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GeneratorOperator");
 
     private final int batchSize;
-    private final List<Generator> generators;
-    private final List<Vector> results;
+    private final List<I64Generator> generators;
+    private final List<I64Vector> results;
 
     private final boolean[] filled;
     private final Allocator allocator;
@@ -39,12 +39,12 @@ public class GeneratorOperator
     private int currentBatchSize;
     private Mask mask;
 
-    public GeneratorOperator(Allocator allocator, long rowCount, List<Generator> generators)
+    public GeneratorOperator(Allocator allocator, long rowCount, List<I64Generator> generators)
     {
         this(allocator, rowCount, DEFAULT_BATCH_SIZE, generators);
     }
 
-    public GeneratorOperator(Allocator allocator, long rowCount, int batchSize, List<Generator> generators)
+    public GeneratorOperator(Allocator allocator, long rowCount, int batchSize, List<I64Generator> generators)
     {
         this.allocator = allocator;
         this.remaining = rowCount;
@@ -52,7 +52,7 @@ public class GeneratorOperator
         this.generators = generators;
 
         results = generators.stream()
-                .map(_ -> allocator.allocate(ALLOCATION_CONTEXT, batchSize))
+                .map(_ -> (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, batchSize))
                 .toList();
 
         filled = new boolean[generators.size()];
@@ -106,8 +106,8 @@ public class GeneratorOperator
 
         filled[column] = true;
 
-        Generator generator = generators.get(column);
-        I64Vector result = (I64Vector) results.get(column);
+        I64Generator generator = generators.get(column);
+        I64Vector result = results.get(column);
 
         for (int position = 0; position < currentBatchSize; position++) {
             generator.next();
