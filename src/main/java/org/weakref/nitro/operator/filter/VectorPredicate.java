@@ -13,25 +13,9 @@
  */
 package org.weakref.nitro.operator.filter;
 
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 
-import java.util.function.LongPredicate;
-
-public class I64Predicate
-        implements VectorPredicate
+public interface VectorPredicate
 {
-    private final LongPredicate predicate;
-
-    public I64Predicate(LongPredicate predicate)
-    {
-        this.predicate = predicate;
-    }
-
-    @Override
-    public boolean test(Vector vector, int position)
-    {
-        I64Vector i64Vector = (I64Vector) vector;
-        return !i64Vector.nulls()[position] && predicate.test(i64Vector.values()[position]);
-    }
+    boolean test(Vector vector, int position);
 }

@@ -13,25 +13,23 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-
-import java.util.function.LongPredicate;
+import org.weakref.nitro.operator.filter.VectorPredicate;
 
 public class FilterOperator
         implements Operator
 {
     private final Operator source;
     private final int filterColumn;
-    private final LongPredicate filter;
+    private final VectorPredicate filter;
 
     private Mask mask;
 
     // reusable mask buffer
     private int[] maskPositions;
 
-    public FilterOperator(int filterColumn, LongPredicate filter, Operator source)
+    public FilterOperator(int filterColumn, VectorPredicate filter, Operator source)
     {
         this.source = source;
         this.filterColumn = filterColumn;
@@ -75,14 +73,12 @@ public class FilterOperator
 
     private void doFilter()
     {
-        I64Vector filterColumn = (I64Vector) source.column(this.filterColumn);
-        long[] values = filterColumn.values();
-        boolean[] nulls = filterColumn.nulls();
+        Vector column = source.column(this.filterColumn);
 
         ensureCapacity(mask.count());
         int maskSize = 0;
         for (int position : mask) {
-            if (!nulls[position] && filter.test(values[position])) {
+            if (filter.test(column, position)) {
                 maskPositions[maskSize] = position;
                 maskSize++;
             }

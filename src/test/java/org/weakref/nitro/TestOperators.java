@@ -34,6 +34,7 @@ import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.Sum;
+import org.weakref.nitro.operator.filter.I64Predicate;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
@@ -81,7 +82,7 @@ public class TestOperators
                                         List.of(v -> v * 2),
                                         new FilterOperator(
                                                 0,
-                                                value -> value < 20 || value > 40,
+                                                new I64Predicate(value -> value < 20 || value > 40),
                                                 new GeneratorOperator(
                                                         allocator,
                                                         50,
@@ -98,7 +99,7 @@ public class TestOperators
         assertThat(operator(
                 new FilterOperator(
                         0,
-                        value -> value < 10 || value > 40,
+                        new I64Predicate(value -> value < 10 || value > 40),
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(
@@ -123,7 +124,7 @@ public class TestOperators
         assertThat(operator(
                 new FilterOperator(
                         0,
-                        value -> value % 2 == 0,
+                        new I64Predicate(value -> value % 2 == 0),
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(
@@ -167,10 +168,10 @@ public class TestOperators
         assertThat(operator(
                 new FilterOperator(
                         0,
-                        value -> value % 2 == 0,
+                        new I64Predicate(value -> value % 2 == 0),
                         new FilterOperator(
                                 0,
-                                value -> value % 3 == 0,
+                                new I64Predicate(value -> value % 3 == 0),
                                 new GeneratorOperator(
                                         allocator,
                                         50,
@@ -339,7 +340,7 @@ public class TestOperators
                                 new CountAll()),
                         new FilterOperator(
                                 0,
-                                value -> value % 2 == 0,
+                                new I64Predicate(value -> value % 2 == 0),
                                 new GeneratorOperator(
                                         allocator,
                                         50,
