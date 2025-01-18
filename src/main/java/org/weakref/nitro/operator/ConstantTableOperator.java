@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
@@ -43,7 +43,7 @@ public class ConstantTableOperator
             Row row = rows.get(position);
             Long[] values = row.values();
             for (int column = 0; column < values.length; column++) {
-                LongVector vector = (LongVector) columns[column];
+                I64Vector vector = (I64Vector) columns[column];
                 if (values[column] == null) {
                     vector.nulls()[position] = true;
                 }

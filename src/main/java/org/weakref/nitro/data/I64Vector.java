@@ -13,18 +13,18 @@
  */
 package org.weakref.nitro.data;
 
-public class LongVector
+public class I64Vector
         implements Vector
 {
     private final boolean[] nulls;
     private final long[] values;
 
-    LongVector(int size)
+    I64Vector(int size)
     {
         this(new boolean[size], new long[size]);
     }
 
-    LongVector(boolean[] nulls, long[] values)
+    I64Vector(boolean[] nulls, long[] values)
     {
         this.nulls = nulls;
         this.values = values;

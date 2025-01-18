@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.generator.Generator;
@@ -107,7 +107,7 @@ public class GeneratorOperator
         filled[column] = true;
 
         Generator generator = generators.get(column);
-        LongVector result = (LongVector) results.get(column);
+        I64Vector result = (I64Vector) results.get(column);
 
         for (int position = 0; position < currentBatchSize; position++) {
             generator.next();

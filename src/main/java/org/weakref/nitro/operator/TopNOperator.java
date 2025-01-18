@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -40,7 +40,7 @@ public class TopNOperator
         this.n = n;
         this.column = column;
         this.source = source;
-        result = new LongVector[source.columnCount()];
+        result = new I64Vector[source.columnCount()];
     }
 
     @Override
@@ -69,7 +69,7 @@ public class TopNOperator
             Mask mask = source.next();
 
             for (int position : mask) {
-                LongVector sortColumn = (LongVector) source.column(column);
+                I64Vector sortColumn = (I64Vector) source.column(column);
                 if (sortColumn.nulls()[position]) {
                     // Skip nulls for now
                     continue;
@@ -112,7 +112,7 @@ public class TopNOperator
         while (!queue.isEmpty()) {
             Entry entry = queue.poll();
             for (int i = 0; i < result.length; i++) {
-                long[] values = ((LongVector) result[i]).values();
+                long[] values = ((I64Vector) result[i]).values();
 
                 temp[i] = values[current];
                 values[current] = values[remap[entry.position]];
@@ -129,7 +129,7 @@ public class TopNOperator
     {
         for (int i = 0; i < result.length; i++) {
             Vector column = source.column(i);
-            ((LongVector) result[i]).values()[to] = ((LongVector) column).values()[from];
+            ((I64Vector) result[i]).values()[to] = ((I64Vector) column).values()[from];
         }
     }
 

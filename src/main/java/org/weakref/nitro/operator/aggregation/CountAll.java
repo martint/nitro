@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -27,22 +27,22 @@ public class CountAll
     @Override
     public void initialize(Vector state, int offset, int length)
     {
-        Arrays.fill(((LongVector) state).nulls(), offset, offset + length, false);
-        Arrays.fill(((LongVector) state).values(), offset, offset + length, 0L);
+        Arrays.fill(((I64Vector) state).nulls(), offset, offset + length, false);
+        Arrays.fill(((I64Vector) state).values(), offset, offset + length, 0L);
     }
 
     @Override
     public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
     {
-        LongVector stateVector = (LongVector) state;
+        I64Vector stateVector = (I64Vector) state;
         accumulate(stateVector, group, mask.count());
     }
 
     @Override
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
-        LongVector stateVector = (LongVector) state;
-        LongVector groupVector = (LongVector) groups;
+        I64Vector stateVector = (I64Vector) state;
+        I64Vector groupVector = (I64Vector) groups;
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -59,7 +59,7 @@ public class CountAll
         }
     }
 
-    private static void accumulate(LongVector stateVector, int group, int count)
+    private static void accumulate(I64Vector stateVector, int group, int count)
     {
         stateVector.values()[group] += count;
         stateVector.nulls()[group] = false;

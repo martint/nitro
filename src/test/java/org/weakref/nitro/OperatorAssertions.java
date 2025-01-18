@@ -16,7 +16,7 @@ package org.weakref.nitro;
 import org.assertj.core.api.AssertProvider;
 import org.assertj.core.api.Descriptable;
 import org.assertj.core.description.Description;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
@@ -84,7 +84,7 @@ public class OperatorAssertions
                 for (int position : mask) {
                     Long[] row = new Long[columns.size()];
                     for (int i = 0; i < columns.size(); i++) {
-                        LongVector column = (LongVector) columns.get(i);
+                        I64Vector column = (I64Vector) columns.get(i);
                         row[i] = column.nulls()[position] ? null : column.values()[position];
                     }
 

@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -78,7 +78,7 @@ public class OutputOperator
     @Override
     public Vector column(int column)
     {
-        LongVector result = (LongVector) allocator.allocate(ALLOCATION_CONTEXT, 1);
+        I64Vector result = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, 1);
         result.values()[0] = rowCount;
         result.nulls()[0] = false;
 
@@ -89,7 +89,7 @@ public class OutputOperator
     {
         rowCount++;
         for (int column = 0; column < columns.size(); column++) {
-            LongVector block = (LongVector) columns.get(column);
+            I64Vector block = (I64Vector) columns.get(column);
 
             if (block.nulls()[position]) {
                 System.out.print("null");

@@ -39,7 +39,7 @@ public class Allocator
     {
         recordAllocation(context, size);
 
-        return new LongVector(size);
+        return new I64Vector(size);
     }
 
     public Vector allocateOrGrow(Context context, Vector vector, int size)
@@ -51,8 +51,8 @@ public class Allocator
             recordAllocation(context, -vector.length());
             recordAllocation(context, size);
 
-            LongVector longVector = (LongVector) vector;
-            vector = new LongVector(
+            I64Vector longVector = (I64Vector) vector;
+            vector = new I64Vector(
                     Arrays.copyOf(longVector.nulls(), size),
                     Arrays.copyOf(longVector.values(), size));
         }

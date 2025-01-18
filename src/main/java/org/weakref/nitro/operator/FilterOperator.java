@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -75,7 +75,7 @@ public class FilterOperator
 
     private void doFilter()
     {
-        LongVector filterColumn = (LongVector) source.column(this.filterColumn);
+        I64Vector filterColumn = (I64Vector) source.column(this.filterColumn);
         long[] values = filterColumn.values();
         boolean[] nulls = filterColumn.nulls();
 

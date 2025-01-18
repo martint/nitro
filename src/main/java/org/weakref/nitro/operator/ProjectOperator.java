@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -83,8 +83,8 @@ public class ProjectOperator
 
         results[column] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, results[column], mask.maxPosition() + 1);
 
-        LongVector input = (LongVector) source.column(inputs.get(column));
-        LongVector output = (LongVector) results[column];
+        I64Vector input = (I64Vector) source.column(inputs.get(column));
+        I64Vector output = (I64Vector) results[column];
 
         LongToLongFunction projection = projections.get(column);
         for (int position : mask) {
@@ -94,7 +94,7 @@ public class ProjectOperator
         return results[column];
     }
 
-    private static void applyProjection(LongVector input, int position, LongToLongFunction projection, LongVector output)
+    private static void applyProjection(I64Vector input, int position, LongToLongFunction projection, I64Vector output)
     {
         boolean isNull = input.nulls()[position];
         output.nulls()[position] = isNull;

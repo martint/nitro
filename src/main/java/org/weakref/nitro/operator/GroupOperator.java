@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -33,7 +33,7 @@ public class GroupOperator
     private final Map<Long, Long> groups = new HashMap<>(); // TODO: more efficient map
     private boolean filled;
     private Mask mask;
-    private LongVector result;
+    private I64Vector result;
 
     public GroupOperator(Allocator allocator, int groupByColumn, Operator source)
     {
@@ -81,9 +81,9 @@ public class GroupOperator
     private void doGroupingIfNeeded()
     {
         if (!filled && !mask.none()) {
-            result = (LongVector) allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, mask.count());
+            result = (I64Vector) allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, mask.count());
 
-            LongVector column = (LongVector) source.column(groupByColumn);
+            I64Vector column = (I64Vector) source.column(groupByColumn);
 
             for (int position : mask) {
                 if (column.nulls()[position]) {

@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -187,8 +187,8 @@ public class NestedLoopJoinOperator
 
     private void replicate(Vector output, int start, int length, Vector input, int position)
     {
-        LongVector outputVector = (LongVector) output;
-        LongVector inputVector = (LongVector) input;
+        I64Vector outputVector = (I64Vector) output;
+        I64Vector inputVector = (I64Vector) input;
 
         Arrays.fill(outputVector.values(), start, start + length, inputVector.values()[position]);
         Arrays.fill(outputVector.nulls(), start, start + length, inputVector.nulls()[position]);
@@ -210,7 +210,7 @@ public class NestedLoopJoinOperator
                     int copied = 0;
                     for (int i = 0; i < columns.length; i++) {
                         // TODO: allow transferring ownership from underlying operator in case we don't need to copy+compact
-                        copied = copyAndCompact((LongVector) inner.column(i), mask, maskOffset, (LongVector) columns[i], outputPosition);
+                        copied = copyAndCompact((I64Vector) inner.column(i), mask, maskOffset, (I64Vector) columns[i], outputPosition);
                     }
                     outputPosition += copied;
                     maskOffset += copied;
@@ -242,7 +242,7 @@ public class NestedLoopJoinOperator
     /**
      * @return the number of elements copied
      */
-    private int copyAndCompact(LongVector input, Mask mask, int maskStart, LongVector output, int outputStart)
+    private int copyAndCompact(I64Vector input, Mask mask, int maskStart, I64Vector output, int outputStart)
     {
         int outputPosition = outputStart;
         int maskIndex = maskStart;

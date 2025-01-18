@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
@@ -42,7 +42,7 @@ public class GroupedAggregationOperator
         this.aggregations = aggregations;
         this.source = source;
 
-        result = new LongVector[aggregations.size()];
+        result = new I64Vector[aggregations.size()];
     }
 
     @Override
@@ -60,12 +60,12 @@ public class GroupedAggregationOperator
     @Override
     public Mask next()
     {
-        Vector[] states = new LongVector[aggregations.size()];
+        Vector[] states = new I64Vector[aggregations.size()];
 
         long maxGroup = -1;
         while (source.hasNext()) {
             Mask mask = source.next();
-            LongVector group = (LongVector) source.column(groupColumn);
+            I64Vector group = (I64Vector) source.column(groupColumn);
 
             long previousMaxGroup = maxGroup;
             if (mask.all()) {

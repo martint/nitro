@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.data.LongVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -34,14 +34,14 @@ public class Sum
     @Override
     public void initialize(Vector state, int offset, int length)
     {
-        Arrays.fill(((LongVector) state).nulls(), offset, offset + length, true);
+        Arrays.fill(((I64Vector) state).nulls(), offset, offset + length, true);
     }
 
     @Override
     public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
     {
-        LongVector stateVector = (LongVector) state;
-        LongVector inputVector = (LongVector) columns.column(inputColumn);
+        I64Vector stateVector = (I64Vector) state;
+        I64Vector inputVector = (I64Vector) columns.column(inputColumn);
 
         boolean[] nulls = inputVector.nulls();
         long[] values = inputVector.values();
@@ -66,9 +66,9 @@ public class Sum
     @Override
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
-        LongVector stateVector = (LongVector) state;
-        LongVector groupVector = (LongVector) groups;
-        LongVector inputVector = (LongVector) columns.column(inputColumn);
+        I64Vector stateVector = (I64Vector) state;
+        I64Vector groupVector = (I64Vector) groups;
+        I64Vector inputVector = (I64Vector) columns.column(inputColumn);
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -84,7 +84,7 @@ public class Sum
         }
     }
 
-    private static void accumulate(LongVector state, int group, LongVector input, int position)
+    private static void accumulate(I64Vector state, int group, I64Vector input, int position)
     {
         state.nulls()[group] = false;
         state.values()[group] += input.nulls()[position] ? 0 : input.values()[position];
