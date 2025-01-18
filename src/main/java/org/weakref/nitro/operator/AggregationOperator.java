@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
@@ -41,7 +40,7 @@ public class AggregationOperator
         this.source = source;
         this.aggregations = aggregations;
 
-        results = new I64Vector[aggregations.size()];
+        results = new Vector[aggregations.size()];
         for (int i = 0; i < results.length; i++) {
             results[i] = allocator.allocate(ALLOCATION_CONTEXT, 1);
         }
