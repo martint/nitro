@@ -2,6 +2,7 @@
   * sparse, dense?
   * Avoid reallocating
 * Vectors
+  * Do all vectors have nulls? How to represent?
 * Operators
   * Equi-join
   * Filter
