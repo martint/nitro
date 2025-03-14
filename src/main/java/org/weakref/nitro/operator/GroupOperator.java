@@ -85,6 +85,7 @@ public class GroupOperator
             filled = true;
             result = (I64Vector) allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, mask.count());
 
+            // TODO: support arbitrary types
             I64Vector column = (I64Vector) source.column(groupByColumn);
 
             for (int position : mask) {
