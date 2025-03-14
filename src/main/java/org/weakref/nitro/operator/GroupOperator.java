@@ -13,13 +13,12 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-
-import java.util.HashMap;
-import java.util.Map;
 
 public class GroupOperator
         implements Operator
@@ -30,7 +29,7 @@ public class GroupOperator
     private final int groupByColumn;
     private final Operator source;
 
-    private final Map<Long, Long> groups = new HashMap<>(); // TODO: more efficient map
+    private final Long2LongMap groups = new Long2LongOpenHashMap();
     private boolean filled;
     private Mask mask;
     private I64Vector result;
@@ -40,6 +39,8 @@ public class GroupOperator
         this.allocator = allocator;
         this.groupByColumn = groupByColumn;
         this.source = source;
+
+        groups.defaultReturnValue(-1);
     }
 
     @Override
@@ -94,8 +95,8 @@ public class GroupOperator
                     long value = column.values()[position];
                     long group = groups.size();
 
-                    Long existing = groups.putIfAbsent(value, group);
-                    if (existing != null) {
+                    long existing = groups.putIfAbsent(value, group);
+                    if (existing != -1) {
                         group = existing;
                     }
 
