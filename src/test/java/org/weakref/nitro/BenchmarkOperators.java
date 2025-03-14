@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
+import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
@@ -74,6 +75,21 @@ public class BenchmarkOperators
                         allocator,
                         100_000_000L,
                         List.of(new SequenceGenerator(0, 10))));
+
+        consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(100_000)
+    public void group()
+    {
+        Operator operator = new GroupOperator(
+                allocator,
+                0,
+                new GeneratorOperator(
+                        allocator,
+                        100_000L,
+                        List.of(new SequenceGenerator(0, 10000))));
 
         consume(operator);
     }
