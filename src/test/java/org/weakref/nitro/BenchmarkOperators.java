@@ -25,13 +25,16 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.Function;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
@@ -47,6 +50,16 @@ import java.util.concurrent.TimeUnit;
 public class BenchmarkOperators
 {
     private final Allocator allocator = new Allocator();
+
+    private static final Function ADD = (output, inputs, mask) -> {
+        I64Vector in1 = (I64Vector) inputs[0];
+        I64Vector in2 = (I64Vector) inputs[1];
+        I64Vector out = (I64Vector) output;
+        for (int i = 0; i <= mask.maxPosition(); i++) {
+            out.values()[i] = in1.values()[i] + in2.values()[i];
+            out.nulls()[i] = in1.nulls()[i] || in2.nulls()[i];
+        }
+    };
 
     @Benchmark
     @OperationsPerInvocation(1_000_000_000)
@@ -86,6 +99,23 @@ public class BenchmarkOperators
         Operator operator = new GroupOperator(
                 allocator,
                 0,
+                new GeneratorOperator(
+                        allocator,
+                        100_000L,
+                        List.of(new SequenceGenerator(0, 10000))));
+
+        consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(100_000)
+    public void project()
+    {
+        Operator operator = new ProjectOperator(
+                allocator,
+                new ProjectOperator.Execution(
+                        List.of(new ProjectOperator.Invocation(ADD, List.of(-1, -1))),
+                        List.of(-1)),
                 new GeneratorOperator(
                         allocator,
                         100_000L,

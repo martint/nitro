@@ -14,10 +14,11 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.Function;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -27,28 +28,34 @@ public class ProjectOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
 
-    private final Operator source;
-    private final List<Integer> inputs;
-    private final List<LongToLongFunction> projections;
-    private final Vector[] results;
+    private final Execution execution;
 
-    private final boolean[] filled;
+    private final Operator source;
     private Mask mask;
 
-    public ProjectOperator(Allocator allocator, List<Integer> inputs, List<LongToLongFunction> projections, Operator source)
+    private final List<Vector[]> inputs;
+    private final Vector[] buffers;
+    private final boolean[] filled;
+
+    public ProjectOperator(Allocator allocator, Execution execution, Operator source)
     {
         this.allocator = allocator;
         this.source = source;
-        this.inputs = inputs;
-        this.projections = projections;
-        results = new Vector[projections.size()];
-        filled = new boolean[projections.size()];
+        this.execution = execution;
+
+        inputs = new ArrayList<>();
+        buffers = new Vector[execution.operations().size()];
+        filled = new boolean[execution.operations().size()];
+
+        for (int i = 0; i < execution.operations.size(); i++) {
+            inputs.add(new Vector[execution.operations.get(i).inputs().size()]);
+        }
     }
 
     @Override
     public int columnCount()
     {
-        return projections.size();
+        return execution.outputs().size();
     }
 
     @Override
@@ -75,35 +82,39 @@ public class ProjectOperator
     @Override
     public Vector column(int column)
     {
-        if (filled[column] || mask.none()) {
-            return results[column];
+        int operation = execution.outputs().get(column);
+        if (operation < 0) {
+            return source.column(-(operation + 1));
         }
 
-        filled[column] = true;
+        evaluateRecursive(operation);
 
-        results[column] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, results[column], mask.maxPosition() + 1);
+        return buffers[operation];
+    }
 
-        I64Vector input = (I64Vector) source.column(inputs.get(column));
-        I64Vector output = (I64Vector) results[column];
-
-        LongToLongFunction projection = projections.get(column);
-        for (int position : mask) {
-            applyProjection(input, position, projection, output);
+    private void evaluateRecursive(int operation)
+    {
+        if (filled[operation]) {
+            return;
         }
 
-        return results[column];
-    }
+        filled[operation] = true;
 
-    private static void applyProjection(I64Vector input, int position, LongToLongFunction projection, I64Vector output)
-    {
-        boolean isNull = input.nulls()[position];
-        output.nulls()[position] = isNull;
-        output.values()[position] = isNull ? 0 : projection.apply(input.values()[position]);
-    }
+        Invocation invocation = execution.operations.get(operation);
+        Vector[] arguments = this.inputs.get(operation);
+        for (int i = 0; i < invocation.inputs().size(); i++) {
+            int input = invocation.inputs().get(i);
+            if (input < 0) {
+                arguments[i] = source.column(-(input + 1));
+            }
+            else {
+                evaluateRecursive(input);
+                arguments[i] = buffers[input];
+            }
+        }
 
-    public interface LongToLongFunction
-    {
-        long apply(long value);
+        buffers[operation] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, buffers[operation], mask.maxPosition() + 1);
+        invocation.operation.apply(buffers[operation], arguments, mask);
     }
 
     @Override
@@ -112,4 +123,20 @@ public class ProjectOperator
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
     }
+
+    /**
+     * The evaluation plan contains a flattened representation of the expression graph.
+     * Each invocation represents an operation to be executed, along with a descriptor of its inputs,
+     * which consists of indexes with the following meaning:
+     * <ul>
+     *  <li>if >= 0, the index of the corresponding operation that produces the input to this operation
+     *  <li>if < 0, an index into the columns of the source operator, which can be calculated as -(index + 1)
+     * </ul>
+     *
+     * The outputs is a list of indexes that indicate how the outputs of the projection are computed, with
+     * the same meaning as above.
+     */
+    public record Execution(List<Invocation> operations, List<Integer> outputs) {}
+
+    public record Invocation(Function operation, List<Integer> inputs) {}
 }

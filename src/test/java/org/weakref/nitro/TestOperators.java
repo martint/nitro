@@ -19,6 +19,8 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.function.Function;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
@@ -78,8 +80,11 @@ public class TestOperators
                                 5,
                                 new ProjectOperator(
                                         allocator,
-                                        List.of(1),
-                                        List.of(v -> v * 2),
+                                        new ProjectOperator.Execution(
+                                                List.of(new ProjectOperator.Invocation(
+                                                        multiply(2),
+                                                        List.of(-2))),
+                                                List.of(0)),
                                         new FilterOperator(
                                                 0,
                                                 new I64Predicate(value -> value < 20 || value > 40),
@@ -198,8 +203,11 @@ public class TestOperators
                         0,
                         new ProjectOperator(
                                 allocator,
-                                List.of(0),
-                                List.of(v -> v / 3),
+                                new ProjectOperator.Execution(
+                                        List.of(new ProjectOperator.Invocation(
+                                                divide(3),
+                                                List.of(-1))),
+                                        List.of(0)),
                                 new GeneratorOperator(
                                         allocator,
                                         10,
@@ -367,10 +375,18 @@ public class TestOperators
                                 0,
                                 new ProjectOperator(
                                         allocator,
-                                        List.of(0, 0),
-                                        List.of(
-                                                v -> v % 10 + 13,
-                                                v -> v),
+                                        new ProjectOperator.Execution(
+                                                List.of(new ProjectOperator.Invocation(
+                                                        (output, inputs, mask) -> {
+                                                            I64Vector in = (I64Vector) inputs[0];
+                                                            I64Vector out = (I64Vector) output;
+                                                            for (int i = 0; i <= mask.maxPosition(); i++) {
+                                                                out.nulls()[i] = in.nulls()[i];
+                                                                out.values()[i] = in.values()[i] % 10 + 13;
+                                                            }
+                                                        },
+                                                        List.of(-1))),
+                                                List.of(0, -1)),
                                         new GeneratorOperator(
                                                 allocator,
                                                 50,
@@ -547,5 +563,94 @@ public class TestOperators
                         new ConstantTableOperator(allocator, 1, List.of()),
                         new GeneratorOperator(allocator, 10, 2, List.of(new SequenceGenerator(0))))))
                 .matches(List.of());
+    }
+
+    @Test
+    void testProject()
+    {
+        Function negate = (output, inputs, mask) -> {
+            I64Vector in = (I64Vector) inputs[0];
+            I64Vector out = (I64Vector) output;
+            for (int i = 0; i <= mask.maxPosition(); i++) {
+                out.values()[i] = -in.values()[i];
+                out.nulls()[i] = in.nulls()[i];
+            }
+        };
+
+        Function add = (output, inputs, mask) -> {
+            I64Vector in1 = (I64Vector) inputs[0];
+            I64Vector in2 = (I64Vector) inputs[1];
+            I64Vector out = (I64Vector) output;
+            for (int i = 0; i <= mask.maxPosition(); i++) {
+                out.values()[i] = in1.values()[i] + in2.values()[i];
+                out.nulls()[i] = in1.nulls()[i] || in2.nulls()[i];
+            }
+        };
+
+        Function multiply = (output, inputs, mask) -> {
+            I64Vector in1 = (I64Vector) inputs[0];
+            I64Vector in2 = (I64Vector) inputs[1];
+            I64Vector out = (I64Vector) output;
+            for (int i = 0; i <= mask.maxPosition(); i++) {
+                out.values()[i] = in1.values()[i] * in2.values()[i];
+                out.nulls()[i] = in1.nulls()[i] || in2.nulls()[i];
+            }
+        };
+
+        /*
+           %0 = %input * %input
+           %1 = %0 + %0
+           %2 = -%0
+         */
+
+        assertThat(operator(
+                new ProjectOperator(
+                        allocator,
+                        new ProjectOperator.Execution(
+                                List.of(
+                                        new ProjectOperator.Invocation(multiply, List.of(-1, -1)),
+                                        new ProjectOperator.Invocation(add, List.of(0, 0)),
+                                        new ProjectOperator.Invocation(negate, List.of(0))),
+                                List.of(-1, 1, 2)),
+                        new GeneratorOperator(
+                                allocator,
+                                10,
+                                5,
+                                List.of(new SequenceGenerator(0), new SequenceGenerator(100))))))
+                .matchesExactly(List.of(
+                        row(0L, 0L, 0L),
+                        row(1L, 2L, -1L),
+                        row(2L, 8L, -4L),
+                        row(3L, 18L, -9L),
+                        row(4L, 32L, -16L),
+                        row(5L, 50L, -25L),
+                        row(6L, 72L, -36L),
+                        row(7L, 98L, -49L),
+                        row(8L, 128L, -64L),
+                        row(9L, 162L, -81L)));
+    }
+
+    private static Function multiply(long value)
+    {
+        return (output, inputs, mask) -> {
+            I64Vector in = (I64Vector) inputs[0];
+            I64Vector out = (I64Vector) output;
+            for (int i = 0; i <= mask.maxPosition(); i++) {
+                out.nulls()[i] = in.nulls()[i];
+                out.values()[i] = in.values()[i] * value;
+            }
+        };
+    }
+
+    private static Function divide(long value)
+    {
+        return (output, inputs, mask) -> {
+            I64Vector in = (I64Vector) inputs[0];
+            I64Vector out = (I64Vector) output;
+            for (int i = 0; i <= mask.maxPosition(); i++) {
+                out.nulls()[i] = in.nulls()[i];
+                out.values()[i] = in.values()[i] / value;
+            }
+        };
     }
 }
