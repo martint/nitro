@@ -13,13 +13,15 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.Arrays;
+
 public class I64Vector
         implements Vector
 {
     private final boolean[] nulls;
     private final long[] values;
 
-    I64Vector(int size)
+    public I64Vector(int size)
     {
         this(new boolean[size], new long[size]);
     }
@@ -28,6 +30,14 @@ public class I64Vector
     {
         this.nulls = nulls;
         this.values = values;
+    }
+
+    @Override
+    public Vector copy(int size)
+    {
+        return new I64Vector(
+                Arrays.copyOf(nulls, size),
+                Arrays.copyOf(values, size));
     }
 
     public boolean[] nulls()

@@ -32,6 +32,12 @@ public class RleVector
     }
 
     @Override
+    public Vector copy(int size)
+    {
+        throw new UnsupportedOperationException("not yet implemented");
+    }
+
+    @Override
     public int length()
     {
         return length;

@@ -11,20 +11,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.aggregation;
+package org.weakref.nitro.data;
 
-import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
-
-public interface Accumulator
+public interface VectorAllocator
 {
     Vector allocate(int size);
-
-    void initialize(Vector state, int offset, int length);
-
-    void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns);
-
-    void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns);
-
-    Vector result(int maxGroup, Vector state, Vector output);
 }

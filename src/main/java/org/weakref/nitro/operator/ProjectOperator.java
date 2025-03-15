@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.function.Function;
 
 import java.util.ArrayList;
@@ -113,7 +114,7 @@ public class ProjectOperator
             }
         }
 
-        buffers[operation] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, buffers[operation], mask.maxPosition() + 1);
+        buffers[operation] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, buffers[operation], mask.maxPosition() + 1, invocation.allocator()::allocate);
         invocation.operation.apply(buffers[operation], arguments, mask);
     }
 
@@ -138,5 +139,5 @@ public class ProjectOperator
      */
     public record Execution(List<Invocation> operations, List<Integer> outputs) {}
 
-    public record Invocation(Function operation, List<Integer> inputs) {}
+    public record Invocation(Function operation, List<Integer> inputs, VectorAllocator allocator) {}
 }

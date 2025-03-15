@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.data;
 
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,40 +34,36 @@ public class Allocator
         return (int) (desiredSize + desiredSize * growthFactor);
     }
 
-    public Vector allocate(Context context, int size)
+    public Vector allocate(Context context, int size, VectorAllocator allocator)
     {
         recordAllocation(context, size);
-
-        return new I64Vector(size);
+        return allocator.allocate(size);
     }
 
-    public Vector allocateOrGrow(Context context, Vector vector, int size)
+    public Vector allocateOrGrow(Context context, Vector vector, int size, VectorAllocator vectorAllocator)
     {
         if (vector == null) {
-            vector = allocate(context, size);
+            vector = allocate(context, size, vectorAllocator);
         }
         else if (vector.length() < size) {
             recordAllocation(context, -vector.length());
             recordAllocation(context, size);
 
-            I64Vector longVector = (I64Vector) vector;
-            vector = new I64Vector(
-                    Arrays.copyOf(longVector.nulls(), size),
-                    Arrays.copyOf(longVector.values(), size));
+            vector = vector.copy(size);
         }
 
         return vector;
     }
 
-    public Vector reallocateIfNecessary(Context context, Vector vector, int count)
+    public Vector reallocateIfNecessary(Context context, Vector vector, int count, VectorAllocator vectorAllocator)
     {
         if (vector == null) {
-            return allocate(context, count);
+            return allocate(context, count, vectorAllocator);
         }
 
         if (vector.length() < count) {
             recordAllocation(context, -vector.length());
-            vector = allocate(context, count);
+            vector = allocate(context, count, vectorAllocator);
         }
 
         return vector;

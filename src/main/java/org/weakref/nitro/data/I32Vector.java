@@ -19,7 +19,7 @@ public class I32Vector
     private final boolean[] nulls;
     private final int[] values;
 
-    I32Vector(int size)
+    public I32Vector(int size)
     {
         this(new boolean[size], new int[size]);
     }
@@ -28,6 +28,14 @@ public class I32Vector
     {
         this.nulls = nulls;
         this.values = values;
+    }
+
+    @Override
+    public Vector copy(int size)
+    {
+        return new I32Vector(
+                java.util.Arrays.copyOf(nulls, size),
+                java.util.Arrays.copyOf(values, size));
     }
 
     public boolean[] nulls()

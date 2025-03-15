@@ -42,7 +42,7 @@ public class AggregationOperator
 
         results = new Vector[aggregations.size()];
         for (int i = 0; i < results.length; i++) {
-            results[i] = allocator.allocate(ALLOCATION_CONTEXT, 1);
+            results[i] = allocator.allocate(ALLOCATION_CONTEXT, 1, aggregations.get(i)::allocate);
         }
     }
 
@@ -85,7 +85,7 @@ public class AggregationOperator
 
             Vector[] state = new Vector[aggregations.size()];
             for (int i = 0; i < state.length; i++) {
-                state[i] = allocator.allocate(ALLOCATION_CONTEXT, 1);
+                state[i] = allocator.allocate(ALLOCATION_CONTEXT, 1, aggregations.get(i)::allocate);
                 aggregations.get(i).initialize(state[i], 0, 1);
             }
 

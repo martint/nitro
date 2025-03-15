@@ -78,7 +78,7 @@ public class OutputOperator
     @Override
     public Vector column(int column)
     {
-        I64Vector result = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, 1);
+        I64Vector result = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, 1, I64Vector::new);
         result.values()[0] = rowCount;
         result.nulls()[0] = false;
 

@@ -83,7 +83,7 @@ public class GroupedAggregationOperator
             for (int i = 0; i < aggregations.size(); i++) {
                 Accumulator accumulator = aggregations.get(i);
 
-                states[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, states[i], newCapacity);
+                states[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, states[i], newCapacity, accumulator::allocate);
                 accumulator.initialize(states[i], toIntExact(previousMaxGroup + 1), toIntExact(maxGroup - previousMaxGroup));
                 accumulator.accumulate(states[i], group, mask, source::column);
             }
@@ -91,7 +91,7 @@ public class GroupedAggregationOperator
 
         int newCapacity = Allocator.computeCapacity(toIntExact(maxGroup + 1));
         for (int i = 0; i < result.length; i++) {
-            result[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, result[i], newCapacity);
+            result[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, result[i], newCapacity, aggregations.get(i)::allocate);
             result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i]);
         }
 

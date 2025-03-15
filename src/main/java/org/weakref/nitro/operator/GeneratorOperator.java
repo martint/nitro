@@ -52,7 +52,7 @@ public class GeneratorOperator
         this.generators = generators;
 
         results = generators.stream()
-                .map(_ -> (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, batchSize))
+                .map(_ -> (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, batchSize, I64Vector::new))
                 .toList();
 
         filled = new boolean[generators.size()];

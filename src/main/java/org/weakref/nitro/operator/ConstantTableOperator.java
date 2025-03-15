@@ -36,7 +36,7 @@ public class ConstantTableOperator
         this.allocator = allocator;
         columns = new Vector[columnCount];
         for (int i = 0; i < columns.length; i++) {
-            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, rows.size());
+            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, rows.size(), I64Vector::new);
         }
 
         for (int position = 0; position < rows.size(); position++) {

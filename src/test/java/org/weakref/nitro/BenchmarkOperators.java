@@ -130,7 +130,7 @@ public class BenchmarkOperators
         Operator operator = new ProjectOperator(
                 allocator,
                 new ProjectOperator.Execution(
-                        List.of(new ProjectOperator.Invocation(ADD, List.of(-1, -1))),
+                        List.of(new ProjectOperator.Invocation(ADD, List.of(-1, -1), I64Vector::new)),
                         List.of(-1)),
                 new GeneratorOperator(
                         allocator,

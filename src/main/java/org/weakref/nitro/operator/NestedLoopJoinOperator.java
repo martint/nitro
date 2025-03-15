@@ -153,7 +153,7 @@ public class NestedLoopJoinOperator
             result[i] = outer.column(i);
         }
         for (int i = 0; i < inner.columnCount(); i++) {
-            innerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, innerBuffer[i], currentOuterMask.maxPosition() + 1);
+            innerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, innerBuffer[i], currentOuterMask.maxPosition() + 1, I64Vector::new);
             replicate(
                     innerBuffer[i],
                     0,
@@ -171,7 +171,7 @@ public class NestedLoopJoinOperator
 
         int outerColumnCount = outer.columnCount();
         for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, outerBuffer[i], batchSize);
+            outerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, outerBuffer[i], batchSize, I64Vector::new);
             replicate(
                     outerBuffer[i],
                     0,
@@ -234,7 +234,7 @@ public class NestedLoopJoinOperator
     {
         Vector[] columns = new Vector[columnCount];
         for (int i = 0; i < columnCount; i++) {
-            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, BATCH_SIZE);
+            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, BATCH_SIZE, I64Vector::new);
         }
         return columns;
     }

@@ -84,7 +84,8 @@ public class TestOperators
                                         new ProjectOperator.Execution(
                                                 List.of(new ProjectOperator.Invocation(
                                                         multiply(2),
-                                                        List.of(-2))),
+                                                        List.of(-2),
+                                                        I64Vector::new)),
                                                 List.of(0)),
                                         new FilterOperator(
                                                 0,
@@ -207,7 +208,8 @@ public class TestOperators
                                 new ProjectOperator.Execution(
                                         List.of(new ProjectOperator.Invocation(
                                                 divide(3),
-                                                List.of(-1))),
+                                                List.of(-1),
+                                                I64Vector::new)),
                                         List.of(0)),
                                 new GeneratorOperator(
                                         allocator,
@@ -408,7 +410,8 @@ public class TestOperators
                                                                 out.values()[i] = in.values()[i] % 10 + 13;
                                                             }
                                                         },
-                                                        List.of(-1))),
+                                                        List.of(-1),
+                                                        I64Vector::new)),
                                                 List.of(0, -1)),
                                         new GeneratorOperator(
                                                 allocator,
@@ -631,9 +634,9 @@ public class TestOperators
                         allocator,
                         new ProjectOperator.Execution(
                                 List.of(
-                                        new ProjectOperator.Invocation(multiply, List.of(-1, -1)),
-                                        new ProjectOperator.Invocation(add, List.of(0, 0)),
-                                        new ProjectOperator.Invocation(negate, List.of(0))),
+                                        new ProjectOperator.Invocation(multiply, List.of(-1, -1), I64Vector::new),
+                                        new ProjectOperator.Invocation(add, List.of(0, 0), I64Vector::new),
+                                        new ProjectOperator.Invocation(negate, List.of(0), I64Vector::new)),
                                 List.of(-1, 1, 2)),
                         new GeneratorOperator(
                                 allocator,

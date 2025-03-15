@@ -32,6 +32,12 @@ public class Max
     }
 
     @Override
+    public Vector allocate(int size)
+    {
+        return new I64Vector(size);
+    }
+
+    @Override
     public void initialize(Vector state, int offset, int length)
     {
         Arrays.fill(((I64Vector) state).nulls(), offset, offset + length, true);
