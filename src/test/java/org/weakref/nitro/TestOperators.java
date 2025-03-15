@@ -32,6 +32,7 @@ import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
@@ -355,6 +356,28 @@ public class TestOperators
                                         10,
                                         List.of(new SequenceGenerator(100)))))))
                 .matchesExactly(List.of(row(100L, 100L, 148L, 3100L, 25L)));
+    }
+
+    @Test
+    void testCountColumn()
+    {
+        assertThat(operator(
+                new AggregationOperator(
+                        allocator,
+                        List.of(
+                                new CountColumn(0),
+                                new CountColumn(1),
+                                new CountColumn(2)),
+                        new ConstantTableOperator(
+                                allocator,
+                                3,
+                                List.of(
+                                        row(1L, null, 10L),
+                                        row(2L, null, 20L),
+                                        row(null, null, 30L),
+                                        row(4L, null, 40L),
+                                        row(5L, null, 50L))))))
+                .matchesExactly(List.of(row(4L, 0L, 5L)));
     }
 
     @Test

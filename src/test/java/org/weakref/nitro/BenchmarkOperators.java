@@ -36,6 +36,7 @@ import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
@@ -63,11 +64,26 @@ public class BenchmarkOperators
 
     @Benchmark
     @OperationsPerInvocation(1_000_000_000)
-    public void aggregation()
+    public void aggregationCountAll()
     {
         Operator operator = new AggregationOperator(
                 allocator,
                 List.of(new CountAll()),
+                new GeneratorOperator(
+                        allocator,
+                        1_000_000_000L,
+                        List.of(new SequenceGenerator(0))));
+
+        consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(1_000_000_000)
+    public void aggregationCount()
+    {
+        Operator operator = new AggregationOperator(
+                allocator,
+                List.of(new CountColumn(0)),
                 new GeneratorOperator(
                         allocator,
                         1_000_000_000L,
