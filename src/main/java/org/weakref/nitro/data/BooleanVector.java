@@ -13,20 +13,18 @@
  */
 package org.weakref.nitro.data;
 
-import java.util.Arrays;
-
-public class I64Vector
+public class BooleanVector
         implements Vector
 {
     private final boolean[] nulls;
-    private final long[] values;
+    private final boolean[] values;
 
-    public I64Vector(int size)
+    public BooleanVector(int size)
     {
-        this(new boolean[size], new long[size]);
+        this(new boolean[size], new boolean[size]);
     }
 
-    public I64Vector(boolean[] nulls, long[] values)
+    public BooleanVector(boolean[] nulls, boolean[] values)
     {
         this.nulls = nulls;
         this.values = values;
@@ -35,9 +33,9 @@ public class I64Vector
     @Override
     public Vector copy(int size)
     {
-        return new I64Vector(
-                Arrays.copyOf(nulls, size),
-                Arrays.copyOf(values, size));
+        return new BooleanVector(
+                java.util.Arrays.copyOf(nulls, size),
+                java.util.Arrays.copyOf(values, size));
     }
 
     public boolean[] nulls()
@@ -45,7 +43,7 @@ public class I64Vector
         return nulls;
     }
 
-    public long[] values()
+    public boolean[] values()
     {
         return values;
     }
@@ -59,9 +57,11 @@ public class I64Vector
     @Override
     public String toString()
     {
-        return "I64Vector{" +
-                "nulls=" + Arrays.toString(nulls) +
-                ", values=" + Arrays.toString(values) +
-                '}';
+        StringBuilder sb = new StringBuilder();
+        sb.append("BooleanVector{");
+        sb.append("nulls=").append(java.util.Arrays.toString(nulls));
+        sb.append(", values=").append(java.util.Arrays.toString(values));
+        sb.append('}');
+        return sb.toString();
     }
 }
