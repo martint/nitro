@@ -11,14 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.data;
+package org.weakref.nitro.operator.evaluator;
 
-public sealed interface Vector
-        permits FlatVector, RleVector
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.Vector;
+
+// TODO: use ErrorVector instead of BooleanVector
+public record Result(Vector result, BooleanVector errors)
 {
-    int length();
-
-    Object valueAt(int position);
-
-    Vector copy(int size);
 }

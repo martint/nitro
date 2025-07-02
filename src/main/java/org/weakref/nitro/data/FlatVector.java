@@ -13,12 +13,7 @@
  */
 package org.weakref.nitro.data;
 
-public sealed interface Vector
-        permits FlatVector, RleVector
+public non-sealed interface FlatVector
+    extends Vector
 {
-    int length();
-
-    Object valueAt(int position);
-
-    Vector copy(int size);
 }

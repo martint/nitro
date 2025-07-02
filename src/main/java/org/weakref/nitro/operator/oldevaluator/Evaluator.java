@@ -14,8 +14,6 @@
 package org.weakref.nitro.operator.oldevaluator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -113,30 +111,30 @@ public class Evaluator
         allocator.release(ALLOCATION_CONTEXT);
     }
 
-    public static void main()
-    {
-        Allocator allocator = new Allocator();
-
-        List<Vector> inputs = List.of(
-                new I64Vector(new boolean[] {false, false, false, false}, new long[] {1, 2, 3, 4}),
-                new I64Vector(new boolean[] {false, false, false, false}, new long[] {10, 20, 30, 40}),
-                new BooleanVector(new boolean[] {false, false, false, false}, new boolean[] {true, true, true, true}));
-
-        List<Operation> operations = List.of(
-                new InputReference(0), // 0
-                new InputReference(1), // 1
-                new InputReference(2), // 2
-                new AddI64(0, 1), // 3
-                new If(2, 3, 0));  // 4
-
-        Evaluator evaluator = new Evaluator(operations, (index, mask) -> inputs.get(index), allocator);
-
-        Vector evens = evaluator.evaluate(4, 4, Mask.sparse(new int[] {0, 2}, 2));
-        Vector odds = evaluator.evaluate(4, 4, Mask.sparse(new int[] {1, 3}, 2));
-        Vector all = evaluator.evaluate(4, 4, Mask.all(4));
-
-        System.out.println(evens);
-        System.out.println(odds);
-        System.out.println(all);
-    }
+//    public static void main()
+//    {
+//        Allocator allocator = new Allocator();
+//
+//        List<Vector> inputs = List.of(
+//                new I64VectorWithNulls(new boolean[] {false, false, false, false}, new long[] {1, 2, 3, 4}),
+//                new I64VectorWithNulls(new boolean[] {false, false, false, false}, new long[] {10, 20, 30, 40}),
+//                new BooleanVector(new boolean[] {true, true, true, true}));
+//
+//        List<Operation> operations = List.of(
+//                new InputReference(0), // 0
+//                new InputReference(1), // 1
+//                new InputReference(2), // 2
+//                new AddI64(0, 1), // 3
+//                new If(2, 3, 0));  // 4
+//
+//        Evaluator evaluator = new Evaluator(operations, (index, mask) -> inputs.get(index), allocator);
+//
+//        Vector evens = evaluator.evaluate(4, 4, Mask.sparse(new int[] {0, 2}, 2));
+//        Vector odds = evaluator.evaluate(4, 4, Mask.sparse(new int[] {1, 3}, 2));
+//        Vector all = evaluator.evaluate(4, 4, Mask.all(4));
+//
+//        System.out.println(evens);
+//        System.out.println(odds);
+//        System.out.println(all);
+//    }
 }

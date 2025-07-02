@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -40,7 +40,7 @@ public class TopNOperator
         this.n = n;
         this.column = column;
         this.source = source;
-        result = new I64Vector[source.columnCount()];
+        result = new I64VectorWithNulls[source.columnCount()];
     }
 
     @Override
@@ -62,14 +62,14 @@ public class TopNOperator
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
 
         for (int i = 0; i < result.length; i++) {
-            result[i] = allocator.allocate(ALLOCATION_CONTEXT, n, I64Vector::new);
+            result[i] = allocator.allocate(ALLOCATION_CONTEXT, n, I64VectorWithNulls::new);
         }
 
         while (source.hasNext()) {
             Mask mask = source.next();
 
             for (int position : mask) {
-                I64Vector sortColumn = (I64Vector) source.column(column);
+                I64VectorWithNulls sortColumn = (I64VectorWithNulls) source.column(column);
                 if (sortColumn.nulls()[position]) {
                     // Skip nulls for now
                     continue;
@@ -112,7 +112,7 @@ public class TopNOperator
         while (!queue.isEmpty()) {
             Entry entry = queue.poll();
             for (int i = 0; i < result.length; i++) {
-                long[] values = ((I64Vector) result[i]).values();
+                long[] values = ((I64VectorWithNulls) result[i]).values();
 
                 temp[i] = values[current];
                 values[current] = values[remap[entry.position]];
@@ -129,7 +129,7 @@ public class TopNOperator
     {
         for (int i = 0; i < result.length; i++) {
             Vector column = source.column(i);
-            ((I64Vector) result[i]).values()[to] = ((I64Vector) column).values()[from];
+            ((I64VectorWithNulls) result[i]).values()[to] = ((I64VectorWithNulls) column).values()[from];
         }
     }
 

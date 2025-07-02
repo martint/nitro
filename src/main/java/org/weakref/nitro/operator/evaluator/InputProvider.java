@@ -11,14 +11,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.data;
+package org.weakref.nitro.operator.evaluator;
 
-public sealed interface Vector
-        permits FlatVector, RleVector
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
+
+public class InputProvider
 {
-    int length();
 
-    Object valueAt(int position);
-
-    Vector copy(int size);
+    public Vector getInput(Variable variable, Mask mask)
+    {
+        throw new UnsupportedOperationException("not yet implemented");
+    }
 }

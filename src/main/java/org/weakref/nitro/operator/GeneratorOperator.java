@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.generator.I64Generator;
@@ -31,7 +31,7 @@ public class GeneratorOperator
 
     private final int batchSize;
     private final List<I64Generator> generators;
-    private final List<I64Vector> results;
+    private final List<I64VectorWithNulls> results;
 
     private final boolean[] filled;
     private final Allocator allocator;
@@ -52,7 +52,7 @@ public class GeneratorOperator
         this.generators = generators;
 
         results = generators.stream()
-                .map(_ -> (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, batchSize, I64Vector::new))
+                .map(_ -> (I64VectorWithNulls) allocator.allocate(ALLOCATION_CONTEXT, batchSize, I64VectorWithNulls::new))
                 .toList();
 
         filled = new boolean[generators.size()];
@@ -107,7 +107,7 @@ public class GeneratorOperator
         filled[column] = true;
 
         I64Generator generator = generators.get(column);
-        I64Vector result = results.get(column);
+        I64VectorWithNulls result = results.get(column);
 
         for (int position = 0; position < currentBatchSize; position++) {
             generator.next();

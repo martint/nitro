@@ -11,14 +11,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.data;
+package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Vector
-        permits FlatVector, RleVector
+public record Variable(int id)
 {
-    int length();
-
-    Object valueAt(int position);
-
-    Vector copy(int size);
 }

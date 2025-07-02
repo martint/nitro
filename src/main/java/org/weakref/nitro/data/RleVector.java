@@ -17,18 +17,71 @@ import java.util.Arrays;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-public class RleVector
+public final class RleVector
         implements Vector
 {
     private final int length;
     private final int[] counts;
+    private final Vector values;
 
     public RleVector(int[] counts, Vector values)
     {
         checkArgument(counts.length == values.length(), "Run lengths counts (%s) must match the length of the underlying values vector (%s)", counts.length, values.length());
-        this.counts = counts;
 
+        this.values = values;
+        this.counts = counts;
         length = Arrays.stream(counts).sum();
+    }
+
+    public static int computeTargetRleLength(RleVector left, RleVector right)
+    {
+        int result = 0;
+
+        int leftIndex = 0;
+        int rightIndex = 0;
+
+        int leftCount = 0;
+        int rightCount = 0;
+
+        while (leftIndex < left.counts().length && rightIndex < right.counts().length) {
+            result++;
+
+            if (leftCount == 0) {
+                leftCount = left.counts()[leftIndex];
+            }
+            if (rightCount == 0) {
+                rightCount = right.counts()[rightIndex];
+            }
+
+            int count = Math.min(leftCount, rightCount);
+            leftCount -= count;
+            rightCount -= count;
+
+            if (leftCount == 0) {
+                leftIndex++;
+            }
+            if (rightCount == 0) {
+                rightIndex++;
+            }
+        }
+
+        return result;
+    }
+
+    public int[] counts()
+    {
+        return counts;
+    }
+
+    public Vector values()
+    {
+        return values;
+    }
+
+    @Override
+    public int length()
+    {
+        return length;
     }
 
     @Override
@@ -38,8 +91,23 @@ public class RleVector
     }
 
     @Override
-    public int length()
+    public Object valueAt(int position)
     {
-        return length;
+        int count = 0;
+
+        for (int i = 0; i < counts.length; i++) {
+            count += counts[i];
+            if (position < count) {
+                return values.valueAt(i);
+            }
+        }
+
+        throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + length);
+    }
+
+    @Override
+    public String toString()
+    {
+        return "RLE {length: " + length + ", counts: " + Arrays.toString(counts) + ", values: " + values + "}";
     }
 }

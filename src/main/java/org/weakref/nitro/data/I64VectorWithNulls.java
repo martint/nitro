@@ -15,28 +15,45 @@ package org.weakref.nitro.data;
 
 import java.util.Arrays;
 
-public class BooleanVector
+@Deprecated
+public class I64VectorWithNulls
         implements FlatVector
 {
-    private final boolean[] values;
+    private final boolean[] nulls;
+    private final long[] values;
 
-    public BooleanVector(int size)
+    public I64VectorWithNulls(int size)
     {
-        this(new boolean[size]);
+        this(new boolean[size], new long[size]);
     }
 
-    public BooleanVector(boolean[] values)
+    public I64VectorWithNulls(boolean[] nulls, long[] values)
     {
+        // if nulls contains any true value, throw an exception
+        for (boolean isNull : nulls) {
+            if (isNull) {
+                throw new IllegalArgumentException("Nulls array must not contain any true values");
+            }
+        }
+        this.nulls = nulls;
         this.values = values;
     }
 
     @Override
     public Vector copy(int size)
     {
-        return new BooleanVector(java.util.Arrays.copyOf(values, size));
+        return new I64VectorWithNulls(
+                Arrays.copyOf(nulls, size),
+                Arrays.copyOf(values, size));
     }
 
-    public boolean[] values()
+    @Deprecated
+    public boolean[] nulls()
+    {
+        return nulls;
+    }
+
+    public long[] values()
     {
         return values;
     }
@@ -56,6 +73,9 @@ public class BooleanVector
     @Override
     public String toString()
     {
-        return "BooleanVector" + Arrays.toString(values);
+        return "I64Vector{" +
+                "nulls=" + Arrays.toString(nulls) +
+                ", values=" + Arrays.toString(values) +
+                '}';
     }
 }

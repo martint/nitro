@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -153,7 +153,7 @@ public class NestedLoopJoinOperator
             result[i] = outer.column(i);
         }
         for (int i = 0; i < inner.columnCount(); i++) {
-            innerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, innerBuffer[i], currentOuterMask.maxPosition() + 1, I64Vector::new);
+            innerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, innerBuffer[i], currentOuterMask.maxPosition() + 1, I64VectorWithNulls::new);
             replicate(
                     innerBuffer[i],
                     0,
@@ -171,7 +171,7 @@ public class NestedLoopJoinOperator
 
         int outerColumnCount = outer.columnCount();
         for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, outerBuffer[i], batchSize, I64Vector::new);
+            outerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, outerBuffer[i], batchSize, I64VectorWithNulls::new);
             replicate(
                     outerBuffer[i],
                     0,
@@ -187,8 +187,8 @@ public class NestedLoopJoinOperator
 
     private void replicate(Vector output, int start, int length, Vector input, int position)
     {
-        I64Vector outputVector = (I64Vector) output;
-        I64Vector inputVector = (I64Vector) input;
+        I64VectorWithNulls outputVector = (I64VectorWithNulls) output;
+        I64VectorWithNulls inputVector = (I64VectorWithNulls) input;
 
         Arrays.fill(outputVector.values(), start, start + length, inputVector.values()[position]);
         Arrays.fill(outputVector.nulls(), start, start + length, inputVector.nulls()[position]);
@@ -210,7 +210,7 @@ public class NestedLoopJoinOperator
                     int copied = 0;
                     for (int i = 0; i < columns.length; i++) {
                         // TODO: allow transferring ownership from underlying operator in case we don't need to copy+compact
-                        copied = copyAndCompact((I64Vector) inner.column(i), mask, maskOffset, (I64Vector) columns[i], outputPosition);
+                        copied = copyAndCompact((I64VectorWithNulls) inner.column(i), mask, maskOffset, (I64VectorWithNulls) columns[i], outputPosition);
                     }
                     outputPosition += copied;
                     maskOffset += copied;
@@ -234,7 +234,7 @@ public class NestedLoopJoinOperator
     {
         Vector[] columns = new Vector[columnCount];
         for (int i = 0; i < columnCount; i++) {
-            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, BATCH_SIZE, I64Vector::new);
+            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, BATCH_SIZE, I64VectorWithNulls::new);
         }
         return columns;
     }
@@ -242,7 +242,7 @@ public class NestedLoopJoinOperator
     /**
      * @return the number of elements copied
      */
-    private int copyAndCompact(I64Vector input, Mask mask, int maskStart, I64Vector output, int outputStart)
+    private int copyAndCompact(I64VectorWithNulls input, Mask mask, int maskStart, I64VectorWithNulls output, int outputStart)
     {
         int outputPosition = outputStart;
         int maskIndex = maskStart;

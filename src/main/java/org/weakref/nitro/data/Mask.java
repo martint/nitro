@@ -18,6 +18,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 public class Mask
         implements Iterable<Integer>
 {
@@ -52,9 +54,9 @@ public class Mask
         this.all = all;
     }
 
-    public static Mask sparse(int[] positions, int count)
+    public static Mask sparse(int[] activePositions, int totalPositions)
     {
-        return new Mask(positions, count, count == positions.length);
+        return new Mask(Arrays.copyOf(activePositions, totalPositions), activePositions.length, totalPositions == activePositions.length);
     }
 
     public boolean all()
@@ -83,6 +85,21 @@ public class Mask
         return count == 0;
     }
 
+    public boolean anyTrue(int start, int end)
+    {
+        if (all) {
+            return true;
+        }
+
+        for (int i = 0; i < count; i++) {
+            int position = positions[i];
+            if (position >= start && position <= end) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public String toString()
     {
@@ -104,7 +121,7 @@ public class Mask
             return this;
         }
 
-        int[] positions = new int[n];
+        int[] positions = new int[this.positions.length];
         System.arraycopy(this.positions, count - n, positions, 0, n);
         return new Mask(positions, n, false);
     }
@@ -132,6 +149,7 @@ public class Mask
 
     /**
      * Returns a new mask with positions that are in this mask but not in the other mask.
+     *
      * @param other the mask to subtract from this mask
      * @return a new mask containing positions in this mask that are not in the other mask
      */
@@ -161,7 +179,7 @@ public class Mask
 
         if (resultCount == 0) {
             // All positions are in other mask
-            return new Mask(new int[0], 0, false);
+            return new Mask(new int[positions.length], 0, false);
         }
 
         if (resultCount == this.count) {
@@ -170,7 +188,7 @@ public class Mask
         }
 
         // Create the result mask
-        int[] resultPositions = new int[resultCount];
+        int[] resultPositions = new int[positions.length];
         int resultIndex = 0;
         for (int i = 0; i < this.count; i++) {
             if (!otherPositions.contains(this.positions[i])) {
@@ -183,6 +201,7 @@ public class Mask
 
     /**
      * Returns a new mask that is the union of this mask and another mask.
+     *
      * @param other the mask to union with this mask
      * @return a new mask containing all positions from both masks (without duplicates)
      */
@@ -208,7 +227,7 @@ public class Mask
         }
 
         // Convert back to an array
-        int[] resultPositions = new int[allPositions.size()];
+        int[] resultPositions = new int[positions.length];
         int index = 0;
         for (int position : allPositions) {
             resultPositions[index++] = position;
@@ -222,6 +241,7 @@ public class Mask
 
     /**
      * Checks if this mask contains the specified position.
+     *
      * @param position the position to check
      * @return true if the mask contains the position, false otherwise
      */
@@ -236,6 +256,7 @@ public class Mask
 
     /**
      * Checks if all positions in the other mask are contained in this mask.
+     *
      * @param other the mask to check
      * @return true if this mask contains all positions from the other mask, false otherwise
      */
@@ -261,38 +282,126 @@ public class Mask
     public Mask and(BooleanVector other)
     {
         if (other == null || other.length() == 0) {
-            return new Mask(new int[0], 0, false);
+            return new Mask(new int[positions.length], 0, false);
         }
 
-        int[] resultPositions = new int[count];
+        int[] resultPositions = new int[positions.length];
         int resultCount = 0;
 
         for (int i = 0; i < count; i++) {
             int position = positions[i];
-            if (!other.nulls()[position] && other.values()[position]) {
+            if (other.values()[position]) {
                 resultPositions[resultCount++] = position;
             }
         }
 
-        return new Mask(Arrays.copyOf(resultPositions, resultCount), resultCount, resultCount == count);
+        return new Mask(resultPositions, resultCount, resultCount == positions.length);
+    }
+
+    public Mask andNot(Mask other)
+    {
+        checkArgument(positions.length == other.positions.length, "Masks must have the same length");
+
+        // TODO: optimize
+        return andNot(other.toVector());
     }
 
     public Mask andNot(BooleanVector other)
     {
-        if (other == null || other.length() == 0) {
+        if (other.length() == 0) {
             return this;
         }
 
-        int[] resultPositions = new int[count];
+        int[] resultPositions = new int[positions.length];
         int resultCount = 0;
 
         for (int i = 0; i < count; i++) {
             int position = positions[i];
-            if (!other.nulls()[position] && !other.values()[position]) {
+            if (!other.values()[position]) {
                 resultPositions[resultCount++] = position;
             }
         }
 
-        return new Mask(Arrays.copyOf(resultPositions, resultCount), resultCount, resultCount == count);
+        return new Mask(resultPositions, resultCount, resultCount == positions.length);
+    }
+
+    public Mask complement()
+    {
+        if (all) {
+            return new Mask(new int[positions.length], 0, false);
+        }
+
+        int[] result = new int[positions.length];
+        int outputIndex = 0;
+        int position = 0;
+
+        // add positions not in this.positions up to count
+        for (int i = 0; i < count; i++) {
+            while (position < positions[i]) {
+                result[outputIndex++] = position++;
+            }
+            position++;
+        }
+
+        for (int i = position; i < positions.length; i++) {
+            result[outputIndex++] = i;
+        }
+
+        return new Mask(result, outputIndex, false);
+    }
+
+    private BooleanVector toVector()
+    {
+        BooleanVector booleanVector = new BooleanVector(positions.length);
+        for (int i = 0; i < count; i++) {
+            booleanVector.values()[positions[i]] = true;
+        }
+        return booleanVector;
+    }
+
+    public Mask or(Mask other)
+    {
+        checkArgument(positions.length == other.positions.length, "Masks must have the same length");
+
+        if (other.none()) {
+            return this;
+        }
+
+        if (this.none()) {
+            return other;
+        }
+
+        int[] result = new int[positions.length];
+
+        int i = 0;
+        int j = 0;
+        int output = 0;
+
+        while (i < count && j < other.count) {
+            if (positions[i] < other.positions[j]) {
+                result[output] = positions[i];
+                i++;
+            }
+            else if (positions[i] > other.positions[j]) {
+                result[output] = other.positions[j];
+                j++;
+            }
+            else {
+                result[output] = positions[i];
+                i++;
+                j++;
+            }
+            output++;
+        }
+
+        while (i < count) {
+            result[output++] = positions[i++];
+        }
+
+        while (j < other.count) {
+            result[output++] = other.positions[j++];
+        }
+
+        return new Mask(result, output, output == positions.length);
     }
 }

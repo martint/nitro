@@ -13,18 +13,19 @@
  */
 package org.weakref.nitro.data;
 
-public class I32Vector
-        implements Vector
+@Deprecated
+public class I32VectorWithNulls
+        implements FlatVector
 {
     private final boolean[] nulls;
     private final int[] values;
 
-    public I32Vector(int size)
+    public I32VectorWithNulls(int size)
     {
         this(new boolean[size], new int[size]);
     }
 
-    I32Vector(boolean[] nulls, int[] values)
+    I32VectorWithNulls(boolean[] nulls, int[] values)
     {
         this.nulls = nulls;
         this.values = values;
@@ -33,11 +34,12 @@ public class I32Vector
     @Override
     public Vector copy(int size)
     {
-        return new I32Vector(
+        return new I32VectorWithNulls(
                 java.util.Arrays.copyOf(nulls, size),
                 java.util.Arrays.copyOf(values, size));
     }
 
+    @Deprecated
     public boolean[] nulls()
     {
         return nulls;
@@ -46,6 +48,12 @@ public class I32Vector
     public int[] values()
     {
         return values;
+    }
+
+    @Override
+    public Object valueAt(int position)
+    {
+        return values[position];
     }
 
     @Override

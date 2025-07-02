@@ -13,8 +13,8 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.data.F64Vector;
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.F64VectorWithNulls;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -35,20 +35,20 @@ public class SumF64
     @Override
     public Vector allocate(int size)
     {
-        return new F64Vector(size);
+        return new F64VectorWithNulls(size);
     }
 
     @Override
     public void initialize(Vector state, int offset, int length)
     {
-        Arrays.fill(((F64Vector) state).nulls(), offset, offset + length, true);
+        Arrays.fill(((F64VectorWithNulls) state).nulls(), offset, offset + length, true);
     }
 
     @Override
     public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
     {
-        F64Vector stateVector = (F64Vector) state;
-        F64Vector inputVector = (F64Vector) columns.column(inputColumn);
+        F64VectorWithNulls stateVector = (F64VectorWithNulls) state;
+        F64VectorWithNulls inputVector = (F64VectorWithNulls) columns.column(inputColumn);
 
         boolean[] nulls = inputVector.nulls();
         double[] values = inputVector.values();
@@ -73,9 +73,9 @@ public class SumF64
     @Override
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
-        F64Vector stateVector = (F64Vector) state;
-        I64Vector groupVector = (I64Vector) groups;
-        F64Vector inputVector = (F64Vector) columns.column(inputColumn);
+        F64VectorWithNulls stateVector = (F64VectorWithNulls) state;
+        I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
+        F64VectorWithNulls inputVector = (F64VectorWithNulls) columns.column(inputColumn);
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -91,7 +91,7 @@ public class SumF64
         }
     }
 
-    private static void accumulate(F64Vector state, int group, F64Vector input, int position)
+    private static void accumulate(F64VectorWithNulls state, int group, F64VectorWithNulls input, int position)
     {
         state.nulls()[group] = false;
         state.values()[group] += input.nulls()[position] ? 0 : input.values()[position];

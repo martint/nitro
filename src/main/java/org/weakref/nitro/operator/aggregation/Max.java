@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -34,20 +34,20 @@ public class Max
     @Override
     public Vector allocate(int size)
     {
-        return new I64Vector(size);
+        return new I64VectorWithNulls(size);
     }
 
     @Override
     public void initialize(Vector state, int offset, int length)
     {
-        Arrays.fill(((I64Vector) state).nulls(), offset, offset + length, true);
+        Arrays.fill(((I64VectorWithNulls) state).nulls(), offset, offset + length, true);
     }
 
     @Override
     public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
     {
-        I64Vector stateVector = (I64Vector) state;
-        I64Vector inputVector = (I64Vector) columns.column(inputColumn);
+        I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
+        I64VectorWithNulls inputVector = (I64VectorWithNulls) columns.column(inputColumn);
 
         for (int position : mask) {
             accumulate(stateVector, group, inputVector, position);
@@ -57,9 +57,9 @@ public class Max
     @Override
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
-        I64Vector stateVector = (I64Vector) state;
-        I64Vector groupVector = (I64Vector) groups;
-        I64Vector inputVector = (I64Vector) columns.column(inputColumn);
+        I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
+        I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
+        I64VectorWithNulls inputVector = (I64VectorWithNulls) columns.column(inputColumn);
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
@@ -67,7 +67,7 @@ public class Max
         }
     }
 
-    private static void accumulate(I64Vector state, int group, I64Vector input, int position)
+    private static void accumulate(I64VectorWithNulls state, int group, I64VectorWithNulls input, int position)
     {
         if (state.nulls()[group]) {
             state.values()[group] = input.values()[position];

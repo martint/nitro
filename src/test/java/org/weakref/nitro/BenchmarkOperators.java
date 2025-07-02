@@ -25,7 +25,7 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.Function;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -53,9 +53,9 @@ public class BenchmarkOperators
     private final Allocator allocator = new Allocator();
 
     private static final Function ADD = (output, inputs, mask) -> {
-        I64Vector in1 = (I64Vector) inputs[0];
-        I64Vector in2 = (I64Vector) inputs[1];
-        I64Vector out = (I64Vector) output;
+        I64VectorWithNulls in1 = (I64VectorWithNulls) inputs[0];
+        I64VectorWithNulls in2 = (I64VectorWithNulls) inputs[1];
+        I64VectorWithNulls out = (I64VectorWithNulls) output;
         for (int i = 0; i <= mask.maxPosition(); i++) {
             out.values()[i] = in1.values()[i] + in2.values()[i];
             out.nulls()[i] = in1.nulls()[i] || in2.nulls()[i];
@@ -130,7 +130,7 @@ public class BenchmarkOperators
         Operator operator = new ProjectOperator(
                 allocator,
                 new ProjectOperator.Execution(
-                        List.of(new ProjectOperator.Invocation(ADD, List.of(-1, -1), I64Vector::new)),
+                        List.of(new ProjectOperator.Invocation(ADD, List.of(-1, -1), I64VectorWithNulls::new)),
                         List.of(-1)),
                 new GeneratorOperator(
                         allocator,

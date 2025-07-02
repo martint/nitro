@@ -16,33 +16,24 @@ package org.weakref.nitro.data;
 import java.util.Arrays;
 
 public class I64Vector
-        implements Vector
+        implements FlatVector
 {
-    private final boolean[] nulls;
     private final long[] values;
 
     public I64Vector(int size)
     {
-        this(new boolean[size], new long[size]);
+        this(new long[size]);
     }
 
-    public I64Vector(boolean[] nulls, long[] values)
+    public I64Vector(long[] values)
     {
-        this.nulls = nulls;
         this.values = values;
     }
 
     @Override
     public Vector copy(int size)
     {
-        return new I64Vector(
-                Arrays.copyOf(nulls, size),
-                Arrays.copyOf(values, size));
-    }
-
-    public boolean[] nulls()
-    {
-        return nulls;
+        return new I64Vector(Arrays.copyOf(values, size));
     }
 
     public long[] values()
@@ -57,11 +48,14 @@ public class I64Vector
     }
 
     @Override
+    public Object valueAt(int position)
+    {
+        return values[position];
+    }
+
+    @Override
     public String toString()
     {
-        return "I64Vector{" +
-                "nulls=" + Arrays.toString(nulls) +
-                ", values=" + Arrays.toString(values) +
-                '}';
+        return "I64Vector" + Arrays.toString(values);
     }
 }

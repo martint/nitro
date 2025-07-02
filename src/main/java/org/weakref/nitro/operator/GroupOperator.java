@@ -89,21 +89,16 @@ public class GroupOperator
             I64Vector column = (I64Vector) source.column(groupByColumn);
 
             for (int position : mask) {
-                if (column.nulls()[position]) {
-                    result.nulls()[position] = true;
-                }
-                else {
-                    long value = column.values()[position];
-                    long group = groups.size();
+                // TODO: handle nulls
+                long value = column.values()[position];
+                long group = groups.size();
 
-                    long existing = groups.putIfAbsent(value, group);
-                    if (existing != -1) {
-                        group = existing;
-                    }
-
-                    result.values()[position] = group;
-                    result.nulls()[position] = false;
+                long existing = groups.putIfAbsent(value, group);
+                if (existing != -1) {
+                    group = existing;
                 }
+
+                result.values()[position] = group;
             }
         }
     }

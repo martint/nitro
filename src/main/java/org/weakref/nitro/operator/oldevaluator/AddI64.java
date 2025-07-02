@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator.oldevaluator;
 
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -32,9 +32,9 @@ public class AddI64
     @Override
     public void apply(int output, Mask mask, Vector[] buffers, EvaluationContext context)
     {
-        I64Vector in1 = (I64Vector) context.evaluate(input1, input1, mask);
-        I64Vector in2 = (I64Vector) context.evaluate(input2, input1, mask);
-        I64Vector out = (I64Vector) context.allocator().allocateOrGrow(null, buffers[output], mask.maxPosition() + 1, I64Vector::new);
+        I64VectorWithNulls in1 = (I64VectorWithNulls) context.evaluate(input1, input1, mask);
+        I64VectorWithNulls in2 = (I64VectorWithNulls) context.evaluate(input2, input1, mask);
+        I64VectorWithNulls out = (I64VectorWithNulls) context.allocator().allocateOrGrow(null, buffers[output], mask.maxPosition() + 1, I64VectorWithNulls::new);
         buffers[output] = out;
         
         for (int i = 0; i < mask.count(); i++) {
