@@ -13,19 +13,35 @@
  */
 package org.weakref.nitro.operator.evaluator.functions;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.EvaluationContext;
+import org.weakref.nitro.operator.evaluator.Function;
 
-import static com.google.common.base.Preconditions.checkArgument;
 
 public class Or
+        implements Function
 {
-    public Vector apply(Vector left, Vector right, Mask mask, Vector result)
-    {
-        checkArgument(left.length() == right.length(), "Vectors must have the same length");
+    private static final Allocator.Context CONTEXT = new Allocator.Context("Or");
 
-        return applyFlatFlat(left, right, mask, result);
+    private final int left;
+    private final int right;
+
+    public Or(int left, int right)
+    {
+        this.left = left;
+        this.right = right;
+    }
+
+    @Override
+    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    {
+        Vector leftVec = context.evaluate(left, mask);
+        Vector rightVec = context.evaluate(right, mask);
+        output = context.allocator().allocateOrGrow(CONTEXT, output, leftVec.length(), BooleanVector::new);
+        return applyFlatFlat(leftVec, rightVec, mask, output);
     }
 
     private Vector applyFlatFlat(Vector left, Vector right, Mask mask, Vector result)
@@ -34,10 +50,6 @@ public class Or
         BooleanVector rightFlat = (BooleanVector) right;
 
         BooleanVector output = (BooleanVector) result;
-        if (output == null) {
-            // TODO: allocate from pool
-            output = new BooleanVector(left.length());
-        }
 
         if (mask.all()) {
             int max = mask.maxPosition();

@@ -13,62 +13,91 @@
  */
 package org.weakref.nitro.operator.evaluator.example;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.Evaluator;
+import org.weakref.nitro.operator.evaluator.Function;
 import org.weakref.nitro.operator.evaluator.functions.AddI64Exact;
+import org.weakref.nitro.operator.evaluator.functions.InputReference;
 import org.weakref.nitro.operator.evaluator.functions.Or;
-import org.weakref.nitro.operator.evaluator.Result;
 
-import static org.weakref.nitro.operator.evaluator.example.Vectors.render;
+import java.util.List;
 
 /**
- * Chained computation: a + b + c \ M
+ * Chained computation: {@code (a + b) + c} with null tracking and overflow detection.
+ *
+ * <pre>
+ *   0: InputReference(0)    -- a values
+ *   1: InputReference(1)    -- a nulls
+ *   2: InputReference(2)    -- b values
+ *   3: InputReference(3)    -- b nulls
+ *   4: InputReference(4)    -- c values
+ *   5: InputReference(5)    -- c nulls
+ *   6: Or(1, 3)             -- ab_nulls
+ *   7: AddI64Exact(0, 2)    -- a + b
+ *   8: Or(6, 5)             -- abc_nulls
+ *   9: AddI64Exact(7, 4)    -- (a + b) + c
+ * </pre>
  */
 public class Example3
 {
-    private static final AddI64Exact ADD_I64_EXACT = new AddI64Exact();
-    private static final Or OR = new Or();
-
     void main()
     {
-        Mask inputMask = Mask.sparse(new int[] {2, 3, 4, 5, 6, 7, 8}, 10);
-        Long[] a = {null, 2L, 3L, Long.MAX_VALUE - 1, Long.MAX_VALUE, 6L, 7L, 8L, 9L, null};
-        Long[] b = {10L, null, 30L, 1L, 1L, 60L, 70L, 80L, null, 100L};
-        Long[] c = {100L, 200L, null, 1L, 1L, 600L, 700L, 800L, null, 1000L};
+        int batchSize = 10;
+        long[] aValues   = {0, 2, 3, Long.MAX_VALUE - 1, Long.MAX_VALUE, 6, 7, 8, 9,    0};
+        long[] bValues   = {10, 0, 30, 1, 1, 60, 70, 80, 0, 100};
+        long[] cValues   = {100, 200, 0, 1, 1, 600, 700, 800, 0, 1000};
+        boolean[] aNulls = {true, false, false, false, false, false, false, false, false, true};
+        boolean[] bNulls = {false, true, false, false, false, false, false, false, false, false};
+        boolean[] cNulls = {false, false, true, false, false, false, false, false, true, false};
 
-        I64Vector aValues = Vectors.i64Vector(a);
-        BooleanVector aNulls = Vectors.nulls(a);
-        I64Vector bValues = Vectors.i64Vector(b);
-        BooleanVector bNulls = Vectors.nulls(b);
-        I64Vector cValues = Vectors.i64Vector(c);
-        BooleanVector cNulls = Vectors.nulls(c);
+        Vector[] inputs = {
+                new I64Vector(aValues),    // 0: a values
+                new BooleanVector(aNulls), // 1: a nulls
+                new I64Vector(bValues),    // 2: b values
+                new BooleanVector(bNulls), // 3: b nulls
+                new I64Vector(cValues),    // 4: c values
+                new BooleanVector(cNulls), // 5: c nulls
+        };
 
-        // $0_nulls = OR(a.nulls, b.nulls) \ IM
-        // $m0 = IM & ~$0_nulls
-        // ($0_values, $0_errors) = ADD_I64_EXACT(a_values, b_values) \ $m0
-        BooleanVector nulls = (BooleanVector) OR.apply(aNulls, bNulls, inputMask, null);
-        Mask m0 = inputMask.andNot(nulls);
-        Result addResult = ADD_I64_EXACT.apply(aValues, bValues, m0, null);
+        AddI64Exact addAB = new AddI64Exact(0, 2);
+        AddI64Exact addABC = new AddI64Exact(7, 4);
+        List<Function> expressions = List.of(
+                new InputReference(0),  // 0: a values
+                new InputReference(1),  // 1: a nulls
+                new InputReference(2),  // 2: b values
+                new InputReference(3),  // 3: b nulls
+                new InputReference(4),  // 4: c values
+                new InputReference(5),  // 5: c nulls
+                new Or(1, 3),           // 6: ab_nulls
+                addAB,                  // 7: a + b
+                new Or(6, 5),           // 8: abc_nulls
+                addABC);                // 9: (a + b) + c
 
-        // $m1 = $m0 ~$0_errors
-        // $r_nulls = OR($0_nulls, c.nulls) \ $m1
-        // ($r_values, $1_errors) = ADD_I64_EXACT($0_values, c_values) \ $m1
+        Allocator allocator = new Allocator();
+        Evaluator evaluator = new Evaluator(expressions, (i, mask) -> inputs[i], allocator);
 
-        // TODO: how to represent merging of errors?
-        //   $r_errors = merge($m1, $1_errors, $0_errors) \ IM
-        Mask remaining = m0.andNot(addResult.errors());
-        BooleanVector nulls2 = (BooleanVector) OR.apply(nulls, cNulls, remaining, nulls);
-        Result addResult2 = ADD_I64_EXACT.apply(addResult.result(), cValues, remaining, addResult);
+        Mask inputMask = Mask.sparse(new int[] {2, 3, 4, 5, 6, 7, 8}, batchSize);
 
-        System.out.println("Input mask: " + inputMask);
-        System.out.println("Remaining mask" + remaining);
+        // Step 1: compute combined nulls; only evaluate where all three inputs are non-null
+        BooleanVector abcNulls = (BooleanVector) evaluator.evaluate(8, inputMask);
+        Mask m0 = inputMask.andNot(abcNulls);
 
-        System.out.println();
-        System.out.println("Nulls:  " + nulls2);
-        System.out.println("Values: " + addResult2.result());
-        System.out.println("Errors: " + addResult2.errors());
-        System.out.println();
-        System.out.println("Result: " + render(inputMask, addResult2.result(), nulls, addResult2.errors()));
+        // Step 2: evaluate a + b; exclude positions with overflow
+        evaluator.evaluate(7, m0);
+        Mask m1 = addAB.errors() != null ? m0.andNot(addAB.errors()) : m0;
+
+        // Step 3: evaluate (a + b) + c for positions with no a+b overflow
+        evaluator.evaluate(9, m1);
+
+        System.out.println("Input mask:       " + inputMask);
+        System.out.println("abc nulls:        " + abcNulls);
+        System.out.println("a+b:              " + evaluator.evaluate(7, m0));
+        System.out.println("a+b overflow:     " + addAB.errors());
+        System.out.println("(a+b)+c:          " + evaluator.evaluate(9, m1));
+        System.out.println("(a+b)+c overflow: " + addABC.errors());
     }
 }

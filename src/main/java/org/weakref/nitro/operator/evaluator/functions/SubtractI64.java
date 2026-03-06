@@ -13,30 +13,54 @@
  */
 package org.weakref.nitro.operator.evaluator.functions;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.FlatVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.EvaluationContext;
+import org.weakref.nitro.operator.evaluator.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
 public class SubtractI64
+        implements Function
 {
-    public Vector apply(Vector left, Vector right, Mask mask, Vector result)
+    private static final Allocator.Context CONTEXT = new Allocator.Context("SubtractI64");
+
+    private final int left;
+    private final int right;
+
+    public SubtractI64(int left, int right)
+    {
+        this.left = left;
+        this.right = right;
+    }
+
+    @Override
+    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    {
+        Vector leftVec = context.evaluate(left, mask);
+        Vector rightVec = context.evaluate(right, mask);
+        return apply(leftVec, rightVec, mask, output, context);
+    }
+
+    private Vector apply(Vector left, Vector right, Mask mask, Vector result, EvaluationContext context)
     {
         checkArgument(left.length() == right.length(), "Vectors must have the same length");
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle) {
-            return applyRleRle(leftRle, rightRle, mask);
+            return applyRleRle(leftRle, rightRle, mask, result, context);
         }
         else if (left instanceof RleVector leftRle && right instanceof FlatVector rightFlat) {
-            return applyRleFlat(leftRle, rightFlat, mask);
+            return applyRleFlat(leftRle, rightFlat, mask, result, context);
         }
         else if (left instanceof FlatVector leftFlat && right instanceof RleVector rightRle) {
-            return applyRleFlat(rightRle, leftFlat, mask);
+            return applyRleFlat(rightRle, leftFlat, mask, result, context);
         }
 
+        result = context.allocator().allocateOrGrow(CONTEXT, result, left.length(), I64Vector::new);
         return applyFlatFlat(left, right, mask, result);
     }
 
@@ -46,10 +70,6 @@ public class SubtractI64
         I64Vector rightFlat = (I64Vector) right;
 
         I64Vector output = (I64Vector) result;
-        if (output == null) {
-            // TODO: allocate from pool
-            output = new I64Vector(left.length());
-        }
 
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -65,10 +85,9 @@ public class SubtractI64
         return output;
     }
 
-    private Vector applyRleFlat(RleVector rle, FlatVector flat, Mask mask)
+    private Vector applyRleFlat(RleVector rle, FlatVector flat, Mask mask, Vector result, EvaluationContext context)
     {
-        // TODO: allocate from pool
-        I64Vector output = new I64Vector(flat.length());
+        I64Vector output = (I64Vector) context.allocator().allocateOrGrow(CONTEXT, result, flat.length(), I64Vector::new);
         I64Vector flatValues = (I64Vector) flat;
 
         if (mask.all()) {
@@ -101,14 +120,14 @@ public class SubtractI64
         return output;
     }
 
-    private RleVector applyRleRle(RleVector left, RleVector right, Mask mask)
+    private RleVector applyRleRle(RleVector left, RleVector right, Mask mask, Vector result, EvaluationContext context)
     {
         int outputSize = RleVector.computeTargetRleLength(left, right);
         // TODO: if outputSize > some threshold, fall back to flat vectors
 
-        // TODO: allocate from pool
         int[] counts = new int[outputSize];
-        I64Vector output = new I64Vector(outputSize);
+        I64Vector existingInner = result instanceof RleVector r ? (I64Vector) r.values() : null;
+        I64Vector output = (I64Vector) context.allocator().allocateOrGrow(CONTEXT, existingInner, outputSize, I64Vector::new);
 
         I64Vector leftValues = (I64Vector) left.values();
         I64Vector rightValues = (I64Vector) right.values();

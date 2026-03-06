@@ -13,100 +13,116 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
-import org.weakref.nitro.operator.evaluator.ir.Assignment;
-import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
 
-import static com.google.common.collect.ImmutableMap.toImmutableMap;
-
+/**
+ * Lazy, memoized, mask-driven expression evaluator.
+ * <p>
+ * The evaluator manages a list of {@link Function} expressions indexed by ordinal.
+ * Expressions are evaluated on demand via {@link #evaluate(int, Mask)} and results
+ * are memoized per expression. Evaluation is additive: calling
+ * {@code evaluate(i, mask1)} followed by {@code evaluate(i, mask2)} computes only
+ * the positions in {@code mask2} not already covered by {@code mask1}.
+ * <p>
+ * Functions call back into the evaluator via {@link EvaluationContext} to request
+ * evaluation of their inputs at whatever masks they require. This allows functions
+ * to implement conditional logic (e.g., {@code IF}) by splitting masks internally,
+ * without any special-casing in the evaluator.
+ * <p>
+ * Call {@link #reset()} between batches to clear memoized state.
+ */
 public class Evaluator
 {
-//    private final Map<Variable, MemoEntry> memo = new HashMap<>();
-//
-//    private final List<Variable> outputs;
-//    private final List<Assignment> program;
-//
-    private final Map<Variable, Assignment> assignments;
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("Evaluator");
 
-//    private final InputProvider inputs;
-//    private final Allocator allocator;
-//
-    public Evaluator(
-            List<Assignment> program,
-            Allocator allocator)
+    private final List<Function> expressions;
+    private final Input input;
+    private final Allocator allocator;
+    private final Vector[] buffers;
+    private final Mask[] masks;
+    private final EvaluationContext context;
+
+    public Evaluator(List<Function> expressions, Input input, Allocator allocator)
     {
-//        this.program = program;
-//        this.outputs = outputs;
-//        this.inputs = inputs;
-//        this.allocator = allocator;
-        this.assignments = program.stream().collect(toImmutableMap(Assignment::variable, Function.identity()));
+        this.expressions = expressions;
+        this.input = input;
+        this.allocator = allocator;
+        this.buffers = new Vector[expressions.size()];
+        this.masks = new Mask[expressions.size()];
+
+        this.context = new EvaluationContext()
+        {
+            @Override
+            public Vector evaluate(int expressionIndex, Mask mask)
+            {
+                return Evaluator.this.evaluate(expressionIndex, mask);
+            }
+
+            @Override
+            public Vector input(int inputIndex, Mask mask)
+            {
+                return Evaluator.this.input.get(inputIndex, mask);
+            }
+
+            @Override
+            public Allocator allocator()
+            {
+                return Evaluator.this.allocator;
+            }
+        };
     }
-//
-//    public Vector evaluate(Variable variable, Mask mask)
-//    {
-//        Vector result;
-//        Mask remaining = mask;
-//
-//        MemoEntry entry = memo.get(variable);
-//        if (entry != null) {
-//            remaining = mask.difference(entry.mask());
-//            if (remaining.none()) {
-//                return entry.vector();
-//            }
-//            result = entry.vector();
-//        }
-//        else {
-//            Assignment assignment = assignments.get(variable);
-//            if (assignment == null) {
-//                result = inputs.getInput(variable, mask);
-//                memo.put(variable, new MemoEntry(result, mask));
-//                return result;
-//            }
-//            result = allocator.allocate(assignment.type());
-//        }
-//
-//        // Evaluate the assignment for the missing mask
-//        Assignment assignment = assignments.get(variable);
-//        if (assignment == null) {
-//            // Input variable: fetch from inputProvider (should not reach here)
-//            result = inputs.getInput(variable, remaining);
-//            memo.put(variable, new MemoEntry(result, mask.copy()));
-//            return result;
-//        }
-//
-//        // Evaluate the operation for the positions in toComputeMask
-//        try {
-//            evaluateOperation(assignment, result, remaining);
-//        }
-//        catch (Exception e) {
-//            // Mark errors in the vector for the positions in toComputeMask
-//            result.setErrors(remaining, true);
-//        }
-//
-//        // Merge masks: previously computed + just computed
-//        Mask newMask;
-//        if (entry != null) {
-//            newMask = entry.mask().union(remaining);
-//        }
-//        else {
-//            newMask = remaining.copy();
-//        }
-//        memo.put(variable, new MemoEntry(result, newMask));
-//        return result;
-//    }
-//
-//    public void reset()
-//    {
-//        // Return vectors to allocator and clear memo
-//        for (MemoEntry entry : memo.values()) {
-//            allocator.release(entry.vector());
-//            // Optionally: release entry.mask() if masks are pooled
-//        }
-//        memo.clear();
-//    }
-//
-//    private record MemoEntry(Vector vector, Mask mask) { }
+
+    /**
+     * Evaluate the expression at the given index for the given mask.
+     * <p>
+     * Only positions not already computed (per the memoized mask) will be evaluated.
+     * The returned vector may contain results from previous calls at other positions.
+     */
+    public Vector evaluate(int expressionIndex, Mask mask)
+    {
+        if (expressionIndex < 0 || expressionIndex >= expressions.size()) {
+            throw new IllegalArgumentException("Invalid expression index: " + expressionIndex);
+        }
+
+        if (mask.none()) {
+            return buffers[expressionIndex];
+        }
+
+        Mask alreadyEvaluated = masks[expressionIndex];
+        if (alreadyEvaluated != null && alreadyEvaluated.containsAll(mask)) {
+            return buffers[expressionIndex];
+        }
+
+        Mask remaining;
+        if (alreadyEvaluated == null) {
+            remaining = mask;
+        }
+        else {
+            remaining = mask.difference(alreadyEvaluated);
+            if (remaining.none()) {
+                return buffers[expressionIndex];
+            }
+        }
+
+        buffers[expressionIndex] = expressions.get(expressionIndex).apply(buffers[expressionIndex], remaining, context);
+
+        masks[expressionIndex] = (alreadyEvaluated == null) ? remaining : alreadyEvaluated.or(remaining);
+
+        return buffers[expressionIndex];
+    }
+
+    /**
+     * Clear all memoized results. Call between batches to allow the evaluator to be reused.
+     */
+    public void reset()
+    {
+        Arrays.fill(buffers, null);
+        Arrays.fill(masks, null);
+        allocator.release(ALLOCATION_CONTEXT);
+    }
 }

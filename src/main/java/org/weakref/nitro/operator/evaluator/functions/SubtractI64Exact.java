@@ -13,20 +13,47 @@
  */
 package org.weakref.nitro.operator.evaluator.functions;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.EvaluationContext;
+import org.weakref.nitro.operator.evaluator.Function;
 import org.weakref.nitro.operator.evaluator.Result;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 public class SubtractI64Exact
+        implements Function
 {
-    public Result apply(Vector left, Vector right, Mask mask, Result result)
+    private static final Allocator.Context CONTEXT = new Allocator.Context("SubtractI64Exact");
+    private static final Allocator.Context ERRORS_CONTEXT = new Allocator.Context("SubtractI64Exact.errors");
+
+    private final int left;
+    private final int right;
+    private BooleanVector errors;
+
+    public SubtractI64Exact(int left, int right)
     {
-        checkArgument(left.length() == right.length(), "Vectors must have the same length");
-        return applyFlatFlat(left, right, mask, result);
+        this.left = left;
+        this.right = right;
+    }
+
+    /** Error flags from the most recent evaluation; null until first evaluated. */
+    public BooleanVector errors()
+    {
+        return errors;
+    }
+
+    @Override
+    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    {
+        Vector leftVec = context.evaluate(left, mask);
+        Vector rightVec = context.evaluate(right, mask);
+        output = context.allocator().allocateOrGrow(CONTEXT, output, leftVec.length(), I64Vector::new);
+        errors = (BooleanVector) context.allocator().allocateOrGrow(ERRORS_CONTEXT, errors, leftVec.length(), BooleanVector::new);
+        Result r = applyFlatFlat(leftVec, rightVec, mask, new Result(output, errors));
+        errors = r.errors();
+        return r.result();
     }
 
     private Result applyFlatFlat(Vector left, Vector right, Mask mask, Result result)
@@ -34,18 +61,8 @@ public class SubtractI64Exact
         I64Vector leftFlat = (I64Vector) left;
         I64Vector rightFlat = (I64Vector) right;
 
-        I64Vector output;
-        BooleanVector errors;
-        
-        if (result == null) {
-            // TODO: allocate from pool
-            output = new I64Vector(left.length());
-            errors = new BooleanVector(left.length());
-        }
-        else {
-            output = (I64Vector) result.result();
-            errors = result.errors();
-        }
+        I64Vector output = (I64Vector) result.result();
+        BooleanVector errors = result.errors();
 
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -58,7 +75,7 @@ public class SubtractI64Exact
                 apply(leftFlat, rightFlat, output, errors, position);
             }
         }
-        
+
         return new Result(output, errors);
     }
 

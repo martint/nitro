@@ -13,74 +13,129 @@
  */
 package org.weakref.nitro.operator.evaluator.example;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.Evaluator;
+import org.weakref.nitro.operator.evaluator.Function;
 import org.weakref.nitro.operator.evaluator.functions.AddI64Exact;
 import org.weakref.nitro.operator.evaluator.functions.DivideI64;
+import org.weakref.nitro.operator.evaluator.functions.If;
+import org.weakref.nitro.operator.evaluator.functions.InputReference;
 import org.weakref.nitro.operator.evaluator.functions.Or;
-import org.weakref.nitro.operator.evaluator.Result;
 import org.weakref.nitro.operator.evaluator.functions.SubtractI64Exact;
 
-import static org.weakref.nitro.operator.evaluator.example.Vectors.render;
+import java.util.List;
 
 /**
- * Conditional expression
+ * Conditional expression: {@code IF(condition, a + b, a - b) / c}
+ * <p>
+ * Demonstrates null tracking and overflow/divide-by-zero detection.
+ *
+ * <pre>
+ *    0: InputReference(0)      -- a values
+ *    1: InputReference(1)      -- a nulls
+ *    2: InputReference(2)      -- b values
+ *    3: InputReference(3)      -- b nulls
+ *    4: InputReference(4)      -- c values
+ *    5: InputReference(5)      -- c nulls
+ *    6: InputReference(6)      -- condition
+ *    7: Or(1, 3)               -- ab_nulls
+ *    8: AddI64Exact(0, 2)      -- a + b
+ *    9: SubtractI64Exact(0, 2) -- a - b
+ *   10: If(6, 8, 9)            -- IF(condition, a+b, a-b)
+ *   11: Or(7, 5)               -- abc_nulls
+ *   12: DivideI64(10, 4)       -- IF(condition, a+b, a-b) / c
+ * </pre>
  */
 public class Example1
 {
-    private static final AddI64Exact ADD_I64_EXACT = new AddI64Exact();
-    private static final SubtractI64Exact SUBTRACT_I64_EXACT = new SubtractI64Exact();
-    private static final DivideI64 DIVIDE_I64 = new DivideI64();
-    private static final Or OR = new Or();
-
     void main()
     {
-        Mask inputMask = Mask.sparse(new int[] {0, 1, 2, 3, 4, 5, 6, 7}, 10);
-        Boolean[] condition = {true, false, true, false, true, false, true, false, true, false};
-        Long[] a = {null, 2L, null, Long.MIN_VALUE, Long.MAX_VALUE, 6L, 7L, 8L, 9L, null};
-        Long[] b = {10L, null, null, 1L, 1L, 60L, 70L, 80L, null, 100L};
-        Long[] c = {1L, 1L, 1L, 1L, 1L, 0L, 2L, null, 1L, 1L};
+        int batchSize = 10;
+        long[] aValues   = {0, 2,  0, Long.MIN_VALUE, Long.MAX_VALUE,  6,  7,  8, 9,   0};
+        long[] bValues   = {10, 0, 0,              1,              1, 60, 70, 80, 0, 100};
+        long[] cValues   = {1,  1, 1,              1,              1,  0,  2,  0, 1,   1};
+        boolean[] aNulls = {true, false, true, false, false, false, false, false, false, true};
+        boolean[] bNulls = {false, true, true, false, false, false, false, false,  true, false};
+        boolean[] cNulls = {false, false, false, false, false, false, false, true, false, false};
+        boolean[] cond   = {true, false, true, false, true, false, true, false, true, false};
 
-        BooleanVector conditionVector = Vectors.booleanVector(condition);
-        I64Vector aValues = Vectors.i64Vector(a);
-        BooleanVector aNulls = Vectors.nulls(a);
-        I64Vector bValues = Vectors.i64Vector(b);
-        BooleanVector bNulls = Vectors.nulls(b);
-        I64Vector cValues = Vectors.i64Vector(c);
-        BooleanVector cNulls = Vectors.nulls(c);
+        Vector[] inputs = {
+                new I64Vector(aValues),     // 0: a values
+                new BooleanVector(aNulls),  // 1: a nulls
+                new I64Vector(bValues),     // 2: b values
+                new BooleanVector(bNulls),  // 3: b nulls
+                new I64Vector(cValues),     // 4: c values
+                new BooleanVector(cNulls),  // 5: c nulls
+                new BooleanVector(cond),    // 6: condition
+        };
 
-        // if(condition, a + b, a - b) / c \ IM
-        // TODO: nulls & errors
-        //   $0 = inputMask ^ condition
-        //   $1 = a + b \ $0
-        //   $2 = inputMask ^ ~condition
-        //   $3 = a - b \ $2
-        //   $4 = merge(condition, $1, $3) \ inputMask
-        //   $5 = $4 / c \ inputMask
+        AddI64Exact addExact = new AddI64Exact(0, 2);
+        SubtractI64Exact subExact = new SubtractI64Exact(0, 2);
+        DivideI64 divide = new DivideI64(10, 4);
 
-        // if (condition) then a + b
-        Mask conditionMask = inputMask.and(conditionVector);
-        BooleanVector nulls = (BooleanVector) OR.apply(aNulls, bNulls, conditionMask, null);
-        Result addResult = ADD_I64_EXACT.apply(aValues, bValues, conditionMask.andNot(nulls), null);
+        List<Function> expressions = List.of(
+                new InputReference(0),  // 0: a values
+                new InputReference(1),  // 1: a nulls
+                new InputReference(2),  // 2: b values
+                new InputReference(3),  // 3: b nulls
+                new InputReference(4),  // 4: c values
+                new InputReference(5),  // 5: c nulls
+                new InputReference(6),  // 6: condition
+                new Or(1, 3),           // 7: ab_nulls
+                addExact,               // 8: a + b
+                subExact,               // 9: a - b
+                new If(6, 8, 9),        // 10: IF(condition, a+b, a-b)
+                new Or(7, 5),           // 11: abc_nulls
+                divide);                // 12: IF(condition, a+b, a-b) / c
 
-        // else a - b
-        Mask elseMask = inputMask.andNot(conditionVector);
-        nulls = (BooleanVector) OR.apply(aNulls, bNulls, elseMask, nulls);
-        Result subtractResult = SUBTRACT_I64_EXACT.apply(aValues, bValues, elseMask.andNot(nulls), addResult);
+        Allocator allocator = new Allocator();
+        Evaluator evaluator = new Evaluator(expressions, (i, mask) -> inputs[i], allocator);
 
-        // divide by c
-        Mask candidates = inputMask.andNot(subtractResult.errors()).andNot(nulls);
-        nulls = (BooleanVector) OR.apply(nulls, cNulls, candidates, nulls);
-        Result divideResult = DIVIDE_I64.apply(aValues, cValues, candidates.andNot(nulls), subtractResult);
+        Mask inputMask = Mask.sparse(new int[] {0, 1, 2, 3, 4, 5, 6, 7}, batchSize);
 
-        System.out.println("Input mask: " + inputMask);
-        System.out.println("Then mask: " + conditionMask);
-        System.out.println("Else mask: " + elseMask);
-        System.out.println("Nulls:   " + nulls);
-        System.out.println("Values: " + divideResult.result());
-        System.out.println("Error: " + divideResult.errors());
-        System.out.println();
-        System.out.println("Result: " + render(inputMask, divideResult.result(), nulls, divideResult.errors()));
+        // Step 1: compute ab nulls; only evaluate IF for non-null positions
+        BooleanVector abNulls = (BooleanVector) evaluator.evaluate(7, inputMask);
+        Mask nonNullMask = inputMask.andNot(abNulls);
+
+        // Step 2: evaluate IF(condition, a+b, a-b) for non-null positions
+        evaluator.evaluate(10, nonNullMask);
+
+        // Step 3: exclude positions with arithmetic overflow
+        BooleanVector condVec = (BooleanVector) evaluator.evaluate(6, nonNullMask);
+        Mask trueMask = nonNullMask.and(condVec);
+        Mask falseMask = nonNullMask.andNot(condVec);
+        Mask noOverflow = union(
+                addExact.errors() != null ? trueMask.andNot(addExact.errors()) : trueMask,
+                subExact.errors() != null ? falseMask.andNot(subExact.errors()) : falseMask);
+
+        // Step 4: exclude c nulls
+        BooleanVector abcNulls = (BooleanVector) evaluator.evaluate(11, noOverflow);
+        Mask candidates = noOverflow.andNot(abcNulls);
+
+        // Step 5: divide
+        evaluator.evaluate(12, candidates);
+
+        System.out.println("Input mask:     " + inputMask);
+        System.out.println("ab nulls:       " + abNulls);
+        System.out.println("abc nulls:      " + abcNulls);
+        System.out.println("Add overflow:   " + addExact.errors());
+        System.out.println("Sub overflow:   " + subExact.errors());
+        System.out.println("Div by zero:    " + divide.errors());
+        System.out.println("Result:         " + evaluator.evaluate(12, candidates));
+    }
+
+    private static Mask union(Mask a, Mask b)
+    {
+        if (a.none()) {
+            return b;
+        }
+        if (b.none()) {
+            return a;
+        }
+        return a.or(b);
     }
 }

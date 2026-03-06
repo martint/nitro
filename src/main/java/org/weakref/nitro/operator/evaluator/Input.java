@@ -15,13 +15,13 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.evaluator.ir.Variable;
 
-public class InputProvider
+/**
+ * Provides source input columns to the evaluator by ordinal.
+ * Implemented by the caller that initializes the evaluator.
+ */
+@FunctionalInterface
+public interface Input
 {
-
-    public Vector getInput(Variable variable, Mask mask)
-    {
-        throw new UnsupportedOperationException("not yet implemented");
-    }
+    Vector get(int index, Mask mask);
 }
