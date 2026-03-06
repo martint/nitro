@@ -1,0 +1,211 @@
+# Specification
+
+✅ **IR Syntax**
+✅ **IR Semantics**
+✅ **Encoding model (Flat, RLE, Dictionary)**
+✅ **Error and null propagation**
+✅ **Evaluator API and behavior**
+✅ **Detailed architecture for lazy, memoized, mask-aware, encoding-preserving evaluation**
+
+---
+
+# 📜 **IR Specification**
+
+## 1️⃣ Syntax
+
+```
+<execution> : <variable> = <operation> / <mask> :: <type>
+<operation>: <literal> | <call>
+<call>     : <function>(<arg>...)
+<mask>     : T | <variable> | ~<variable>
+
+<variable> : %0, %1, %2, ...
+<type>     : boolean | integer | double | string | binary | ...
+<literal>  : true | false | NULL | number | string | byte_array
+```
+
+* **Variables**: Represented as `%0`, `%1`, `%2`, … and uniquely identify a vector produced during evaluation.
+* **Mask**: Determines **which positions in the vector are active** for evaluation:
+
+  * `T`: all positions active.
+  * `%N`: use the mask from another boolean variable.
+  * `~%N`: complement of mask `%N`.
+* **Type**: Declares the type of the vector (boolean, integer, etc.).
+
+---
+
+## 2️⃣ Semantics
+
+Each `<execution>` statement means:
+
+> Compute `<operation>` for all vector positions where `<mask>` is true and store the result in `<variable>` with type `<type>`.
+
+* **Vector Representation**:
+
+  * A vector includes **values**, **nulls**, and **errors**:
+
+    * `values`: the actual data.
+    * `nulls`: a boolean vector marking null positions.
+    * `errors`: a boolean vector marking positions where evaluation failed.
+
+* **Partial Evaluation**:
+
+  * An operation may only compute a subset of positions (as indicated by `<mask>`). Later evaluations with other masks can reuse previous computations.
+
+---
+
+## 3️⃣ Encoding model
+
+Vectors may use **encoding formats** for compactness and efficiency:
+
+* **FlatVector**: Plain array of values (no encoding).
+* **RLEVector** (Run-Length Encoding):
+
+  * Encodes repeating values as `(value, count)` pairs.
+  * Semantics: every position has the same value unless overridden.
+* **DictionaryVector**:
+
+  * Contains:
+
+    * A dictionary of unique values.
+    * An indirection array mapping positions to dictionary entries.
+
+Operations:
+
+* Should **preserve encoding** when possible.
+* Fall back to **FlatVector** when encoding cannot be maintained.
+
+---
+
+## 4️⃣ Nulls and Errors
+
+* Each vector has:
+
+  * `values`: actual data.
+  * `nulls`: tracks null values.
+  * `errors`: tracks positions where evaluation threw an exception.
+
+**Semantics of special operators:**
+
+* `IDENTICAL(x, y)`: true if both value and nullness are the same, including `NULL == NULL`.
+* `TRY(f(x))`: evaluates `f(x)` and captures exceptions, returning `NULL` where errors occur.
+
+---
+
+# 🏗 **Evaluator Architecture**
+
+## ✅ API
+
+```java
+class Evaluator {
+    Evaluator(List<Assignment> assignments, List<Variable> outputs, InputProvider inputProvider, VectorPool pool)
+
+    Vector evaluate(Variable output, BitSet mask) throws EvaluationException
+    void reset()
+}
+```
+
+* **Inputs**:
+
+  * `assignments`: list of IR statements defining expressions.
+  * `outputs`: the variables the caller intends to compute.
+  * `inputProvider`: fetches input column vectors for evaluation.
+  * `pool`: manages allocation and reuse of vectors.
+
+* **`evaluate()`**:
+
+  * Computes `output` for the given `mask`.
+  * May reuse previous partial computations.
+  * Memoizes intermediate results across invocations.
+
+* **`reset()`**:
+
+  * Clears memoized results. Retains allocated vectors in the pool for reuse.
+
+---
+
+## ✅ Evaluation Mechanics
+
+### 🧠 Lazy evaluation
+
+* Expressions are evaluated **only when needed**.
+* Subexpressions are evaluated lazily **under the caller-supplied mask**.
+* Subsequent calls with overlapping masks reuse previously computed data.
+
+### 🧠 Memoization
+
+* Each expression memoizes:
+
+  * The current result vector (which may be partially filled).
+  * The computed mask indicating which positions have been evaluated.
+
+### 🧠 In-place Merging
+
+* If a result vector already exists:
+
+  * Operations fill only the **missing positions** in the vector.
+  * Avoid redundant computation.
+
+---
+
+## ✅ Data Flow Example
+
+For this IR:
+
+```
+%0 = a :: boolean
+%1 = b :: boolean
+%2 = c :: integer
+%3 = f(%2) / %0
+%4 = g(%2) / %1
+```
+
+1. `evaluate(%3, maskA)` computes `f(c)` only for positions where `maskA` is true.
+2. `evaluate(%4, maskB)` reuses `f(c)` results for `maskA ∩ maskB` and computes `f(c)` only for positions in `maskB \ maskA`.
+
+---
+
+## ✅ VectorPool
+
+Manages allocation and reuse of vectors:
+
+* Supports `Flat`, `RLE`, `Dictionary`, `nulls`, `errors`, and `mask` vectors.
+* Reuses **larger vectors** for smaller computations.
+
+---
+
+## ✅ InputProvider
+
+Abstracts fetching of input columns:
+
+```java
+interface InputProvider {
+    Vector getInput(Variable var, BitSet mask);
+}
+```
+
+---
+
+## ✅ Encoding-Aware Functions
+
+* Each function accepts encoded vectors.
+* Attempts to preserve encoding:
+
+  * RLE + RLE → RLE
+  * Dictionary + Dictionary → Dictionary (if possible)
+* Falls back to decoding into FlatVectors when required.
+
+---
+
+# 📖 **Examples of IR Lowerings**
+
+| SQL Expression   | IR Lowering                                                                             |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| `COALESCE(a, b)` | `%0 = IS_NULL(a) :: boolean`<br>`%1 = merge(a, b, ~%0) / T :: type`                     |
+| `IF(cond, x, y)` | `%0 = x / cond :: type`<br>`%1 = y / ~cond :: type`<br>`%2 = merge(%0, %1) / T :: type` |
+| `a AND b`        | `%0 = b / a :: boolean`<br>`%1 = merge(false, %0, ~a) / T :: boolean`                   |
+| `a OR b`         | `%0 = b / ~a :: boolean`<br>`%1 = merge(true, %0, a) / T :: boolean`                    |
+| `TRY(f(x))`      | `%0 = f(x) / T :: type`<br>(Errors captured into `%0.errors`)                           |
+| `CASE ...`       | Use nested `IF`s and masks that narrow at each step.                                    |
+
+---

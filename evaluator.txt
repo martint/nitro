@@ -1,0 +1,271 @@
+Consider the following grammar for a vectorized IR language:
+
+<assignment> : <variable> = <operation> / <mask> :: <type>
+<operation>: <literal> | <call>
+<call>: <function>(<arg>...)
+<mask>: T | <variable> | ~<variable>
+
+with the following semantics:
+* Variables are represented as %0, %1, %2, ...
+* An execution invokes the given <operation> for the elements that satisfy the given <mask> and returns an expression of the give <type> that gets assigned to the given <variable>
+* A <literal> can be true, false, a number, a string, a byte array or NULL
+* A call can have 0 or more arguments
+* A mask can reference any variable of type "boolean". T is the special built-in mask representing "true" for every position in the vector. The ~ (negation) mask operator indicates the complement of the given mask
+
+This IR is meant to implement expression evaluation in a SQL engine (Trino), which supports:
+* conditional lazy evaluation (if, coalesce, case) and lambda expressions
+* three-valued null logic
+* vectorized execution
+* encoding-preserving evaluation
+* mask-aware evaluation
+* memoization
+* null-aware and error-aware calling conventions. In particular, some functions may declare that they return NULL on NULL inputs, and some functions may return NULL on error (e.g., try(() -> {...}))
+
+There's a built-in IDENTICAL(x, y) operation with the following semantics:
+* IDENTICAL(T, T) = T
+* IDENTICAL(F, F) = T
+* IDENTICAL(NULL, NULL) = T
+* For every other case, IDENTICAL(x, y) = F
+
+
+* Values, nulls and errors vectors are maintained separately.
+* Functions can return one or more vectors: values, nulls and errors. Values can be of different types (e.g., i8, i16, i32, i64, f32, f64, string, binary, etc.).
+* Errors are represented as a vector of Error values. An Error contains a message, error code and stack trace.
+* Nulls are represented as a boolean vector, where each position is true if the value is NULL and false otherwise.
+
+Operations need to be well formed with respect to the mask applied to them. That is:
+* The mask associated with each arguments needs to be a superset of the evaluation mask
+* For merge, the condition needs to represent a subset of the mask associated with the "then" value, and the complement of the condition with respect to the evaluation mask needs to represent a subset of the mask associated with the "else" value
+  i.e., given merge(C : boolean, T, E) \ M
+
+  The following must be true:
+    M ⊆ C.mask
+    C ∩ M ⊆ T.mask
+    M - C ⊆ E.mask
+
+
+TODO:
+* Nested vectors (map, array, row)
+* Should conversion between boolean and mask be an explicit operation?
+* Should negation of mask be an explicit operation?
+* Allow operations to take an output vector or allocate from the pool
+
+// `try<T>(f : () -> T) : T` is implemented as:
+//  try(f : (values : T.carrier, nulls : boolean, errors : string)) : (values : T.carrier, nulls : boolean)
+
+`add(a : BIGINT, b : BIGINT) : BIGINT` is implemented as:
+  add(a : i64, b : i64, mask : Mask) : (values : i64, errors : Error)
+
+
+
+# a + b + c \ M
+
+%ab_nulls = or(%a.nulls, %b.nulls) \ M
+  %ab_nulls.mask ::= M
+%ab_not_null = not(%ab_nulls) \ M
+  %ab_not_nulls.mask ::= M
+(%ab_values, %ab_errors) = add(%a.values, %b.values) \ %ab_not_null
+  %ab_values.mask ::= %ab_not_null
+  %ab_errors.mask ::= %ab_not_null
+%ab_success = success(%ab_errors) \ %ab_not_null
+  %ab_success.mask = %ab_not_null
+%abc_nulls = or(%ab_nulls, %c.nulls) \ %ab_success
+  %abc_nulls.mask ::= %ab_success
+%abc_not_null = not(%abc_nulls) \ %ab_success
+  %abc_not_null.mask ::= %ab_success
+(%abc_values, %abc_errors) = add(%ab_values, %c.values) \ %abc_not_null
+  %abc_values.mask := %abc_not_null
+  %abc_errors.mask := %abc_not_null
+%abc_error_result = merge(%ab_success, %abc_errors, %ab_errors) \ M
+  %abc_error_result.mask ::= M
+
+return (%abc_values, %abc_nulls, %abc_errors_result)
+
+
+
+
+# add(add(a, b), c) \ M
+
+%r0_nulls = or(%a.nulls, %b.nulls) \ M
+%r0_not_null = not(%ab_nulls) \ M
+(%r0_values, %r0_errors) = add(%a.values, %b.values) \ %r0_not_null
+%r0_success = success(%r0_errors) \ %r0_not_null
+
+%r1_nulls = or(%r0_nulls, %c.nulls) \ %r0_success
+%r1_not_null = not(%r1_nulls) \ %r0_success
+(%r1_values, %r1_errors) = add(%r0_values, %c.values) \ %r1_not_null
+
+%r_errors = merge(%r0_success, %r1_errors, %r0_errors) \ M
+
+return (%r1_values, %r1_nulls, %r_errors)
+
+
+======
+
+$0 = if(condition, f, g) \ M1
+$1 = f \ M2
+
+* Can we reuse f \ condition when computing f \ M2 ?
+   * It depends on whether the results of the branches of the IF are merged into a single vector eagerly. If so, then the vector
+     represents the result of the IF, which may contain some values for "g" in positions that overlap with positions covered
+     by M2-condition
+   * Options:
+      1. Copy the parts of $0 that correspond to condition (the precomputed values of f) and compute f for M2-condition
+      2. Compute f for all positions in M2
+
+
+======
+
+($0_values, $0_errors) = op1(...) \ $m0
+$0_nulls = ...
+$m1 = ~$0_nulls \ $m0
+
+($r_values, $1_errors) = op2($0_values, ...) \ $m1    // $m1 ⊆ $m0
+$r_errors = merge($m1, $1_errors, $0_errors) \ $m0
+
+=>
+
+($0_values, $0_errors) = op1(...) \ $m0
+$0_nulls = ...
+$m1 = ~$0_nulls \ $m0
+
+($r_values, $r_errors) = op2($0_values, ..., ($0_values, $0_errors)) \ $m1    // $m1 ⊆ $m0
+
+Reasoning about the transformation:
+* When op1 is evaluated over $m0, some positions will be marked as errors and stored in $0_errors
+* $m1 is a subset of $m0. When op2 is evaluated, some positions in $m1 will be marked as errors. Any positions in $m0 - $m1 will not be affected
+* When merging the errors, only the positions affected by op2 will be considered from $1_errors based on the condition, which correspond to the
+  subset $m1. The rest of the positions ($m0 - $m1) will be taken from $0_errors
+
+Rule:
+* Assumption:
+    * The OUT argument of an operation can be null. In that case, the operation allocates a vector and returns it.
+    * If the OUT argument is not null, the operation is required to preserve the values in the OUT argument that are not affected by the operation given the evaluation mask. This
+      is necessary to be able to express the same semantics as an explicit merge() of the result of two operations.
+* Given
+
+    r0 = op1(...) \ M0
+    r1 = op2(...) \ M1
+    r2 = merge(M1, r0, r1) \ M0
+
+    if op2 takes an OUT argument, and knowing that M1 ⊆ M0, then the code can be transformed to:
+
+    r0 = op1(...) \ M0
+    r2 = op2(..., r0) \ M1
+
+
+
+Exploration w/ ChatGPT:
+
+
+          In a predicated vector evaluation IR, an operation has the following shape:
+
+          <variable> = <operation>(<arguments>...) \ <mask>
+
+          The operation is evaluated with the given arguments, but only the positions of the input vectors described by the mask are considered. The result is stored in the given variable
+
+          There's a special "merge" operation with the following semantics. Given:
+
+          <variable> = merge(<mask>, <vector1>, <vector2>) \ <input mask>
+
+          The result will contain the values of <vector1> for positions in <mask> and the values for <vector2> for any positions not in <mask>. Only the positions covered by <input mask> are considered>
+
+          Additionally, operations can support an OUT argument which allows the caller to allocate the output vector or reuse an existing vector. The OUT argument is optional at runtime (it can be null). In that case, the operation must allocate a vector and return it. If the argument is not null, the operation is required to preserve its values for any position that's not affected by the operation given the evaluation mask.
+
+          Given that specification, is this a valid transformation? If not, what would be required to make it so?
+
+              r0 = op1(...) \ M0
+              r1 = op2(...) \ M1
+              r2 = merge(M1, r1, r0) \ M0
+
+              =>
+
+              r0 = op1(...) \ M0
+              r2 = op2(..., r0) \ M1
+
+          ---
+
+          ### Original program:
+
+          ```
+          r0 = op1(...) \ M0
+          r1 = op2(...) \ M1
+          r2 = merge(M1, r1, r0) \ M0
+          ```
+
+          **Semantics:**
+
+          * `r0`: computed by `op1`, only defined/updated at positions in `M0`.
+          * `r1`: computed by `op2`, only defined/updated at positions in `M1`.
+          * `r2`: merge, with **outer mask = M0**. So:
+
+            * At positions in `M0 ∧ M1`: take from `r1`.
+            * At positions in `M0 ∧ ¬M1`: take from `r0`.
+            * At positions outside `M0`: unchanged/undefined.
+
+          So, **r2 = r0 updated at M0 ∧ M1 with values from r1**.
+
+          ---
+
+          ### Transformed program:
+
+          ```
+          r0 = op1(...) \ M0
+          r2 = op2(..., r0) \ M1
+          ```
+
+          Here `op2` has been given `r0` as its `OUT` vector.
+
+          * So, op2 must preserve the values of `r0` outside `M1`,
+          * And it updates positions in `M1`.
+
+          Thus the result is:
+
+          * At positions in `M1`: computed by `op2`.
+          * At positions in ¬M1: values come from `r0`.
+
+          ---
+
+          ### Key difference: the **input masks**.
+
+          * In the original, `r2` is defined **only inside M0**, because the merge is guarded by `\ M0`.
+
+            * At `¬M0` positions, r2 is unspecified.
+          * In the transformed version, `r2 = op2(..., r0) \ M1` produces a vector defined over **all positions in `r0`**, with updates on `M1`.
+
+            * So at positions in `(¬M0 ∧ ¬M1)`, r2 keeps the values of r0 — but in the original, those positions were not part of r2’s defined semantics.
+
+          ---
+
+          ### Conclusion:
+
+          The transformation as written is **not valid**, because in the new version, `r2` can carry extra defined values outside `M0`, which the original program never specified.
+          The merge with `\ M0` restricts the domain of definition of `r2`, and this restriction is lost in the rewritten form.
+
+          ---
+
+          ### What’s required to make it valid?
+
+          You must preserve the effect of the **outer mask `M0`** in the rewrite.
+          That means either:
+
+          1. Restrict the execution of `op2` to the intersection `M0 ∧ M1`:
+
+          ```
+          r0 = op1(...) \ M0
+          r2 = op2(..., r0) \ (M0 ∧ M1)
+          ```
+
+          This way, only positions in both masks are updated, and outside `M0`, r2 remains undefined, just as before.
+
+          ---
+
+          ✅ **Correct transformation:**
+
+          ```
+          r0 = op1(...) \ M0
+          r2 = op2(..., r0) \ (M0 ∧ M1)
+          ```
+
+          ---
+

@@ -1,0 +1,75 @@
+Calling conventions
+
+
+f(Vector1, Vector2, ..., VectorN, selection) -> Vector
+    f(Vector1, position1, Vector2, position2, ..., VectorN, positionN, output Vector, outputPosition)
+        f(Vector1, position1, Vector2, position2, ..., VectorN, positionN) -> scalar
+            f(arg1, arg2, ..., argN) -> scalar
+
+
+
+Lazy functions
+
+OR(...)
+AND(...)
+IF(...)
+CASE(...)
+
+OR(
+    AND(
+        f1,
+        f2),
+    AND(
+        f3,
+        f4))
+
+
+f1 AND f2 || f3 AND f4
+
+a || b === ~(~a && ~b)
+
+
+* Column leaves modeled as functions
+    * In support of lazy loading of columns
+* For multi-arg functions, multiple variants of evaluator
+    * All RLE vectors (evaluate once)
+    * All RLE vs 1 dictionary (evaluate RLEs x dictionary)
+    * Single dictionary (evaluate dictionary)
+    * Evaluate flat
+
+* Lambda expressions
+
+# OR
+
+## Sparse mask evaluation
+    * Start with all active positions
+    * Evaluate each term
+        * For each active position
+            * if expression is false, add to survivor list
+    * Compute complement of survivor list
+
+        Equivalent to:
+
+            OR(f1, f2, ..., fN) == ~AND(~f1, ~f2, ..., ~fN)
+
+## Dense mask evaluation
+    * Start with all false masks
+    * Evaluate each term
+        * result[i] = result[i] || <term>
+
+
+# Expression annotations
+
+* Null output if any input is null
+* Does not handle nulls => null output if any input is null
+* Can produce null / cannot produce null
+* Deterministic / non-deterministic
+
+# Data annotations
+
+* All nulls / no nulls / maybe some nulls
+* RLE / dictionary / flat
+
+
+
+
