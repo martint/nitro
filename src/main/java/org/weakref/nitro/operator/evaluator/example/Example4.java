@@ -77,7 +77,7 @@ public class Example4
 
         // --- Demo 1: basic computation ---
         System.out.println("=== Demo 1: a + b over all positions ===");
-        Vector result = evaluator.evaluate(3, all);
+        Vector result = evaluator.evaluate(3, all).values();
         System.out.println("a + b: " + result);
         evaluator.reset();
 
@@ -87,14 +87,14 @@ public class Example4
         evaluator.evaluate(5, all);
         // Requesting a+b separately should be a no-op (already computed)
         evaluator.evaluate(3, all);
-        System.out.println("IF result: " + evaluator.evaluate(5, all));
+        System.out.println("IF result: " + evaluator.evaluate(5, all).values());
         evaluator.reset();
 
         // --- Demo 3: additive evaluation ---
         System.out.println("\n=== Demo 3: additive — evens then odds ===");
-        Vector addResult = evaluator.evaluate(3, evens);
+        Vector addResult = evaluator.evaluate(3, evens).values();
         System.out.println("a+b after evens: " + addResult);
-        addResult = evaluator.evaluate(3, odds);
+        addResult = evaluator.evaluate(3, odds).values();
         System.out.println("a+b after odds:  " + addResult);
         evaluator.reset();
 
@@ -109,7 +109,7 @@ public class Example4
         System.out.println("condition: " + cond);
         System.out.println("a+b:       " + ab);
         System.out.println("a-b:       " + aMb);
-        Vector ifResult = evaluator.evaluate(5, all);
+        Vector ifResult = evaluator.evaluate(5, all).values();
         System.out.println("IF result: " + ifResult);
         evaluator.reset();
     }

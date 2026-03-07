@@ -83,21 +83,21 @@ public class Example3
         Mask inputMask = Mask.sparse(new int[] {2, 3, 4, 5, 6, 7, 8}, batchSize);
 
         // Step 1: compute combined nulls; only evaluate where all three inputs are non-null
-        BooleanVector abcNulls = (BooleanVector) evaluator.evaluate(8, inputMask);
+        BooleanVector abcNulls = (BooleanVector) evaluator.evaluate(8, inputMask).values();
         Mask m0 = inputMask.andNot(abcNulls);
 
         // Step 2: evaluate a + b; exclude positions with overflow
-        evaluator.evaluate(7, m0);
-        Mask m1 = addAB.errors() != null ? m0.andNot(addAB.errors()) : m0;
+        BooleanVector addABErrors = evaluator.evaluate(7, m0).errors();
+        Mask m1 = addABErrors != null ? m0.andNot(addABErrors) : m0;
 
         // Step 3: evaluate (a + b) + c for positions with no a+b overflow
         evaluator.evaluate(9, m1);
 
         System.out.println("Input mask:       " + inputMask);
         System.out.println("abc nulls:        " + abcNulls);
-        System.out.println("a+b:              " + evaluator.evaluate(7, m0));
-        System.out.println("a+b overflow:     " + addAB.errors());
-        System.out.println("(a+b)+c:          " + evaluator.evaluate(9, m1));
-        System.out.println("(a+b)+c overflow: " + addABC.errors());
+        System.out.println("a+b:              " + evaluator.evaluate(7, m0).values());
+        System.out.println("a+b overflow:     " + addABErrors);
+        System.out.println("(a+b)+c:          " + evaluator.evaluate(9, m1).values());
+        System.out.println("(a+b)+c overflow: " + evaluator.evaluate(9, m1).errors());
     }
 }

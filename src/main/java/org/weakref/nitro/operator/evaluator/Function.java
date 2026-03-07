@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 
 /**
  * Unified protocol for all expression nodes in the evaluator.
@@ -32,10 +31,10 @@ public interface Function
     /**
      * Compute this expression for the positions described by {@code mask}.
      *
-     * @param output the current output vector (null on first call, may be partially filled on subsequent calls)
+     * @param output the current output (null on first call, may be partially filled on subsequent calls)
      * @param mask   the positions to evaluate; the evaluator guarantees these have not been computed yet
      * @param context callback for evaluating sub-expressions and accessing the allocator
-     * @return the output vector (possibly newly allocated if {@code output} was null)
+     * @return a {@link Result} containing computed values and optional null/error flags
      */
-    Vector apply(Vector output, Mask mask, EvaluationContext context);
+    Result apply(Result output, Mask mask, EvaluationContext context);
 }

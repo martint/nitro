@@ -21,6 +21,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
+import org.weakref.nitro.operator.evaluator.Result;
 
 import java.util.function.LongPredicate;
 
@@ -39,11 +40,11 @@ public class I64Predicate
     }
 
     @Override
-    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    public Result apply(Result output, Mask mask, EvaluationContext context)
     {
-        Vector vec = context.evaluate(input, mask);
-        output = context.allocator().allocateOrGrow(CONTEXT, output, vec.length(), BooleanVector::new);
-        BooleanVector result = (BooleanVector) output;
+        Vector vec = context.evaluate(input, mask).values();
+        Vector out = context.allocator().allocateOrGrow(CONTEXT, output != null ? output.values() : null, vec.length(), BooleanVector::new);
+        BooleanVector result = (BooleanVector) out;
 
         if (vec instanceof RleVector rle) {
             applyRle(rle, mask, result);
@@ -52,7 +53,7 @@ public class I64Predicate
             applyFlat(vec, mask, result);
         }
 
-        return result;
+        return Result.of(result);
     }
 
     private void applyFlat(Vector vector, Mask mask, BooleanVector output)

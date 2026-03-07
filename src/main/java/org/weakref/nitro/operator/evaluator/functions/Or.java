@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
+import org.weakref.nitro.operator.evaluator.Result;
 
 
 public class Or
@@ -36,12 +37,12 @@ public class Or
     }
 
     @Override
-    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    public Result apply(Result output, Mask mask, EvaluationContext context)
     {
-        Vector leftVec = context.evaluate(left, mask);
-        Vector rightVec = context.evaluate(right, mask);
-        output = context.allocator().allocateOrGrow(CONTEXT, output, leftVec.length(), BooleanVector::new);
-        return applyFlatFlat(leftVec, rightVec, mask, output);
+        Vector leftVec = context.evaluate(left, mask).values();
+        Vector rightVec = context.evaluate(right, mask).values();
+        Vector out = context.allocator().allocateOrGrow(CONTEXT, output != null ? output.values() : null, leftVec.length(), BooleanVector::new);
+        return Result.of(applyFlatFlat(leftVec, rightVec, mask, out));
     }
 
     private Vector applyFlatFlat(Vector left, Vector right, Mask mask, Vector result)

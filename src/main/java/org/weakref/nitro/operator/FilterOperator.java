@@ -48,7 +48,7 @@ public class FilterOperator
     public Mask next()
     {
         mask = source.next();
-        BooleanVector predicate = (BooleanVector) evaluator.evaluate(predicateExpression, mask);
+        BooleanVector predicate = (BooleanVector) evaluator.evaluate(predicateExpression, mask).values();
         mask = mask.and(predicate);
         source.constrain(mask);
         evaluator.reset();

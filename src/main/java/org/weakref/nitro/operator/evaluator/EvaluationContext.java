@@ -30,7 +30,7 @@ public interface EvaluationContext
      * Evaluate the expression at the given index for the given mask.
      * Results are memoized; subsequent calls with overlapping masks are cheap.
      */
-    Vector evaluate(int expressionIndex, Mask mask);
+    Result evaluate(int expressionIndex, Mask mask);
 
     /**
      * Fetch a source input column by ordinal for the given mask.

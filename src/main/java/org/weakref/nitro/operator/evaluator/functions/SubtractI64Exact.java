@@ -30,7 +30,6 @@ public class SubtractI64Exact
 
     private final int left;
     private final int right;
-    private BooleanVector errors;
 
     public SubtractI64Exact(int left, int right)
     {
@@ -38,31 +37,20 @@ public class SubtractI64Exact
         this.right = right;
     }
 
-    /** Error flags from the most recent evaluation; null until first evaluated. */
-    public BooleanVector errors()
-    {
-        return errors;
-    }
-
     @Override
-    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    public Result apply(Result output, Mask mask, EvaluationContext context)
     {
-        Vector leftVec = context.evaluate(left, mask);
-        Vector rightVec = context.evaluate(right, mask);
-        output = context.allocator().allocateOrGrow(CONTEXT, output, leftVec.length(), I64Vector::new);
-        errors = (BooleanVector) context.allocator().allocateOrGrow(ERRORS_CONTEXT, errors, leftVec.length(), BooleanVector::new);
-        Result r = applyFlatFlat(leftVec, rightVec, mask, new Result(output, errors));
-        errors = r.errors();
-        return r.result();
+        Vector leftVec = context.evaluate(left, mask).values();
+        Vector rightVec = context.evaluate(right, mask).values();
+        I64Vector outValues = (I64Vector) context.allocator().allocateOrGrow(CONTEXT, output != null ? output.values() : null, leftVec.length(), I64Vector::new);
+        BooleanVector outErrors = (BooleanVector) context.allocator().allocateOrGrow(ERRORS_CONTEXT, output != null ? output.errors() : null, leftVec.length(), BooleanVector::new);
+        return applyFlatFlat(leftVec, rightVec, mask, outValues, outErrors);
     }
 
-    private Result applyFlatFlat(Vector left, Vector right, Mask mask, Result result)
+    private Result applyFlatFlat(Vector left, Vector right, Mask mask, I64Vector output, BooleanVector errors)
     {
         I64Vector leftFlat = (I64Vector) left;
         I64Vector rightFlat = (I64Vector) right;
-
-        I64Vector output = (I64Vector) result.result();
-        BooleanVector errors = result.errors();
 
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -76,7 +64,7 @@ public class SubtractI64Exact
             }
         }
 
-        return new Result(output, errors);
+        return new Result(output, null, errors);
     }
 
     private static void apply(I64Vector left, I64Vector right, I64Vector output, BooleanVector errors, int position)

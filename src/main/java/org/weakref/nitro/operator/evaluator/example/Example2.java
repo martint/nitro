@@ -74,14 +74,14 @@ public class Example2
         Mask inputMask2 = Mask.sparse(new int[] {4, 5, 6, 7, 8}, batchSize);
 
         // Evaluate a + b for inputMask1, excluding nulls
-        BooleanVector nulls = (BooleanVector) evaluator.evaluate(4, inputMask1);
+        BooleanVector nulls = (BooleanVector) evaluator.evaluate(4, inputMask1).values();
         evaluator.evaluate(5, inputMask1.andNot(nulls));
-        System.out.println("a+b after mask1: " + evaluator.evaluate(5, inputMask1.andNot(nulls)));
+        System.out.println("a+b after mask1: " + evaluator.evaluate(5, inputMask1.andNot(nulls)).values());
 
         // Extend to inputMask2; the evaluator computes only positions not yet evaluated
-        nulls = (BooleanVector) evaluator.evaluate(4, inputMask2);
+        nulls = (BooleanVector) evaluator.evaluate(4, inputMask2).values();
         evaluator.evaluate(5, inputMask2.andNot(nulls));
-        System.out.println("a+b after mask2: " + evaluator.evaluate(5, inputMask1.or(inputMask2)));
-        System.out.println("Errors:          " + addExact.errors());
+        System.out.println("a+b after mask2: " + evaluator.evaluate(5, inputMask1.or(inputMask2)).values());
+        System.out.println("Errors:          " + evaluator.evaluate(5, inputMask1.or(inputMask2)).errors());
     }
 }

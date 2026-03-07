@@ -16,7 +16,24 @@ package org.weakref.nitro.operator.evaluator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
 
-// TODO: use ErrorVector instead of BooleanVector
-public record Result(Vector result, BooleanVector errors)
+/**
+ * The output of a {@link Function}: computed values, optional null flags, and optional error flags.
+ * <p>
+ * {@code nulls} is non-null only when the function has tracked which positions produced a null result.
+ * {@code errors} is non-null only when the function has detected per-position errors (e.g., overflow,
+ * divide-by-zero). Both are {@link BooleanVector}s parallel to {@code values}.
+ * <p>
+ * Passed as the {@code output} parameter on additive calls so that functions can reuse existing buffers.
+ */
+public record Result(Vector values, BooleanVector nulls, BooleanVector errors)
 {
+    public static Result of(Vector values)
+    {
+        return new Result(values, null, null);
+    }
+
+    public static Result of(Vector values, BooleanVector nulls)
+    {
+        return new Result(values, nulls, null);
+    }
 }

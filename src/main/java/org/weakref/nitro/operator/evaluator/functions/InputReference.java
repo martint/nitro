@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
+import org.weakref.nitro.operator.evaluator.Result;
 
 /**
  * Leaf expression that provides a source input column by ordinal.
@@ -34,8 +35,8 @@ public class InputReference
     }
 
     @Override
-    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    public Result apply(Result output, Mask mask, EvaluationContext context)
     {
-        return context.input(index, mask);
+        return Result.of(context.input(index, mask));
     }
 }

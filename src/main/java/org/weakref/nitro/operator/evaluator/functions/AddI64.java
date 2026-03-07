@@ -21,6 +21,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
+import org.weakref.nitro.operator.evaluator.Result;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.weakref.nitro.data.RleVector.computeTargetRleLength;
@@ -40,11 +41,12 @@ public class AddI64
     }
 
     @Override
-    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    public Result apply(Result output, Mask mask, EvaluationContext context)
     {
-        Vector leftVec = context.evaluate(left, mask);
-        Vector rightVec = context.evaluate(right, mask);
-        return apply(leftVec, rightVec, mask, output, context);
+        Vector leftVec = context.evaluate(left, mask).values();
+        Vector rightVec = context.evaluate(right, mask).values();
+        Vector out = output != null ? output.values() : null;
+        return Result.of(apply(leftVec, rightVec, mask, out, context));
     }
 
     private Vector apply(Vector left, Vector right, Mask mask, Vector result, EvaluationContext context)

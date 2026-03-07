@@ -75,7 +75,6 @@ public class Example1
 
         AddI64Exact addExact = new AddI64Exact(0, 2);
         SubtractI64Exact subExact = new SubtractI64Exact(0, 2);
-        DivideI64 divide = new DivideI64(10, 4);
 
         List<Function> expressions = List.of(
                 new InputReference(0),  // 0: a values
@@ -90,7 +89,7 @@ public class Example1
                 subExact,               // 9: a - b
                 new If(6, 8, 9),        // 10: IF(condition, a+b, a-b)
                 new Or(7, 5),           // 11: abc_nulls
-                divide);                // 12: IF(condition, a+b, a-b) / c
+                new DivideI64(10, 4));  // 12: IF(condition, a+b, a-b) / c
 
         Allocator allocator = new Allocator();
         Evaluator evaluator = new Evaluator(expressions, (i, mask) -> inputs[i], allocator);
@@ -98,22 +97,24 @@ public class Example1
         Mask inputMask = Mask.sparse(new int[] {0, 1, 2, 3, 4, 5, 6, 7}, batchSize);
 
         // Step 1: compute ab nulls; only evaluate IF for non-null positions
-        BooleanVector abNulls = (BooleanVector) evaluator.evaluate(7, inputMask);
+        BooleanVector abNulls = (BooleanVector) evaluator.evaluate(7, inputMask).values();
         Mask nonNullMask = inputMask.andNot(abNulls);
 
         // Step 2: evaluate IF(condition, a+b, a-b) for non-null positions
         evaluator.evaluate(10, nonNullMask);
 
         // Step 3: exclude positions with arithmetic overflow
-        BooleanVector condVec = (BooleanVector) evaluator.evaluate(6, nonNullMask);
+        BooleanVector condVec = (BooleanVector) evaluator.evaluate(6, nonNullMask).values();
         Mask trueMask = nonNullMask.and(condVec);
         Mask falseMask = nonNullMask.andNot(condVec);
+        BooleanVector addErrors = evaluator.evaluate(8, trueMask).errors();
+        BooleanVector subErrors = evaluator.evaluate(9, falseMask).errors();
         Mask noOverflow = union(
-                addExact.errors() != null ? trueMask.andNot(addExact.errors()) : trueMask,
-                subExact.errors() != null ? falseMask.andNot(subExact.errors()) : falseMask);
+                addErrors != null ? trueMask.andNot(addErrors) : trueMask,
+                subErrors != null ? falseMask.andNot(subErrors) : falseMask);
 
         // Step 4: exclude c nulls
-        BooleanVector abcNulls = (BooleanVector) evaluator.evaluate(11, noOverflow);
+        BooleanVector abcNulls = (BooleanVector) evaluator.evaluate(11, noOverflow).values();
         Mask candidates = noOverflow.andNot(abcNulls);
 
         // Step 5: divide
@@ -122,10 +123,10 @@ public class Example1
         System.out.println("Input mask:     " + inputMask);
         System.out.println("ab nulls:       " + abNulls);
         System.out.println("abc nulls:      " + abcNulls);
-        System.out.println("Add overflow:   " + addExact.errors());
-        System.out.println("Sub overflow:   " + subExact.errors());
-        System.out.println("Div by zero:    " + divide.errors());
-        System.out.println("Result:         " + evaluator.evaluate(12, candidates));
+        System.out.println("Add overflow:   " + addErrors);
+        System.out.println("Sub overflow:   " + subErrors);
+        System.out.println("Div by zero:    " + evaluator.evaluate(12, candidates).errors());
+        System.out.println("Result:         " + evaluator.evaluate(12, candidates).values());
     }
 
     private static Mask union(Mask a, Mask b)

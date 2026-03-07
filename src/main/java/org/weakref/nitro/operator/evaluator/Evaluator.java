@@ -43,7 +43,7 @@ public class Evaluator
     private final List<Function> expressions;
     private final Input input;
     private final Allocator allocator;
-    private final Vector[] buffers;
+    private final Result[] buffers;
     private final Mask[] masks;
     private final EvaluationContext context;
 
@@ -52,13 +52,13 @@ public class Evaluator
         this.expressions = expressions;
         this.input = input;
         this.allocator = allocator;
-        this.buffers = new Vector[expressions.size()];
+        this.buffers = new Result[expressions.size()];
         this.masks = new Mask[expressions.size()];
 
         this.context = new EvaluationContext()
         {
             @Override
-            public Vector evaluate(int expressionIndex, Mask mask)
+            public Result evaluate(int expressionIndex, Mask mask)
             {
                 return Evaluator.this.evaluate(expressionIndex, mask);
             }
@@ -81,9 +81,9 @@ public class Evaluator
      * Evaluate the expression at the given index for the given mask.
      * <p>
      * Only positions not already computed (per the memoized mask) will be evaluated.
-     * The returned vector may contain results from previous calls at other positions.
+     * The returned result may contain values from previous calls at other positions.
      */
-    public Vector evaluate(int expressionIndex, Mask mask)
+    public Result evaluate(int expressionIndex, Mask mask)
     {
         if (expressionIndex < 0 || expressionIndex >= expressions.size()) {
             throw new IllegalArgumentException("Invalid expression index: " + expressionIndex);

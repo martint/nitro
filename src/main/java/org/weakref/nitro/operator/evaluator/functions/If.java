@@ -20,6 +20,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
+import org.weakref.nitro.operator.evaluator.Result;
 
 /**
  * Conditional expression: {@code IF(condition, ifTrue, ifFalse)}.
@@ -50,28 +51,29 @@ public class If
     }
 
     @Override
-    public Vector apply(Vector output, Mask mask, EvaluationContext context)
+    public Result apply(Result output, Mask mask, EvaluationContext context)
     {
-        BooleanVector cond = (BooleanVector) context.evaluate(condition, mask);
+        BooleanVector cond = (BooleanVector) context.evaluate(condition, mask).values();
         Mask trueMask = mask.and(cond);
         Mask falseMask = mask.andNot(cond);
 
-        Vector trueResult = trueMask.none() ? null : context.evaluate(ifTrue, trueMask);
-        Vector falseResult = falseMask.none() ? null : context.evaluate(ifFalse, falseMask);
+        Vector trueResult = trueMask.none() ? null : context.evaluate(ifTrue, trueMask).values();
+        Vector falseResult = falseMask.none() ? null : context.evaluate(ifFalse, falseMask).values();
 
         Vector template = trueResult != null ? trueResult : falseResult;
         if (template == null) {
             return output;
         }
 
-        if (output == null) {
-            output = allocate(template, context);
+        Vector outVec = output != null ? output.values() : null;
+        if (outVec == null) {
+            outVec = allocate(template, context);
         }
 
-        merge(output, trueResult, trueMask);
-        merge(output, falseResult, falseMask);
+        merge(outVec, trueResult, trueMask);
+        merge(outVec, falseResult, falseMask);
 
-        return output;
+        return Result.of(outVec);
     }
 
     private static Vector allocate(Vector template, EvaluationContext context)
