@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -40,7 +41,7 @@ public class TopNOperator
         this.n = n;
         this.column = column;
         this.source = source;
-        result = new I64VectorWithNulls[source.columnCount()];
+        result = new I64Vector[source.columnCount()];
     }
 
     @Override
@@ -62,20 +63,15 @@ public class TopNOperator
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
 
         for (int i = 0; i < result.length; i++) {
-            result[i] = allocator.allocate(ALLOCATION_CONTEXT, n, I64VectorWithNulls::new);
+            result[i] = allocator.allocate(ALLOCATION_CONTEXT, n, I64Vector::new);
         }
 
         while (source.hasNext()) {
             Mask mask = source.next();
 
             for (int position : mask) {
-                I64VectorWithNulls sortColumn = (I64VectorWithNulls) source.column(column);
-                if (sortColumn.nulls()[position]) {
-                    // Skip nulls for now
-                    continue;
-                }
+                long value = values(source.column(column))[position];
 
-                long value = sortColumn.values()[position];
                 if (queue.size() < n) {
                     int slot = queue.size();
                     queue.add(new Entry(value, slot));
@@ -112,11 +108,11 @@ public class TopNOperator
         while (!queue.isEmpty()) {
             Entry entry = queue.poll();
             for (int i = 0; i < result.length; i++) {
-                long[] values = ((I64VectorWithNulls) result[i]).values();
+                long[] vals = ((I64Vector) result[i]).values();
 
-                temp[i] = values[current];
-                values[current] = values[remap[entry.position]];
-                values[remap[entry.position]] = temp[i];
+                temp[i] = vals[current];
+                vals[current] = vals[remap[entry.position]];
+                vals[remap[entry.position]] = temp[i];
 
                 remap[current] = remap[entry.position];
             }
@@ -128,9 +124,17 @@ public class TopNOperator
     private void copyToBuffer(int from, int to)
     {
         for (int i = 0; i < result.length; i++) {
-            Vector column = source.column(i);
-            ((I64VectorWithNulls) result[i]).values()[to] = ((I64VectorWithNulls) column).values()[from];
+            ((I64Vector) result[i]).values()[to] = values(source.column(i))[from];
         }
+    }
+
+    private static long[] values(Vector v)
+    {
+        return switch (v) {
+            case I64Vector iv -> iv.values();
+            case I64VectorWithNulls iv -> iv.values();
+            default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
+        };
     }
 
     @Override

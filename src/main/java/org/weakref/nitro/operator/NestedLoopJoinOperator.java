@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -188,10 +189,11 @@ public class NestedLoopJoinOperator
     private void replicate(Vector output, int start, int length, Vector input, int position)
     {
         I64VectorWithNulls outputVector = (I64VectorWithNulls) output;
-        I64VectorWithNulls inputVector = (I64VectorWithNulls) input;
+        long value = values(input)[position];
+        boolean isNull = input instanceof I64VectorWithNulls iv && iv.nulls()[position];
 
-        Arrays.fill(outputVector.values(), start, start + length, inputVector.values()[position]);
-        Arrays.fill(outputVector.nulls(), start, start + length, inputVector.nulls()[position]);
+        Arrays.fill(outputVector.values(), start, start + length, value);
+        Arrays.fill(outputVector.nulls(), start, start + length, isNull);
     }
 
     private void loadInnerIfNecessary()
@@ -210,7 +212,7 @@ public class NestedLoopJoinOperator
                     int copied = 0;
                     for (int i = 0; i < columns.length; i++) {
                         // TODO: allow transferring ownership from underlying operator in case we don't need to copy+compact
-                        copied = copyAndCompact((I64VectorWithNulls) inner.column(i), mask, maskOffset, (I64VectorWithNulls) columns[i], outputPosition);
+                        copied = copyAndCompact(inner.column(i), mask, maskOffset, (I64VectorWithNulls) columns[i], outputPosition);
                     }
                     outputPosition += copied;
                     maskOffset += copied;
@@ -242,28 +244,42 @@ public class NestedLoopJoinOperator
     /**
      * @return the number of elements copied
      */
-    private int copyAndCompact(I64VectorWithNulls input, Mask mask, int maskStart, I64VectorWithNulls output, int outputStart)
+    private int copyAndCompact(Vector inputVec, Mask mask, int maskStart, I64VectorWithNulls output, int outputStart)
     {
+        long[] inputValues = values(inputVec);
+        boolean[] inputNulls = inputVec instanceof I64VectorWithNulls iv ? iv.nulls() : null;
+
         int outputPosition = outputStart;
         int maskIndex = maskStart;
 
         if (mask.all()) {
             int length = Math.min(mask.count() - maskStart, output.length() - outputPosition);
-            System.arraycopy(input.nulls(), maskStart, output.nulls(), outputPosition, length);
-            System.arraycopy(input.values(), maskStart, output.values(), outputPosition, length);
+            if (inputNulls != null) {
+                System.arraycopy(inputNulls, maskStart, output.nulls(), outputPosition, length);
+            }
+            System.arraycopy(inputValues, maskStart, output.values(), outputPosition, length);
             outputPosition += length;
         }
         else {
             while (outputPosition < output.length() && maskIndex < mask.count()) {
                 int inputPosition = mask.position(maskIndex);
-                output.nulls()[outputPosition] = input.nulls()[inputPosition];
-                output.values()[outputPosition] = input.values()[inputPosition];
+                output.nulls()[outputPosition] = inputNulls != null && inputNulls[inputPosition];
+                output.values()[outputPosition] = inputValues[inputPosition];
                 outputPosition++;
                 maskIndex++;
             }
         }
 
         return outputPosition - outputStart;
+    }
+
+    private static long[] values(Vector v)
+    {
+        return switch (v) {
+            case I64Vector iv -> iv.values();
+            case I64VectorWithNulls iv -> iv.values();
+            default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
+        };
     }
 
     @Override

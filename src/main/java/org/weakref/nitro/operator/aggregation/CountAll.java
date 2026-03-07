@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -48,7 +49,7 @@ public class CountAll
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
-        I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
+        I64Vector groupVector = (I64Vector) groups;
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {

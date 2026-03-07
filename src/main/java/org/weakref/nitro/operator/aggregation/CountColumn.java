@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -48,10 +49,12 @@ public class CountColumn
     public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
-        I64VectorWithNulls inputVector = (I64VectorWithNulls) columns.column(inputColumn);
+        boolean[] inputNulls = nulls(columns.column(inputColumn));
 
         for (int position : mask) {
-            accumulate(stateVector, group, inputVector, position);
+            if (!isNull(inputNulls, position)) {
+                stateVector.values()[group]++;
+            }
         }
     }
 
@@ -59,19 +62,14 @@ public class CountColumn
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
-        I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
-        I64VectorWithNulls inputVector = (I64VectorWithNulls) columns.column(inputColumn);
+        I64Vector groupVector = (I64Vector) groups;
+        boolean[] inputNulls = nulls(columns.column(inputColumn));
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
-            accumulate(stateVector, group, inputVector, position);
-        }
-    }
-
-    private static void accumulate(I64VectorWithNulls state, int group, I64VectorWithNulls input, int position)
-    {
-        if (!input.nulls()[position]) {
-            state.values()[group]++;
+            if (!isNull(inputNulls, position)) {
+                stateVector.values()[group]++;
+            }
         }
     }
 
@@ -79,5 +77,15 @@ public class CountColumn
     public Vector result(int maxGroup, Vector state, Vector output)
     {
         return state;
+    }
+
+    private static boolean[] nulls(Vector v)
+    {
+        return v instanceof I64VectorWithNulls iv ? iv.nulls() : null;
+    }
+
+    private static boolean isNull(boolean[] nulls, int position)
+    {
+        return nulls != null && nulls[position];
     }
 }

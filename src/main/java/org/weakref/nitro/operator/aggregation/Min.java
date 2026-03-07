@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -47,22 +48,20 @@ public class Min
     public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
-        I64VectorWithNulls inputVector = (I64VectorWithNulls) columns.column(inputColumn);
+        Vector input = columns.column(inputColumn);
+        long[] inputValues = values(input);
+        boolean[] inputNulls = nulls(input);
 
         for (int position : mask) {
-            accumulate(stateVector, group, inputVector, position);
-        }
-    }
-
-    private static void accumulate(I64VectorWithNulls state, int group, I64VectorWithNulls input, int position)
-    {
-        if (state.nulls()[group]) {
-            state.values()[group] = input.values()[position];
-            state.nulls()[group] = input.nulls()[position];
-        }
-        else if (!input.nulls()[position]) {
-            state.values()[group] = Math.min(state.values()[group], input.values()[position]);
-            state.nulls()[group] = false;
+            if (!isNull(inputNulls, position)) {
+                if (stateVector.nulls()[group]) {
+                    stateVector.values()[group] = inputValues[position];
+                    stateVector.nulls()[group] = false;
+                }
+                else {
+                    stateVector.values()[group] = Math.min(stateVector.values()[group], inputValues[position]);
+                }
+            }
         }
     }
 
@@ -70,12 +69,22 @@ public class Min
     public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
-        I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
-        I64VectorWithNulls inputVector = (I64VectorWithNulls) columns.column(inputColumn);
+        I64Vector groupVector = (I64Vector) groups;
+        Vector input = columns.column(inputColumn);
+        long[] inputValues = values(input);
+        boolean[] inputNulls = nulls(input);
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
-            accumulate(stateVector, group, inputVector, position);
+            if (!isNull(inputNulls, position)) {
+                if (stateVector.nulls()[group]) {
+                    stateVector.values()[group] = inputValues[position];
+                    stateVector.nulls()[group] = false;
+                }
+                else {
+                    stateVector.values()[group] = Math.min(stateVector.values()[group], inputValues[position]);
+                }
+            }
         }
     }
 
@@ -83,5 +92,24 @@ public class Min
     public Vector result(int maxGroup, Vector state, Vector output)
     {
         return state;
+    }
+
+    private static long[] values(Vector v)
+    {
+        return switch (v) {
+            case I64Vector iv -> iv.values();
+            case I64VectorWithNulls iv -> iv.values();
+            default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
+        };
+    }
+
+    private static boolean[] nulls(Vector v)
+    {
+        return v instanceof I64VectorWithNulls iv ? iv.nulls() : null;
+    }
+
+    private static boolean isNull(boolean[] nulls, int position)
+    {
+        return nulls != null && nulls[position];
     }
 }

@@ -13,27 +13,29 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.filter.VectorPredicate;
+import org.weakref.nitro.operator.evaluator.Evaluator;
+import org.weakref.nitro.operator.evaluator.Function;
+
+import java.util.List;
 
 public class FilterOperator
         implements Operator
 {
     private final Operator source;
-    private final int filterColumn;
-    private final VectorPredicate filter;
+    private final Evaluator evaluator;
+    private final int predicateExpression;
 
     private Mask mask;
 
-    // reusable mask buffer
-    private int[] maskPositions;
-
-    public FilterOperator(int filterColumn, VectorPredicate filter, Operator source)
+    public FilterOperator(Operator source, List<Function> expressions, int predicateExpression, Allocator allocator)
     {
         this.source = source;
-        this.filterColumn = filterColumn;
-        this.filter = filter;
+        this.predicateExpression = predicateExpression;
+        this.evaluator = new Evaluator(expressions, (index, m) -> source.column(index), allocator);
     }
 
     @Override
@@ -46,9 +48,10 @@ public class FilterOperator
     public Mask next()
     {
         mask = source.next();
-
-        doFilter(); // TODO: lazy? -- but for that, we need to be able to return the mask separately from the call to nextBatch
-
+        BooleanVector predicate = (BooleanVector) evaluator.evaluate(predicateExpression, mask);
+        mask = mask.and(predicate);
+        source.constrain(mask);
+        evaluator.reset();
         return mask;
     }
 
@@ -61,7 +64,7 @@ public class FilterOperator
     @Override
     public void constrain(Mask mask)
     {
-        this.mask = mask; // TODO: combine masks?
+        this.mask = mask;
         source.constrain(mask);
     }
 
@@ -69,31 +72,6 @@ public class FilterOperator
     public Vector column(int column)
     {
         return source.column(column);
-    }
-
-    private void doFilter()
-    {
-        Vector column = source.column(this.filterColumn);
-
-        ensureCapacity(mask.count());
-        int maskSize = 0;
-        for (int position : mask) {
-            if (filter.test(column, position)) {
-                maskPositions[maskSize] = position;
-                maskSize++;
-            }
-        }
-
-        mask = Mask.sparse(maskPositions, maskSize);
-        source.constrain(mask);
-    }
-
-    @Deprecated // TODO: move to Mask
-    private void ensureCapacity(int size)
-    {
-        if (maskPositions == null || maskPositions.length < size) {
-            maskPositions = new int[size];
-        }
     }
 
     @Override

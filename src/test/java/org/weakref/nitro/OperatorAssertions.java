@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.assertj.core.api.AssertProvider;
 import org.assertj.core.api.Descriptable;
 import org.assertj.core.description.Description;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -84,8 +85,11 @@ public class OperatorAssertions
                 for (int position : mask) {
                     Long[] row = new Long[columns.size()];
                     for (int i = 0; i < columns.size(); i++) {
-                        I64VectorWithNulls column = (I64VectorWithNulls) columns.get(i);
-                        row[i] = column.nulls()[position] ? null : column.values()[position];
+                        row[i] = switch (columns.get(i)) {
+                            case I64VectorWithNulls v -> v.nulls()[position] ? null : v.values()[position];
+                            case I64Vector v -> v.values()[position];
+                            default -> throw new UnsupportedOperationException(columns.get(i).getClass().getSimpleName());
+                        };
                     }
 
                     result.add(new Row(row));
