@@ -71,3 +71,8 @@ A work-in-progress expression evaluator with an IR layer:
 
 - `TestOperators` — JUnit 5 functional tests; uses `OperatorAssertions.operator()` to wrap any `Operator` for assertj-based row matching
 - `BenchmarkOperators`, `BenchmarkAggregationStrategies`, `BenchmarkEvaluationStrategies`, `BenchmarkAddExact` — JMH benchmarks in `src/test/java`
+            
+### Code Style and others
+
+- Do not use abbreviations in class, method or variable names, except for well-known terms (e.g. `Rle` for run-length encoding, `max`, `min`, etc).
+- This project uses Jujutsu VCS for version control
