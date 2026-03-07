@@ -54,10 +54,10 @@ public class SubtractI64
             return applyRleRle(leftRle, rightRle, mask, result, context);
         }
         else if (left instanceof RleVector leftRle && right instanceof FlatVector rightFlat) {
-            return applyRleFlat(leftRle, rightFlat, mask, result, context);
+            return applyRleFlat(leftRle, rightFlat, true, mask, result, context);
         }
         else if (left instanceof FlatVector leftFlat && right instanceof RleVector rightRle) {
-            return applyRleFlat(rightRle, leftFlat, mask, result, context);
+            return applyRleFlat(rightRle, leftFlat, false, mask, result, context);
         }
 
         result = context.allocator().allocateOrGrow(CONTEXT, result, left.length(), I64Vector::new);
@@ -85,7 +85,7 @@ public class SubtractI64
         return output;
     }
 
-    private Vector applyRleFlat(RleVector rle, FlatVector flat, Mask mask, Vector result, EvaluationContext context)
+    private Vector applyRleFlat(RleVector rle, FlatVector flat, boolean rleIsLeft, Mask mask, Vector result, EvaluationContext context)
     {
         I64Vector output = (I64Vector) context.allocator().allocateOrGrow(CONTEXT, result, flat.length(), I64Vector::new);
         I64Vector flatValues = (I64Vector) flat;
@@ -97,7 +97,9 @@ public class SubtractI64
                 long value = ((I64Vector) rle.values()).values()[run];
 
                 for (int i = 0; i < runLength; i++) {
-                    output.values()[position] = value - flatValues.values()[position];
+                    output.values()[position] = rleIsLeft
+                            ? value - flatValues.values()[position]
+                            : flatValues.values()[position] - value;
                     position++;
                 }
             }
@@ -110,7 +112,9 @@ public class SubtractI64
 
                 for (int i = 0; i < runLength; i++) {
                     if (mask.contains(position)) {
-                        output.values()[position] = value - flatValues.values()[position];
+                        output.values()[position] = rleIsLeft
+                                ? value - flatValues.values()[position]
+                                : flatValues.values()[position] - value;
                     }
                     position++;
                 }
