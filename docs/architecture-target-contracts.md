@@ -1,0 +1,1162 @@
+# Nitro Target Contracts
+
+This document captures the intended architectural contracts for Nitro as it
+evolves from the current prototype state toward a stream-first evaluation
+engine.
+
+The goal is not to describe the code exactly as it exists today. The goal is to
+define the interfaces and responsibilities we want the codebase to converge on.
+
+## Design Goals
+
+- Keep the `Operator` abstraction as the batch execution backbone.
+- Make the evaluator the single mechanism for scalar expression computation.
+- Treat `VALUES`, `NULLS`, and `ERRORS` as first-class streams.
+- Keep vectors focused on physical encoding, not semantic concerns like
+  nullability.
+- Preserve compact encodings when possible instead of eagerly flattening.
+- Allow downstream operators to request only the streams they actually need.
+- Preserve mask-driven, additive evaluation so partial work can be reused across
+  columns and across stream requests within a batch.
+
+## Architectural Principles
+
+### Operators orchestrate batches
+
+Operators are responsible for:
+
+- pulling batches from upstream operators
+- propagating masks downstream and upstream
+- exposing logical outputs for the current batch
+- deciding when work is blocking vs. streaming
+
+Operators are not responsible for implementing their own scalar expression
+evaluation engines.
+
+### The evaluator owns scalar semantics
+
+The evaluator is responsible for:
+
+- evaluating expression DAGs lazily
+- memoizing only the results that benefit from reuse within a batch
+- reusing intermediate results across multiple projected outputs
+- computing only the positions requested by the current mask
+- exposing all streams produced by an expression
+
+Any operator that needs scalar computation over rows should delegate to the
+evaluator rather than embedding its own expression scheduler.
+
+### Streams are semantic outputs
+
+For any logical expression or logical column, Nitro should model separate
+streams such as:
+
+- `VALUES`
+- `NULLS`
+- `ERRORS`
+
+Additional streams may be introduced later if needed, but the key idea is that
+nullability and error state are not hidden inside value vectors.
+
+### Vectors are physical encodings
+
+Vectors represent a single stream in some physical layout.
+
+Examples:
+
+- flat vectors for primitive types
+- `ConstantVector`
+- `RleVector`
+- future `DictionaryVector`
+
+Vectors should not be forced to embed nullability. A null stream is just
+another vector, typically a boolean-typed one.
+
+The physical encoding of a given logical stream is a runtime property of each
+produced batch, not a fixed property of the logical column or expression.
+
+For example, the same logical output stream may appear as:
+
+- `RleVector` in one batch
+- `DictionaryVector` in the next batch
+- a flat vector in a later batch
+
+This may happen at any point in the pipeline depending on the input data and
+the behavior of upstream operators.
+
+As a result:
+
+- plans should express required capabilities and allowed behaviors, not fixed
+  vector representations
+- primitive functions should advertise which encodings they can consume or
+  preserve
+- materialization decisions may be made per batch based on the execution path
+  taken for that batch
+
+### Allocation and ownership are explicit runtime concerns
+
+Nitro should target a steady state where execution is almost allocation-free.
+That requires explicit rules for reuse, mutation, and ownership transfer rather
+than relying on convention.
+
+The allocator is therefore not just a statistics collector. It is the single
+mediator for:
+
+- vector allocation
+- mask allocation
+- scratch buffer reuse
+- capacity growth
+- recycling
+- ownership handoff between operators
+
+No operator or function should allocate execution buffers directly with `new`
+once the runtime path is mature. All execution buffers should come from the
+allocator or a pool owned by the allocator.
+
+### Ownership modes
+
+Execution buffers, including vectors and masks, should follow an ownership
+model. Conceptually, a buffer is in one of these modes:
+
+- `owned`: exactly one component may mutate and later recycle it
+- `borrowed`: the buffer may be read but must not be mutated or retained past
+  the current batch contract
+- `transferred`: ownership has moved downstream; the previous owner must no
+  longer mutate or recycle it
+
+The exact API can vary, but the semantics should stay consistent.
+
+### Reuse rules
+
+- A component may mutate only buffers it owns.
+- Borrowed buffers are read-only from the borrower's point of view even if the
+  underlying object is physically mutable.
+- Reusing an existing output buffer is preferred over allocating a new one.
+- Capacity growth should happen through allocator-mediated grow or replace
+  operations.
+- Recycling should return the buffer to allocator-managed pools rather than
+  letting it become ordinary garbage.
+- Operators may keep private reusable scratch buffers when ownership never
+  leaves the operator.
+- Operators may transfer ownership of buffers downstream when doing so avoids a
+  copy and the upstream operator no longer needs the buffer.
+
+## Target Allocator Contract
+
+The current allocator already tracks memory by context. The target allocator
+should evolve into a resource manager for execution buffers.
+
+### Responsibilities
+
+The allocator should:
+
+- allocate vectors and masks
+- grow or replace existing buffers
+- recycle buffers into per-type pools
+- track allocations and peak usage by context
+- support operator-local scratch reuse
+- support ownership transfer and recycling
+
+### Conceptual shape
+
+```java
+interface Allocator
+{
+    <T extends Buffer> T allocate(Context context, BufferFactory<T> factory, int capacity);
+
+    <T extends Buffer> T grow(Context context, T existing, int requiredCapacity);
+
+    void recycle(Context context, Buffer buffer);
+
+    <T extends Buffer> T transfer(T buffer);
+}
+```
+
+This is illustrative only. The key architectural point is that all execution
+buffers flow through a single mediator.
+
+### Contexts
+
+Allocation contexts should continue to exist because they are useful both for
+profiling and for understanding where reuse is failing.
+
+Longer term, hierarchical contexts are desirable so a pipeline can distinguish:
+
+- operator-owned reusable buffers
+- evaluator-owned reusable buffers
+- one-off fallback allocations
+- memory retained due to ownership transfer
+
+## Target Mask Contract
+
+Masks are part of the execution hot path and should be treated like pooled
+execution buffers, not disposable values.
+
+### Principles
+
+- Masks should be reusable across batches where possible.
+- Derived masks should prefer writing into owned output buffers rather than
+  allocating fresh arrays for every set operation.
+- Mask operations should continue to support sparse and dense-friendly
+  execution paths.
+- Boolean streams should remain convertible into masks without forcing
+  unnecessary copies.
+
+### Intended direction
+
+The current `Mask` API behaves like a value type. The target runtime behavior
+should be closer to a resettable buffer with logical size and reusable
+capacity.
+
+Conceptually:
+
+```java
+interface MaskBuffer
+{
+    int count();
+
+    int capacity();
+
+    boolean all();
+
+    void reset();
+}
+```
+
+This does not require the public API to become mutable immediately, but it does
+mean the implementation should move toward allocator-managed storage.
+
+### Ownership and handoff
+
+- A mask returned from `next()` is borrowed by default for the lifetime of the
+  current batch.
+- An operator may keep and reuse its owned masks internally across batches.
+- Ownership transfer of a mask should be explicit if downstream is expected to
+  retain or mutate it.
+- Mask-producing operations such as union, difference, complement, and boolean
+  filtering should eventually support writing into owned output masks.
+
+## Target IR Contract
+
+Nitro should use one IR language with one semantic model, but it may operate on
+that IR at different normalization levels.
+
+### Core idea
+
+The IR should be stream-first and producer-oriented:
+
+- a variable denotes a producer
+- streams are addressed explicitly from that producer
+- masks are explicit expressions in the internal representation
+- lowering rewrites convenient forms into a normalized subset of the same
+  language rather than translating into a different IR
+
+### Core entities
+
+Conceptually, the IR revolves around:
+
+- producers
+- stream references
+- mask expressions
+- operations
+- assignments
+
+Conceptually:
+
+```java
+sealed interface Producer
+{
+}
+
+record Variable(int id) implements Producer
+{
+}
+
+record Input(int index) implements Producer
+{
+}
+
+record StreamReference(Producer producer, Stream stream)
+{
+}
+
+sealed interface MaskExpression
+{
+}
+
+record AllMask() implements MaskExpression
+{
+}
+
+record FromStreamMask(StreamReference source) implements MaskExpression
+{
+}
+
+record NotMask(MaskExpression source) implements MaskExpression
+{
+}
+
+record AndMask(MaskExpression left, MaskExpression right) implements MaskExpression
+{
+}
+
+record OrMask(MaskExpression left, MaskExpression right) implements MaskExpression
+{
+}
+
+record Assignment(Variable output, Operation operation, MaskExpression mask, Type type)
+{
+}
+```
+
+This is illustrative. The important properties are:
+
+- variables name producers, not single vectors
+- stream access is explicit
+- masks are explicit in the internal model
+- assignments define producer semantics under a mask
+
+### General versus normalized form
+
+The IR language should support:
+
+- a general form that is convenient to construct and read
+- a normalized form that is explicit enough for direct execution
+
+These are not two different IRs. They are two forms of the same language.
+
+The general form may contain:
+
+- special forms such as `if`, `coalesce`, `case`, `try`, `and`, and `or`
+- compact producer assignments with implicit companion-stream behavior
+- textual sugar for masks and boolean-to-mask conversion
+
+The normalized form should require:
+
+- explicit stream references
+- explicit mask expressions
+- explicit control-flow structure in the IR rather than hidden inside special
+  forms
+- only primitive execution calls plus explicit structural operations such as
+  copy and merge-like overlay
+
+### Normalized operation set
+
+The normalized executable subset should stay intentionally small.
+
+The evaluator should only need to execute a handful of operation kinds:
+
+- `Literal`
+- `Call`
+- `Copy`
+- `Merge`
+
+Their intended roles are:
+
+- `Literal`: produce structural constant or null-like results
+- `Call`: invoke a primitive execution function with explicit stream arguments
+  and an explicit mask
+- `Copy`: perform a masked identity write from one stream into an output
+- `Merge`: represent semantic overlay of partial results under explicit masks
+
+Everything else should be lowered into combinations of these operations plus
+explicit mask expressions and stream references.
+
+### General-form operations
+
+The general form may contain richer constructs for readability and planning,
+including:
+
+- `if`
+- `coalesce`
+- `case`
+- `try`
+- short-circuit `and`
+- short-circuit `or`
+
+These are part of the same IR language, but they are not part of the normalized
+execution subset. They must be lowered before direct evaluation.
+
+### Why keep `Merge`
+
+Even if physical execution usually prefers direct masked writes into a final
+output buffer, `Merge` should remain part of the normalized IR because it makes
+overlay semantics explicit and gives normalization and validation a concrete
+semantic target.
+
+### Normalization
+
+The normalization pass should stay within the same IR language.
+
+Its job is to:
+
+- eliminate control-flow special forms from executable regions
+- rewrite implicit mask usage into explicit mask expressions
+- introduce explicit stream-level producers when needed for execution,
+  memoization, or planning
+- make null/error handling explicit where required by the execution model
+- ensure mask well-formedness for the resulting fragment
+
+### Mask well-formedness
+
+The internal IR should support validation of mask relationships.
+
+At minimum, the architecture should define and enforce these ideas:
+
+- an operation may only read positions that are guaranteed to be available under
+  its evaluation mask
+- branch-local writes must be restricted to the branch mask
+- merge-like overlays must be validated against the enclosing evaluation mask
+- any rewrite that relies on output-buffer preservation must preserve the domain
+  of definition of the original expression
+
+The exact validation algorithm is open, but the normalized form should be
+checkable rather than relying on informal correctness arguments.
+
+### Boolean streams and masks
+
+Boolean streams and masks are closely related but should not be conflated in the
+internal model.
+
+The recommended direction is:
+
+- keep masks explicit in the Java IR model
+- allow compact textual sugar that desugars boolean streams into mask
+  expressions where appropriate
+
+This gives the implementation precise internal semantics without making every
+human-authored IR example excessively verbose.
+
+## Target Operator Contract
+
+The current `Operator` API should remain the batch protocol, but its meaning
+should become stream-aware.
+
+### Responsibilities
+
+An operator:
+
+- exposes a fixed logical output schema
+- returns a batch object for the current batch via `next()`
+- accepts narrower masks via `constrain()`
+- provides access to the streams for each logical output through the batch
+- participates in explicit borrow and transfer semantics for masks and outputs
+
+### Intended shape
+
+The current `column(int)` method is too value-centric for the long-term design.
+The target contract should expose a batch-scoped object that provides access to
+logical outputs and their streams.
+
+Conceptually:
+
+```java
+interface Operator extends AutoCloseable
+{
+    int outputCount();
+
+    boolean hasNext();
+
+    Batch next();
+
+    void constrain(Mask mask);
+
+    void close();
+}
+
+interface Batch
+{
+    Mask borrowMask();
+
+    Mask takeMask();
+
+    Output output(int index);
+}
+
+interface Output
+{
+    Vector borrow(Stream stream);
+
+    Vector take(Stream stream);
+}
+```
+
+This is illustrative rather than prescriptive. Equivalent designs are fine if
+they preserve the same semantics.
+
+What matters is that callers can request `NULLS` or `ERRORS` without pretending
+they are ordinary value columns, and that ownership is explicit at the batch
+boundary.
+
+The contract should also permit operators to preserve compact encodings such as
+constant, RLE, and dictionary when downstream consumers can operate on them.
+
+### Semantics
+
+- `Batch` represents one current batch of output from the operator.
+- Borrowed masks and streams are valid only for that batch.
+- Previously borrowed masks and streams are invalidated after the next call to
+  `next()`.
+- `constrain(mask)` narrows the rows of interest for the current batch only.
+- Operators may use `constrain(mask)` to avoid materializing streams that are no
+  longer needed.
+- `takeMask()` and `take(stream)` transfer ownership to the caller.
+- After ownership transfer, the batch should no longer assume it can expose the
+  transferred buffer again unless it regenerates or replaces it.
+
+### Transitional rule
+
+Until the operator API becomes explicitly stream-aware, operators may still
+present stream outputs as synthetic logical columns. This is a migration aid,
+not the final model.
+
+### Ownership-aware extensions
+
+The batch object is the preferred place to carry ownership semantics and any
+future batch-local metadata such as encoding information, schema details, or
+profiling counters.
+
+## Target Stream Reference Contract
+
+Nitro needs one shared notion of "which stream are you asking for?" that can be
+used consistently by:
+
+- the evaluator
+- `ProjectOperator`
+- aggregations
+- future planner or IR layers
+
+### Reference
+
+The existing evaluator IR already points in the right direction:
+
+- a logical producer
+- a specific stream of that producer
+
+Conceptually:
+
+```java
+record Reference(Producer producer, Stream stream) {}
+```
+
+The "producer" part may be:
+
+- an input column
+- an expression result
+- an aggregate result
+- eventually another logical source such as a constant or symbol
+
+The exact representation can vary. The important part is that stream selection
+is explicit and uniform.
+
+Boolean-valued references should also be usable as masks. In other words, a
+boolean stream is both data and a potential row-selection input.
+
+### Input access
+
+The evaluator's input abstraction should become stream-aware as well.
+
+Instead of:
+
+```java
+interface Input
+{
+    Vector get(int index, Mask mask);
+}
+```
+
+the target is conceptually closer to:
+
+```java
+interface InputResolver
+{
+    Vector resolve(Reference reference, Mask mask);
+}
+```
+
+This lets the evaluator request only the specific upstream stream it needs.
+
+### Result access
+
+Expression evaluation should produce a stream bundle rather than privileging
+`VALUES` as the only real output.
+
+Conceptually:
+
+```java
+interface Streams
+{
+    Vector get(Stream stream);
+}
+```
+
+or:
+
+```java
+record Result(Map<Stream, Vector> streams) {}
+```
+
+The exact container is less important than these rules:
+
+- any stream may be absent if it is not semantically produced
+- functions should compute only the streams requested by callers, when feasible
+- results remain batch-local and mask-aware
+- the carrier type of the error stream is intentionally left open; it may be
+  boolean in some phases and richer in others
+
+### Primitive function contract
+
+Normalized execution should rely on primitive functions whose behavior is
+explicit enough for planning and runtime decisions.
+
+Primitive functions should not hide control flow. Their semantics should be
+local to the supplied arguments, mask, output buffers, and calling convention.
+
+The architecture should keep primitive-function metadata minimal.
+
+For now, the important semantic metadata is:
+
+- determinism
+- null behavior when lowering or validation depends on it
+- error behavior when lowering or validation depends on it
+
+Other execution details should preferably be expressed through the calling
+convention and framework callbacks rather than through a large metadata surface.
+
+### Calling convention
+
+Primitive functions should follow a calling convention that makes these rules
+explicit:
+
+- functions execute under an explicit mask
+- functions may be given a reusable output destination
+- if a reusable output is supplied, functions must preserve positions outside
+  the active mask
+- if no output is supplied, functions may allocate or return a read-only encoded
+  result for the current batch
+- functions may request framework-mediated transformations or helpers when they
+  cannot operate directly on the current input representation
+
+Conceptually, the calling convention should look like:
+
+```java
+interface PrimitiveFunction
+{
+    Streams apply(
+            List<Streams> inputs,
+            Mask mask,
+            Streams output,
+            ExecutionContext context);
+}
+```
+
+This is illustrative only, but the chosen signature should make output reuse
+and masked writes part of the contract rather than implicit behavior.
+
+### Framework callbacks
+
+If a primitive function cannot efficiently consume a particular batch-local
+representation directly, it should be able to:
+
+- handle the adaptation internally, or
+- request help from the framework through callbacks or context services
+
+This avoids forcing the planner to predict every encoding transition in advance.
+
+### Null and error behavior
+
+The architecture should make room for at least these distinctions:
+
+- null-propagating versus null-producing versus null-oblivious behavior
+- error-producing versus error-capturing versus error-free behavior
+
+These distinctions matter for:
+
+- lowering of `try`, `coalesce`, and conditional forms
+- stream-specific materialization
+- adaptive reordering safety
+- validation of normalized fragments
+
+### Primitive versus special
+
+A call is primitive if:
+
+- it has no hidden control flow
+- it can execute directly under an explicit mask
+- its stream behavior is explicit enough for planning
+- it obeys the output-buffer preservation rules when given reusable outputs
+
+A call is not primitive if it requires semantic lowering first, for example:
+
+- `if`
+- `coalesce`
+- `case`
+- `try`
+- short-circuit forms whose control flow is not yet explicit in the IR
+
+The exact boundary can evolve, but the evaluator should execute only the
+primitive subset.
+
+### Selective memoization
+
+Memoization should not be the default for every intermediate expression.
+Instead, memoization should be a property of the execution plan.
+
+The evaluator should distinguish between retained results and ephemeral ones,
+but that distinction should come from the plan rather than from hard-coded
+runtime defaults.
+
+### Target evaluation plan contract
+
+The evaluator should execute a plan that carries explicit per-stream buffering
+policy.
+
+Conceptually:
+
+```java
+record EvaluationPlan(
+        List<ProducerPlan> producers,
+        List<Reference> outputs)
+{
+}
+
+record ProducerPlan(
+        Producer producer,
+        Map<Stream, StreamPlan> streams)
+{
+}
+
+record StreamPlan(
+        MaterializationPolicy materialization,
+        MemoizationPolicy memoization)
+{
+}
+
+enum MaterializationPolicy
+{
+    NONE,
+    SCRATCH,
+    MATERIALIZE
+}
+
+enum MemoizationPolicy
+{
+    NONE,
+    MEMOIZE
+}
+```
+
+This is illustrative only. The important point is that the abstraction carries
+policy, not planner diagnostics about why that policy was chosen.
+
+The plan should describe buffering requirements and execution capabilities, but
+it should not force a single fixed vector encoding for a logical stream across
+all batches.
+
+### Materialization versus memoization
+
+The plan should distinguish two separate questions:
+
+- should this stream be materialized into a backing buffer at all?
+- if materialized, should that buffer be retained across calls within the batch?
+
+Those are related but not identical.
+
+Examples:
+
+- a constant stream may be memoized without needing a mutable materialized
+  buffer
+- a branch output may need materialization because it is filled incrementally
+  under multiple masks
+- a cheap single-use stream may use scratch materialization without any
+  memoization
+
+The evaluator should therefore avoid treating "buffer exists" and "result is
+memoized" as the same concept.
+
+### Plan-level policies
+
+The intended meaning of the policies is:
+
+- `MaterializationPolicy.NONE`: no backing buffer is required for the general
+  case; the producer may expose a structural result directly
+- `MaterializationPolicy.SCRATCH`: materialize into allocator-managed scratch
+  storage that may be recycled once the consumer is finished
+- `MaterializationPolicy.MATERIALIZE`: produce a retained materialized stream
+  suitable for repeated access or incremental fill
+- `MemoizationPolicy.NONE`: do not retain computed-mask state or result buffers
+  beyond the active parent evaluation
+- `MemoizationPolicy.MEMOIZE`: retain computed-mask state and result identity
+  within the batch
+
+The exact enum names are open, but the separation of concerns should remain.
+
+These policies describe storage and lifetime requirements, not a fixed physical
+encoding. The actual representation for a stream may vary from batch to batch
+as long as it satisfies the requirements of the current consumer path.
+
+### Policy combinations
+
+Not every combination is equally useful. The expected meanings are:
+
+| Materialization | Memoization | Typical meaning | Typical use |
+|---|---|---|---|
+| `NONE` | `NONE` | No retained backing buffer and no retained computed state | literals, trivial structural forwarding, cheap structural results |
+| `NONE` | `MEMOIZE` | Retained structural result without ordinary materialized storage | constants and other immutable structural results worth retaining by identity |
+| `SCRATCH` | `NONE` | Temporary buffer recycled after the active parent evaluation | single-use arithmetic, temporary decoded fallback, one-shot branch-local intermediates |
+| `SCRATCH` | `MEMOIZE` | Generally undesirable; scratch lifetime conflicts with retained memoization | should usually be rewritten as `MATERIALIZE` plus `MEMOIZE` |
+| `MATERIALIZE` | `NONE` | Stable physical buffer without retained memoization state | boundary cases where a stream must exist physically but is produced once and not incrementally revisited |
+| `MATERIALIZE` | `MEMOIZE` | Retained physical buffer with retained computed-mask state | projected outputs, shared subexpressions, conditional branch outputs, expensive lazily loaded inputs |
+
+The recommended guidance is:
+
+- treat `SCRATCH` plus `MEMOIZE` as invalid or at least strongly discouraged
+- use `NONE` plus `MEMOIZE` mainly for structural immutable results
+- treat `MATERIALIZE` plus `MEMOIZE` as the standard full memoization case
+
+### Structural forwarding versus writable destinations
+
+A structural result is a valid complete result for a batch, but whether it can
+remain structural depends on how that batch-local result is used.
+
+For a given batch, a result may be forwarded unchanged when all of these are
+true:
+
+- it already fully represents the requested stream for that batch
+- no later step writes into that same logical result
+- downstream consumers can operate on the current encoding directly
+- ownership can be borrowed or transferred without requiring mutation
+
+For a given batch, a result must become a writable destination when any of these
+are true:
+
+- it will be filled incrementally over multiple masks
+- it is the target of branch overlay or semantic merge behavior
+- a downstream consumer requires mutable owned storage
+- the current encoding does not support the required update pattern
+
+The key rule is:
+
+- sources may remain structural
+- destinations must be writable
+
+This is a batch-local execution decision, not a fixed property of the logical
+stream across all batches.
+
+### Memoization points
+
+The execution plan should identify explicit buffering or materialization points.
+Typical memoization points are:
+
+- common subexpressions
+- outputs of conditional branches that may be filled over multiple masks
+- projected outputs requested independently by downstream operators
+- leaves whose lazy loading cost justifies retaining the fetched stream
+
+Everything else should flow through scratch buffers with allocator-managed
+reuse.
+
+These decisions should be made per producer and, ideally, per stream rather
+than as a blanket rule for the entire expression node.
+
+### Scratch evaluation
+
+Non-memoized evaluation still needs reusable storage. The evaluator should use
+allocator-managed scratch buffers for ephemeral intermediates.
+
+Those scratch buffers should:
+
+- be reused aggressively within a batch
+- obey the same ownership rules as other execution buffers
+- be recyclable as soon as the parent expression no longer needs them
+- preserve positions outside the active mask only when required by the calling
+  convention
+
+This is how the evaluator can reduce memory retention without giving up
+allocation reuse.
+
+### ProjectOperator in the target design
+
+`ProjectOperator` should become a thin adapter around the evaluator:
+
+- it owns an evaluator for the current batch
+- it maps projected outputs to `Reference`s
+- each output may refer to `VALUES`, `NULLS`, or `ERRORS`
+- requesting one output should be able to reuse partial work from prior output
+  requests in the same batch
+
+This replaces the legacy `ProjectOperator.Execution` mini-engine with evaluator
+references and shared memoization.
+
+### Output buffer rule
+
+Any function that accepts a reusable output must preserve positions outside the
+evaluation mask. This is the rule that makes in-place additive evaluation and
+merge-style rewrites semantically valid.
+
+### Encoding-aware dispatch
+
+Operations should be vector-type aware. They should inspect physical encodings
+and pick specialized paths when possible.
+
+Examples:
+
+- constant plus constant should remain constant
+- RLE plus RLE should prefer RLE-preserving evaluation when valid
+- dictionary plus dictionary should exploit shared dictionaries or shared
+  indirection when possible
+- flattening should be the fallback, not the default
+
+This applies equally to scalar functions, predicate functions, and any future
+merge-like evaluator operations.
+
+### Concrete execution decisions
+
+The following execution choices should guide the runtime design:
+
+- `merge` is primarily a semantic IR construct. It does not imply that execution
+  must materialize a temporary result and then physically merge it into another
+  vector.
+- The preferred physical strategy for `merge`-like behavior is direct masked
+  writes into the final output buffer, using explicit masks and output-buffer
+  preservation rules.
+- The evaluator may still support `Merge` as a fallback executable primitive so
+  that normalized plans remain directly executable even when merge-like behavior
+  was not compiled into a destination-writing strategy.
+- Writable result vectors must support sparse and out-of-order population. A
+  result may be filled in multiple masked passes and untouched positions may
+  contain stale data.
+- `Mask` remains the semantic row-selection mechanism. Encodings such as
+  dictionary are physical optimizations and do not replace masks in the semantic
+  model.
+- `DictionaryVector` may be used as a physical representation of selected or
+  repeated rows when that avoids copying, but planning and correctness should
+  still be expressed in terms of masks.
+- Runtime adaptive reordering is allowed for normalized deterministic n-ary
+  boolean forms such as `AND` and `OR`, provided that short-circuit, null, and
+  error semantics remain unchanged.
+- Adaptive reordering should be driven by observed cost and selectivity, but it
+  should be scoped narrowly to forms whose semantics are order-insensitive under
+  the established rules.
+- Primitive execution functions should advertise enough behavior for the runtime
+  to know whether they support direct masked writes, preserve encodings, or
+  require flattening as a fallback.
+
+### Adaptive reordering safety
+
+Adaptive reordering should be allowed only for normalized n-ary boolean forms
+whose terms are:
+
+- deterministic
+- side-effect free
+- explicitly marked reorderable
+- row-local in their null and error behavior
+
+For reorderable `AND` and `OR`, Nitro should adopt order-insensitive row
+semantics rather than strict left-to-right evaluation semantics.
+
+For `AND`, per row:
+
+- `FALSE` is decisive and suppresses later `NULL` and `ERROR`
+- if no term is `FALSE`, then `ERROR` dominates `NULL`
+- if no term is `FALSE` or `ERROR`, then `NULL` dominates `TRUE`
+
+For `OR`, per row:
+
+- `TRUE` is decisive and suppresses later `NULL` and `ERROR`
+- if no term is `TRUE`, then `ERROR` dominates `NULL`
+- if no term is `TRUE` or `ERROR`, then `NULL` dominates `FALSE`
+
+This means errors observed during evaluation may be provisional until the row is
+known not to be decided by a suppressing `FALSE` or `TRUE`.
+
+If multiple unsuppressed terms produce errors for the same row, the visible
+error should be chosen deterministically by source order rather than runtime
+evaluation order.
+
+Adaptive ordering should therefore be based on observed cost and decisiveness,
+for example:
+
+- for `AND`, prefer cheaper and more false-selective terms first
+- for `OR`, prefer cheaper and more true-selective terms first
+
+Any boolean form that does not satisfy the reorderability contract should retain
+its original evaluation order after normalization.
+
+## Target Accumulator Contract
+
+Accumulators should operate on semantic stream references, not on nullable value
+vectors.
+
+### Responsibilities
+
+An accumulator:
+
+- defines its input dependencies in terms of stream references
+- owns aggregation state for one aggregate function
+- updates that state for a mask of rows
+- exposes aggregate result streams explicitly
+
+### Input contract
+
+Today, accumulators consume bare column indexes through `ColumnAccessor`.
+The target contract should allow them to resolve the exact streams they need.
+
+Conceptually:
+
+```java
+interface StreamAccessor
+{
+    Vector resolve(Reference reference);
+}
+```
+
+Examples:
+
+- `sum(x)` reads `x/VALUES` and `x/NULLS`
+- `count(x)` reads `x/NULLS`
+- `count(*)` reads nothing
+- `first(x)` may read `x/VALUES`, `x/NULLS`, and possibly `x/ERRORS`
+
+This keeps null handling explicit and local to aggregate semantics.
+
+### State contract
+
+Aggregate state should not be modeled as a single nullable vector by default.
+Some aggregates naturally have multiple state streams.
+
+Conceptually:
+
+```java
+interface Accumulator
+{
+    State allocate(int size);
+
+    void initialize(State state, int offset, int length);
+
+    void accumulate(State state, int group, Mask mask, StreamAccessor inputs);
+
+    void accumulate(State state, Vector groups, Mask mask, StreamAccessor inputs);
+
+    Streams result(int maxGroup, State state, Streams output);
+}
+```
+
+This is again illustrative. The key properties are:
+
+- state may have multiple streams
+- result may have multiple streams
+- group and non-group accumulation share the same semantic model
+- accumulators should preserve input encodings when possible and flatten only as
+  a fallback
+
+### State versus output
+
+Aggregate state and aggregate output should be treated as distinct layers:
+
+- aggregate state is internal, mutable, and operator-owned
+- aggregate output is batch-local and should use the same stream-oriented batch
+  model as any other operator output
+
+In other words, accumulators own long-lived state across input batches, but they
+produce ordinary batch-scoped output streams when results are emitted.
+
+### Ownership
+
+Aggregate state should remain internal to the aggregation operator and should
+not participate in downstream borrow or take semantics.
+
+Aggregate output batches, on the other hand, should follow the same ownership
+rules as other operator outputs:
+
+- outputs are borrowed by default
+- outputs may be transferred via the batch boundary
+- encodings may vary from batch to batch
+
+### Planning
+
+Aggregate state planning and scalar stream planning are related but not
+identical.
+
+The recommended split is:
+
+- scalar `StreamPlan` governs expression intermediates and operator-visible
+  streams
+- aggregate-state planning governs internal accumulator state layout and growth
+
+Aggregate output planning should align with the ordinary batch/output model even
+if aggregate-state planning uses different internal rules.
+
+### Result batching
+
+Grouped aggregation may produce more groups than are convenient to expose in a
+single output batch.
+
+The architecture should therefore allow aggregation operators to:
+
+- retain internal state across many input batches
+- produce result batches incrementally over the accumulated group space
+- expose each result batch through the same batch object contract used by other
+  operators
+
+The default chunking policy should be contiguous group-id ranges over the
+accumulated state space. Grouped-result emission should therefore remain
+compatible with the general operator batching model while staying simple and
+stable.
+
+### Output contract
+
+Aggregate outputs should be stream-addressable just like scalar expression
+outputs. This avoids reintroducing legacy nullable vector types at the aggregate
+boundary.
+
+## Future Considerations
+
+The following topics were intentionally deferred rather than fixed in the core
+architecture:
+
+- Exact primitive-function signature and callback APIs. The architecture assumes
+  an explicit masked-write calling convention, but the final Java signature is
+  still open.
+- Whether `Merge` remains available as a fallback executable primitive in the
+  evaluator or is always compiled into destination planning plus masked writes.
+- Additional normalized IR operation kinds beyond `Literal`, `Call`, `Copy`, and
+  `Merge`, if implementation pressure later justifies them.
+- Function-level null and error behavior enums. For now, null/error handling may
+  be made explicit in the IR instead of being expressed as metadata on
+  primitive functions.
+- Using OpenJDK Code Reflection as a future mechanism for deriving or
+  specializing vectorized adapters from scalar Java function definitions once
+  that technology is mature enough for practical use.
+- More formal separation between IR mask semantics and runtime mask-buffer
+  storage if implementation experience suggests the current conceptual split is
+  still too loose.
+- Exact grouped-result chunking policy for aggregation output batches.
+- Whether planner- or runtime-visible encoding metadata becomes necessary later,
+  beyond the current calling-convention and callback approach.
+
+## Migration Notes
+
+The expected migration sequence is:
+
+1. Extend evaluator-facing references and result access so streams are explicit.
+2. Rebuild `ProjectOperator` on top of the evaluator and projected references.
+3. Introduce stream-aware access in aggregation interfaces.
+4. Migrate existing accumulators away from nullable vectors.
+5. Evolve the operator interface from values-only output access to explicit
+   stream access.
+6. Continue filling out the physical vector layer with additional flat types and
+   encoded vectors such as dictionary.
+
+## Non-Goals
+
+This document does not define:
+
+- SQL semantics for nulls or errors
+- planner architecture
+- optimizer rules
+- exact Java type hierarchies for every vector kind
+- the final representation type of error streams
+- whether stream requests are pull-only or can be predeclared
+
+Those can be decided independently as long as the contracts above remain true.
