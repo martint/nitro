@@ -13,20 +13,9 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-import java.util.List;
-import java.util.Map;
-
-public record EvaluationPlan(List<Assignment> assignments, List<Reference> outputs, Map<Reference, StreamPlan> streamPlans)
+public enum MaterializationPolicy
 {
-    public EvaluationPlan(List<Assignment> assignments, List<Reference> outputs)
-    {
-        this(assignments, outputs, Map.of());
-    }
-
-    public EvaluationPlan
-    {
-        assignments = List.copyOf(assignments);
-        outputs = List.copyOf(outputs);
-        streamPlans = Map.copyOf(streamPlans);
-    }
+    NONE,
+    SCRATCH,
+    MATERIALIZE,
 }

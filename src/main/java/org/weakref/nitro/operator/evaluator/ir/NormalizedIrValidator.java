@@ -13,20 +13,24 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
-public record EvaluationPlan(List<Assignment> assignments, List<Reference> outputs, Map<Reference, StreamPlan> streamPlans)
+public final class NormalizedIrValidator
 {
-    public EvaluationPlan(List<Assignment> assignments, List<Reference> outputs)
+    private static final Set<String> SPECIAL_FORMS = Set.of("if", "coalesce", "try", "and", "or");
+
+    private NormalizedIrValidator() {}
+
+    public static boolean isNormalized(EvaluationPlan plan)
     {
-        this(assignments, outputs, Map.of());
+        return plan.assignments().stream()
+                .noneMatch(assignment -> assignment.operation() instanceof Call call && SPECIAL_FORMS.contains(call.name()));
     }
 
-    public EvaluationPlan
+    public static void validate(EvaluationPlan plan)
     {
-        assignments = List.copyOf(assignments);
-        outputs = List.copyOf(outputs);
-        streamPlans = Map.copyOf(streamPlans);
+        if (!isNormalized(plan)) {
+            throw new IllegalArgumentException("Plan is not normalized");
+        }
     }
 }

@@ -13,20 +13,8 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-import java.util.List;
-import java.util.Map;
-
-public record EvaluationPlan(List<Assignment> assignments, List<Reference> outputs, Map<Reference, StreamPlan> streamPlans)
+public record StreamPlan(MaterializationPolicy materializationPolicy, MemoizationPolicy memoizationPolicy)
 {
-    public EvaluationPlan(List<Assignment> assignments, List<Reference> outputs)
-    {
-        this(assignments, outputs, Map.of());
-    }
-
-    public EvaluationPlan
-    {
-        assignments = List.copyOf(assignments);
-        outputs = List.copyOf(outputs);
-        streamPlans = Map.copyOf(streamPlans);
-    }
+    public static final StreamPlan SCRATCH = new StreamPlan(MaterializationPolicy.SCRATCH, MemoizationPolicy.NONE);
+    public static final StreamPlan MATERIALIZED = new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE);
 }

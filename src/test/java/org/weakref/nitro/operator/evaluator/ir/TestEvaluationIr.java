@@ -16,6 +16,7 @@ package org.weakref.nitro.operator.evaluator.ir;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -59,5 +60,49 @@ public class TestEvaluationIr
         Call call = new Call("identity", arguments);
 
         assertThat(call.arguments()).containsExactlyElementsOf(arguments);
+    }
+
+    @Test
+    void testNormalizerRewritesIfIntoCopiesAndMerge()
+    {
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("if", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+
+        assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
+        assertThat(normalizedPlan.assignments()).hasSize(3);
+        assertThat(normalizedPlan.assignments().get(0).operation()).isInstanceOf(Copy.class);
+        assertThat(normalizedPlan.assignments().get(1).operation()).isInstanceOf(Copy.class);
+        assertThat(normalizedPlan.assignments().get(2).operation()).isInstanceOf(Merge.class);
+    }
+
+    @Test
+    void testNormalizerRewritesCoalesce()
+    {
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("coalesce", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)),
+                Map.of(new Reference(result, Stream.VALUES), StreamPlan.MATERIALIZED));
+
+        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+
+        assertThat(normalizedPlan.streamPlans()).containsEntry(new Reference(result, Stream.VALUES), StreamPlan.MATERIALIZED);
+        assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
+        assertThat(normalizedPlan.assignments().getLast().operation()).isInstanceOf(Merge.class);
     }
 }
