@@ -1,0 +1,79 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.operator;
+
+import org.weakref.nitro.data.Vector;
+
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+import static java.util.Objects.requireNonNull;
+
+public final class Output
+{
+    private final EnumSet<Stream> exposedStreams;
+    private final Function<Stream, Vector> resolver;
+    private final EnumMap<Stream, Vector> resolvedStreams = new EnumMap<>(Stream.class);
+    private final EnumSet<Stream> takenStreams = EnumSet.noneOf(Stream.class);
+
+    public static Output of(Streams streams)
+    {
+        var streamsByKind = streams.asMap();
+        EnumSet<Stream> exposedStreams = streamsByKind.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(streamsByKind.keySet());
+        return new Output(exposedStreams, streams::get);
+    }
+
+    public static Output values(Vector values)
+    {
+        return of(Streams.ofValues(values));
+    }
+
+    public static Output lazyValues(Supplier<? extends Vector> supplier)
+    {
+        requireNonNull(supplier, "supplier is null");
+        return new Output(EnumSet.of(Stream.VALUES), stream -> switch (stream) {
+            case VALUES -> supplier.get();
+            case NULLS, ERRORS -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
+        });
+    }
+
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
+    {
+        requireNonNull(exposedStreams, "exposedStreams is null");
+        this.exposedStreams = exposedStreams.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(exposedStreams);
+        this.resolver = requireNonNull(resolver, "resolver is null");
+    }
+
+    public Vector borrow(Stream stream)
+    {
+        requireNonNull(stream, "stream is null");
+        if (takenStreams.contains(stream)) {
+            throw new IllegalStateException("Stream already taken: " + stream);
+        }
+        if (!exposedStreams.contains(stream)) {
+            throw new IllegalArgumentException("Output does not expose stream: " + stream);
+        }
+        return resolvedStreams.computeIfAbsent(stream, key -> requireNonNull(resolver.apply(key), "resolver returned null"));
+    }
+
+    public Vector take(Stream stream)
+    {
+        Vector vector = borrow(stream);
+        takenStreams.add(stream);
+        return vector;
+    }
+}

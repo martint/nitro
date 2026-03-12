@@ -15,6 +15,8 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.Stream;
+import org.weakref.nitro.operator.Streams;
 
 /**
  * The output of a {@link Function}: computed values, optional null flags, and optional error flags.
@@ -35,5 +37,32 @@ public record Result(Vector values, BooleanVector nulls, BooleanVector errors)
     public static Result of(Vector values, BooleanVector nulls)
     {
         return new Result(values, nulls, null);
+    }
+
+    public Streams toStreams()
+    {
+        Streams streams = Streams.of(Stream.VALUES, values);
+        if (nulls != null) {
+            streams = streams.with(Stream.NULLS, nulls);
+        }
+        if (errors != null) {
+            streams = streams.with(Stream.ERRORS, errors);
+        }
+        return streams;
+    }
+
+    public static Result fromStreams(Streams streams)
+    {
+        BooleanVector nulls = streams.has(Stream.NULLS) ? asBooleanVector(streams.get(Stream.NULLS), Stream.NULLS) : null;
+        BooleanVector errors = streams.has(Stream.ERRORS) ? asBooleanVector(streams.get(Stream.ERRORS), Stream.ERRORS) : null;
+        return new Result(streams.get(Stream.VALUES), nulls, errors);
+    }
+
+    private static BooleanVector asBooleanVector(Vector vector, Stream stream)
+    {
+        if (vector instanceof BooleanVector booleanVector) {
+            return booleanVector;
+        }
+        throw new IllegalArgumentException("Expected BooleanVector for stream " + stream + ": " + vector.getClass().getSimpleName());
     }
 }
