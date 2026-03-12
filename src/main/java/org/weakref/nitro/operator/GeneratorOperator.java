@@ -24,7 +24,7 @@ import java.util.List;
 import static java.lang.Math.toIntExact;
 
 public class GeneratorOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final int DEFAULT_BATCH_SIZE = 1024 * 10;
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GeneratorOperator");
@@ -65,6 +65,12 @@ public class GeneratorOperator
     }
 
     @Override
+    public int outputCount()
+    {
+        return columnCount();
+    }
+
+    @Override
     public Mask next()
     {
         // for any column not filled in the last run, advance the generators
@@ -89,6 +95,18 @@ public class GeneratorOperator
     public boolean hasNext()
     {
         return remaining > 0;
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     @Override
