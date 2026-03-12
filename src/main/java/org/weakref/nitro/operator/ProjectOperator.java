@@ -18,9 +18,14 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.function.Function;
+import org.weakref.nitro.operator.evaluator.PlanEvaluator;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 public class ProjectOperator
@@ -30,6 +35,9 @@ public class ProjectOperator
     private final Allocator allocator;
 
     private final Execution execution;
+    private final EvaluationPlan evaluationPlan;
+    private final PlanEvaluator planEvaluator;
+    private final List<Reference> outputReferences;
 
     private final Operator source;
     private Mask mask;
@@ -43,6 +51,9 @@ public class ProjectOperator
         this.allocator = allocator;
         this.source = source;
         this.execution = execution;
+        this.evaluationPlan = null;
+        this.planEvaluator = null;
+        this.outputReferences = List.of();
 
         inputs = new ArrayList<>();
         buffers = new Vector[execution.operations().size()];
@@ -53,17 +64,38 @@ public class ProjectOperator
         }
     }
 
+    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        this.allocator = allocator;
+        this.source = source;
+        this.execution = null;
+        this.evaluationPlan = evaluationPlan;
+        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> source.column(index), allocator);
+        this.outputReferences = evaluationPlan.outputs();
+        this.inputs = Collections.emptyList();
+        this.buffers = new Vector[0];
+        this.filled = new boolean[0];
+    }
+
     @Override
     public int columnCount()
     {
+        if (planEvaluator != null) {
+            return outputReferences.size();
+        }
         return execution.outputs().size();
     }
 
     @Override
     public Mask next()
     {
-        Arrays.fill(filled, false);
         mask = source.next();
+        if (planEvaluator != null) {
+            planEvaluator.reset();
+            return mask;
+        }
+
+        Arrays.fill(filled, false);
         return mask;
     }
 
@@ -83,6 +115,11 @@ public class ProjectOperator
     @Override
     public Vector column(int column)
     {
+        if (planEvaluator != null) {
+            Reference outputReference = outputReferences.get(column);
+            return planEvaluator.evaluate(outputReference, mask).get(outputReference.stream());
+        }
+
         int operation = execution.outputs().get(column);
         if (operation < 0) {
             return source.column(-(operation + 1));

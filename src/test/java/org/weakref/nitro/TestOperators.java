@@ -21,6 +21,9 @@ import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.function.Function;
+import org.weakref.nitro.function.scalar.ScalarRegistry;
+import org.weakref.nitro.function.scalar.builtin.AddBigint;
+import org.weakref.nitro.function.scalar.builtin.LessThanBigint;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
@@ -37,11 +40,25 @@ import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.Sum;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.functions.I64Predicate;
 import org.weakref.nitro.operator.evaluator.functions.InputReference;
+import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.Assignment;
+import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
+import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -103,6 +120,76 @@ public class TestOperators
     }
 
     @Test
+    void testProjectOperatorUsesPlanEvaluator()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable sum = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        sum,
+                        new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(sum, Stream.VALUES)),
+                Map.of(new Reference(sum, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
+
+        assertThat(operator(
+                new ProjectOperator(
+                        allocator,
+                        evaluationPlan,
+                        primitiveRegistry,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(2L, 20L),
+                                        row(3L, 30L))))))
+                .matchesExactly(List.of(
+                        row(11L),
+                        row(22L),
+                        row(33L)));
+    }
+
+    @Test
+    void testFilterOperatorUsesPlanEvaluator()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literalThreshold = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literalThreshold, new Literal(3L), AllMask.ALL),
+                        new Assignment(
+                                predicate,
+                                new Call("lt", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literalThreshold, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(predicate, Stream.VALUES)),
+                Map.of(new Reference(predicate, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
+
+        assertThat(operator(
+                new FilterOperator(
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(2L, 20L),
+                                        row(3L, 30L),
+                                        row(4L, 40L))),
+                        evaluationPlan,
+                        primitiveRegistry,
+                        new Reference(predicate, Stream.VALUES),
+                        allocator)))
+                .matchesExactly(List.of(
+                        row(1L, 10L),
+                        row(2L, 20L)));
+    }
+
+    @Test
     void testFilterOverLimit()
     {
         assertThat(operator(
@@ -154,6 +241,15 @@ public class TestOperators
                         row(10L, 110L),
                         row(12L, 112L),
                         row(14L, 114L)));
+    }
+
+    private PrimitiveRegistry primitiveRegistry()
+    {
+        ScalarRegistry scalarRegistry = new ScalarRegistry();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register(scalarRegistry.register(AddBigint.class));
+        primitiveRegistry.register(scalarRegistry.register(LessThanBigint.class));
+        return primitiveRegistry;
     }
 
     @Test

@@ -19,6 +19,10 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.Evaluator;
 import org.weakref.nitro.operator.evaluator.Function;
+import org.weakref.nitro.operator.evaluator.PlanEvaluator;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 
@@ -27,7 +31,9 @@ public class FilterOperator
 {
     private final Operator source;
     private final Evaluator evaluator;
+    private final PlanEvaluator planEvaluator;
     private final int predicateExpression;
+    private final Reference predicateReference;
 
     private Mask mask;
 
@@ -36,6 +42,17 @@ public class FilterOperator
         this.source = source;
         this.predicateExpression = predicateExpression;
         this.evaluator = new Evaluator(expressions, (index, m) -> source.column(index), allocator);
+        this.planEvaluator = null;
+        this.predicateReference = null;
+    }
+
+    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
+    {
+        this.source = source;
+        this.predicateExpression = -1;
+        this.evaluator = null;
+        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> source.column(index), allocator);
+        this.predicateReference = predicateReference;
     }
 
     @Override
@@ -48,10 +65,17 @@ public class FilterOperator
     public Mask next()
     {
         mask = source.next();
-        BooleanVector predicate = (BooleanVector) evaluator.evaluate(predicateExpression, mask).values();
+        BooleanVector predicate = evaluator != null
+                ? (BooleanVector) evaluator.evaluate(predicateExpression, mask).values()
+                : (BooleanVector) planEvaluator.evaluate(predicateReference, mask).get(predicateReference.stream());
         mask = mask.and(predicate);
         source.constrain(mask);
-        evaluator.reset();
+        if (evaluator != null) {
+            evaluator.reset();
+        }
+        else {
+            planEvaluator.reset();
+        }
         return mask;
     }
 
