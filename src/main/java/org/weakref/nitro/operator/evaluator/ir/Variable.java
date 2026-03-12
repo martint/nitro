@@ -14,5 +14,6 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 public record Variable(int id)
+        implements Producer
 {
 }

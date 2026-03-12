@@ -13,13 +13,7 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-import java.util.List;
-
-public record Call(String name, List<Reference> arguments)
-        implements Operation
+public sealed interface MaskExpression
+        permits AllMask, AndMask, NotMask, OrMask, ReferenceMask
 {
-    public Call
-    {
-        arguments = List.copyOf(arguments);
-    }
 }

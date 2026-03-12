@@ -13,6 +13,6 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public record Assignment(Variable variable, Operation operation, Reference mask)
+public record Assignment(Variable output, Operation operation, MaskExpression mask)
 {
 }

@@ -13,10 +13,7 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-/**
- *
- */
-public record Literal()
+public record Literal(Object value)
         implements Operation
 {
 }

@@ -15,11 +15,11 @@ package org.weakref.nitro.operator.evaluator.ir;
 
 import java.util.List;
 
-public record Call(String name, List<Reference> arguments)
-        implements Operation
+public record EvaluationPlan(List<Assignment> assignments, List<Reference> outputs)
 {
-    public Call
+    public EvaluationPlan
     {
-        arguments = List.copyOf(arguments);
+        assignments = List.copyOf(assignments);
+        outputs = List.copyOf(outputs);
     }
 }
