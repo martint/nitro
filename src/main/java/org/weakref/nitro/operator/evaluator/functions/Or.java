@@ -21,7 +21,6 @@ import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
 import org.weakref.nitro.operator.evaluator.Result;
 
-
 public class Or
         implements Function
 {

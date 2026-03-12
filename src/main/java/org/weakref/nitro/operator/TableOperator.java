@@ -67,5 +67,5 @@ public class TableOperator
     {
     }
 
-    public record Page(int rows, Vector[] columns, Mask mask) { }
+    public record Page(int rows, Vector[] columns, Mask mask) {}
 }

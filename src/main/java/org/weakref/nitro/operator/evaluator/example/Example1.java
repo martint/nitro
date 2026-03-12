@@ -55,13 +55,13 @@ public class Example1
     void main()
     {
         int batchSize = 10;
-        long[] aValues   = {0, 2,  0, Long.MIN_VALUE, Long.MAX_VALUE,  6,  7,  8, 9,   0};
-        long[] bValues   = {10, 0, 0,              1,              1, 60, 70, 80, 0, 100};
-        long[] cValues   = {1,  1, 1,              1,              1,  0,  2,  0, 1,   1};
+        long[] aValues = {0, 2, 0, Long.MIN_VALUE, Long.MAX_VALUE, 6, 7, 8, 9, 0};
+        long[] bValues = {10, 0, 0, 1, 1, 60, 70, 80, 0, 100};
+        long[] cValues = {1, 1, 1, 1, 1, 0, 2, 0, 1, 1};
         boolean[] aNulls = {true, false, true, false, false, false, false, false, false, true};
-        boolean[] bNulls = {false, true, true, false, false, false, false, false,  true, false};
+        boolean[] bNulls = {false, true, true, false, false, false, false, false, true, false};
         boolean[] cNulls = {false, false, false, false, false, false, false, true, false, false};
-        boolean[] cond   = {true, false, true, false, true, false, true, false, true, false};
+        boolean[] cond = {true, false, true, false, true, false, true, false, true, false};
 
         Vector[] inputs = {
                 new I64Vector(aValues),     // 0: a values

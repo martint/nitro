@@ -14,6 +14,6 @@
 package org.weakref.nitro.data;
 
 public non-sealed interface FlatVector
-    extends Vector
+        extends Vector
 {
 }

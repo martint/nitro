@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator.evaluator.functions;
 
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluationContext;
 import org.weakref.nitro.operator.evaluator.Function;
 import org.weakref.nitro.operator.evaluator.Result;

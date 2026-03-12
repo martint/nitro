@@ -46,8 +46,8 @@ public class Example2
     void main()
     {
         int batchSize = 10;
-        long[] aValues   = {0, 2, 3, Long.MAX_VALUE - 1, Long.MAX_VALUE, 6, 7, 8, 9, 0};
-        long[] bValues   = {10, 0, 30, 1, 1, 60, 70, 80, 0, 100};
+        long[] aValues = {0, 2, 3, Long.MAX_VALUE - 1, Long.MAX_VALUE, 6, 7, 8, 9, 0};
+        long[] bValues = {10, 0, 30, 1, 1, 60, 70, 80, 0, 100};
         boolean[] aNulls = {true, false, false, false, false, false, false, false, false, true};
         boolean[] bNulls = {false, true, false, false, false, false, false, false, true, false};
 
