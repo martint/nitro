@@ -24,8 +24,8 @@ import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.LegacyBatchOperatorAdapter;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.Stream;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 

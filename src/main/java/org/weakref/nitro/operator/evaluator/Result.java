@@ -15,8 +15,8 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.Stream;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 /**
  * The output of a {@link Function}: computed values, optional null flags, and optional error flags.
