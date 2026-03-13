@@ -14,61 +14,48 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 
 import static java.lang.Math.toIntExact;
 
 public class LimitOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private final long limit;
-    private final Operator source;
+    private final BatchOperator source;
 
     private long count;
+    private Batch currentBatch;
+    private Mask currentMask;
 
-    public LimitOperator(long limit, Operator source)
+    public LimitOperator(long limit, BatchOperator source)
     {
         this.limit = limit;
         this.source = source;
     }
 
     @Override
-    public int columnCount()
-    {
-        return source.columnCount();
-    }
-
-    @Override
     public int outputCount()
     {
-        return columnCount();
-    }
-
-    @Override
-    public Mask next()
-    {
-        Mask mask = source.next();
-
-        int remaining = toIntExact(Math.min(limit - this.count, mask.count()));
-
-        mask = mask.first(remaining);
-        source.constrain(mask);
-
-        this.count += remaining;
-
-        return mask;
+        return source.outputCount();
     }
 
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        currentBatch = source.nextBatch();
+        currentMask = currentBatch.borrowMask();
+
+        int remaining = toIntExact(Math.min(limit - count, currentMask.count()));
+        currentMask = currentMask.first(remaining);
+        source.constrain(currentMask);
+        count += remaining;
+
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            Output sourceOutput = currentBatch.output(outputIndex);
+            outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow);
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(currentMask, outputs);
     }
 
     @Override
@@ -81,12 +68,6 @@ public class LimitOperator
     public void constrain(Mask mask)
     {
         source.constrain(mask);
-    }
-
-    @Override
-    public Vector column(int column)
-    {
-        return source.column(column);
     }
 
     @Override

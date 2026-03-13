@@ -20,22 +20,24 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 public class GroupOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
     private final Allocator allocator;
 
     private final int groupByColumn;
-    private final Operator source;
+    private final BatchOperator source;
 
     private final Long2LongMap groups = new Long2LongOpenHashMap();
     private boolean filled;
+    private Batch currentBatch;
     private Mask mask;
     private I64Vector result;
 
-    public GroupOperator(Allocator allocator, int groupByColumn, Operator source)
+    public GroupOperator(Allocator allocator, int groupByColumn, BatchOperator source)
     {
         this.allocator = allocator;
         this.groupByColumn = groupByColumn;
@@ -45,35 +47,29 @@ public class GroupOperator
     }
 
     @Override
-    public int columnCount()
-    {
-        return source.columnCount() + 1;
-    }
-
-    @Override
     public int outputCount()
     {
-        return columnCount();
-    }
-
-    @Override
-    public Mask next()
-    {
-        filled = false;
-        mask = source.next();
-        return mask;
+        return source.outputCount() + 1;
     }
 
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        filled = false;
+        currentBatch = source.nextBatch();
+        mask = currentBatch.borrowMask();
+
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            if (outputIndex == 0) {
+                outputs[outputIndex] = Output.lazyValues(this::groupIds);
+            }
+            else {
+                Output sourceOutput = currentBatch.output(outputIndex - 1);
+                outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow);
+            }
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(mask, outputs);
     }
 
     @Override
@@ -88,14 +84,10 @@ public class GroupOperator
         source.constrain(mask);
     }
 
-    @Override
-    public Vector column(int column)
+    private Vector groupIds()
     {
-        if (column == 0) {
-            doGroupingIfNeeded();
-            return result;
-        }
-        return source.column(column - 1);
+        doGroupingIfNeeded();
+        return result;
     }
 
     private void doGroupingIfNeeded()
@@ -105,7 +97,7 @@ public class GroupOperator
             result = (I64Vector) allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, mask.count(), I64Vector::new);
 
             // TODO: support arbitrary types
-            long[] values = values(source.column(groupByColumn));
+            long[] values = values(currentBatch.output(groupByColumn).borrow(Stream.VALUES));
 
             for (int position : mask) {
                 // TODO: handle nulls

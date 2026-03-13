@@ -18,42 +18,38 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Comparator;
 import java.util.PriorityQueue;
 
 public class TopNOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TopNOperator");
     private final Allocator allocator;
 
     private final int n;
     private final int column;
-    private final Operator source;
+    private final BatchOperator source;
 
     private final Vector[] result;
     private boolean done;
+    private Batch currentBatch;
 
-    public TopNOperator(Allocator allocator, int n, int column, Operator source)
+    public TopNOperator(Allocator allocator, int n, int column, BatchOperator source)
     {
         this.allocator = allocator;
         this.n = n;
         this.column = column;
         this.source = source;
-        result = new I64Vector[source.columnCount()];
-    }
-
-    @Override
-    public int columnCount()
-    {
-        return source.columnCount();
+        result = new I64Vector[source.outputCount()];
     }
 
     @Override
     public int outputCount()
     {
-        return columnCount();
+        return source.outputCount();
     }
 
     @Override
@@ -62,8 +58,7 @@ public class TopNOperator
         return !done;
     }
 
-    @Override
-    public Mask next()
+    private Mask computeTopN()
     {
         // TODO: flat memory priority queue
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
@@ -73,10 +68,11 @@ public class TopNOperator
         }
 
         while (source.hasNext()) {
-            Mask mask = source.next();
+            currentBatch = source.nextBatch();
+            Mask mask = currentBatch.borrowMask();
 
             for (int position : mask) {
-                long value = values(source.column(column))[position];
+                long value = values(currentBatch.output(column).borrow(Stream.VALUES))[position];
 
                 if (queue.size() < n) {
                     int slot = queue.size();
@@ -104,18 +100,18 @@ public class TopNOperator
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        Mask batchMask = computeTopN();
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            int output = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> result[output]);
         }
         return new Batch(batchMask, outputs);
     }
 
     private void reorderBuffer(PriorityQueue<Entry> queue)
     {
-        long[] temp = new long[columnCount()];
+        long[] temp = new long[outputCount()];
 
         int[] remap = new int[queue.size()];
         for (int i = 0; i < remap.length; i++) {
@@ -142,7 +138,7 @@ public class TopNOperator
     private void copyToBuffer(int from, int to)
     {
         for (int i = 0; i < result.length; i++) {
-            ((I64Vector) result[i]).values()[to] = values(source.column(i))[from];
+            ((I64Vector) result[i]).values()[to] = values(currentBatch.output(i).borrow(Stream.VALUES))[from];
         }
     }
 
@@ -159,12 +155,6 @@ public class TopNOperator
     public void constrain(Mask mask)
     {
         // Nothing to do. All output is already computed
-    }
-
-    @Override
-    public Vector column(int column)
-    {
-        return result[column];
     }
 
     @Override

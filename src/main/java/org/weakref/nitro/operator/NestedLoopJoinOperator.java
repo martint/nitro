@@ -18,6 +18,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -25,14 +26,14 @@ import java.util.Iterator;
 import java.util.List;
 
 public class NestedLoopJoinOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NestedLoopJoinOperator");
     private static final int BATCH_SIZE = 1024;
 
     private final Allocator allocator;
-    private final Operator outer;
-    private final Operator inner;
+    private final BatchOperator outer;
+    private final BatchOperator inner;
 
     private boolean innerLoaded;
     private final List<InnerBatch> innerBatches = new ArrayList<>();
@@ -42,6 +43,7 @@ public class NestedLoopJoinOperator
     private int currentInnerPosition;
 
     private Mask currentOuterMask;
+    private Batch currentOuterBatch;
     private int outerRemaining;
     private Iterator<Integer> outerPositionIterator;
     private int currentOuterPosition;
@@ -52,26 +54,20 @@ public class NestedLoopJoinOperator
 
     private boolean done;
 
-    public NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner)
+    public NestedLoopJoinOperator(Allocator allocator, BatchOperator outer, BatchOperator inner)
     {
         this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
-        result = new Vector[outer.columnCount() + inner.columnCount()];
-        outerBuffer = new Vector[outer.columnCount()];
-        innerBuffer = new Vector[inner.columnCount()];
-    }
-
-    @Override
-    public int columnCount()
-    {
-        return outer.columnCount() + inner.columnCount();
+        result = new Vector[outer.outputCount() + inner.outputCount()];
+        outerBuffer = new Vector[outer.outputCount()];
+        innerBuffer = new Vector[inner.outputCount()];
     }
 
     @Override
     public int outputCount()
     {
-        return columnCount();
+        return outer.outputCount() + inner.outputCount();
     }
 
     @Override
@@ -80,8 +76,7 @@ public class NestedLoopJoinOperator
         return !done;
     }
 
-    @Override
-    public Mask next()
+    private Mask produceBatch()
     {
         loadInnerIfNecessary();
         if (innerRowCount == 0) {
@@ -91,7 +86,8 @@ public class NestedLoopJoinOperator
 
         if (outerRemaining == 0) {
             while (outer.hasNext()) {
-                currentOuterMask = outer.next();
+                currentOuterBatch = outer.nextBatch();
+                currentOuterMask = currentOuterBatch.borrowMask();
                 if (!currentOuterMask.none()) {
                     break;
                 }
@@ -156,22 +152,22 @@ public class NestedLoopJoinOperator
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        Mask batchMask = produceBatch();
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            int output = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> result[output]);
         }
         return new Batch(batchMask, outputs);
     }
 
     private void joinWithInnerRow()
     {
-        int outerColumnCount = outer.columnCount();
+        int outerColumnCount = outer.outputCount();
         for (int i = 0; i < outerColumnCount; i++) {
-            result[i] = outer.column(i);
+            result[i] = currentOuterBatch.output(i).borrow(Stream.VALUES);
         }
-        for (int i = 0; i < inner.columnCount(); i++) {
+        for (int i = 0; i < inner.outputCount(); i++) {
             innerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, innerBuffer[i], currentOuterMask.maxPosition() + 1, I64VectorWithNulls::new);
             replicate(
                     innerBuffer[i],
@@ -188,19 +184,19 @@ public class NestedLoopJoinOperator
     {
         int batchSize = innerBatches.get(currentInnerBatch).length();
 
-        int outerColumnCount = outer.columnCount();
+        int outerColumnCount = outer.outputCount();
         for (int i = 0; i < outerColumnCount; i++) {
             outerBuffer[i] = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, outerBuffer[i], batchSize, I64VectorWithNulls::new);
             replicate(
                     outerBuffer[i],
                     0,
                     batchSize,
-                    outer.column(i),
+                    currentOuterBatch.output(i).borrow(Stream.VALUES),
                     currentOuterPosition);
 
             result[i] = outerBuffer[i];
         }
-        System.arraycopy(innerBatches.get(currentInnerBatch).columns(), 0, result, outerColumnCount, inner.columnCount());
+        System.arraycopy(innerBatches.get(currentInnerBatch).columns(), 0, result, outerColumnCount, inner.outputCount());
         return batchSize;
     }
 
@@ -219,18 +215,19 @@ public class NestedLoopJoinOperator
         if (!innerLoaded) {
             innerLoaded = true;
 
-            Vector[] columns = allocateNewBatch(inner.columnCount());
+            Vector[] columns = allocateNewBatch(inner.outputCount());
             int outputPosition = 0;
             innerRowCount = 0;
 
             while (inner.hasNext()) {
-                Mask mask = inner.next();
+                Batch batch = inner.nextBatch();
+                Mask mask = batch.borrowMask();
                 int maskOffset = 0;
                 while (maskOffset < mask.count()) {
                     int copied = 0;
                     for (int i = 0; i < columns.length; i++) {
                         // TODO: allow transferring ownership from underlying operator in case we don't need to copy+compact
-                        copied = copyAndCompact(inner.column(i), mask, maskOffset, (I64VectorWithNulls) columns[i], outputPosition);
+                        copied = copyAndCompact(batch.output(i).borrow(Stream.VALUES), mask, maskOffset, (I64VectorWithNulls) columns[i], outputPosition);
                     }
                     outputPosition += copied;
                     maskOffset += copied;
@@ -239,7 +236,7 @@ public class NestedLoopJoinOperator
                     if (outputPosition == BATCH_SIZE) {
                         outputPosition = 0;
                         innerBatches.add(new InnerBatch(columns, BATCH_SIZE));
-                        columns = allocateNewBatch(inner.columnCount());
+                        columns = allocateNewBatch(inner.outputCount());
                     }
                 }
             }
@@ -303,12 +300,6 @@ public class NestedLoopJoinOperator
     @Override
     public void constrain(Mask mask)
     {
-    }
-
-    @Override
-    public Vector column(int column)
-    {
-        return result[column];
     }
 
     @Override

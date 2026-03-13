@@ -15,16 +15,17 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
+import java.util.Set;
 
 public class ProjectOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
@@ -33,36 +34,23 @@ public class ProjectOperator
     private final PlanEvaluator planEvaluator;
     private final List<Reference> outputReferences;
 
-    private final Operator source;
+    private final BatchOperator source;
+    private Batch currentBatch;
     private Mask mask;
 
-    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
+    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, BatchOperator source)
     {
         this.allocator = allocator;
         this.source = source;
         this.evaluationPlan = evaluationPlan;
-        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> source.column(index), allocator);
+        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> currentBatch.output(index).borrow(Stream.VALUES), allocator);
         this.outputReferences = evaluationPlan.outputs();
-    }
-
-    @Override
-    public int columnCount()
-    {
-        return outputReferences.size();
     }
 
     @Override
     public int outputCount()
     {
-        return columnCount();
-    }
-
-    @Override
-    public Mask next()
-    {
-        mask = source.next();
-        planEvaluator.reset();
-        return mask;
+        return outputReferences.size();
     }
 
     @Override
@@ -74,13 +62,16 @@ public class ProjectOperator
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        currentBatch = source.nextBatch();
+        mask = currentBatch.borrowMask();
+        planEvaluator.reset();
+
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            Reference outputReference = outputReferences.get(outputIndex);
+            outputs[outputIndex] = new Output(Set.of(outputReference.stream()), stream -> evaluateOutput(outputReference, stream));
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(mask, outputs);
     }
 
     @Override
@@ -90,11 +81,12 @@ public class ProjectOperator
         this.mask = mask;
     }
 
-    @Override
-    public Vector column(int column)
+    private org.weakref.nitro.data.Vector evaluateOutput(Reference outputReference, Stream stream)
     {
-        Reference outputReference = outputReferences.get(column);
-        return planEvaluator.evaluate(outputReference, mask).get(outputReference.stream());
+        if (stream != outputReference.stream()) {
+            throw new IllegalArgumentException("Output does not expose stream: " + stream);
+        }
+        return planEvaluator.evaluate(outputReference, mask).get(stream);
     }
 
     @Override

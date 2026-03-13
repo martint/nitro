@@ -17,49 +17,45 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class OutputOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OutputOperator");
     private final Allocator allocator;
 
-    private final Operator source;
+    private final BatchOperator source;
     private boolean done;
     private long rowCount;
 
-    public OutputOperator(Allocator allocator, Operator source)
+    public OutputOperator(Allocator allocator, BatchOperator source)
     {
         this.allocator = allocator;
         this.source = source;
     }
 
     @Override
-    public int columnCount()
+    public int outputCount()
     {
         return 1;
     }
 
     @Override
-    public int outputCount()
-    {
-        return columnCount();
-    }
-
-    @Override
-    public Mask next()
+    public Batch nextBatch()
     {
         done = true;
 
         while (source.hasNext()) {
-            Mask mask = source.next();
+            Batch batch = source.nextBatch();
+            Mask mask = batch.borrowMask();
 
             List<Vector> columns = new ArrayList<>();
-            for (int i = 0; i < source.columnCount(); i++) {
-                columns.add(source.column(i));
+            for (int i = 0; i < source.outputCount(); i++) {
+                columns.add(batch.output(i).borrow(Stream.VALUES));
             }
 
             for (int position : mask) {
@@ -67,14 +63,7 @@ public class OutputOperator
             }
         }
 
-        return Mask.all(1);
-    }
-
-    @Override
-    public Batch nextBatch()
-    {
-        Mask batchMask = next();
-        return new Batch(batchMask, Output.lazyValues(() -> column(0)));
+        return new Batch(Mask.all(1), Output.lazyValues(this::resultVector));
     }
 
     @Override
@@ -88,8 +77,7 @@ public class OutputOperator
     {
     }
 
-    @Override
-    public Vector column(int column)
+    private Vector resultVector()
     {
         I64VectorWithNulls result = (I64VectorWithNulls) allocator.allocate(ALLOCATION_CONTEXT, 1, I64VectorWithNulls::new);
         result.values()[0] = rowCount;

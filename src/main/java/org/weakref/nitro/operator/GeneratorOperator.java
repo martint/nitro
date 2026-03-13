@@ -16,7 +16,6 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.generator.I64Generator;
 
 import java.util.List;
@@ -24,7 +23,7 @@ import java.util.List;
 import static java.lang.Math.toIntExact;
 
 public class GeneratorOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final int DEFAULT_BATCH_SIZE = 1024 * 10;
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GeneratorOperator");
@@ -59,36 +58,9 @@ public class GeneratorOperator
     }
 
     @Override
-    public int columnCount()
-    {
-        return results.size();
-    }
-
-    @Override
     public int outputCount()
     {
-        return columnCount();
-    }
-
-    @Override
-    public Mask next()
-    {
-        // for any column not filled in the last run, advance the generators
-        for (int i = 0; i < filled.length; i++) {
-            if (!filled[i]) {
-                generators.get(i).skip(currentBatchSize);
-            }
-            filled[i] = false;
-        }
-
-        currentBatchSize = toIntExact(Math.min(this.remaining, batchSize));
-        if (mask == null || mask.count() != currentBatchSize) {
-            mask = Mask.all(currentBatchSize);
-        }
-
-        this.remaining -= currentBatchSize;
-
-        return mask;
+        return results.size();
     }
 
     @Override
@@ -100,13 +72,25 @@ public class GeneratorOperator
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
-        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        for (int i = 0; i < filled.length; i++) {
+            if (!filled[i]) {
+                generators.get(i).skip(currentBatchSize);
+            }
+            filled[i] = false;
         }
-        return new Batch(batchMask, outputs);
+
+        currentBatchSize = toIntExact(Math.min(remaining, batchSize));
+        if (mask == null || mask.count() != currentBatchSize) {
+            mask = Mask.all(currentBatchSize);
+        }
+        remaining -= currentBatchSize;
+
+        Output[] outputs = new Output[outputCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int output = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> outputVector(output));
+        }
+        return new Batch(mask, outputs);
     }
 
     @Override
@@ -115,17 +99,16 @@ public class GeneratorOperator
         this.mask = mask;
     }
 
-    @Override
-    public Vector column(int column)
+    private I64Vector outputVector(int output)
     {
-        if (filled[column] || mask.none()) {
-            return results.get(column);
+        if (filled[output] || mask.none()) {
+            return results.get(output);
         }
 
-        filled[column] = true;
+        filled[output] = true;
 
-        I64Generator generator = generators.get(column);
-        I64Vector result = results.get(column);
+        I64Generator generator = generators.get(output);
+        I64Vector result = results.get(output);
 
         for (int position = 0; position < currentBatchSize; position++) {
             generator.next();

@@ -22,7 +22,7 @@ import org.weakref.nitro.data.Vector;
 import java.util.List;
 
 public class ConstantTableOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ConstantTableOperator");
     private final Allocator allocator;
@@ -58,15 +58,9 @@ public class ConstantTableOperator
     }
 
     @Override
-    public int columnCount()
-    {
-        return columns.length;
-    }
-
-    @Override
     public int outputCount()
     {
-        return columnCount();
+        return columns.length;
     }
 
     @Override
@@ -76,32 +70,19 @@ public class ConstantTableOperator
     }
 
     @Override
-    public Mask next()
-    {
-        done = true;
-        return Mask.all(count);
-    }
-
-    @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        done = true;
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = Output.values(columns[outputIndex]);
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(Mask.all(count), outputs);
     }
 
     @Override
     public void constrain(Mask mask)
     {
-    }
-
-    @Override
-    public Vector column(int column)
-    {
-        return columns[column];
     }
 
     @Override

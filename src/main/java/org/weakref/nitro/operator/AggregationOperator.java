@@ -22,7 +22,7 @@ import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import java.util.List;
 
 public class AggregationOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AggregationOperator");
     private final Allocator allocator;
@@ -48,34 +48,21 @@ public class AggregationOperator
     }
 
     @Override
-    public int columnCount()
+    public int outputCount()
     {
         return aggregations.size();
     }
 
     @Override
-    public int outputCount()
-    {
-        return columnCount();
-    }
-
-    @Override
-    public Mask next()
-    {
-        done = true;
-        return mask;
-    }
-
-    @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        done = true;
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            int output = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> resultVector(output));
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(mask, outputs);
     }
 
     @Override
@@ -90,11 +77,10 @@ public class AggregationOperator
         this.mask = mask;
     }
 
-    @Override
-    public Vector column(int column)
+    private Vector resultVector(int output)
     {
         doAggregationIfNeeded();
-        return results[column];
+        return results[output];
     }
 
     private void doAggregationIfNeeded()

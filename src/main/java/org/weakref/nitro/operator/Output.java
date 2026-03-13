@@ -77,4 +77,9 @@ public final class Output
         takenStreams.add(stream);
         return vector;
     }
+
+    public Set<Stream> streams()
+    {
+        return Set.copyOf(exposedStreams);
+    }
 }

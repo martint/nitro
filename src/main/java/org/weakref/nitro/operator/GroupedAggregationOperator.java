@@ -26,7 +26,7 @@ import java.util.List;
 import static java.lang.Math.toIntExact;
 
 public class GroupedAggregationOperator
-        implements Operator, BatchOperator
+        implements BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
@@ -48,15 +48,9 @@ public class GroupedAggregationOperator
     }
 
     @Override
-    public int columnCount()
-    {
-        return aggregations.size();
-    }
-
-    @Override
     public int outputCount()
     {
-        return columnCount();
+        return aggregations.size();
     }
 
     @Override
@@ -65,8 +59,7 @@ public class GroupedAggregationOperator
         return !done;
     }
 
-    @Override
-    public Mask next()
+    private Mask computeResults()
     {
         Vector[] states = new Vector[aggregations.size()];
 
@@ -113,11 +106,11 @@ public class GroupedAggregationOperator
     @Override
     public Batch nextBatch()
     {
-        Mask batchMask = next();
-        Output[] outputs = new Output[columnCount()];
+        Mask batchMask = computeResults();
+        Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int column = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+            int output = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> resultVector(output));
         }
         return new Batch(batchMask, outputs);
     }
@@ -128,10 +121,9 @@ public class GroupedAggregationOperator
         // Nothing to do. All output is already computed
     }
 
-    @Override
-    public Vector column(int column)
+    private Vector resultVector(int output)
     {
-        return result[column];
+        return result[output];
     }
 
     @Override
