@@ -19,7 +19,7 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 /**
- * The output of a {@link Function}: computed values, optional null flags, and optional error flags.
+ * The output of evaluator execution: computed values, optional null flags, and optional error flags.
  * <p>
  * {@code nulls} is non-null only when the function has tracked which positions produced a null result.
  * {@code errors} is non-null only when the function has detected per-position errors (e.g., overflow,

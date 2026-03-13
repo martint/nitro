@@ -50,14 +50,20 @@ public final class PlanEvaluator
 
     private final EvaluationPlan plan;
     private final PrimitiveRegistry primitiveRegistry;
-    private final Input input;
+    private final InputResolver input;
     private final Allocator allocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
 
-    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, Input input, Allocator allocator)
+    @FunctionalInterface
+    public interface InputResolver
+    {
+        Vector get(int index, Mask mask);
+    }
+
+    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator)
     {
         this.plan = plan;
         this.primitiveRegistry = primitiveRegistry;
