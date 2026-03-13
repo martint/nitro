@@ -14,7 +14,7 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -28,43 +28,43 @@ import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "add")
-public final class AddI64
+@ScalarFunction(name = "or")
+public final class OrBoolean
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AddI64");
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OrBoolean");
 
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for add");
+        checkArgument(inputs.size() == 2, "Unexpected argument count for or");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            return Streams.ofValues(applyRleRle(leftRle, rightRle));
+            return Streams.of(Stream.VALUES, applyRleRle(leftRle, rightRle));
         }
 
-        I64Vector result = (I64Vector) context.allocator().allocateOrGrow(
+        BooleanVector result = (BooleanVector) context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
-                existing instanceof I64Vector vector ? vector : null,
+                existing instanceof BooleanVector vector ? vector : null,
                 requiredLength(mask, Math.max(left.length(), right.length())),
-                I64Vector::new);
-        if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {
+                BooleanVector::new);
+        if (left instanceof RleVector leftRle && right instanceof BooleanVector rightFlat) {
             applyLeftRleRightFlat(leftRle, rightFlat, mask, result);
         }
-        else if (left instanceof I64Vector leftFlat && right instanceof RleVector rightRle) {
+        else if (left instanceof BooleanVector leftFlat && right instanceof RleVector rightRle) {
             applyLeftFlatRightRle(leftFlat, rightRle, mask, result);
         }
         else {
-            applyFlatFlat((I64Vector) left, (I64Vector) right, mask, result);
+            applyFlatFlat((BooleanVector) left, (BooleanVector) right, mask, result);
         }
-        return Streams.ofValues(result);
+        return Streams.of(Stream.VALUES, result);
     }
 
-    private static void applyFlatFlat(I64Vector left, I64Vector right, Mask mask, I64Vector output)
+    private static void applyFlatFlat(BooleanVector left, BooleanVector right, Mask mask, BooleanVector output)
     {
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -79,14 +79,14 @@ public final class AddI64
         }
     }
 
-    private static void applyLeftRleRightFlat(RleVector left, I64Vector right, Mask mask, I64Vector output)
+    private static void applyLeftRleRightFlat(RleVector left, BooleanVector right, Mask mask, BooleanVector output)
     {
-        long[] leftValues = ((I64Vector) left.values()).values();
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
 
         int position = 0;
         for (int run = 0; run < left.counts().length; run++) {
             int runLength = left.counts()[run];
-            long leftValue = leftValues[run];
+            boolean leftValue = leftValues[run];
 
             for (int offset = 0; offset < runLength; offset++) {
                 if (mask.all() || mask.contains(position)) {
@@ -97,14 +97,14 @@ public final class AddI64
         }
     }
 
-    private static void applyLeftFlatRightRle(I64Vector left, RleVector right, Mask mask, I64Vector output)
+    private static void applyLeftFlatRightRle(BooleanVector left, RleVector right, Mask mask, BooleanVector output)
     {
-        long[] rightValues = ((I64Vector) right.values()).values();
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
 
         int position = 0;
         for (int run = 0; run < right.counts().length; run++) {
             int runLength = right.counts()[run];
-            long rightValue = rightValues[run];
+            boolean rightValue = rightValues[run];
 
             for (int offset = 0; offset < runLength; offset++) {
                 if (mask.all() || mask.contains(position)) {
@@ -117,11 +117,11 @@ public final class AddI64
 
     private static RleVector applyRleRle(RleVector left, RleVector right)
     {
-        long[] leftValues = ((I64Vector) left.values()).values();
-        long[] rightValues = ((I64Vector) right.values()).values();
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
 
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        long[] values = new long[counts.length];
+        boolean[] values = new boolean[counts.length];
 
         int outputIndex = 0;
         int leftIndex = 0;
@@ -153,12 +153,12 @@ public final class AddI64
             }
         }
 
-        return new RleVector(counts, new I64Vector(values));
+        return new RleVector(counts, new BooleanVector(values));
     }
 
-    private static long apply(long leftValue, long rightValue)
+    private static boolean apply(boolean leftValue, boolean rightValue)
     {
-        return leftValue + rightValue;
+        return leftValue || rightValue;
     }
 
     private static int requiredLength(Mask mask, int defaultLength)

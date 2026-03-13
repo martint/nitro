@@ -13,8 +13,9 @@
  */
 package org.weakref.nitro.function.scalar;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+
+import java.lang.reflect.InvocationTargetException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -31,15 +32,12 @@ public final class ScalarRegistry
 
         ScalarFunction scalarFunction = functionClass.getAnnotation(ScalarFunction.class);
         checkArgument(scalarFunction != null, "Function class is missing @ScalarFunction: %s", functionClass.getName());
-
-        Method implementation = findImplementation(functionClass);
-        checkArgument(Modifier.isStatic(implementation.getModifiers()), "Scalar implementation must be static: %s", implementation);
+        checkArgument(PrimitiveFunction.class.isAssignableFrom(functionClass), "Function class must implement PrimitiveFunction: %s", functionClass.getName());
 
         ScalarDescriptor descriptor = new ScalarDescriptor(
                 scalarFunction.name(),
                 scalarFunction.deterministic(),
-                implementation,
-                scalarFunction.vectorizedAdapter());
+                instantiate(functionClass.asSubclass(PrimitiveFunction.class)));
 
         checkArgument(descriptors.putIfAbsent(descriptor.name(), descriptor) == null, "Scalar function already registered: %s", descriptor.name());
         return descriptor;
@@ -52,17 +50,15 @@ public final class ScalarRegistry
         return descriptor;
     }
 
-    private static Method findImplementation(Class<?> functionClass)
+    private static PrimitiveFunction instantiate(Class<? extends PrimitiveFunction> functionClass)
     {
-        Method implementation = null;
-        for (Method method : functionClass.getDeclaredMethods()) {
-            if (!method.isAnnotationPresent(ScalarImplementation.class)) {
-                continue;
-            }
-            checkArgument(implementation == null, "Multiple @ScalarImplementation methods found in %s", functionClass.getName());
-            implementation = method;
+        try {
+            var constructor = functionClass.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            return constructor.newInstance();
         }
-        checkArgument(implementation != null, "No @ScalarImplementation method found in %s", functionClass.getName());
-        return implementation;
+        catch (InstantiationException | IllegalAccessException | InvocationTargetException | NoSuchMethodException exception) {
+            throw new IllegalArgumentException("Unable to instantiate scalar function: " + functionClass.getName(), exception);
+        }
     }
 }

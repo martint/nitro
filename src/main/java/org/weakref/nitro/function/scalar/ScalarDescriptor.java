@@ -15,25 +15,16 @@ package org.weakref.nitro.function.scalar;
 
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
-import java.lang.reflect.Method;
-
 import static java.util.Objects.requireNonNull;
 
 public record ScalarDescriptor(
         String name,
         boolean deterministic,
-        Method implementation,
-        Class<? extends PrimitiveFunction> vectorizedAdapter)
+        PrimitiveFunction implementation)
 {
     public ScalarDescriptor
     {
         requireNonNull(name, "name is null");
         requireNonNull(implementation, "implementation is null");
-        requireNonNull(vectorizedAdapter, "vectorizedAdapter is null");
-    }
-
-    public int arity()
-    {
-        return implementation.getParameterCount();
     }
 }

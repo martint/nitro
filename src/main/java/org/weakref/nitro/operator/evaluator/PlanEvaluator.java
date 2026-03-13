@@ -148,7 +148,6 @@ public final class PlanEvaluator
 
     private Streams evaluateCall(Stream stream, Call call, Mask mask, Streams output)
     {
-        checkArgument(stream == Stream.VALUES, "Call currently supports only VALUES: %s", stream);
         PrimitiveFunction function = primitiveRegistry.get(call.name());
         List<Streams> inputs = call.arguments().stream()
                 .map(argument -> evaluate(argument, mask))

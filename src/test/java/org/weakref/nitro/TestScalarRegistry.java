@@ -14,12 +14,14 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarFunction;
-import org.weakref.nitro.function.scalar.ScalarImplementation;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
-import org.weakref.nitro.function.scalar.generated.AddI64Primitive;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,23 +30,19 @@ public class TestScalarRegistry
 {
     @Test
     void testRegistersAnnotatedScalarFunction()
-            throws ReflectiveOperationException
     {
         ScalarRegistry registry = new ScalarRegistry();
 
         ScalarDescriptor descriptor = registry.register(TestAddI64.class);
 
         assertThat(descriptor.name()).isEqualTo("add");
-        assertThat(descriptor.arity()).isEqualTo(2);
-        assertThat(descriptor.implementation().getReturnType()).isEqualTo(long.class);
-        assertThat(descriptor.implementation().getParameterTypes()).containsExactly(long.class, long.class);
         assertThat(descriptor.deterministic()).isTrue();
-        assertThat((long) descriptor.implementation().invoke(null, 7L, 8L)).isEqualTo(15L);
+        assertThat(descriptor.implementation()).isInstanceOf(TestAddI64.class);
         assertThat(registry.get("add")).isEqualTo(descriptor);
     }
 
     @Test
-    void testPrimitiveRegistryPrefersGeneratedVectorizedAdapter()
+    void testPrimitiveRegistryRegistersVectorizedFunction()
     {
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
@@ -52,19 +50,18 @@ public class TestScalarRegistry
         ScalarDescriptor descriptor = scalarRegistry.register(AddI64.class);
         primitiveRegistry.register(descriptor);
 
-        assertThat(descriptor.vectorizedAdapter()).isEqualTo(AddI64Primitive.class);
-        assertThat(primitiveRegistry.get("add")).isInstanceOf(AddI64Primitive.class);
+        assertThat(descriptor.implementation()).isInstanceOf(AddI64.class);
+        assertThat(primitiveRegistry.get("add")).isInstanceOf(AddI64.class);
     }
 
     @ScalarFunction(name = "add")
     public static final class TestAddI64
+            implements PrimitiveFunction
     {
-        private TestAddI64() {}
-
-        @ScalarImplementation
-        public static long apply(long left, long right)
+        @Override
+        public Streams apply(java.util.List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context)
         {
-            return left + right;
+            return new AddI64().apply(inputs, mask, output, context);
         }
     }
 }

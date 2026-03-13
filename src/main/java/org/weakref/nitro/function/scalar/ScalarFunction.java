@@ -13,8 +13,6 @@
  */
 package org.weakref.nitro.function.scalar;
 
-import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
-
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 
@@ -28,6 +26,4 @@ public @interface ScalarFunction
     String name();
 
     boolean deterministic() default true;
-
-    Class<? extends PrimitiveFunction> vectorizedAdapter() default PrimitiveFunction.class;
 }

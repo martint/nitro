@@ -13,18 +13,160 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
-import org.weakref.nitro.function.scalar.ScalarImplementation;
-import org.weakref.nitro.function.scalar.generated.LessThanI64Primitive;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-@ScalarFunction(name = "lt", vectorizedAdapter = LessThanI64Primitive.class)
+import java.util.List;
+
+import static com.google.common.base.Preconditions.checkArgument;
+
+@ScalarFunction(name = "lt")
 public final class LessThanI64
+        implements PrimitiveFunction
 {
-    private LessThanI64() {}
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanI64");
 
-    @ScalarImplementation
-    public static boolean apply(long left, long right)
+    @Override
+    public Streams apply(List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context)
     {
-        return left < right;
+        checkArgument(inputs.size() == 2, "Unexpected argument count for lt");
+
+        Vector left = inputs.get(0).values();
+        Vector right = inputs.get(1).values();
+        Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
+
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
+            return Streams.of(Stream.VALUES, applyRleRle(leftRle, rightRle));
+        }
+
+        BooleanVector result = (BooleanVector) context.allocator().allocateOrGrow(
+                ALLOCATION_CONTEXT,
+                existing instanceof BooleanVector vector ? vector : null,
+                requiredLength(mask, Math.max(left.length(), right.length())),
+                BooleanVector::new);
+        if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {
+            applyLeftRleRightFlat(leftRle, rightFlat, mask, result);
+        }
+        else if (left instanceof I64Vector leftFlat && right instanceof RleVector rightRle) {
+            applyLeftFlatRightRle(leftFlat, rightRle, mask, result);
+        }
+        else {
+            applyFlatFlat((I64Vector) left, (I64Vector) right, mask, result);
+        }
+        return Streams.of(Stream.VALUES, result);
+    }
+
+    private static void applyFlatFlat(I64Vector left, I64Vector right, Mask mask, BooleanVector output)
+    {
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                output.values()[position] = apply(left.values()[position], right.values()[position]);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            output.values()[position] = apply(left.values()[position], right.values()[position]);
+        }
+    }
+
+    private static void applyLeftRleRightFlat(RleVector left, I64Vector right, Mask mask, BooleanVector output)
+    {
+        long[] leftValues = ((I64Vector) left.values()).values();
+
+        int position = 0;
+        for (int run = 0; run < left.counts().length; run++) {
+            int runLength = left.counts()[run];
+            long leftValue = leftValues[run];
+
+            for (int offset = 0; offset < runLength; offset++) {
+                if (mask.all() || mask.contains(position)) {
+                    output.values()[position] = apply(leftValue, right.values()[position]);
+                }
+                position++;
+            }
+        }
+    }
+
+    private static void applyLeftFlatRightRle(I64Vector left, RleVector right, Mask mask, BooleanVector output)
+    {
+        long[] rightValues = ((I64Vector) right.values()).values();
+
+        int position = 0;
+        for (int run = 0; run < right.counts().length; run++) {
+            int runLength = right.counts()[run];
+            long rightValue = rightValues[run];
+
+            for (int offset = 0; offset < runLength; offset++) {
+                if (mask.all() || mask.contains(position)) {
+                    output.values()[position] = apply(left.values()[position], rightValue);
+                }
+                position++;
+            }
+        }
+    }
+
+    private static RleVector applyRleRle(RleVector left, RleVector right)
+    {
+        long[] leftValues = ((I64Vector) left.values()).values();
+        long[] rightValues = ((I64Vector) right.values()).values();
+
+        int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
+        boolean[] values = new boolean[counts.length];
+
+        int outputIndex = 0;
+        int leftIndex = 0;
+        int rightIndex = 0;
+        int leftCount = 0;
+        int rightCount = 0;
+
+        while (leftIndex < left.counts().length && rightIndex < right.counts().length) {
+            if (leftCount == 0) {
+                leftCount = left.counts()[leftIndex];
+            }
+            if (rightCount == 0) {
+                rightCount = right.counts()[rightIndex];
+            }
+
+            int count = Math.min(leftCount, rightCount);
+            counts[outputIndex] = count;
+            values[outputIndex] = apply(leftValues[leftIndex], rightValues[rightIndex]);
+            outputIndex++;
+
+            leftCount -= count;
+            rightCount -= count;
+
+            if (leftCount == 0) {
+                leftIndex++;
+            }
+            if (rightCount == 0) {
+                rightIndex++;
+            }
+        }
+
+        return new RleVector(counts, new BooleanVector(values));
+    }
+
+    private static boolean apply(long leftValue, long rightValue)
+    {
+        return leftValue < rightValue;
+    }
+
+    private static int requiredLength(Mask mask, int defaultLength)
+    {
+        if (mask.none()) {
+            return defaultLength;
+        }
+        return Math.max(defaultLength, mask.maxPosition() + 1);
     }
 }

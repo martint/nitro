@@ -13,11 +13,15 @@
  */
 package org.weakref.nitro;
 
-import org.weakref.nitro.function.scalar.ScalarFunction;
-import org.weakref.nitro.function.scalar.ScalarImplementation;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
+import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
+import org.weakref.nitro.function.scalar.builtin.ModuloI64;
+import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
+import org.weakref.nitro.function.scalar.builtin.OrBoolean;
+import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.util.List;
@@ -42,77 +46,5 @@ public final class TestPrimitiveFunctions
             primitiveRegistry.register(scalarRegistry.register(functionClass));
         }
         return primitiveRegistry;
-    }
-
-    @ScalarFunction(name = "multiply")
-    public static final class MultiplyI64
-    {
-        private MultiplyI64() {}
-
-        @ScalarImplementation
-        public static long apply(long left, long right)
-        {
-            return left * right;
-        }
-    }
-
-    @ScalarFunction(name = "divide")
-    public static final class DivideI64
-    {
-        private DivideI64() {}
-
-        @ScalarImplementation
-        public static long apply(long left, long right)
-        {
-            return left / right;
-        }
-    }
-
-    @ScalarFunction(name = "modulo")
-    public static final class ModuloI64
-    {
-        private ModuloI64() {}
-
-        @ScalarImplementation
-        public static long apply(long left, long right)
-        {
-            return left % right;
-        }
-    }
-
-    @ScalarFunction(name = "or")
-    public static final class OrBoolean
-    {
-        private OrBoolean() {}
-
-        @ScalarImplementation
-        public static boolean apply(boolean left, boolean right)
-        {
-            return left || right;
-        }
-    }
-
-    @ScalarFunction(name = "add_exact")
-    public static final class AddExactI64
-    {
-        private AddExactI64() {}
-
-        @ScalarImplementation
-        public static long apply(long left, long right)
-        {
-            return Math.addExact(left, right);
-        }
-    }
-
-    @ScalarFunction(name = "subtract_exact")
-    public static final class SubtractExactI64
-    {
-        private SubtractExactI64() {}
-
-        @ScalarImplementation
-        public static long apply(long left, long right)
-        {
-            return Math.subtractExact(left, right);
-        }
     }
 }

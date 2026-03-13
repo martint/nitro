@@ -28,16 +28,16 @@ import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "add")
-public final class AddI64
+@ScalarFunction(name = "multiply")
+public final class MultiplyI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AddI64");
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MultiplyI64");
 
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for add");
+        checkArgument(inputs.size() == 2, "Unexpected argument count for multiply");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
@@ -158,7 +158,7 @@ public final class AddI64
 
     private static long apply(long leftValue, long rightValue)
     {
-        return leftValue + rightValue;
+        return leftValue * rightValue;
     }
 
     private static int requiredLength(Mask mask, int defaultLength)

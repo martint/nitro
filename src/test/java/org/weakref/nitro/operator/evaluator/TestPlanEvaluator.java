@@ -93,7 +93,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testGeneratedAddPreservesRleAcrossFullBatch()
+    void testAddFunctionPreservesRleAcrossFullBatch()
     {
         PrimitiveFunction add = builtinPrimitiveRegistry().get("add");
 
@@ -112,7 +112,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testGeneratedComparisonPreservesRleAcrossFullBatch()
+    void testComparisonFunctionPreservesRleAcrossFullBatch()
     {
         PrimitiveFunction lessThan = builtinPrimitiveRegistry().get("lt");
 
@@ -131,7 +131,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testInterpretedExactFunctionsSupportRleInputs()
+    void testExactFunctionsSupportRleInputs()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
 
@@ -145,6 +145,8 @@ public class TestPlanEvaluator
 
         assertThat(addExact.values()).isInstanceOf(RleVector.class);
         assertThat(((I64Vector) ((RleVector) addExact.values()).values()).values()).containsExactly(11L, 21L, 25L);
+        assertThat(addExact.get(Stream.ERRORS)).isInstanceOf(RleVector.class);
+        assertThat(((BooleanVector) ((RleVector) addExact.get(Stream.ERRORS)).values()).values()).containsExactly(false, false, false);
 
         Streams subtractExact = primitiveRegistry.get("subtract_exact").apply(
                 List.of(
@@ -156,6 +158,63 @@ public class TestPlanEvaluator
 
         assertThat(subtractExact.values()).isInstanceOf(I64Vector.class);
         assertThat(((I64Vector) subtractExact.values()).values()).containsExactly(9L, 8L, 27L, 26L);
+        assertThat(((BooleanVector) subtractExact.get(Stream.ERRORS)).values()).containsExactly(false, false, false, false);
+    }
+
+    @Test
+    void testExactFunctionsReportOverflowViaErrorsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
+        Streams addExact = primitiveRegistry.get("add_exact").apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {Long.MAX_VALUE, 1})),
+                        Streams.ofValues(new I64Vector(new long[] {1, 2}))),
+                Mask.all(2),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((I64Vector) addExact.values()).values()).containsExactly(Long.MIN_VALUE, 3L);
+        assertThat(((BooleanVector) addExact.get(Stream.ERRORS)).values()).containsExactly(true, false);
+
+        Streams subtractExact = primitiveRegistry.get("subtract_exact").apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {Long.MIN_VALUE, 10})),
+                        Streams.ofValues(new I64Vector(new long[] {1, 3}))),
+                Mask.all(2),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((I64Vector) subtractExact.values()).values()).containsExactly(Long.MAX_VALUE, 7L);
+        assertThat(((BooleanVector) subtractExact.get(Stream.ERRORS)).values()).containsExactly(true, false);
+    }
+
+    @Test
+    void testDivideAndModuloReportErrorsViaErrorsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
+        Streams divide = primitiveRegistry.get("divide").apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {20, 21, 22})),
+                        Streams.ofValues(new I64Vector(new long[] {5, 0, 2}))),
+                Mask.all(3),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((I64Vector) divide.values()).values()).containsExactly(4L, 0L, 11L);
+        assertThat(((BooleanVector) divide.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+
+        Streams modulo = primitiveRegistry.get("modulo").apply(
+                List.of(
+                        Streams.ofValues(new RleVector(new int[] {2, 1}, new I64Vector(new long[] {20, 22}))),
+                        Streams.ofValues(new I64Vector(new long[] {6, 0, 5}))),
+                Mask.all(3),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((I64Vector) modulo.values()).values()).containsExactly(2L, 0L, 2L);
+        assertThat(((BooleanVector) modulo.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
     }
 
     @Test
