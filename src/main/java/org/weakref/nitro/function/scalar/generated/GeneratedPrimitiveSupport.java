@@ -11,19 +11,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar.builtin;
+package org.weakref.nitro.function.scalar.generated;
 
-import org.weakref.nitro.function.scalar.ScalarFunction;
-import org.weakref.nitro.function.scalar.ScalarImplementation;
+import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "lt", returnType = "BOOLEAN", argumentTypes = {"BIGINT", "BIGINT"})
-public final class LessThanBigint
+final class GeneratedPrimitiveSupport
 {
-    private LessThanBigint() {}
+    private GeneratedPrimitiveSupport() {}
 
-    @ScalarImplementation
-    public static boolean apply(long left, long right)
+    static void verifyBinaryArity(String functionName, int argumentCount)
     {
-        return left < right;
+        checkArgument(argumentCount == 2, "Unexpected argument count for %s", functionName);
     }
 }

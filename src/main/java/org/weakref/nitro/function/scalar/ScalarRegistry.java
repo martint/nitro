@@ -16,7 +16,6 @@ package org.weakref.nitro.function.scalar;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -38,10 +37,9 @@ public final class ScalarRegistry
 
         ScalarDescriptor descriptor = new ScalarDescriptor(
                 scalarFunction.name(),
-                scalarFunction.returnType(),
-                List.of(scalarFunction.argumentTypes()),
                 scalarFunction.deterministic(),
-                implementation);
+                implementation,
+                scalarFunction.vectorizedAdapter());
 
         checkArgument(descriptors.putIfAbsent(descriptor.name(), descriptor) == null, "Scalar function already registered: %s", descriptor.name());
         return descriptor;

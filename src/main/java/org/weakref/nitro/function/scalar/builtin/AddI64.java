@@ -15,11 +15,12 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.function.scalar.ScalarImplementation;
+import org.weakref.nitro.function.scalar.generated.AddI64Primitive;
 
-@ScalarFunction(name = "add", returnType = "BIGINT", argumentTypes = {"BIGINT", "BIGINT"})
-public final class AddBigint
+@ScalarFunction(name = "add", vectorizedAdapter = AddI64Primitive.class)
+public final class AddI64
 {
-    private AddBigint() {}
+    private AddI64() {}
 
     @ScalarImplementation
     public static long apply(long left, long right)

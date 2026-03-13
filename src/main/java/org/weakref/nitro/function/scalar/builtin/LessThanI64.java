@@ -11,23 +11,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar;
+package org.weakref.nitro.function.scalar.builtin;
 
-import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.ScalarFunction;
+import org.weakref.nitro.function.scalar.ScalarImplementation;
+import org.weakref.nitro.function.scalar.generated.LessThanI64Primitive;
 
-import java.lang.annotation.Retention;
-import java.lang.annotation.Target;
-
-import static java.lang.annotation.ElementType.TYPE;
-import static java.lang.annotation.RetentionPolicy.RUNTIME;
-
-@Retention(RUNTIME)
-@Target(TYPE)
-public @interface ScalarFunction
+@ScalarFunction(name = "lt", vectorizedAdapter = LessThanI64Primitive.class)
+public final class LessThanI64
 {
-    String name();
+    private LessThanI64() {}
 
-    boolean deterministic() default true;
-
-    Class<? extends PrimitiveFunction> vectorizedAdapter() default PrimitiveFunction.class;
+    @ScalarImplementation
+    public static boolean apply(long left, long right)
+    {
+        return left < right;
+    }
 }

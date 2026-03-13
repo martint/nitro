@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -34,7 +35,7 @@ public final class PrimitiveRegistry
 
     public void register(ScalarDescriptor descriptor)
     {
-        register(descriptor.name(), new InterpretedScalarFunction(descriptor));
+        register(descriptor.name(), bind(descriptor));
     }
 
     public PrimitiveFunction get(String name)
@@ -42,5 +43,33 @@ public final class PrimitiveRegistry
         PrimitiveFunction function = functions.get(name);
         checkArgument(function != null, "Unknown primitive function: %s", name);
         return function;
+    }
+
+    private static PrimitiveFunction bind(ScalarDescriptor descriptor)
+    {
+        if (descriptor.vectorizedAdapter() == PrimitiveFunction.class) {
+            return new InterpretedScalarFunction(descriptor);
+        }
+
+        try {
+            return descriptor.vectorizedAdapter()
+                    .asSubclass(PrimitiveFunction.class)
+                    .getConstructor(ScalarDescriptor.class)
+                    .newInstance(descriptor);
+        }
+        catch (NoSuchMethodException ignored) {
+            try {
+                return descriptor.vectorizedAdapter()
+                        .asSubclass(PrimitiveFunction.class)
+                        .getConstructor()
+                        .newInstance();
+            }
+            catch (InstantiationException | IllegalAccessException | InvocationTargetException | NoSuchMethodException exception) {
+                throw new IllegalArgumentException("Unable to instantiate vectorized adapter for " + descriptor.name(), exception);
+            }
+        }
+        catch (InstantiationException | IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalArgumentException("Unable to instantiate vectorized adapter for " + descriptor.name(), exception);
+        }
     }
 }
