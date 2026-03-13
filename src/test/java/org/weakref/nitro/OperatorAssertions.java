@@ -16,12 +16,14 @@ package org.weakref.nitro;
 import org.assertj.core.api.AssertProvider;
 import org.assertj.core.api.Descriptable;
 import org.assertj.core.description.Description;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
-import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.BatchOperator;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,7 +34,7 @@ public class OperatorAssertions
 {
     private OperatorAssertions() {}
 
-    public static AssertProvider<OperatorAssert> operator(Operator operator)
+    public static AssertProvider<OperatorAssert> operator(BatchOperator operator)
     {
         return () -> new OperatorAssert(operator);
     }
@@ -40,10 +42,10 @@ public class OperatorAssertions
     public static class OperatorAssert
             implements Descriptable<OperatorAssert>
     {
-        private final Operator operator;
+        private final BatchOperator operator;
         private Description description;
 
-        public OperatorAssert(Operator operator)
+        public OperatorAssert(BatchOperator operator)
         {
             this.operator = operator;
         }
@@ -71,15 +73,19 @@ public class OperatorAssertions
                     .containsExactlyInAnyOrderElementsOf(expected);
         }
 
-        public static List<Row> toRows(Operator operator)
+        public static List<Row> toRows(BatchOperator operator)
         {
             List<Row> result = new ArrayList<>();
             while (operator.hasNext()) {
-                Mask mask = operator.next();
+                Batch batch = operator.nextBatch();
+                var mask = batch.borrowMask();
+                if (mask.none()) {
+                    continue;
+                }
 
                 List<Vector> columns = new ArrayList<>();
-                for (int i = 0; i < operator.columnCount(); i++) {
-                    columns.add(operator.column(i));
+                for (int i = 0; i < operator.outputCount(); i++) {
+                    columns.add(batch.output(i).borrow(Stream.VALUES));
                 }
 
                 for (int position : mask) {
@@ -88,6 +94,7 @@ public class OperatorAssertions
                         row[i] = switch (columns.get(i)) {
                             case I64VectorWithNulls v -> v.nulls()[position] ? null : v.values()[position];
                             case I64Vector v -> v.values()[position];
+                            case BooleanVector v -> v.values()[position] ? 1L : 0L;
                             default -> throw new UnsupportedOperationException(columns.get(i).getClass().getSimpleName());
                         };
                     }

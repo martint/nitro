@@ -17,8 +17,6 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
-import org.weakref.nitro.function.scalar.ScalarRegistry;
-import org.weakref.nitro.function.scalar.builtin.AddBigint;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.BatchOperator;
@@ -40,8 +38,10 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.Arrays;
@@ -76,18 +76,16 @@ public class TestBatchOperators
     void testProjectOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        ScalarRegistry scalarRegistry = new ScalarRegistry();
-        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register(scalarRegistry.register(AddBigint.class));
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
 
         EvaluationPlan evaluationPlan = new EvaluationPlan(
                 List.of(new Assignment(
-                        new org.weakref.nitro.operator.evaluator.ir.Variable(0),
+                        new Variable(0),
                         new Call("add", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
-                List.of(new Reference(new org.weakref.nitro.operator.evaluator.ir.Variable(0), Stream.VALUES)));
+                List.of(new Reference(new Variable(0), Stream.VALUES)));
 
         BatchOperator operator = new ProjectOperator(
                 allocator,
@@ -103,10 +101,25 @@ public class TestBatchOperators
     void testFilterOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable threshold = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(threshold, new Literal(3L), AllMask.ALL),
+                        new Assignment(
+                                predicate,
+                                new Call("lt", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(threshold, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(predicate, Stream.VALUES)));
+
         BatchOperator operator = new FilterOperator(
                 new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))),
-                List.of(new org.weakref.nitro.operator.evaluator.functions.InputReference(0), new org.weakref.nitro.operator.evaluator.functions.I64Predicate(0, value -> value < 3)),
-                1,
+                evaluationPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
                 allocator);
 
         Batch batch = operator.nextBatch();

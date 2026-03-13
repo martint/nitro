@@ -25,18 +25,25 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.function.Function;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
-import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.Assignment;
+import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
@@ -51,22 +58,13 @@ import java.util.concurrent.TimeUnit;
 public class BenchmarkOperators
 {
     private final Allocator allocator = new Allocator();
-
-    private static final Function ADD = (output, inputs, mask) -> {
-        I64VectorWithNulls in1 = (I64VectorWithNulls) inputs[0];
-        I64VectorWithNulls in2 = (I64VectorWithNulls) inputs[1];
-        I64VectorWithNulls out = (I64VectorWithNulls) output;
-        for (int i = 0; i <= mask.maxPosition(); i++) {
-            out.values()[i] = in1.values()[i] + in2.values()[i];
-            out.nulls()[i] = in1.nulls()[i] || in2.nulls()[i];
-        }
-    };
+    private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
 
     @Benchmark
     @OperationsPerInvocation(1_000_000_000)
     public void aggregationCountAll()
     {
-        Operator operator = new AggregationOperator(
+        BatchOperator operator = new AggregationOperator(
                 allocator,
                 List.of(new CountAll()),
                 new GeneratorOperator(
@@ -81,7 +79,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(1_000_000_000)
     public void aggregationCount()
     {
-        Operator operator = new AggregationOperator(
+        BatchOperator operator = new AggregationOperator(
                 allocator,
                 List.of(new CountColumn(0)),
                 new GeneratorOperator(
@@ -96,7 +94,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(100_000_000)
     public void groupBy()
     {
-        Operator operator = new GroupedAggregationOperator(
+        BatchOperator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(new CountAll()),
@@ -112,7 +110,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(100_000)
     public void group()
     {
-        Operator operator = new GroupOperator(
+        BatchOperator operator = new GroupOperator(
                 allocator,
                 0,
                 new GeneratorOperator(
@@ -127,11 +125,20 @@ public class BenchmarkOperators
     @OperationsPerInvocation(100_000)
     public void project()
     {
-        Operator operator = new ProjectOperator(
+        Variable projected = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        projected,
+                        new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(projected, Stream.VALUES)));
+
+        BatchOperator operator = new ProjectOperator(
                 allocator,
-                new ProjectOperator.Execution(
-                        List.of(new ProjectOperator.Invocation(ADD, List.of(-1, -1), I64VectorWithNulls::new)),
-                        List.of(-1)),
+                evaluationPlan,
+                primitiveRegistry,
                 new GeneratorOperator(
                         allocator,
                         100_000L,
@@ -144,7 +151,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(25_000 * 25_000)
     public void nestedLoopJoin()
     {
-        Operator operator = new NestedLoopJoinOperator(
+        BatchOperator operator = new NestedLoopJoinOperator(
                 allocator,
                 new GeneratorOperator(
                         allocator,
@@ -162,7 +169,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(3_000 * 500_000)
     public void nestedLoopJoinSmallVsLarge()
     {
-        Operator operator = new NestedLoopJoinOperator(
+        BatchOperator operator = new NestedLoopJoinOperator(
                 allocator,
                 new GeneratorOperator(
                         allocator,
@@ -180,7 +187,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(3_000 * 500_000)
     public void nestedLoopJoinLargeVsSmall()
     {
-        Operator operator = new NestedLoopJoinOperator(
+        BatchOperator operator = new NestedLoopJoinOperator(
                 allocator,
                 new GeneratorOperator(
                         allocator,
@@ -194,12 +201,16 @@ public class BenchmarkOperators
         consume(operator);
     }
 
-    private static void consume(Operator operator)
+    private static void consume(BatchOperator operator)
     {
         while (operator.hasNext()) {
-            operator.next();
-            for (int column = 0; column < operator.columnCount(); column++) {
-                consume(operator.column(column));
+            var batch = operator.nextBatch();
+            var mask = batch.borrowMask();
+            if (mask.none()) {
+                continue;
+            }
+            for (int column = 0; column < operator.outputCount(); column++) {
+                consume(batch.output(column).borrow(Stream.VALUES));
             }
         }
     }

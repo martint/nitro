@@ -19,11 +19,6 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.function.Function;
-import org.weakref.nitro.function.scalar.ScalarRegistry;
-import org.weakref.nitro.function.scalar.builtin.AddBigint;
-import org.weakref.nitro.function.scalar.builtin.LessThanBigint;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
@@ -32,6 +27,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -41,8 +37,6 @@ import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.evaluator.functions.I64Predicate;
-import org.weakref.nitro.operator.evaluator.functions.InputReference;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
@@ -51,6 +45,7 @@ import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
+import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
@@ -79,6 +74,29 @@ public class TestOperators
     @Test
     void testComplex()
     {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable twenty = new Variable(0);
+        Variable forty = new Variable(1);
+        Variable lessThanTwenty = new Variable(2);
+        Variable greaterThanForty = new Variable(3);
+        Variable predicate = new Variable(4);
+        EvaluationPlan filterPlan = plan(
+                List.of(
+                        literal(twenty, 20),
+                        literal(forty, 40),
+                        call(lessThanTwenty, "lt", values(new Input(0)), values(twenty)),
+                        call(greaterThanForty, "lt", values(forty), values(new Input(0))),
+                        call(predicate, "or", values(lessThanTwenty), values(greaterThanForty))),
+                values(predicate));
+
+        Variable two = new Variable(0);
+        Variable doubled = new Variable(1);
+        EvaluationPlan projectPlan = plan(
+                List.of(
+                        literal(two, 2),
+                        call(doubled, "multiply", values(new Input(1)), values(two))),
+                values(doubled));
+
         /*
           SELECT min(v), max(v), sum(v), count(*)
           FROM (
@@ -99,12 +117,8 @@ public class TestOperators
                                 5,
                                 new ProjectOperator(
                                         allocator,
-                                        new ProjectOperator.Execution(
-                                                List.of(new ProjectOperator.Invocation(
-                                                        multiply(2),
-                                                        List.of(-2),
-                                                        I64Vector::new)),
-                                                List.of(0)),
+                                        projectPlan,
+                                        primitiveRegistry,
                                         new FilterOperator(
                                                 new GeneratorOperator(
                                                         allocator,
@@ -113,8 +127,9 @@ public class TestOperators
                                                         List.of(
                                                                 new SequenceGenerator(0),
                                                                 new SequenceGenerator(100))),
-                                                List.of(new InputReference(0), new I64Predicate(0, value -> value < 20 || value > 40)),
-                                                1,
+                                                filterPlan,
+                                                primitiveRegistry,
+                                                values(predicate),
                                                 allocator))))))
                 .matchesExactly(List.of(row(200L, 208L, 1020L, 5L)));
     }
@@ -192,8 +207,10 @@ public class TestOperators
     @Test
     void testFilterOverLimit()
     {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
         assertThat(operator(
-                new FilterOperator(
+                filterLessThanOrGreaterThan(
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(
@@ -203,9 +220,10 @@ public class TestOperators
                                         List.of(
                                                 new SequenceGenerator(0),
                                                 new SequenceGenerator(100)))),
-                        List.of(new InputReference(0), new I64Predicate(0, value -> value < 10 || value > 40)),
-                        1,
-                        allocator)))
+                        0,
+                        10,
+                        40,
+                        primitiveRegistry)))
                 .matchesExactly(List.of(
                         row(0L, 100L),
                         row(1L, 101L),
@@ -219,7 +237,7 @@ public class TestOperators
                         row(9L, 109L)));
 
         assertThat(operator(
-                new FilterOperator(
+                filterDivisibleBy(
                         new LimitOperator(
                                 15,
                                 new GeneratorOperator(
@@ -229,9 +247,9 @@ public class TestOperators
                                         List.of(
                                                 new SequenceGenerator(0),
                                                 new SequenceGenerator(100)))),
-                        List.of(new InputReference(0), new I64Predicate(0, value -> value % 2 == 0)),
-                        1,
-                        allocator)))
+                        0,
+                        2,
+                        primitiveRegistry)))
                 .matchesExactly(List.of(
                         row(0L, 100L),
                         row(2L, 102L),
@@ -245,11 +263,7 @@ public class TestOperators
 
     private PrimitiveRegistry primitiveRegistry()
     {
-        ScalarRegistry scalarRegistry = new ScalarRegistry();
-        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register(scalarRegistry.register(AddBigint.class));
-        primitiveRegistry.register(scalarRegistry.register(LessThanBigint.class));
-        return primitiveRegistry;
+        return TestPrimitiveFunctions.primitiveRegistry();
     }
 
     @Test
@@ -272,20 +286,22 @@ public class TestOperators
     @Test
     void testFilterOverFilter()
     {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
         assertThat(operator(
-                new FilterOperator(
-                        new FilterOperator(
+                filterDivisibleBy(
+                        filterDivisibleBy(
                                 new GeneratorOperator(
                                         allocator,
                                         50,
                                         10,
                                         List.of(new SequenceGenerator(0))),
-                                List.of(new InputReference(0), new I64Predicate(0, value -> value % 3 == 0)),
-                                1,
-                                allocator),
-                        List.of(new InputReference(0), new I64Predicate(0, value -> value % 2 == 0)),
-                        1,
-                        allocator)))
+                                0,
+                                3,
+                                primitiveRegistry),
+                        0,
+                        2,
+                        primitiveRegistry)))
                 .matchesExactly(List.of(
                         row(0L),
                         row(6L),
@@ -301,18 +317,23 @@ public class TestOperators
     @Test
     void testGroup()
     {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable three = new Variable(0);
+        Variable quotient = new Variable(1);
+        EvaluationPlan evaluationPlan = plan(
+                List.of(
+                        literal(three, 3),
+                        call(quotient, "divide", values(new Input(0)), values(three))),
+                values(quotient));
+
         assertThat(operator(
                 new GroupOperator(
                         allocator,
                         0,
                         new ProjectOperator(
                                 allocator,
-                                new ProjectOperator.Execution(
-                                        List.of(new ProjectOperator.Invocation(
-                                                divide(3),
-                                                List.of(-1),
-                                                I64Vector::new)),
-                                        List.of(0)),
+                                evaluationPlan,
+                                primitiveRegistry,
                                 new GeneratorOperator(
                                         allocator,
                                         10,
@@ -451,15 +472,15 @@ public class TestOperators
                                 new Max(0),
                                 new Sum(0),
                                 new CountAll()),
-                        new FilterOperator(
+                        filterDivisibleBy(
                                 new GeneratorOperator(
                                         allocator,
                                         50,
                                         10,
                                         List.of(new SequenceGenerator(100))),
-                                List.of(new InputReference(0), new I64Predicate(0, value -> value % 2 == 0)),
-                                1,
-                                allocator))))
+                                0,
+                                2,
+                                primitiveRegistry()))))
                 .matchesExactly(List.of(row(100L, 100L, 148L, 3100L, 25L)));
     }
 
@@ -488,6 +509,20 @@ public class TestOperators
     @Test
     void testGroupedAggregation()
     {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable ten = new Variable(0);
+        Variable thirteen = new Variable(1);
+        Variable modulo = new Variable(2);
+        Variable groupingKey = new Variable(3);
+        EvaluationPlan evaluationPlan = plan(
+                List.of(
+                        literal(ten, 10),
+                        literal(thirteen, 13),
+                        call(modulo, "modulo", values(new Input(0)), values(ten)),
+                        call(groupingKey, "add", values(modulo), values(thirteen))),
+                values(groupingKey),
+                values(new Input(0)));
+
         assertThat(operator(
                 new GroupedAggregationOperator(
                         allocator,
@@ -503,18 +538,8 @@ public class TestOperators
                                 0,
                                 new ProjectOperator(
                                         allocator,
-                                        new ProjectOperator.Execution(
-                                                List.of(new ProjectOperator.Invocation(
-                                                        (output, inputs, mask) -> {
-                                                            I64Vector in = (I64Vector) inputs[0];
-                                                            I64Vector out = (I64Vector) output;
-                                                            for (int i = 0; i <= mask.maxPosition(); i++) {
-                                                                out.values()[i] = in.values()[i] % 10 + 13;
-                                                            }
-                                                        },
-                                                        List.of(-1),
-                                                        I64Vector::new)),
-                                                List.of(0, -1)),
+                                        evaluationPlan,
+                                        primitiveRegistry,
                                         new GeneratorOperator(
                                                 allocator,
                                                 50,
@@ -696,31 +721,20 @@ public class TestOperators
     @Test
     void testProject()
     {
-        Function negate = (output, inputs, mask) -> {
-            I64Vector in = (I64Vector) inputs[0];
-            I64Vector out = (I64Vector) output;
-            for (int i = 0; i <= mask.maxPosition(); i++) {
-                out.values()[i] = -in.values()[i];
-            }
-        };
-
-        Function add = (output, inputs, mask) -> {
-            I64Vector in1 = (I64Vector) inputs[0];
-            I64Vector in2 = (I64Vector) inputs[1];
-            I64Vector out = (I64Vector) output;
-            for (int i = 0; i <= mask.maxPosition(); i++) {
-                out.values()[i] = in1.values()[i] + in2.values()[i];
-            }
-        };
-
-        Function multiply = (output, inputs, mask) -> {
-            I64Vector in1 = (I64Vector) inputs[0];
-            I64Vector in2 = (I64Vector) inputs[1];
-            I64Vector out = (I64Vector) output;
-            for (int i = 0; i <= mask.maxPosition(); i++) {
-                out.values()[i] = in1.values()[i] * in2.values()[i];
-            }
-        };
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable negativeOne = new Variable(0);
+        Variable squared = new Variable(1);
+        Variable doubled = new Variable(2);
+        Variable negative = new Variable(3);
+        EvaluationPlan evaluationPlan = plan(
+                List.of(
+                        literal(negativeOne, -1),
+                        call(squared, "multiply", values(new Input(0)), values(new Input(0))),
+                        call(doubled, "add", values(squared), values(squared)),
+                        call(negative, "multiply", values(squared), values(negativeOne))),
+                values(new Input(0)),
+                values(doubled),
+                values(negative));
 
         /*
            %0 = %input * %input
@@ -731,12 +745,8 @@ public class TestOperators
         assertThat(operator(
                 new ProjectOperator(
                         allocator,
-                        new ProjectOperator.Execution(
-                                List.of(
-                                        new ProjectOperator.Invocation(multiply, List.of(-1, -1), I64Vector::new),
-                                        new ProjectOperator.Invocation(add, List.of(0, 0), I64Vector::new),
-                                        new ProjectOperator.Invocation(negate, List.of(0), I64Vector::new)),
-                                List.of(-1, 1, 2)),
+                        evaluationPlan,
+                        primitiveRegistry,
                         new GeneratorOperator(
                                 allocator,
                                 10,
@@ -755,25 +765,59 @@ public class TestOperators
                         row(9L, 162L, -81L)));
     }
 
-    private static Function multiply(long value)
+    private FilterOperator filterDivisibleBy(Operator source, int inputColumn, long divisor, PrimitiveRegistry primitiveRegistry)
     {
-        return (output, inputs, mask) -> {
-            I64Vector in = (I64Vector) inputs[0];
-            I64Vector out = (I64Vector) output;
-            for (int i = 0; i <= mask.maxPosition(); i++) {
-                out.values()[i] = in.values()[i] * value;
-            }
-        };
+        Variable divisorLiteral = new Variable(0);
+        Variable remainder = new Variable(1);
+        Variable one = new Variable(2);
+        Variable predicate = new Variable(3);
+        EvaluationPlan evaluationPlan = plan(
+                List.of(
+                        literal(divisorLiteral, divisor),
+                        call(remainder, "modulo", values(new Input(inputColumn)), values(divisorLiteral)),
+                        literal(one, 1),
+                        call(predicate, "lt", values(remainder), values(one))),
+                values(predicate));
+
+        return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
     }
 
-    private static Function divide(long value)
+    private FilterOperator filterLessThanOrGreaterThan(Operator source, int inputColumn, long lowerBound, long upperBound, PrimitiveRegistry primitiveRegistry)
     {
-        return (output, inputs, mask) -> {
-            I64Vector in = (I64Vector) inputs[0];
-            I64Vector out = (I64Vector) output;
-            for (int i = 0; i <= mask.maxPosition(); i++) {
-                out.values()[i] = in.values()[i] / value;
-            }
-        };
+        Variable lowerLiteral = new Variable(0);
+        Variable upperLiteral = new Variable(1);
+        Variable lessThanLower = new Variable(2);
+        Variable greaterThanUpper = new Variable(3);
+        Variable predicate = new Variable(4);
+        EvaluationPlan evaluationPlan = plan(
+                List.of(
+                        literal(lowerLiteral, lowerBound),
+                        literal(upperLiteral, upperBound),
+                        call(lessThanLower, "lt", values(new Input(inputColumn)), values(lowerLiteral)),
+                        call(greaterThanUpper, "lt", values(upperLiteral), values(new Input(inputColumn))),
+                        call(predicate, "or", values(lessThanLower), values(greaterThanUpper))),
+                values(predicate));
+
+        return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
+    }
+
+    private static EvaluationPlan plan(List<Assignment> assignments, Reference... outputs)
+    {
+        return new EvaluationPlan(assignments, List.of(outputs));
+    }
+
+    private static Assignment literal(Variable output, long value)
+    {
+        return new Assignment(output, new Literal(value), AllMask.ALL);
+    }
+
+    private static Assignment call(Variable output, String function, Reference... arguments)
+    {
+        return new Assignment(output, new Call(function, List.of(arguments)), AllMask.ALL);
+    }
+
+    private static Reference values(Producer producer)
+    {
+        return new Reference(producer, Stream.VALUES);
     }
 }
