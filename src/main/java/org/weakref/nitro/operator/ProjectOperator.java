@@ -30,7 +30,6 @@ public class ProjectOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
 
-    private final EvaluationPlan evaluationPlan;
     private final PlanEvaluator planEvaluator;
     private final List<Reference> outputReferences;
 
@@ -42,7 +41,6 @@ public class ProjectOperator
     {
         this.allocator = allocator;
         this.source = source;
-        this.evaluationPlan = evaluationPlan;
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> currentBatch.output(index).borrow(Stream.VALUES), allocator);
         this.outputReferences = evaluationPlan.outputs();
     }

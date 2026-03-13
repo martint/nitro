@@ -226,7 +226,6 @@ public final class I64BinaryVectorSupport
         private final long[] flatValues;
         private final int[] counts;
         private int runIndex;
-        private int runStart;
         private int runEnd;
 
         private I64ValueReader(Vector vector)
@@ -251,7 +250,6 @@ public final class I64BinaryVectorSupport
             }
 
             while (position >= runEnd) {
-                runStart = runEnd;
                 runIndex++;
                 runEnd += counts[runIndex];
             }
