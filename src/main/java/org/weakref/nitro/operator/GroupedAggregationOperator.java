@@ -18,20 +18,22 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.StreamAccessors;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 
 import static java.lang.Math.toIntExact;
 
 public class GroupedAggregationOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
 
     private final int groupColumn;
     private final List<Accumulator> aggregations;
-    private final Operator source;
+    private final BatchOperator source;
     private final Vector[] result;
     private boolean done;
 
@@ -40,7 +42,7 @@ public class GroupedAggregationOperator
         this.allocator = allocator;
         this.groupColumn = groupColumn;
         this.aggregations = aggregations;
-        this.source = source;
+        this.source = source instanceof BatchOperator batchOperator ? batchOperator : new LegacyBatchOperatorAdapter(source);
 
         result = new Vector[aggregations.size()];
     }
@@ -49,6 +51,12 @@ public class GroupedAggregationOperator
     public int columnCount()
     {
         return aggregations.size();
+    }
+
+    @Override
+    public int outputCount()
+    {
+        return columnCount();
     }
 
     @Override
@@ -64,8 +72,9 @@ public class GroupedAggregationOperator
 
         long maxGroup = -1;
         while (source.hasNext()) {
-            Mask mask = source.next();
-            I64Vector group = (I64Vector) source.column(groupColumn);
+            Batch batch = source.nextBatch();
+            Mask mask = batch.borrowMask();
+            I64Vector group = (I64Vector) batch.output(groupColumn).borrow(Stream.VALUES);
 
             long previousMaxGroup = maxGroup;
             if (mask.all()) {
@@ -85,7 +94,7 @@ public class GroupedAggregationOperator
 
                 states[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, states[i], newCapacity, accumulator::allocate);
                 accumulator.initialize(states[i], toIntExact(previousMaxGroup + 1), toIntExact(maxGroup - previousMaxGroup));
-                accumulator.accumulate(states[i], group, mask, source::column);
+                accumulator.accumulate(states[i], group, mask, StreamAccessors.forBatch(batch));
             }
         }
 
@@ -99,6 +108,18 @@ public class GroupedAggregationOperator
 
         // TODO: reuse mask if possible
         return Mask.all(toIntExact(maxGroup + 1));
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     @Override

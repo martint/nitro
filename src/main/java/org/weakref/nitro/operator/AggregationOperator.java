@@ -17,16 +17,17 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
 
 public class AggregationOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AggregationOperator");
     private final Allocator allocator;
 
-    private final Operator source;
+    private final BatchOperator source;
     private final List<Accumulator> aggregations;
 
     private final Vector[] results;
@@ -37,7 +38,7 @@ public class AggregationOperator
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
         this.allocator = allocator;
-        this.source = source;
+        this.source = source instanceof BatchOperator batchOperator ? batchOperator : new LegacyBatchOperatorAdapter(source);
         this.aggregations = aggregations;
 
         results = new Vector[aggregations.size()];
@@ -53,10 +54,28 @@ public class AggregationOperator
     }
 
     @Override
+    public int outputCount()
+    {
+        return columnCount();
+    }
+
+    @Override
     public Mask next()
     {
         done = true;
         return mask;
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     @Override
@@ -90,11 +109,12 @@ public class AggregationOperator
             }
 
             while (source.hasNext()) {
-                Mask mask = source.next();
+                Batch batch = source.nextBatch();
+                Mask mask = batch.borrowMask();
 
                 for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
                     Accumulator accumulator = aggregations.get(aggregation);
-                    accumulator.accumulate(state[aggregation], 0, mask, source::column);
+                    accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
                     results[aggregation] = accumulator.result(1, state[aggregation], results[aggregation]);
                 }
             }

@@ -45,10 +45,10 @@ public class SumF64
     }
 
     @Override
-    public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
+    public void accumulate(Vector state, int group, Mask mask, StreamAccessor streams)
     {
         F64VectorWithNulls stateVector = (F64VectorWithNulls) state;
-        F64VectorWithNulls inputVector = (F64VectorWithNulls) columns.column(inputColumn);
+        F64VectorWithNulls inputVector = (F64VectorWithNulls) streams.values(inputColumn);
 
         boolean[] nulls = inputVector.nulls();
         double[] values = inputVector.values();
@@ -71,11 +71,11 @@ public class SumF64
     }
 
     @Override
-    public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
+    public void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams)
     {
         F64VectorWithNulls stateVector = (F64VectorWithNulls) state;
         I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
-        F64VectorWithNulls inputVector = (F64VectorWithNulls) columns.column(inputColumn);
+        F64VectorWithNulls inputVector = (F64VectorWithNulls) streams.values(inputColumn);
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {

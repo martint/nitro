@@ -13,9 +13,22 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-public interface ColumnAccessor
+@FunctionalInterface
+public interface StreamAccessor
 {
-    Vector column(int column);
+    Vector stream(int column, Stream stream);
+
+    default Vector values(int column)
+    {
+        return stream(column, Stream.VALUES);
+    }
+
+    default BooleanVector nulls(int column)
+    {
+        return (BooleanVector) stream(column, Stream.NULLS);
+    }
 }

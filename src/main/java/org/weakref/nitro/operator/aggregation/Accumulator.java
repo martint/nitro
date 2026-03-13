@@ -22,9 +22,9 @@ public interface Accumulator
 
     void initialize(Vector state, int offset, int length);
 
-    void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns);
+    void accumulate(Vector state, int group, Mask mask, StreamAccessor streams);
 
-    void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns);
+    void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams);
 
     Vector result(int maxGroup, Vector state, Vector output);
 }

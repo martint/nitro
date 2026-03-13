@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 
@@ -45,12 +47,11 @@ public class First
     }
 
     @Override
-    public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
+    public void accumulate(Vector state, int group, Mask mask, StreamAccessor streams)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
-        Vector input = columns.column(inputColumn);
-        long[] inputValues = values(input);
-        boolean[] inputNulls = nulls(input);
+        long[] inputValues = values(streams.values(inputColumn));
+        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             if (stateVector.nulls()[group]) {
@@ -61,13 +62,12 @@ public class First
     }
 
     @Override
-    public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
+    public void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
         I64Vector groupVector = (I64Vector) groups;
-        Vector input = columns.column(inputColumn);
-        long[] inputValues = values(input);
-        boolean[] inputNulls = nulls(input);
+        long[] inputValues = values(streams.values(inputColumn));
+        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
@@ -95,7 +95,12 @@ public class First
 
     private static boolean[] nulls(Vector v)
     {
-        return v instanceof I64VectorWithNulls iv ? iv.nulls() : null;
+        return switch (v) {
+            case null -> null;
+            case BooleanVector vector -> vector.values();
+            case I64VectorWithNulls vector -> vector.nulls();
+            default -> null;
+        };
     }
 
     private static boolean isNull(boolean[] nulls, int position)

@@ -19,12 +19,17 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddBigint;
+import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
+import org.weakref.nitro.operator.GroupOperator;
+import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -35,6 +40,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -102,5 +108,41 @@ public class TestBatchOperators
         Batch batch = operator.nextBatch();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L, 1L, 2L, 3L, 4L);
         assertThat(batch.borrowMask().count()).isEqualTo(3);
+    }
+
+    @Test
+    void testAggregationOperatorExposesBatchApi()
+    {
+        Allocator allocator = new Allocator();
+        BatchOperator operator = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new CountAll()),
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))));
+
+        Batch batch = operator.nextBatch();
+        assertThat(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
+        assertThat(((I64VectorWithNulls) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+    }
+
+    @Test
+    void testGroupedAggregationOperatorExposesBatchApi()
+    {
+        Allocator allocator = new Allocator();
+        BatchOperator operator = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(new Sum(2), new CountAll()),
+                new GroupOperator(
+                        allocator,
+                        0,
+                        new ConstantTableOperator(allocator, 2, List.of(
+                                row(10L, 1L),
+                                row(10L, 2L),
+                                row(20L, 3L)))));
+
+        Batch batch = operator.nextBatch();
+        int rowCount = batch.borrowMask().count();
+        assertThat(Arrays.copyOf(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(3L, 3L);
+        assertThat(Arrays.copyOf(((I64VectorWithNulls) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 1L);
     }
 }

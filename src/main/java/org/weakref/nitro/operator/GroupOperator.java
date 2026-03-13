@@ -17,6 +17,7 @@ import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -86,11 +87,11 @@ public class GroupOperator
             result = (I64Vector) allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, mask.count(), I64Vector::new);
 
             // TODO: support arbitrary types
-            I64Vector column = (I64Vector) source.column(groupByColumn);
+            long[] values = values(source.column(groupByColumn));
 
             for (int position : mask) {
                 // TODO: handle nulls
-                long value = column.values()[position];
+                long value = values[position];
                 long group = groups.size();
 
                 long existing = groups.putIfAbsent(value, group);
@@ -108,5 +109,14 @@ public class GroupOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private static long[] values(Vector vector)
+    {
+        return switch (vector) {
+            case I64Vector values -> values.values();
+            case I64VectorWithNulls values -> values.values();
+            default -> throw new IllegalArgumentException("Unsupported group-by vector: " + vector.getClass().getSimpleName());
+        };
     }
 }

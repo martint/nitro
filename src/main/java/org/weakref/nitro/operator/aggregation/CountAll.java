@@ -39,14 +39,14 @@ public class CountAll
     }
 
     @Override
-    public void accumulate(Vector state, int group, Mask mask, ColumnAccessor columns)
+    public void accumulate(Vector state, int group, Mask mask, StreamAccessor streams)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
         accumulate(stateVector, group, mask.count());
     }
 
     @Override
-    public void accumulate(Vector state, Vector groups, Mask mask, ColumnAccessor columns)
+    public void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams)
     {
         I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
         I64Vector groupVector = (I64Vector) groups;
