@@ -22,7 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class OutputOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OutputOperator");
     private final Allocator allocator;
@@ -44,6 +44,12 @@ public class OutputOperator
     }
 
     @Override
+    public int outputCount()
+    {
+        return columnCount();
+    }
+
+    @Override
     public Mask next()
     {
         done = true;
@@ -62,6 +68,13 @@ public class OutputOperator
         }
 
         return Mask.all(1);
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        return new Batch(batchMask, Output.lazyValues(() -> column(0)));
     }
 
     @Override

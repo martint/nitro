@@ -23,7 +23,7 @@ import java.util.Comparator;
 import java.util.PriorityQueue;
 
 public class TopNOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TopNOperator");
     private final Allocator allocator;
@@ -48,6 +48,12 @@ public class TopNOperator
     public int columnCount()
     {
         return source.columnCount();
+    }
+
+    @Override
+    public int outputCount()
+    {
+        return columnCount();
     }
 
     @Override
@@ -93,6 +99,18 @@ public class TopNOperator
 
         done = true;
         return Mask.range(0, count);
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     private void reorderBuffer(PriorityQueue<Entry> queue)

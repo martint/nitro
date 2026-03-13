@@ -19,7 +19,7 @@ import org.weakref.nitro.data.Vector;
 import static java.lang.Math.toIntExact;
 
 public class LimitOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private final long limit;
     private final Operator source;
@@ -39,6 +39,12 @@ public class LimitOperator
     }
 
     @Override
+    public int outputCount()
+    {
+        return columnCount();
+    }
+
+    @Override
     public Mask next()
     {
         Mask mask = source.next();
@@ -51,6 +57,18 @@ public class LimitOperator
         this.count += remaining;
 
         return mask;
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     @Override

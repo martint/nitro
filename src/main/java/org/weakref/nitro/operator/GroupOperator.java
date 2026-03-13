@@ -22,7 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
 public class GroupOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
     private final Allocator allocator;
@@ -51,11 +51,29 @@ public class GroupOperator
     }
 
     @Override
+    public int outputCount()
+    {
+        return columnCount();
+    }
+
+    @Override
     public Mask next()
     {
         filled = false;
         mask = source.next();
         return mask;
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     @Override

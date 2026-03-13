@@ -25,7 +25,7 @@ import java.util.Iterator;
 import java.util.List;
 
 public class NestedLoopJoinOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NestedLoopJoinOperator");
     private static final int BATCH_SIZE = 1024;
@@ -35,7 +35,7 @@ public class NestedLoopJoinOperator
     private final Operator inner;
 
     private boolean innerLoaded;
-    private final List<Batch> innerBatches = new ArrayList<>();
+    private final List<InnerBatch> innerBatches = new ArrayList<>();
     private long innerRowCount;
 
     private int currentInnerBatch;
@@ -66,6 +66,12 @@ public class NestedLoopJoinOperator
     public int columnCount()
     {
         return outer.columnCount() + inner.columnCount();
+    }
+
+    @Override
+    public int outputCount()
+    {
+        return columnCount();
     }
 
     @Override
@@ -147,6 +153,18 @@ public class NestedLoopJoinOperator
         return mask;
     }
 
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int column = outputIndex;
+            outputs[outputIndex] = Output.lazyValues(() -> column(column));
+        }
+        return new Batch(batchMask, outputs);
+    }
+
     private void joinWithInnerRow()
     {
         int outerColumnCount = outer.columnCount();
@@ -159,7 +177,7 @@ public class NestedLoopJoinOperator
                     innerBuffer[i],
                     0,
                     currentOuterMask.maxPosition() + 1,
-                    innerBatches.get(currentInnerBatch).columns[i],
+                    innerBatches.get(currentInnerBatch).columns()[i],
                     currentInnerPosition);
 
             result[i + outerColumnCount] = innerBuffer[i];
@@ -220,14 +238,14 @@ public class NestedLoopJoinOperator
 
                     if (outputPosition == BATCH_SIZE) {
                         outputPosition = 0;
-                        innerBatches.add(new Batch(columns, BATCH_SIZE));
+                        innerBatches.add(new InnerBatch(columns, BATCH_SIZE));
                         columns = allocateNewBatch(inner.columnCount());
                     }
                 }
             }
 
             if (outputPosition > 0) {
-                innerBatches.add(new Batch(columns, outputPosition));
+                innerBatches.add(new InnerBatch(columns, outputPosition));
             }
         }
     }
@@ -303,5 +321,5 @@ public class NestedLoopJoinOperator
 
     // TODO: could geeneralize (call it Chunk?) this to have a Mask instead. Not needed for NLJ, but might be useful
     //       for other operators
-    record Batch(Vector[] columns, int length) {}
+    record InnerBatch(Vector[] columns, int length) {}
 }

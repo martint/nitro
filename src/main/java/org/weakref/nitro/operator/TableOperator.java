@@ -19,7 +19,7 @@ import org.weakref.nitro.data.Vector;
 import java.util.List;
 
 public class TableOperator
-        implements Operator
+        implements Operator, BatchOperator
 {
     private final int columns;
     private final List<Page> pages;
@@ -39,6 +39,12 @@ public class TableOperator
     }
 
     @Override
+    public int outputCount()
+    {
+        return columnCount();
+    }
+
+    @Override
     public boolean hasNext()
     {
         return currentPage < pages.size() - 1;
@@ -49,6 +55,17 @@ public class TableOperator
     {
         currentPage++;
         return pages.get(currentPage).mask();
+    }
+
+    @Override
+    public Batch nextBatch()
+    {
+        Mask batchMask = next();
+        Output[] outputs = new Output[columnCount()];
+        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            outputs[outputIndex] = Output.values(column(outputIndex));
+        }
+        return new Batch(batchMask, outputs);
     }
 
     @Override
