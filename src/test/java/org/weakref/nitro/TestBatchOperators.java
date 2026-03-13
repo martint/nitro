@@ -16,7 +16,6 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -59,7 +58,7 @@ public class TestBatchOperators
         Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L)));
 
         Batch batch = operator.nextBatch();
-        assertThat(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
+        assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
     }
 
     @Test
@@ -137,8 +136,8 @@ public class TestBatchOperators
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))));
 
         Batch batch = operator.nextBatch();
-        assertThat(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
-        assertThat(((I64VectorWithNulls) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+        assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
+        assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
     }
 
     @Test
@@ -159,8 +158,8 @@ public class TestBatchOperators
 
         Batch batch = operator.nextBatch();
         int rowCount = batch.borrowMask().count();
-        assertThat(Arrays.copyOf(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(3L, 3L);
-        assertThat(Arrays.copyOf(((I64VectorWithNulls) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 1L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(3L, 3L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 1L);
     }
 
     @Test
@@ -212,8 +211,8 @@ public class TestBatchOperators
 
         Batch batch = operator.nextBatch();
         int rowCount = batch.borrowMask().count();
-        assertThat(Arrays.copyOf(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(1L, 2L);
-        assertThat(Arrays.copyOf(((I64VectorWithNulls) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(10L, 10L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(1L, 2L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(10L, 10L);
     }
 
     @Test

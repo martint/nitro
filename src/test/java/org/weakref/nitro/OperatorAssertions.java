@@ -18,11 +18,11 @@ import org.assertj.core.api.Descriptable;
 import org.assertj.core.description.Description;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -83,19 +83,21 @@ public class OperatorAssertions
                     continue;
                 }
 
-                List<Vector> columns = new ArrayList<>();
+                List<Output> columns = new ArrayList<>();
                 for (int i = 0; i < operator.outputCount(); i++) {
-                    columns.add(batch.output(i).borrow(Stream.VALUES));
+                    columns.add(batch.output(i));
                 }
 
                 for (int position : mask) {
                     Long[] row = new Long[columns.size()];
                     for (int i = 0; i < columns.size(); i++) {
-                        row[i] = switch (columns.get(i)) {
-                            case I64VectorWithNulls v -> v.nulls()[position] ? null : v.values()[position];
-                            case I64Vector v -> v.values()[position];
+                        Output output = columns.get(i);
+                        Vector values = output.borrow(Stream.VALUES);
+                        BooleanVector nulls = output.streams().contains(Stream.NULLS) ? (BooleanVector) output.borrow(Stream.NULLS) : null;
+                        row[i] = switch (values) {
+                            case I64Vector v -> nulls != null && nulls.values()[position] ? null : v.values()[position];
                             case BooleanVector v -> v.values()[position] ? 1L : 0L;
-                            default -> throw new UnsupportedOperationException(columns.get(i).getClass().getSimpleName());
+                            default -> throw new UnsupportedOperationException(values.getClass().getSimpleName());
                         };
                     }
 

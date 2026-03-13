@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.F64VectorWithNulls;
-import org.weakref.nitro.data.I64VectorWithNulls;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.Streams;
 
 import java.util.Arrays;
 
@@ -33,21 +35,27 @@ public class SumF64
     }
 
     @Override
-    public Vector allocate(int size)
+    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return new F64VectorWithNulls(size);
+        return Streams.ofValues((F64VectorWithNulls) allocator.allocate(allocationContext, size, F64VectorWithNulls::new));
     }
 
     @Override
-    public void initialize(Vector state, int offset, int length)
+    public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        Arrays.fill(((F64VectorWithNulls) state).nulls(), offset, offset + length, true);
+        return Streams.ofValues((F64VectorWithNulls) allocator.allocateOrGrow(allocationContext, state.values(), size, F64VectorWithNulls::new));
     }
 
     @Override
-    public void accumulate(Vector state, int group, Mask mask, StreamAccessor streams)
+    public void initialize(Streams state, int offset, int length)
     {
-        F64VectorWithNulls stateVector = (F64VectorWithNulls) state;
+        Arrays.fill(((F64VectorWithNulls) state.values()).nulls(), offset, offset + length, true);
+    }
+
+    @Override
+    public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
+    {
+        F64VectorWithNulls stateVector = (F64VectorWithNulls) state.values();
         F64VectorWithNulls inputVector = (F64VectorWithNulls) streams.values(inputColumn);
 
         boolean[] nulls = inputVector.nulls();
@@ -71,10 +79,10 @@ public class SumF64
     }
 
     @Override
-    public void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams)
+    public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
-        F64VectorWithNulls stateVector = (F64VectorWithNulls) state;
-        I64VectorWithNulls groupVector = (I64VectorWithNulls) groups;
+        F64VectorWithNulls stateVector = (F64VectorWithNulls) state.values();
+        I64Vector groupVector = (I64Vector) groups;
         F64VectorWithNulls inputVector = (F64VectorWithNulls) streams.values(inputColumn);
 
         if (mask.all()) {
@@ -98,7 +106,7 @@ public class SumF64
     }
 
     @Override
-    public Vector result(int maxGroup, Vector state, Vector output)
+    public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
     }

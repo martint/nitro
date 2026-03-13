@@ -14,7 +14,8 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64VectorWithNulls;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -53,9 +54,9 @@ public class OutputOperator
             Batch batch = source.nextBatch();
             Mask mask = batch.borrowMask();
 
-            List<Vector> columns = new ArrayList<>();
+            List<Output> columns = new ArrayList<>();
             for (int i = 0; i < source.outputCount(); i++) {
-                columns.add(batch.output(i).borrow(Stream.VALUES));
+                columns.add(batch.output(i));
             }
 
             for (int position : mask) {
@@ -79,24 +80,24 @@ public class OutputOperator
 
     private Vector resultVector()
     {
-        I64VectorWithNulls result = (I64VectorWithNulls) allocator.allocate(ALLOCATION_CONTEXT, 1, I64VectorWithNulls::new);
+        I64Vector result = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, 1, I64Vector::new);
         result.values()[0] = rowCount;
-        result.nulls()[0] = false;
-
         return result;
     }
 
-    private void outputRow(List<Vector> columns, int position)
+    private void outputRow(List<Output> columns, int position)
     {
         rowCount++;
         for (int column = 0; column < columns.size(); column++) {
-            I64VectorWithNulls block = (I64VectorWithNulls) columns.get(column);
+            Output block = columns.get(column);
+            I64Vector values = (I64Vector) block.borrow(Stream.VALUES);
+            BooleanVector nulls = block.streams().contains(Stream.NULLS) ? (BooleanVector) block.borrow(Stream.NULLS) : null;
 
-            if (block.nulls()[position]) {
+            if (nulls != null && nulls.values()[position]) {
                 System.out.print("null");
             }
             else {
-                System.out.print(block.values()[position]);
+                System.out.print(values.values()[position]);
             }
 
             if (column < columns.size() - 1) {

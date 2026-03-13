@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
@@ -30,7 +29,7 @@ public class AggregationOperator
     private final Operator source;
     private final List<Accumulator> aggregations;
 
-    private final Vector[] results;
+    private final Streams[] results;
     private Mask mask = Mask.all(1);
     private boolean filled;
     private boolean done;
@@ -41,10 +40,7 @@ public class AggregationOperator
         this.source = source;
         this.aggregations = aggregations;
 
-        results = new Vector[aggregations.size()];
-        for (int i = 0; i < results.length; i++) {
-            results[i] = allocator.allocate(ALLOCATION_CONTEXT, 1, aggregations.get(i)::allocate);
-        }
+        results = new Streams[aggregations.size()];
     }
 
     @Override
@@ -60,7 +56,7 @@ public class AggregationOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> resultVector(output));
+            outputs[outputIndex] = resultOutput(output);
         }
         return new Batch(mask, outputs);
     }
@@ -77,10 +73,10 @@ public class AggregationOperator
         this.mask = mask;
     }
 
-    private Vector resultVector(int output)
+    private Output resultOutput(int output)
     {
         doAggregationIfNeeded();
-        return results[output];
+        return Output.of(results[output]);
     }
 
     private void doAggregationIfNeeded()
@@ -88,9 +84,9 @@ public class AggregationOperator
         if (!filled && !mask.none()) {
             filled = true;
 
-            Vector[] state = new Vector[aggregations.size()];
+            Streams[] state = new Streams[aggregations.size()];
             for (int i = 0; i < state.length; i++) {
-                state[i] = allocator.allocate(ALLOCATION_CONTEXT, 1, aggregations.get(i)::allocate);
+                state[i] = aggregations.get(i).allocate(allocator, ALLOCATION_CONTEXT, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
             }
 
@@ -101,7 +97,7 @@ public class AggregationOperator
                 for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
                     Accumulator accumulator = aggregations.get(aggregation);
                     accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
-                    results[aggregation] = accumulator.result(1, state[aggregation], results[aggregation]);
+                    results[aggregation] = accumulator.result(1, state[aggregation], results[aggregation], allocator, ALLOCATION_CONTEXT);
                 }
             }
         }

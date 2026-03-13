@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -43,6 +44,11 @@ public final class Streams
     public static Streams ofValues(Vector values)
     {
         return of(Stream.VALUES, values);
+    }
+
+    public static Streams ofValuesAndNulls(Vector values, BooleanVector nulls)
+    {
+        return of(Stream.VALUES, values).with(Stream.NULLS, nulls);
     }
 
     public Streams with(Stream stream, Vector vector)

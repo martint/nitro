@@ -16,7 +16,6 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -34,7 +33,7 @@ public class GroupedAggregationOperator
     private final int groupColumn;
     private final List<Accumulator> aggregations;
     private final Operator source;
-    private final Vector[] result;
+    private final Streams[] result;
     private boolean done;
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
@@ -44,7 +43,7 @@ public class GroupedAggregationOperator
         this.aggregations = aggregations;
         this.source = source;
 
-        result = new Vector[aggregations.size()];
+        result = new Streams[aggregations.size()];
     }
 
     @Override
@@ -61,7 +60,7 @@ public class GroupedAggregationOperator
 
     private Mask computeResults()
     {
-        Vector[] states = new Vector[aggregations.size()];
+        Streams[] states = new Streams[aggregations.size()];
 
         long maxGroup = -1;
         while (source.hasNext()) {
@@ -85,16 +84,16 @@ public class GroupedAggregationOperator
             for (int i = 0; i < aggregations.size(); i++) {
                 Accumulator accumulator = aggregations.get(i);
 
-                states[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, states[i], newCapacity, accumulator::allocate);
+                states[i] = states[i] == null
+                        ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
+                        : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[i], newCapacity);
                 accumulator.initialize(states[i], toIntExact(previousMaxGroup + 1), toIntExact(maxGroup - previousMaxGroup));
                 accumulator.accumulate(states[i], group, mask, StreamAccessors.forBatch(batch));
             }
         }
 
-        int newCapacity = Allocator.computeCapacity(toIntExact(maxGroup + 1));
         for (int i = 0; i < result.length; i++) {
-            result[i] = allocator.allocateOrGrow(ALLOCATION_CONTEXT, result[i], newCapacity, aggregations.get(i)::allocate);
-            result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i]);
+            result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i], allocator, ALLOCATION_CONTEXT);
         }
 
         done = true;
@@ -110,7 +109,7 @@ public class GroupedAggregationOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> resultVector(output));
+            outputs[outputIndex] = resultOutput(output);
         }
         return new Batch(batchMask, outputs);
     }
@@ -121,9 +120,9 @@ public class GroupedAggregationOperator
         // Nothing to do. All output is already computed
     }
 
-    private Vector resultVector(int output)
+    private Output resultOutput(int output)
     {
-        return result[output];
+        return Output.of(result[output]);
     }
 
     @Override

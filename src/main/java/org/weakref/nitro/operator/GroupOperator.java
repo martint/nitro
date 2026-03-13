@@ -17,7 +17,6 @@ import it.unimi.dsi.fastutil.longs.Long2LongMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -125,7 +124,6 @@ public class GroupOperator
     {
         return switch (vector) {
             case I64Vector values -> values.values();
-            case I64VectorWithNulls values -> values.values();
             default -> throw new IllegalArgumentException("Unsupported group-by vector: " + vector.getClass().getSimpleName());
         };
     }

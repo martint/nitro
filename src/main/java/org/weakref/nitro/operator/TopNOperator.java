@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -146,7 +145,6 @@ public class TopNOperator
     {
         return switch (v) {
             case I64Vector iv -> iv.values();
-            case I64VectorWithNulls iv -> iv.values();
             default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
         };
     }

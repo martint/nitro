@@ -13,18 +13,22 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.Streams;
 
 public interface Accumulator
 {
-    Vector allocate(int size);
+    Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size);
 
-    void initialize(Vector state, int offset, int length);
+    Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size);
 
-    void accumulate(Vector state, int group, Mask mask, StreamAccessor streams);
+    void initialize(Streams state, int offset, int length);
 
-    void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams);
+    void accumulate(Streams state, int group, Mask mask, StreamAccessor streams);
 
-    Vector result(int maxGroup, Vector state, Vector output);
+    void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams);
+
+    Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext);
 }

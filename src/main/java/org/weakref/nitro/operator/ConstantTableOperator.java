@@ -14,10 +14,10 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64VectorWithNulls;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.data.Vector;
 
 import java.util.List;
 
@@ -27,29 +27,31 @@ public class ConstantTableOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ConstantTableOperator");
     private final Allocator allocator;
 
-    private final Vector[] columns;
+    private final I64Vector[] columns;
+    private final BooleanVector[] nulls;
     private final int count;
     private boolean done;
 
     public ConstantTableOperator(Allocator allocator, int columnCount, List<Row> rows)
     {
         this.allocator = allocator;
-        columns = new Vector[columnCount];
+        columns = new I64Vector[columnCount];
+        nulls = new BooleanVector[columnCount];
         for (int i = 0; i < columns.length; i++) {
-            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, rows.size(), I64VectorWithNulls::new);
+            columns[i] = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, rows.size(), I64Vector::new);
+            nulls[i] = (BooleanVector) allocator.allocate(ALLOCATION_CONTEXT, rows.size(), BooleanVector::new);
         }
 
         for (int position = 0; position < rows.size(); position++) {
             Row row = rows.get(position);
             Long[] values = row.values();
             for (int column = 0; column < values.length; column++) {
-                I64VectorWithNulls vector = (I64VectorWithNulls) columns[column];
                 if (values[column] == null) {
-                    vector.nulls()[position] = true;
+                    nulls[column].values()[position] = true;
                 }
                 else {
-                    vector.nulls()[position] = false;
-                    vector.values()[position] = values[column];
+                    nulls[column].values()[position] = false;
+                    columns[column].values()[position] = values[column];
                 }
             }
         }
@@ -75,7 +77,7 @@ public class ConstantTableOperator
         done = true;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = Output.values(columns[outputIndex]);
+            outputs[outputIndex] = Output.of(Streams.ofValuesAndNulls(columns[outputIndex], nulls[outputIndex]));
         }
         return new Batch(Mask.all(count), outputs);
     }

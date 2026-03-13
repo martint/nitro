@@ -17,7 +17,6 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -83,17 +82,16 @@ public class TestBatchRuntime
         Output firstOutput = batch.output(0);
         Output secondOutput = batch.output(1);
 
-        assertThat(((I64VectorWithNulls) firstOutput.borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
-        assertThat(((I64VectorWithNulls) firstOutput.borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
-        assertThat(((I64VectorWithNulls) secondOutput.take(Stream.VALUES)).values()).containsExactly(10L, 20L, 30L);
+        assertThat(((I64Vector) firstOutput.borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
+        assertThat(((I64Vector) firstOutput.borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
+        assertThat(((I64Vector) secondOutput.take(Stream.VALUES)).values()).containsExactly(10L, 20L, 30L);
+
+        assertThat(((BooleanVector) firstOutput.borrow(Stream.NULLS)).values()).containsExactly(false, false, false);
+        assertThat(((BooleanVector) secondOutput.borrow(Stream.NULLS)).values()).containsExactly(false, false, false);
 
         assertThatThrownBy(() -> secondOutput.borrow(Stream.VALUES))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("already taken");
-
-        assertThatThrownBy(() -> firstOutput.borrow(Stream.NULLS))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("does not expose stream");
 
         operator.close();
     }

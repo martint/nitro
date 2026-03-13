@@ -13,10 +13,13 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 
@@ -26,36 +29,47 @@ public class CountAll
         implements Accumulator
 {
     @Override
-    public Vector allocate(int size)
+    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return new I64VectorWithNulls(size);
+        return Streams.ofValuesAndNulls(
+                (I64Vector) allocator.allocate(allocationContext, size, I64Vector::new),
+                (BooleanVector) allocator.allocate(allocationContext, size, BooleanVector::new));
     }
 
     @Override
-    public void initialize(Vector state, int offset, int length)
+    public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        Arrays.fill(((I64VectorWithNulls) state).nulls(), offset, offset + length, false);
-        Arrays.fill(((I64VectorWithNulls) state).values(), offset, offset + length, 0L);
+        I64Vector values = (I64Vector) allocator.allocateOrGrow(allocationContext, state.values(), size, I64Vector::new);
+        BooleanVector nulls = (BooleanVector) allocator.allocateOrGrow(allocationContext, state.get(Stream.NULLS), size, BooleanVector::new);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     @Override
-    public void accumulate(Vector state, int group, Mask mask, StreamAccessor streams)
+    public void initialize(Streams state, int offset, int length)
     {
-        I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
+        I64Vector stateVector = (I64Vector) state.values();
+        BooleanVector nulls = (BooleanVector) state.get(Stream.NULLS);
+        Arrays.fill(nulls.values(), offset, offset + length, false);
+        Arrays.fill(stateVector.values(), offset, offset + length, 0L);
+    }
+
+    @Override
+    public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
+    {
+        I64Vector stateVector = (I64Vector) state.values();
         accumulate(stateVector, group, mask.count());
     }
 
     @Override
-    public void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams)
+    public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
-        I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
+        I64Vector stateVector = (I64Vector) state.values();
         I64Vector groupVector = (I64Vector) groups;
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
                 stateVector.values()[group] += 1;
-                stateVector.nulls()[group] = false;
             }
         }
         else {
@@ -66,14 +80,13 @@ public class CountAll
         }
     }
 
-    private static void accumulate(I64VectorWithNulls stateVector, int group, int count)
+    private static void accumulate(I64Vector stateVector, int group, int count)
     {
         stateVector.values()[group] += count;
-        stateVector.nulls()[group] = false;
     }
 
     @Override
-    public Vector result(int maxGroup, Vector state, Vector output)
+    public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
     }

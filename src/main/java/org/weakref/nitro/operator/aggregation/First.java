@@ -13,11 +13,12 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
@@ -35,51 +36,63 @@ public class First
     }
 
     @Override
-    public Vector allocate(int size)
+    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return new I64VectorWithNulls(size);
+        return Streams.ofValuesAndNulls(
+                (I64Vector) allocator.allocate(allocationContext, size, I64Vector::new),
+                (BooleanVector) allocator.allocate(allocationContext, size, BooleanVector::new));
     }
 
     @Override
-    public void initialize(Vector state, int offset, int length)
+    public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        Arrays.fill(((I64VectorWithNulls) state).nulls(), offset, offset + length, true);
+        I64Vector values = (I64Vector) allocator.allocateOrGrow(allocationContext, state.values(), size, I64Vector::new);
+        BooleanVector nulls = (BooleanVector) allocator.allocateOrGrow(allocationContext, state.get(Stream.NULLS), size, BooleanVector::new);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     @Override
-    public void accumulate(Vector state, int group, Mask mask, StreamAccessor streams)
+    public void initialize(Streams state, int offset, int length)
     {
-        I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
+        Arrays.fill(((BooleanVector) state.get(Stream.NULLS)).values(), offset, offset + length, true);
+    }
+
+    @Override
+    public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
+    {
+        I64Vector stateValues = (I64Vector) state.values();
+        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         long[] inputValues = values(streams.values(inputColumn));
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
-            if (stateVector.nulls()[group]) {
-                stateVector.values()[group] = inputValues[position];
-                stateVector.nulls()[group] = isNull(inputNulls, position);
+            if (stateNulls.values()[group]) {
+                stateValues.values()[group] = inputValues[position];
+                stateNulls.values()[group] = isNull(inputNulls, position);
             }
         }
     }
 
     @Override
-    public void accumulate(Vector state, Vector groups, Mask mask, StreamAccessor streams)
+    public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
-        I64VectorWithNulls stateVector = (I64VectorWithNulls) state;
+        I64Vector stateValues = (I64Vector) state.values();
+        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
         long[] inputValues = values(streams.values(inputColumn));
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
-            if (stateVector.nulls()[group]) {
-                stateVector.values()[group] = inputValues[position];
-                stateVector.nulls()[group] = isNull(inputNulls, position);
+            if (stateNulls.values()[group]) {
+                stateValues.values()[group] = inputValues[position];
+                stateNulls.values()[group] = isNull(inputNulls, position);
             }
         }
     }
 
     @Override
-    public Vector result(int maxGroup, Vector state, Vector output)
+    public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
     }
@@ -88,7 +101,6 @@ public class First
     {
         return switch (v) {
             case I64Vector iv -> iv.values();
-            case I64VectorWithNulls iv -> iv.values();
             default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
         };
     }
@@ -98,7 +110,6 @@ public class First
         return switch (v) {
             case null -> null;
             case BooleanVector vector -> vector.values();
-            case I64VectorWithNulls vector -> vector.nulls();
             default -> null;
         };
     }
