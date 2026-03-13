@@ -78,10 +78,7 @@ public final class I64BinaryVectorSupport
 
     public static long[] i64Values(Vector vector)
     {
-        return switch (vector) {
-            case I64Vector values -> values.values();
-            default -> throw new IllegalArgumentException("Unsupported i64 vector: " + vector.getClass().getSimpleName());
-        };
+        return ((I64Vector) vector).values();
     }
 
     private static I64Vector allocateLongOutput(Vector output, Mask mask, int defaultLength, PrimitiveExecutionContext context, Allocator.Context allocationContext)

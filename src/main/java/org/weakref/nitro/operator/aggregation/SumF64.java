@@ -120,19 +120,12 @@ public class SumF64
 
     private static double[] values(Vector vector)
     {
-        return switch (vector) {
-            case F64Vector values -> values.values();
-            default -> throw new UnsupportedOperationException(vector.getClass().getSimpleName());
-        };
+        return ((F64Vector) vector).values();
     }
 
     private static boolean[] nulls(Vector vector)
     {
-        return switch (vector) {
-            case null -> null;
-            case BooleanVector nulls -> nulls.values();
-            default -> null;
-        };
+        return vector == null ? null : ((BooleanVector) vector).values();
     }
 
     private static boolean isNull(boolean[] nulls, int position)

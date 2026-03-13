@@ -115,19 +115,12 @@ public class Sum
 
     private static long[] values(Vector v)
     {
-        return switch (v) {
-            case I64Vector iv -> iv.values();
-            default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
-        };
+        return ((I64Vector) v).values();
     }
 
     private static boolean[] nulls(Vector v)
     {
-        return switch (v) {
-            case null -> null;
-            case BooleanVector vector -> vector.values();
-            default -> null;
-        };
+        return v == null ? null : ((BooleanVector) v).values();
     }
 
     private static boolean isNull(boolean[] nulls, int position)

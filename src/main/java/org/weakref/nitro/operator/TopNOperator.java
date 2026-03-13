@@ -143,10 +143,7 @@ public class TopNOperator
 
     private static long[] values(Vector v)
     {
-        return switch (v) {
-            case I64Vector iv -> iv.values();
-            default -> throw new UnsupportedOperationException(v.getClass().getSimpleName());
-        };
+        return ((I64Vector) v).values();
     }
 
     @Override

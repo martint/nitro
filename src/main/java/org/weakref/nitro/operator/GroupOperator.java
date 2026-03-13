@@ -122,9 +122,6 @@ public class GroupOperator
 
     private static long[] values(Vector vector)
     {
-        return switch (vector) {
-            case I64Vector values -> values.values();
-            default -> throw new IllegalArgumentException("Unsupported group-by vector: " + vector.getClass().getSimpleName());
-        };
+        return ((I64Vector) vector).values();
     }
 }

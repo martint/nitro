@@ -96,11 +96,7 @@ public class CountColumn
 
     private static boolean[] nulls(Vector v)
     {
-        return switch (v) {
-            case null -> null;
-            case BooleanVector vector -> vector.values();
-            default -> null;
-        };
+        return v == null ? null : ((BooleanVector) v).values();
     }
 
     private static boolean isNull(boolean[] nulls, int position)
