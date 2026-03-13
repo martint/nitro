@@ -58,6 +58,11 @@ streams such as:
 Additional streams may be introduced later if needed, but the key idea is that
 nullability and error state are not hidden inside value vectors.
 
+When a logical output does not expose a `NULLS` stream, that should mean "all
+rows are non-null" for that batch rather than "nullability is unknown." This
+keeps absence of the null stream a valid fast path instead of forcing operators
+to synthesize all-false null vectors eagerly.
+
 ### Vectors are physical encodings
 
 Vectors represent a single stream in some physical layout.
@@ -68,6 +73,10 @@ Examples:
 - `ConstantVector`
 - `RleVector`
 - future `DictionaryVector`
+
+Nitro should provide builtin flat vectors for common physical types such as
+`I64`, `I32`, `F64`, and boolean, while still allowing custom vector
+implementations outside a closed builtin type list.
 
 Vectors should not be forced to embed nullability. A null stream is just
 another vector, typically a boolean-typed one.
@@ -88,8 +97,8 @@ As a result:
 
 - plans should express required capabilities and allowed behaviors, not fixed
   vector representations
-- primitive functions should advertise which encodings they can consume or
-  preserve
+- primitive functions and framework callbacks should cooperate on representation
+  adaptation without forcing the planner to predict every transition in advance
 - materialization decisions may be made per batch based on the execution path
   taken for that batch
 
@@ -491,6 +500,11 @@ boundary.
 The contract should also permit operators to preserve compact encodings such as
 constant, RLE, and dictionary when downstream consumers can operate on them.
 
+Even when a batch has zero active rows, the batch object should still expose a
+valid shape: the mask may be empty, but the outputs themselves must be
+well-formed and borrowable for the lifetime of that batch. Empty batches should
+not use `null` output placeholders.
+
 ### Semantics
 
 - `Batch` represents one current batch of output from the operator.
@@ -652,6 +666,21 @@ interface PrimitiveFunction
 
 This is illustrative only, but the chosen signature should make output reuse
 and masked writes part of the contract rather than implicit behavior.
+
+### Type-system independence
+
+Scalar registration at this layer should remain independent of any frontend
+type system such as SQL types.
+
+In particular:
+
+- scalar declarations should not require SQL type names
+- function identity should be separate from frontend type binding
+- builtin vectors may provide common physical carrier types, but the scalar
+  layer should not assume a closed global type list
+
+Frontend-specific typing can be layered on top later without leaking those type
+names into Nitro's core execution and function-registration contracts.
 
 ### Framework callbacks
 
@@ -907,6 +936,17 @@ Examples:
   indirection when possible
 - flattening should be the fallback, not the default
 
+At a minimum, builtin numeric and boolean operations should handle:
+
+- flat plus flat
+- flat plus RLE
+- RLE plus flat
+- RLE plus RLE
+
+More advanced encodings such as dictionary can still grow incrementally, but
+support for flat and RLE combinations is the minimum bar for saying execution
+is genuinely encoding-aware.
+
 This applies equally to scalar functions, predicate functions, and any future
 merge-like evaluator operations.
 
@@ -1049,6 +1089,10 @@ This is again illustrative. The key properties are:
 - group and non-group accumulation share the same semantic model
 - accumulators should preserve input encodings when possible and flatten only as
   a fallback
+
+Aggregate state should follow the same stream model as operator outputs: a
+state slot may have `VALUES`, `NULLS`, and other streams as needed, rather than
+reintroducing nullable wrapper vectors internally.
 
 ### State versus output
 
