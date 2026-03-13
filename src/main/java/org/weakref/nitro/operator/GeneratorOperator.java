@@ -23,7 +23,7 @@ import java.util.List;
 import static java.lang.Math.toIntExact;
 
 public class GeneratorOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final int DEFAULT_BATCH_SIZE = 1024 * 10;
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GeneratorOperator");

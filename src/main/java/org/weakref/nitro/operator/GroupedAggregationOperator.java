@@ -26,18 +26,18 @@ import java.util.List;
 import static java.lang.Math.toIntExact;
 
 public class GroupedAggregationOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
 
     private final int groupColumn;
     private final List<Accumulator> aggregations;
-    private final BatchOperator source;
+    private final Operator source;
     private final Vector[] result;
     private boolean done;
 
-    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, BatchOperator source)
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
         this.allocator = allocator;
         this.groupColumn = groupColumn;

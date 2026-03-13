@@ -22,7 +22,7 @@ import org.weakref.nitro.data.Vector;
 import java.util.List;
 
 public class ConstantTableOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ConstantTableOperator");
     private final Allocator allocator;

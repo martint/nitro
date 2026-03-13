@@ -19,7 +19,6 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
-import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -27,6 +26,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
@@ -56,7 +56,7 @@ public class TestBatchOperators
     void testConstantTableOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L)));
+        Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L)));
 
         Batch batch = operator.nextBatch();
         assertThat(((I64VectorWithNulls) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
@@ -66,7 +66,7 @@ public class TestBatchOperators
     void testGeneratorOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(10)));
+        Operator operator = new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(10)));
 
         Batch batch = operator.nextBatch();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(10L, 11L, 12L, 13L, 14L);
@@ -87,7 +87,7 @@ public class TestBatchOperators
                         AllMask.ALL)),
                 List.of(new Reference(new Variable(0), Stream.VALUES)));
 
-        BatchOperator operator = new ProjectOperator(
+        Operator operator = new ProjectOperator(
                 allocator,
                 evaluationPlan,
                 primitiveRegistry,
@@ -115,7 +115,7 @@ public class TestBatchOperators
                                 AllMask.ALL)),
                 List.of(new Reference(predicate, Stream.VALUES)));
 
-        BatchOperator operator = new FilterOperator(
+        Operator operator = new FilterOperator(
                 new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))),
                 evaluationPlan,
                 primitiveRegistry,
@@ -131,7 +131,7 @@ public class TestBatchOperators
     void testAggregationOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new AggregationOperator(
+        Operator operator = new AggregationOperator(
                 allocator,
                 List.of(new Sum(0), new CountAll()),
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))));
@@ -145,7 +145,7 @@ public class TestBatchOperators
     void testGroupedAggregationOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new GroupedAggregationOperator(
+        Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(new Sum(2), new CountAll()),
@@ -167,7 +167,7 @@ public class TestBatchOperators
     void testLimitOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new LimitOperator(3, new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))));
+        Operator operator = new LimitOperator(3, new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))));
 
         Batch batch = operator.nextBatch();
         assertThat(batch.borrowMask().count()).isEqualTo(3);
@@ -178,7 +178,7 @@ public class TestBatchOperators
     void testGroupOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new GroupOperator(
+        Operator operator = new GroupOperator(
                 allocator,
                 0,
                 new ConstantTableOperator(allocator, 1, List.of(row(10L), row(10L), row(20L))));
@@ -191,7 +191,7 @@ public class TestBatchOperators
     void testTopNOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new TopNOperator(
+        Operator operator = new TopNOperator(
                 allocator,
                 2,
                 0,
@@ -205,7 +205,7 @@ public class TestBatchOperators
     void testNestedLoopJoinOperatorExposesBatchApi()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new NestedLoopJoinOperator(
+        Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L))),
                 new ConstantTableOperator(allocator, 1, List.of(row(10L), row(20L))));
@@ -219,7 +219,7 @@ public class TestBatchOperators
     @Test
     void testTableOperatorExposesBatchApi()
     {
-        BatchOperator operator = new TableOperator(
+        Operator operator = new TableOperator(
                 1,
                 List.of(new TableOperator.Page(
                         2,

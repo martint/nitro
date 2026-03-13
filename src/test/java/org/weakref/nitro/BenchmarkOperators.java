@@ -27,11 +27,11 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
-import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
@@ -64,7 +64,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(1_000_000_000)
     public void aggregationCountAll()
     {
-        BatchOperator operator = new AggregationOperator(
+        Operator operator = new AggregationOperator(
                 allocator,
                 List.of(new CountAll()),
                 new GeneratorOperator(
@@ -79,7 +79,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(1_000_000_000)
     public void aggregationCount()
     {
-        BatchOperator operator = new AggregationOperator(
+        Operator operator = new AggregationOperator(
                 allocator,
                 List.of(new CountColumn(0)),
                 new GeneratorOperator(
@@ -94,7 +94,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(100_000_000)
     public void groupBy()
     {
-        BatchOperator operator = new GroupedAggregationOperator(
+        Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(new CountAll()),
@@ -110,7 +110,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(100_000)
     public void group()
     {
-        BatchOperator operator = new GroupOperator(
+        Operator operator = new GroupOperator(
                 allocator,
                 0,
                 new GeneratorOperator(
@@ -135,7 +135,7 @@ public class BenchmarkOperators
                         AllMask.ALL)),
                 List.of(new Reference(projected, Stream.VALUES)));
 
-        BatchOperator operator = new ProjectOperator(
+        Operator operator = new ProjectOperator(
                 allocator,
                 evaluationPlan,
                 primitiveRegistry,
@@ -151,7 +151,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(25_000 * 25_000)
     public void nestedLoopJoin()
     {
-        BatchOperator operator = new NestedLoopJoinOperator(
+        Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new GeneratorOperator(
                         allocator,
@@ -169,7 +169,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(3_000 * 500_000)
     public void nestedLoopJoinSmallVsLarge()
     {
-        BatchOperator operator = new NestedLoopJoinOperator(
+        Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new GeneratorOperator(
                         allocator,
@@ -187,7 +187,7 @@ public class BenchmarkOperators
     @OperationsPerInvocation(3_000 * 500_000)
     public void nestedLoopJoinLargeVsSmall()
     {
-        BatchOperator operator = new NestedLoopJoinOperator(
+        Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new GeneratorOperator(
                         allocator,
@@ -201,7 +201,7 @@ public class BenchmarkOperators
         consume(operator);
     }
 
-    private static void consume(BatchOperator operator)
+    private static void consume(Operator operator)
     {
         while (operator.hasNext()) {
             var batch = operator.nextBatch();

@@ -24,20 +24,20 @@ import java.util.Comparator;
 import java.util.PriorityQueue;
 
 public class TopNOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TopNOperator");
     private final Allocator allocator;
 
     private final int n;
     private final int column;
-    private final BatchOperator source;
+    private final Operator source;
 
     private final Vector[] result;
     private boolean done;
     private Batch currentBatch;
 
-    public TopNOperator(Allocator allocator, int n, int column, BatchOperator source)
+    public TopNOperator(Allocator allocator, int n, int column, Operator source)
     {
         this.allocator = allocator;
         this.n = n;

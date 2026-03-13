@@ -23,16 +23,16 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 public class FilterOperator
-        implements BatchOperator
+        implements Operator
 {
-    private final BatchOperator source;
+    private final Operator source;
     private final PlanEvaluator planEvaluator;
     private final Reference predicateReference;
 
     private Batch currentBatch;
     private Mask mask;
 
-    public FilterOperator(BatchOperator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
+    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
     {
         this.source = source;
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> currentBatch.output(index).borrow(Stream.VALUES), allocator);

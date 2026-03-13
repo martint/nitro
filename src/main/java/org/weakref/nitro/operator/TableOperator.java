@@ -19,7 +19,7 @@ import org.weakref.nitro.data.Vector;
 import java.util.List;
 
 public class TableOperator
-        implements BatchOperator
+        implements Operator
 {
     private final int columns;
     private final List<Page> pages;

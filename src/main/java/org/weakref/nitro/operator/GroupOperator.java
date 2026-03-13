@@ -23,13 +23,13 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 public class GroupOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
     private final Allocator allocator;
 
     private final int groupByColumn;
-    private final BatchOperator source;
+    private final Operator source;
 
     private final Long2LongMap groups = new Long2LongOpenHashMap();
     private boolean filled;
@@ -37,7 +37,7 @@ public class GroupOperator
     private Mask mask;
     private I64Vector result;
 
-    public GroupOperator(Allocator allocator, int groupByColumn, BatchOperator source)
+    public GroupOperator(Allocator allocator, int groupByColumn, Operator source)
     {
         this.allocator = allocator;
         this.groupByColumn = groupByColumn;

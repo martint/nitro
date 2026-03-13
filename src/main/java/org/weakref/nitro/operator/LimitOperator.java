@@ -18,16 +18,16 @@ import org.weakref.nitro.data.Mask;
 import static java.lang.Math.toIntExact;
 
 public class LimitOperator
-        implements BatchOperator
+        implements Operator
 {
     private final long limit;
-    private final BatchOperator source;
+    private final Operator source;
 
     private long count;
     private Batch currentBatch;
     private Mask currentMask;
 
-    public LimitOperator(long limit, BatchOperator source)
+    public LimitOperator(long limit, Operator source)
     {
         this.limit = limit;
         this.source = source;

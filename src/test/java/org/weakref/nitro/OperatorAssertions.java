@@ -22,7 +22,7 @@ import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
-import org.weakref.nitro.operator.BatchOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -34,7 +34,7 @@ public class OperatorAssertions
 {
     private OperatorAssertions() {}
 
-    public static AssertProvider<OperatorAssert> operator(BatchOperator operator)
+    public static AssertProvider<OperatorAssert> operator(Operator operator)
     {
         return () -> new OperatorAssert(operator);
     }
@@ -42,10 +42,10 @@ public class OperatorAssertions
     public static class OperatorAssert
             implements Descriptable<OperatorAssert>
     {
-        private final BatchOperator operator;
+        private final Operator operator;
         private Description description;
 
-        public OperatorAssert(BatchOperator operator)
+        public OperatorAssert(Operator operator)
         {
             this.operator = operator;
         }
@@ -73,7 +73,7 @@ public class OperatorAssertions
                     .containsExactlyInAnyOrderElementsOf(expected);
         }
 
-        public static List<Row> toRows(BatchOperator operator)
+        public static List<Row> toRows(Operator operator)
         {
             List<Row> result = new ArrayList<>();
             while (operator.hasNext()) {

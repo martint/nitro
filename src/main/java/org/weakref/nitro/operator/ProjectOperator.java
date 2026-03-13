@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Set;
 
 public class ProjectOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
@@ -34,11 +34,11 @@ public class ProjectOperator
     private final PlanEvaluator planEvaluator;
     private final List<Reference> outputReferences;
 
-    private final BatchOperator source;
+    private final Operator source;
     private Batch currentBatch;
     private Mask mask;
 
-    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, BatchOperator source)
+    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         this.allocator = allocator;
         this.source = source;

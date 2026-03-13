@@ -15,7 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Mask;
 
-public interface BatchOperator
+public interface Operator
         extends AutoCloseable
 {
     int outputCount();

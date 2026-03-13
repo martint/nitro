@@ -22,12 +22,12 @@ import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import java.util.List;
 
 public class AggregationOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AggregationOperator");
     private final Allocator allocator;
 
-    private final BatchOperator source;
+    private final Operator source;
     private final List<Accumulator> aggregations;
 
     private final Vector[] results;
@@ -35,7 +35,7 @@ public class AggregationOperator
     private boolean filled;
     private boolean done;
 
-    public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, BatchOperator source)
+    public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
         this.allocator = allocator;
         this.source = source;

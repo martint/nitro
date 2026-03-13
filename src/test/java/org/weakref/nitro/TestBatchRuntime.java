@@ -20,8 +20,8 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.I64VectorWithNulls;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
-import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -66,10 +66,10 @@ public class TestBatchRuntime
     }
 
     @Test
-    void testBatchOperatorOutputsRespectBorrowAndTakeSemantics()
+    void testOperatorOutputsRespectBorrowAndTakeSemantics()
     {
         Allocator allocator = new Allocator();
-        BatchOperator operator = new ConstantTableOperator(
+        Operator operator = new ConstantTableOperator(
                 allocator,
                 2,
                 List.of(

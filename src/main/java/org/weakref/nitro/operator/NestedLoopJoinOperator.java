@@ -26,14 +26,14 @@ import java.util.Iterator;
 import java.util.List;
 
 public class NestedLoopJoinOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NestedLoopJoinOperator");
     private static final int BATCH_SIZE = 1024;
 
     private final Allocator allocator;
-    private final BatchOperator outer;
-    private final BatchOperator inner;
+    private final Operator outer;
+    private final Operator inner;
 
     private boolean innerLoaded;
     private final List<InnerBatch> innerBatches = new ArrayList<>();
@@ -54,7 +54,7 @@ public class NestedLoopJoinOperator
 
     private boolean done;
 
-    public NestedLoopJoinOperator(Allocator allocator, BatchOperator outer, BatchOperator inner)
+    public NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner)
     {
         this.allocator = allocator;
         this.outer = outer;

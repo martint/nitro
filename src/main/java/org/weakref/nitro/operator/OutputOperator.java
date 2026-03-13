@@ -23,16 +23,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class OutputOperator
-        implements BatchOperator
+        implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OutputOperator");
     private final Allocator allocator;
 
-    private final BatchOperator source;
+    private final Operator source;
     private boolean done;
     private long rowCount;
 
-    public OutputOperator(Allocator allocator, BatchOperator source)
+    public OutputOperator(Allocator allocator, Operator source)
     {
         this.allocator = allocator;
         this.source = source;

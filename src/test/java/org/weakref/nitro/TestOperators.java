@@ -20,7 +20,6 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
-import org.weakref.nitro.operator.BatchOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -28,6 +27,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -765,7 +765,7 @@ public class TestOperators
                         row(9L, 162L, -81L)));
     }
 
-    private FilterOperator filterDivisibleBy(BatchOperator source, int inputColumn, long divisor, PrimitiveRegistry primitiveRegistry)
+    private FilterOperator filterDivisibleBy(Operator source, int inputColumn, long divisor, PrimitiveRegistry primitiveRegistry)
     {
         Variable divisorLiteral = new Variable(0);
         Variable remainder = new Variable(1);
@@ -782,7 +782,7 @@ public class TestOperators
         return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
     }
 
-    private FilterOperator filterLessThanOrGreaterThan(BatchOperator source, int inputColumn, long lowerBound, long upperBound, PrimitiveRegistry primitiveRegistry)
+    private FilterOperator filterLessThanOrGreaterThan(Operator source, int inputColumn, long lowerBound, long upperBound, PrimitiveRegistry primitiveRegistry)
     {
         Variable lowerLiteral = new Variable(0);
         Variable upperLiteral = new Variable(1);
