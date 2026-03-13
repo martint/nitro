@@ -37,12 +37,12 @@ public class GroupedAggregationOperator
     private final Vector[] result;
     private boolean done;
 
-    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, BatchOperator source)
     {
         this.allocator = allocator;
         this.groupColumn = groupColumn;
         this.aggregations = aggregations;
-        this.source = source instanceof BatchOperator batchOperator ? batchOperator : new LegacyBatchOperatorAdapter(source);
+        this.source = source;
 
         result = new Vector[aggregations.size()];
     }

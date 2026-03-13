@@ -35,10 +35,10 @@ public class AggregationOperator
     private boolean filled;
     private boolean done;
 
-    public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
+    public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, BatchOperator source)
     {
         this.allocator = allocator;
-        this.source = source instanceof BatchOperator batchOperator ? batchOperator : new LegacyBatchOperatorAdapter(source);
+        this.source = source;
         this.aggregations = aggregations;
 
         results = new Vector[aggregations.size()];
