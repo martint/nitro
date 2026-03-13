@@ -13,41 +13,38 @@
  */
 package org.weakref.nitro.data;
 
-@Deprecated
-public class I32VectorWithNulls
+import java.util.Arrays;
+
+public class F64Vector
         implements FlatVector
 {
-    private final boolean[] nulls;
-    private final int[] values;
+    private final double[] values;
 
-    public I32VectorWithNulls(int size)
+    public F64Vector(int size)
     {
-        this(new boolean[size], new int[size]);
+        this(new double[size]);
     }
 
-    I32VectorWithNulls(boolean[] nulls, int[] values)
+    public F64Vector(double[] values)
     {
-        this.nulls = nulls;
         this.values = values;
     }
 
     @Override
     public Vector copy(int size)
     {
-        return new I32VectorWithNulls(
-                java.util.Arrays.copyOf(nulls, size),
-                java.util.Arrays.copyOf(values, size));
+        return new F64Vector(Arrays.copyOf(values, size));
     }
 
-    @Deprecated
-    public boolean[] nulls()
-    {
-        return nulls;
-    }
-
-    public int[] values()
+    public double[] values()
     {
         return values;
+    }
+
+    @Override
+    public int length()
+    {
+        return values.length;
     }
 
     @Override
@@ -57,8 +54,8 @@ public class I32VectorWithNulls
     }
 
     @Override
-    public int length()
+    public String toString()
     {
-        return values.length;
+        return "F64Vector" + Arrays.toString(values);
     }
 }

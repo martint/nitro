@@ -14,11 +14,13 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.F64VectorWithNulls;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 
@@ -37,77 +39,104 @@ public class SumF64
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return Streams.ofValues((F64VectorWithNulls) allocator.allocate(allocationContext, size, F64VectorWithNulls::new));
+        return Streams.ofValuesAndNulls(
+                (F64Vector) allocator.allocate(allocationContext, size, F64Vector::new),
+                (BooleanVector) allocator.allocate(allocationContext, size, BooleanVector::new));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        return Streams.ofValues((F64VectorWithNulls) allocator.allocateOrGrow(allocationContext, state.values(), size, F64VectorWithNulls::new));
+        F64Vector values = (F64Vector) allocator.allocateOrGrow(allocationContext, state.values(), size, F64Vector::new);
+        BooleanVector nulls = (BooleanVector) allocator.allocateOrGrow(allocationContext, state.get(Stream.NULLS), size, BooleanVector::new);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     @Override
     public void initialize(Streams state, int offset, int length)
     {
-        Arrays.fill(((F64VectorWithNulls) state.values()).nulls(), offset, offset + length, true);
+        Arrays.fill(((BooleanVector) state.get(Stream.NULLS)).values(), offset, offset + length, true);
     }
 
     @Override
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
-        F64VectorWithNulls stateVector = (F64VectorWithNulls) state.values();
-        F64VectorWithNulls inputVector = (F64VectorWithNulls) streams.values(inputColumn);
-
-        boolean[] nulls = inputVector.nulls();
-        double[] values = inputVector.values();
+        F64Vector stateVector = (F64Vector) state.values();
+        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
+        double[] inputValues = values(streams.values(inputColumn));
+        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         double sum = 0;
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                sum += nulls[position] ? 0 : values[position];
+                sum += isNull(inputNulls, position) ? 0 : inputValues[position];
             }
         }
         else {
             for (int position : mask) {
-                sum += nulls[position] ? 0 : values[position];
+                sum += isNull(inputNulls, position) ? 0 : inputValues[position];
             }
         }
 
-        stateVector.nulls()[group] = false;
+        stateNulls.values()[group] = false;
         stateVector.values()[group] += sum;
     }
 
     @Override
     public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
-        F64VectorWithNulls stateVector = (F64VectorWithNulls) state.values();
+        F64Vector stateVector = (F64Vector) state.values();
+        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
-        F64VectorWithNulls inputVector = (F64VectorWithNulls) streams.values(inputColumn);
+        double[] inputValues = values(streams.values(inputColumn));
+        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
-                accumulate(stateVector, group, inputVector, position);
+                accumulate(stateVector, stateNulls, group, inputValues, inputNulls, position);
             }
         }
         else {
             for (int position : mask) {
                 int group = toIntExact(groupVector.values()[position]);
-                accumulate(stateVector, group, inputVector, position);
+                accumulate(stateVector, stateNulls, group, inputValues, inputNulls, position);
             }
         }
     }
 
-    private static void accumulate(F64VectorWithNulls state, int group, F64VectorWithNulls input, int position)
+    private static void accumulate(F64Vector state, BooleanVector stateNulls, int group, double[] inputValues, boolean[] inputNulls, int position)
     {
-        state.nulls()[group] = false;
-        state.values()[group] += input.nulls()[position] ? 0 : input.values()[position];
+        stateNulls.values()[group] = false;
+        state.values()[group] += isNull(inputNulls, position) ? 0 : inputValues[position];
     }
 
     @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
+    }
+
+    private static double[] values(Vector vector)
+    {
+        return switch (vector) {
+            case F64Vector values -> values.values();
+            default -> throw new UnsupportedOperationException(vector.getClass().getSimpleName());
+        };
+    }
+
+    private static boolean[] nulls(Vector vector)
+    {
+        return switch (vector) {
+            case null -> null;
+            case BooleanVector nulls -> nulls.values();
+            default -> null;
+        };
+    }
+
+    private static boolean isNull(boolean[] nulls, int position)
+    {
+        return nulls != null && nulls[position];
     }
 }

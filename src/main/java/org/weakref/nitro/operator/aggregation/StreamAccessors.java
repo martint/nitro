@@ -13,9 +13,6 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.F64VectorWithNulls;
-import org.weakref.nitro.data.I32VectorWithNulls;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Output;
@@ -39,16 +36,7 @@ public final class StreamAccessors
             if (stream != Stream.NULLS) {
                 throw exception;
             }
-            return deriveNulls(output.borrow(Stream.VALUES));
+            return null;
         }
-    }
-
-    private static BooleanVector deriveNulls(Vector values)
-    {
-        return switch (values) {
-            case I32VectorWithNulls vector -> new BooleanVector(vector.nulls());
-            case F64VectorWithNulls vector -> new BooleanVector(vector.nulls());
-            default -> null;
-        };
     }
 }
