@@ -80,8 +80,11 @@ public class GeneratorOperator
         }
 
         currentBatchSize = toIntExact(Math.min(remaining, batchSize));
-        if (mask == null || mask.count() != currentBatchSize) {
-            mask = Mask.all(currentBatchSize);
+        if (mask == null) {
+            mask = allocator.allocateAllMask(ALLOCATION_CONTEXT, currentBatchSize);
+        }
+        else {
+            mask.selectAll(currentBatchSize);
         }
         remaining -= currentBatchSize;
 

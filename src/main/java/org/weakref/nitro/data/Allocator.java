@@ -36,7 +36,7 @@ public class Allocator
 
     public Vector allocate(Context context, int size, VectorAllocator allocator)
     {
-        recordAllocation(context, size);
+        recordVectorAllocation(context, size);
         return allocator.allocate(size);
     }
 
@@ -46,8 +46,8 @@ public class Allocator
             vector = allocate(context, size, vectorAllocator);
         }
         else if (vector.length() < size) {
-            recordAllocation(context, -vector.length());
-            recordAllocation(context, size);
+            recordVectorAllocation(context, -vector.length());
+            recordVectorAllocation(context, size);
 
             vector = vector.copy(size);
         }
@@ -62,16 +62,87 @@ public class Allocator
         }
 
         if (vector.length() < count) {
-            recordAllocation(context, -vector.length());
+            recordVectorAllocation(context, -vector.length());
             vector = allocate(context, count, vectorAllocator);
         }
 
         return vector;
     }
 
-    private void recordAllocation(Context context, int size)
+    public Mask allocateAllMask(Context context, int size)
     {
-        stats.computeIfAbsent(context, _ -> new Stats()).record(size * Long.BYTES);
+        Mask mask = Mask.all(size);
+        recordMaskAllocation(context, mask);
+        return mask;
+    }
+
+    public Mask allocateRangeMask(Context context, int start, int length)
+    {
+        Mask mask = Mask.range(start, length);
+        recordMaskAllocation(context, mask);
+        return mask;
+    }
+
+    public Mask allocateSparseMask(Context context, int[] activePositions, int totalPositions)
+    {
+        Mask mask = Mask.sparse(activePositions, totalPositions);
+        recordMaskAllocation(context, mask);
+        return mask;
+    }
+
+    public Mask intersectMask(Context context, Mask mask, BooleanVector other)
+    {
+        Mask result = mask.and(other);
+        recordMaskAllocation(context, result);
+        return result;
+    }
+
+    public Mask differenceMask(Context context, Mask left, Mask right)
+    {
+        Mask result = left.difference(right);
+        recordMaskAllocation(context, result);
+        return result;
+    }
+
+    public Mask differenceMask(Context context, Mask mask, BooleanVector other)
+    {
+        Mask result = mask.andNot(other);
+        recordMaskAllocation(context, result);
+        return result;
+    }
+
+    public Mask unionMask(Context context, Mask left, Mask right)
+    {
+        Mask result = left.or(right);
+        recordMaskAllocation(context, result);
+        return result;
+    }
+
+    public Mask lastMask(Context context, Mask mask, int count)
+    {
+        Mask result = mask.last(count);
+        if (result != mask) {
+            recordMaskAllocation(context, result);
+        }
+        return result;
+    }
+
+    private void recordVectorAllocation(Context context, int size)
+    {
+        recordBytes(context, size * Long.BYTES);
+    }
+
+    private void recordMaskAllocation(Context context, Mask mask)
+    {
+        if (mask.all()) {
+            return;
+        }
+        recordBytes(context, (long) mask.selectedCount() * Integer.BYTES);
+    }
+
+    private void recordBytes(Context context, long bytes)
+    {
+        stats.computeIfAbsent(context, _ -> new Stats()).record(bytes);
     }
 
     @Override
@@ -84,6 +155,21 @@ public class Allocator
                         e.getValue().peak(),
                         e.getValue().current()))
                 .collect(Collectors.joining("\n"));
+    }
+
+    public long totalBytes(Context context)
+    {
+        return stats.computeIfAbsent(context, _ -> new Stats()).total();
+    }
+
+    public long currentBytes(Context context)
+    {
+        return stats.computeIfAbsent(context, _ -> new Stats()).current();
+    }
+
+    public long peakBytes(Context context)
+    {
+        return stats.computeIfAbsent(context, _ -> new Stats()).peak();
     }
 
     public void release(Context context)

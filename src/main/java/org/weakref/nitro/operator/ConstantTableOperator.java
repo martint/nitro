@@ -79,7 +79,7 @@ public class ConstantTableOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = Output.of(Streams.ofValuesAndNulls(columns[outputIndex], nulls[outputIndex]));
         }
-        return new Batch(Mask.all(count), outputs);
+        return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, count), outputs);
     }
 
     @Override

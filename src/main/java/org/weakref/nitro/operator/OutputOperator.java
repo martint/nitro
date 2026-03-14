@@ -64,7 +64,7 @@ public class OutputOperator
             }
         }
 
-        return new Batch(Mask.all(1), Output.lazyValues(this::resultVector));
+        return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, 1), Output.lazyValues(this::resultVector));
     }
 
     @Override

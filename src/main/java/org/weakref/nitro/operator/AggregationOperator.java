@@ -30,7 +30,7 @@ public class AggregationOperator
     private final List<Accumulator> aggregations;
 
     private final Streams[] results;
-    private Mask mask = Mask.all(1);
+    private Mask mask;
     private boolean filled;
     private boolean done;
 
@@ -41,6 +41,7 @@ public class AggregationOperator
         this.aggregations = aggregations;
 
         results = new Streams[aggregations.size()];
+        mask = allocator.allocateAllMask(ALLOCATION_CONTEXT, 1);
     }
 
     @Override

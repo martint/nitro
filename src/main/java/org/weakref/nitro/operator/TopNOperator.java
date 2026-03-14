@@ -93,7 +93,7 @@ public class TopNOperator
         reorderBuffer(queue);
 
         done = true;
-        return Mask.range(0, count);
+        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, count);
     }
 
     @Override

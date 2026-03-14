@@ -25,7 +25,10 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 public class FilterOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("FilterOperator");
+
     private final Operator source;
+    private final Allocator allocator;
     private final PlanEvaluator planEvaluator;
     private final Reference predicateReference;
 
@@ -35,6 +38,7 @@ public class FilterOperator
     public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
     {
         this.source = source;
+        this.allocator = allocator;
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> currentBatch.output(index).borrow(Stream.VALUES), allocator);
         this.predicateReference = predicateReference;
     }
@@ -57,7 +61,7 @@ public class FilterOperator
         currentBatch = source.next();
         mask = currentBatch.borrowMask();
         BooleanVector predicate = (BooleanVector) planEvaluator.evaluate(predicateReference, mask).get(predicateReference.stream());
-        mask = mask.and(predicate);
+        mask = allocator.intersectMask(ALLOCATION_CONTEXT, mask, predicate);
         source.constrain(mask);
         planEvaluator.reset();
 
@@ -80,5 +84,6 @@ public class FilterOperator
     public void close()
     {
         source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

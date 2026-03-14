@@ -108,6 +108,23 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorTracksDerivedMaskAllocations()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("MaskTest");
+
+        Mask all = allocator.allocateAllMask(context, 6);
+        BooleanVector predicate = new BooleanVector(new boolean[] {false, true, false, true, false, false});
+        Mask filtered = allocator.intersectMask(context, all, predicate);
+        Mask tail = allocator.allocateRangeMask(context, 4, 2);
+        Mask combined = allocator.unionMask(context, filtered, tail);
+
+        assertThat(positions(filtered)).containsExactly(1, 3);
+        assertThat(positions(combined)).containsExactly(1, 3, 4, 5);
+        assertThat(allocator.currentBytes(context)).isEqualTo((2L + 2L + 4L) * Integer.BYTES);
+    }
+
+    @Test
     void testOperatorOutputsRespectBorrowAndTakeSemantics()
     {
         Allocator allocator = new Allocator();

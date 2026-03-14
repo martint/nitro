@@ -98,8 +98,7 @@ public class GroupedAggregationOperator
 
         done = true;
 
-        // TODO: reuse mask if possible
-        return Mask.all(toIntExact(maxGroup + 1));
+        return allocator.allocateAllMask(ALLOCATION_CONTEXT, toIntExact(maxGroup + 1));
     }
 
     @Override

@@ -80,7 +80,7 @@ public class NestedLoopJoinOperator
         loadInnerIfNecessary();
         if (innerRowCount == 0) {
             done = true;
-            return Mask.all(0);
+            return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
 
         if (outerRemaining == 0) {
@@ -96,7 +96,7 @@ public class NestedLoopJoinOperator
 
             if (outerRemaining == 0) {
                 done = true;
-                return Mask.all(0);
+                return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
             }
         }
 
@@ -113,14 +113,14 @@ public class NestedLoopJoinOperator
         if (outerRemaining < innerRemaining) {
             int batchSize = joinWithOuterRow();
 
-            mask = Mask.all(batchSize);
+            mask = allocator.allocateAllMask(ALLOCATION_CONTEXT, batchSize);
             innerProcessed = batchSize;
             outerProcessed = 1;
         }
         else {
             joinWithInnerRow();
 
-            mask = currentOuterMask.last(outerRemaining);
+            mask = allocator.lastMask(ALLOCATION_CONTEXT, currentOuterMask, outerRemaining);
             innerProcessed = 1;
             outerProcessed = outerRemaining;
 
