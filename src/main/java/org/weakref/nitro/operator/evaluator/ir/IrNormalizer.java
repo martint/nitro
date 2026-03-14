@@ -16,72 +16,68 @@ package org.weakref.nitro.operator.evaluator.ir;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 public final class IrNormalizer
 {
-    private IrNormalizer() {}
+    private static final IrNormalizer STANDARD = new IrNormalizer(List.of(
+            new IfNormalizationRule(),
+            new CoalesceNormalizationRule()));
+
+    private final List<IrNormalizationRule> rules;
+
+    public IrNormalizer(List<IrNormalizationRule> rules)
+    {
+        this.rules = List.copyOf(rules);
+    }
 
     public static EvaluationPlan normalize(EvaluationPlan plan)
     {
-        VariableAllocator variableAllocator = new VariableAllocator(nextVariableId(plan.assignments()));
-        List<Assignment> assignments = new ArrayList<>();
+        return STANDARD.normalizePlan(plan);
+    }
 
+    public EvaluationPlan normalizePlan(EvaluationPlan plan)
+    {
+        Context context = new Context(nextVariableId(plan.assignments()));
         for (Assignment assignment : plan.assignments()) {
-            normalizeAssignment(assignment, assignments, variableAllocator);
+            normalizeAssignment(assignment, context);
+        }
+        return new EvaluationPlan(context.assignments(), plan.outputs(), plan.streamPlans());
+    }
+
+    private void normalizeAssignment(Assignment assignment, Context context)
+    {
+        for (IrNormalizationRule rule : rules) {
+            if (rule.matches(assignment)) {
+                rule.apply(assignment, context);
+                return;
+            }
+        }
+        context.emit(assignment);
+    }
+
+    public static final class Context
+    {
+        private final VariableAllocator variableAllocator;
+        private final List<Assignment> assignments = new ArrayList<>();
+
+        private Context(int nextVariableId)
+        {
+            variableAllocator = new VariableAllocator(nextVariableId);
         }
 
-        return new EvaluationPlan(assignments, plan.outputs(), plan.streamPlans());
-    }
-
-    private static void normalizeAssignment(Assignment assignment, List<Assignment> output, VariableAllocator variableAllocator)
-    {
-        switch (assignment.operation()) {
-            case Call(String name, List<Reference> arguments) when name.equals("if") -> normalizeIf(assignment, arguments, output, variableAllocator);
-            case Call(String name, List<Reference> arguments) when name.equals("coalesce") -> normalizeCoalesce(assignment, arguments, output, variableAllocator);
-            default -> output.add(assignment);
+        public void emit(Assignment assignment)
+        {
+            assignments.add(assignment);
         }
-    }
 
-    private static void normalizeIf(Assignment assignment, List<Reference> arguments, List<Assignment> output, VariableAllocator variableAllocator)
-    {
-        checkArgument(arguments.size() == 3, "if requires 3 arguments");
+        public Variable nextVariable()
+        {
+            return variableAllocator.next();
+        }
 
-        Reference condition = arguments.get(0);
-        Reference whenTrue = arguments.get(1);
-        Reference whenFalse = arguments.get(2);
-
-        Variable thenVariable = variableAllocator.next();
-        Variable elseVariable = variableAllocator.next();
-        MaskExpression conditionMask = new ReferenceMask(condition);
-
-        output.add(new Assignment(thenVariable, new Copy(whenTrue), new AndMask(assignment.mask(), conditionMask)));
-        output.add(new Assignment(elseVariable, new Copy(whenFalse), new AndMask(assignment.mask(), new NotMask(conditionMask))));
-        output.add(new Assignment(
-                assignment.output(),
-                new Merge(conditionMask, new Reference(thenVariable, whenTrue.stream()), new Reference(elseVariable, whenFalse.stream())),
-                assignment.mask()));
-    }
-
-    private static void normalizeCoalesce(Assignment assignment, List<Reference> arguments, List<Assignment> output, VariableAllocator variableAllocator)
-    {
-        checkArgument(arguments.size() == 2, "coalesce requires 2 arguments");
-
-        Reference first = arguments.get(0);
-        Reference second = arguments.get(1);
-        Reference firstNulls = new Reference(first.producer(), Stream.NULLS);
-        MaskExpression firstIsNull = new ReferenceMask(firstNulls);
-        MaskExpression firstIsPresent = new NotMask(firstIsNull);
-
-        Variable firstVariable = variableAllocator.next();
-        Variable secondVariable = variableAllocator.next();
-
-        output.add(new Assignment(firstVariable, new Copy(first), new AndMask(assignment.mask(), firstIsPresent)));
-        output.add(new Assignment(secondVariable, new Copy(second), new AndMask(assignment.mask(), firstIsNull)));
-        output.add(new Assignment(
-                assignment.output(),
-                new Merge(firstIsPresent, new Reference(firstVariable, first.stream()), new Reference(secondVariable, second.stream())),
-                assignment.mask()));
+        private List<Assignment> assignments()
+        {
+            return assignments;
+        }
     }
 
     private static int nextVariableId(List<Assignment> assignments)

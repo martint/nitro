@@ -105,4 +105,37 @@ public class TestEvaluationIr
         assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
         assertThat(normalizedPlan.assignments().getLast().operation()).isInstanceOf(Merge.class);
     }
+
+    @Test
+    void testNormalizerUsesRegisteredRules()
+    {
+        Variable result = new Variable(0);
+        Assignment assignment = new Assignment(
+                result,
+                new Call("identity", List.of(new Reference(new Input(0), Stream.VALUES))),
+                AllMask.ALL);
+        EvaluationPlan plan = new EvaluationPlan(List.of(assignment), List.of(new Reference(result, Stream.VALUES)));
+
+        IrNormalizer normalizer = new IrNormalizer(List.of(new IrNormalizationRule()
+        {
+            @Override
+            public boolean matches(Assignment candidate)
+            {
+                return candidate.operation() instanceof Call(String name, List<Reference> ignored) && name.equals("identity");
+            }
+
+            @Override
+            public void apply(Assignment candidate, IrNormalizer.Context context)
+            {
+                Call call = (Call) candidate.operation();
+                context.emit(new Assignment(candidate.output(), new Copy(call.arguments().getFirst()), candidate.mask()));
+            }
+        }));
+
+        EvaluationPlan normalizedPlan = normalizer.normalizePlan(plan);
+
+        assertThat(normalizedPlan.assignments()).singleElement()
+                .extracting(Assignment::operation)
+                .isInstanceOf(Copy.class);
+    }
 }
