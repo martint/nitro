@@ -40,15 +40,15 @@ public class SumF64
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
         return Streams.ofValuesAndNulls(
-                (F64Vector) allocator.allocate(allocationContext, size, F64Vector::new),
-                (BooleanVector) allocator.allocate(allocationContext, size, BooleanVector::new));
+                allocator.allocate(allocationContext, F64Vector.class, size, F64Vector::new),
+                allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        F64Vector values = (F64Vector) allocator.allocateOrGrow(allocationContext, state.values(), size, F64Vector::new);
-        BooleanVector nulls = (BooleanVector) allocator.allocateOrGrow(allocationContext, state.get(Stream.NULLS), size, BooleanVector::new);
+        F64Vector values = allocator.allocateOrGrow(allocationContext, (F64Vector) state.values(), F64Vector.class, size, F64Vector::new);
+        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 

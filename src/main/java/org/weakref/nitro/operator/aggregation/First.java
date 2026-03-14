@@ -39,15 +39,15 @@ public class First
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
         return Streams.ofValuesAndNulls(
-                (I64Vector) allocator.allocate(allocationContext, size, I64Vector::new),
-                (BooleanVector) allocator.allocate(allocationContext, size, BooleanVector::new));
+                allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
+                allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        I64Vector values = (I64Vector) allocator.allocateOrGrow(allocationContext, state.values(), size, I64Vector::new);
-        BooleanVector nulls = (BooleanVector) allocator.allocateOrGrow(allocationContext, state.get(Stream.NULLS), size, BooleanVector::new);
+        I64Vector values = allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new);
+        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 

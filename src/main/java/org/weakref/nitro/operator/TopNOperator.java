@@ -63,7 +63,7 @@ public class TopNOperator
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
 
         for (int i = 0; i < result.length; i++) {
-            result[i] = allocator.allocate(ALLOCATION_CONTEXT, n, I64Vector::new);
+            result[i] = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, n, I64Vector::new);
         }
 
         while (source.hasNext()) {

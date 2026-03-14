@@ -155,7 +155,7 @@ public class NestedLoopJoinOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Streams streams = result[outputIndex];
-            outputs[outputIndex] = (streams == null) ? Output.values(new I64Vector(0)) : Output.of(streams);
+            outputs[outputIndex] = (streams == null) ? Output.values(allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 0, I64Vector::new)) : Output.of(streams);
         }
         return new Batch(batchMask, outputs);
     }
@@ -312,14 +312,16 @@ public class NestedLoopJoinOperator
     //       for other operators
     private Streams allocateNullableI64Buffer(Streams existing, int size)
     {
-        I64Vector values = (I64Vector) allocator.reallocateIfNecessary(
+        I64Vector values = allocator.reallocateIfNecessary(
                 ALLOCATION_CONTEXT,
-                existing != null && existing.has(Stream.VALUES) ? existing.values() : null,
+                existing != null && existing.has(Stream.VALUES) ? (I64Vector) existing.values() : null,
+                I64Vector.class,
                 size,
                 I64Vector::new);
-        BooleanVector nulls = (BooleanVector) allocator.reallocateIfNecessary(
+        BooleanVector nulls = allocator.reallocateIfNecessary(
                 ALLOCATION_CONTEXT,
-                existing != null && existing.has(Stream.NULLS) ? existing.get(Stream.NULLS) : null,
+                existing != null && existing.has(Stream.NULLS) ? (BooleanVector) existing.get(Stream.NULLS) : null,
+                BooleanVector.class,
                 size,
                 BooleanVector::new);
         return Streams.ofValuesAndNulls(values, nulls);

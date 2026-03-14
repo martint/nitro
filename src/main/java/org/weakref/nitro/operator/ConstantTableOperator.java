@@ -38,8 +38,8 @@ public class ConstantTableOperator
         columns = new I64Vector[columnCount];
         nulls = new BooleanVector[columnCount];
         for (int i = 0; i < columns.length; i++) {
-            columns[i] = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, rows.size(), I64Vector::new);
-            nulls[i] = (BooleanVector) allocator.allocate(ALLOCATION_CONTEXT, rows.size(), BooleanVector::new);
+            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rows.size(), I64Vector::new);
+            nulls[i] = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
         }
 
         for (int position = 0; position < rows.size(); position++) {

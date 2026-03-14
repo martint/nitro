@@ -48,9 +48,10 @@ public final class LessThanI64
             return Streams.of(Stream.VALUES, applyRleRle(leftRle, rightRle));
         }
 
-        BooleanVector result = (BooleanVector) context.allocator().allocateOrGrow(
+        BooleanVector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof BooleanVector vector ? vector : null,
+                BooleanVector.class,
                 requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
         if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {

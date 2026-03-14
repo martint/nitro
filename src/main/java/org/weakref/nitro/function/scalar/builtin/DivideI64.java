@@ -50,14 +50,16 @@ public final class DivideI64
             return applyRleRle(leftRle, rightRle);
         }
 
-        I64Vector result = (I64Vector) context.allocator().allocateOrGrow(
+        I64Vector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existingValues instanceof I64Vector vector ? vector : null,
+                I64Vector.class,
                 requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
-        BooleanVector errors = (BooleanVector) context.allocator().allocateOrGrow(
+        BooleanVector errors = context.allocator().allocateOrGrow(
                 ERRORS_CONTEXT,
                 existingErrors instanceof BooleanVector vector ? vector : null,
+                BooleanVector.class,
                 requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
         if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {

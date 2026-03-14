@@ -192,7 +192,7 @@ public final class PlanEvaluator
     private Streams evaluateMaskReference(MaskExpression condition, Mask mask)
     {
         Mask conditionMask = evaluateMask(condition, mask);
-        BooleanVector values = new BooleanVector(mask.maxPosition() + 1);
+        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask.maxPosition() + 1, BooleanVector::new);
         for (int position : conditionMask) {
             values.values()[position] = true;
         }
@@ -212,7 +212,7 @@ public final class PlanEvaluator
 
     private BooleanVector toBooleanVector(Mask mask, int length)
     {
-        BooleanVector result = new BooleanVector(length);
+        BooleanVector result = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, length, BooleanVector::new);
         for (int position : mask) {
             result.values()[position] = true;
         }
@@ -236,7 +236,7 @@ public final class PlanEvaluator
 
     private Vector copyLongVector(I64Vector source, Vector existing, Mask mask)
     {
-        I64Vector target = (I64Vector) allocator.allocateOrGrow(ALLOCATION_CONTEXT, existing, source.length(), I64Vector::new);
+        I64Vector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (I64Vector) existing, I64Vector.class, source.length(), I64Vector::new);
         for (int position : mask) {
             target.values()[position] = source.values()[position];
         }
@@ -245,7 +245,7 @@ public final class PlanEvaluator
 
     private Vector copyBooleanVector(BooleanVector source, Vector existing, Mask mask)
     {
-        BooleanVector target = (BooleanVector) allocator.allocateOrGrow(ALLOCATION_CONTEXT, existing, source.length(), BooleanVector::new);
+        BooleanVector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, source.length(), BooleanVector::new);
         for (int position : mask) {
             target.values()[position] = source.values()[position];
         }
@@ -263,7 +263,7 @@ public final class PlanEvaluator
 
     private Vector copyLongRleVector(int[] counts, long[] values, Vector existing, Mask mask, int length)
     {
-        I64Vector target = (I64Vector) allocator.allocateOrGrow(ALLOCATION_CONTEXT, existing, length, I64Vector::new);
+        I64Vector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (I64Vector) existing, I64Vector.class, length, I64Vector::new);
         int runIndex = 0;
         int runEnd = counts[0];
         for (int position : mask) {
@@ -278,7 +278,7 @@ public final class PlanEvaluator
 
     private Vector copyBooleanRleVector(int[] counts, boolean[] values, Vector existing, Mask mask, int length)
     {
-        BooleanVector target = (BooleanVector) allocator.allocateOrGrow(ALLOCATION_CONTEXT, existing, length, BooleanVector::new);
+        BooleanVector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, length, BooleanVector::new);
         int runIndex = 0;
         int runEnd = counts[0];
         for (int position : mask) {
@@ -293,7 +293,7 @@ public final class PlanEvaluator
 
     private Vector fillLong(long value, int length)
     {
-        I64Vector result = new I64Vector(length);
+        I64Vector result = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, length, I64Vector::new);
         for (int position = 0; position < length; position++) {
             result.values()[position] = value;
         }
@@ -302,7 +302,7 @@ public final class PlanEvaluator
 
     private Vector fillBoolean(boolean value, int length)
     {
-        BooleanVector result = new BooleanVector(length);
+        BooleanVector result = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, length, BooleanVector::new);
         for (int position = 0; position < length; position++) {
             result.values()[position] = value;
         }

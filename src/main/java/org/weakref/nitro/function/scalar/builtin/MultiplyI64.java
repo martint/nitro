@@ -47,9 +47,10 @@ public final class MultiplyI64
             return Streams.ofValues(applyRleRle(leftRle, rightRle));
         }
 
-        I64Vector result = (I64Vector) context.allocator().allocateOrGrow(
+        I64Vector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof I64Vector vector ? vector : null,
+                I64Vector.class,
                 requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
         if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {

@@ -587,6 +587,30 @@ public class Mask
         positions = Arrays.copyOf(positions, capacity);
     }
 
+    int capacity()
+    {
+        return positions.length;
+    }
+
+    int[] positionsArray(int requiredCapacity)
+    {
+        ensureCapacity(requiredCapacity);
+        return positions;
+    }
+
+    void setSelection(int size, int selectedCount, boolean allSelected)
+    {
+        checkArgument(size >= 0, "size is negative");
+        checkArgument(selectedCount >= 0, "selectedCount is negative");
+        checkArgument(selectedCount <= size, "selectedCount exceeds size");
+        checkArgument(allSelected == (selectedCount == size), "allSelected must match selectedCount");
+        checkArgument(allSelected || positions.length >= selectedCount, "positions capacity is too small");
+
+        this.size = size;
+        this.selectedCount = selectedCount;
+        this.allSelected = allSelected;
+    }
+
     private void checkCompatible(Mask other)
     {
         checkArgument(size == other.size, "Masks must have the same row-domain size");

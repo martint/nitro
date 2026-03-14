@@ -80,7 +80,7 @@ public class OutputOperator
 
     private Vector resultVector()
     {
-        I64Vector result = (I64Vector) allocator.allocate(ALLOCATION_CONTEXT, 1, I64Vector::new);
+        I64Vector result = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 1, I64Vector::new);
         result.values()[0] = rowCount;
         return result;
     }

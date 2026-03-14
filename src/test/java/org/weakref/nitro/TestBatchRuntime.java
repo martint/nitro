@@ -125,6 +125,41 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorReusesVectorInstancesAfterRelease()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("VectorPool");
+
+        I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        long totalBytes = allocator.totalBytes(context);
+
+        allocator.release(context);
+
+        I64Vector second = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+
+        assertThat(second).isSameAs(first);
+        assertThat(allocator.totalBytes(context)).isEqualTo(totalBytes);
+    }
+
+    @Test
+    void testAllocatorReusesMaskInstancesAfterRelease()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("MaskPool");
+
+        Mask first = allocator.allocateRangeMask(context, 4, 3);
+        long totalBytes = allocator.totalBytes(context);
+
+        allocator.release(context);
+
+        Mask second = allocator.allocateSparseMask(context, new int[] {1, 5}, 6);
+
+        assertThat(second).isSameAs(first);
+        assertThat(positions(second)).containsExactly(1, 5);
+        assertThat(allocator.totalBytes(context)).isEqualTo(totalBytes);
+    }
+
+    @Test
     void testOperatorOutputsRespectBorrowAndTakeSemantics()
     {
         Allocator allocator = new Allocator();

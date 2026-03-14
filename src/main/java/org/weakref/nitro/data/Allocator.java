@@ -13,14 +13,20 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
 // TODO: support hierarchical contexts
 public class Allocator
 {
-    private final Map<Context, Stats> stats = new HashMap<>();
+    private final Map<Context, ContextState> states = new HashMap<>();
 
     /**
      * Calculates the capacity of a vector that can hold the desired size, plus some extra space.
@@ -34,36 +40,45 @@ public class Allocator
         return (int) (desiredSize + desiredSize * growthFactor);
     }
 
-    public Vector allocate(Context context, int size, VectorAllocator allocator)
+    public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
     {
-        recordVectorAllocation(context, size);
-        return allocator.allocate(size);
+        ContextState state = state(context);
+        Vector vector = state.borrowVector(vectorType, size);
+        boolean reused = vector != null;
+        if (!reused) {
+            vector = allocator.apply(size);
+        }
+        else {
+            clearVector(vector);
+        }
+
+        @SuppressWarnings("unchecked")
+        T typedVector = (T) vectorType.cast(vector);
+        state.trackVector(typedVector, reused);
+        return typedVector;
     }
 
-    public Vector allocateOrGrow(Context context, Vector vector, int size, VectorAllocator vectorAllocator)
+    public <T extends Vector> T allocateOrGrow(Context context, T vector, Class<T> vectorType, int size, IntFunction<T> vectorAllocator)
     {
         if (vector == null) {
-            vector = allocate(context, size, vectorAllocator);
+            return allocate(context, vectorType, size, vectorAllocator);
         }
-        else if (vector.length() < size) {
-            recordVectorAllocation(context, -vector.length());
-            recordVectorAllocation(context, size);
-
-            vector = vector.copy(size);
+        if (vector.length() < size) {
+            releaseVector(context, vector);
+            return allocate(context, vectorType, size, vectorAllocator);
         }
-
         return vector;
     }
 
-    public Vector reallocateIfNecessary(Context context, Vector vector, int count, VectorAllocator vectorAllocator)
+    public <T extends Vector> T reallocateIfNecessary(Context context, T vector, Class<T> vectorType, int count, IntFunction<T> vectorAllocator)
     {
         if (vector == null) {
-            return allocate(context, count, vectorAllocator);
+            return allocate(context, vectorType, count, vectorAllocator);
         }
 
         if (vector.length() < count) {
-            recordVectorAllocation(context, -vector.length());
-            vector = allocate(context, count, vectorAllocator);
+            releaseVector(context, vector);
+            return allocate(context, vectorType, count, vectorAllocator);
         }
 
         return vector;
@@ -71,110 +86,476 @@ public class Allocator
 
     public Mask allocateAllMask(Context context, int size)
     {
-        Mask mask = Mask.all(size);
-        recordMaskAllocation(context, mask);
+        ContextState state = state(context);
+        Mask mask = state.borrowMask(0);
+        boolean reused = mask != null;
+        if (!reused) {
+            mask = Mask.all(size);
+        }
+        else {
+            mask.selectAll(size);
+        }
+        state.trackMask(mask, reused);
         return mask;
     }
 
     public Mask allocateRangeMask(Context context, int start, int length)
     {
-        Mask mask = Mask.range(start, length);
-        recordMaskAllocation(context, mask);
+        ContextState state = state(context);
+        Mask mask = state.borrowMask(length);
+        boolean reused = mask != null;
+        if (!reused) {
+            mask = Mask.range(start, length);
+        }
+        else if (start == 0) {
+            mask.selectAll(length);
+        }
+        else {
+            int[] positions = mask.positionsArray(length);
+            for (int index = 0; index < length; index++) {
+                positions[index] = start + index;
+            }
+            mask.setSelection(start + length, length, false);
+        }
+        state.trackMask(mask, reused);
         return mask;
     }
 
     public Mask allocateSparseMask(Context context, int[] activePositions, int totalPositions)
     {
-        Mask mask = Mask.sparse(activePositions, totalPositions);
-        recordMaskAllocation(context, mask);
+        ContextState state = state(context);
+        Mask mask = state.borrowMask(activePositions.length);
+        boolean reused = mask != null;
+        if (!reused) {
+            mask = Mask.sparse(activePositions, totalPositions);
+        }
+        else if (activePositions.length == totalPositions && isAllPositions(activePositions, totalPositions)) {
+            mask.selectAll(totalPositions);
+        }
+        else {
+            int[] positions = mask.positionsArray(activePositions.length);
+            System.arraycopy(activePositions, 0, positions, 0, activePositions.length);
+            mask.setSelection(totalPositions, activePositions.length, false);
+        }
+        state.trackMask(mask, reused);
         return mask;
     }
 
     public Mask intersectMask(Context context, Mask mask, BooleanVector other)
     {
-        Mask result = mask.and(other);
-        recordMaskAllocation(context, result);
+        if (other.length() == 0 || mask.none()) {
+            return allocateSparseMask(context, new int[0], mask.size());
+        }
+
+        ContextState state = state(context);
+        Mask result = state.borrowMask(mask.selectedCount());
+        boolean reused = result != null;
+        if (!reused) {
+            result = mask.and(other);
+        }
+        else {
+            int[] positions = result.positionsArray(mask.selectedCount());
+            int selectedCount = 0;
+            if (mask.all()) {
+                for (int position = 0; position < mask.size(); position++) {
+                    if (other.values()[position]) {
+                        positions[selectedCount++] = position;
+                    }
+                }
+            }
+            else {
+                for (int index = 0; index < mask.selectedCount(); index++) {
+                    int position = mask.position(index);
+                    if (other.values()[position]) {
+                        positions[selectedCount++] = position;
+                    }
+                }
+            }
+            if (selectedCount == mask.size() && isAllPositions(positions, selectedCount)) {
+                result.selectAll(mask.size());
+            }
+            else {
+                result.setSelection(mask.size(), selectedCount, false);
+            }
+        }
+        state.trackMask(result, reused);
         return result;
     }
 
     public Mask differenceMask(Context context, Mask left, Mask right)
     {
-        Mask result = left.difference(right);
-        recordMaskAllocation(context, result);
+        ContextState state = state(context);
+        Mask result = state.borrowMask(left.selectedCount());
+        boolean reused = result != null;
+        if (!reused) {
+            result = left.difference(right);
+        }
+        else if (right.none() || left.none()) {
+            copyMask(result, left);
+        }
+        else if (right.all()) {
+            result.clear(left.size());
+        }
+        else if (left.all()) {
+            int[] positions = result.positionsArray(left.size() - right.selectedCount());
+            int outputIndex = 0;
+            int position = 0;
+            for (int index = 0; index < right.selectedCount(); index++) {
+                int rightPosition = right.position(index);
+                while (position < rightPosition) {
+                    positions[outputIndex++] = position++;
+                }
+                position++;
+            }
+            while (position < left.size()) {
+                positions[outputIndex++] = position++;
+            }
+            result.setSelection(left.size(), outputIndex, false);
+        }
+        else {
+            int[] positions = result.positionsArray(left.selectedCount());
+            int leftIndex = 0;
+            int rightIndex = 0;
+            int outputIndex = 0;
+            while (leftIndex < left.selectedCount() && rightIndex < right.selectedCount()) {
+                int leftPosition = left.position(leftIndex);
+                int rightPosition = right.position(rightIndex);
+                if (leftPosition < rightPosition) {
+                    positions[outputIndex++] = leftPosition;
+                    leftIndex++;
+                }
+                else if (leftPosition > rightPosition) {
+                    rightIndex++;
+                }
+                else {
+                    leftIndex++;
+                    rightIndex++;
+                }
+            }
+            while (leftIndex < left.selectedCount()) {
+                positions[outputIndex++] = left.position(leftIndex++);
+            }
+            result.setSelection(left.size(), outputIndex, false);
+        }
+        state.trackMask(result, reused);
         return result;
     }
 
     public Mask differenceMask(Context context, Mask mask, BooleanVector other)
     {
-        Mask result = mask.andNot(other);
-        recordMaskAllocation(context, result);
+        if (other.length() == 0 || mask.none()) {
+            return allocateSparseMask(context, positions(mask), mask.size());
+        }
+
+        ContextState state = state(context);
+        Mask result = state.borrowMask(mask.selectedCount());
+        boolean reused = result != null;
+        if (!reused) {
+            result = mask.andNot(other);
+        }
+        else {
+            int[] positions = result.positionsArray(mask.selectedCount());
+            int selectedCount = 0;
+            if (mask.all()) {
+                for (int position = 0; position < mask.size(); position++) {
+                    if (!other.values()[position]) {
+                        positions[selectedCount++] = position;
+                    }
+                }
+            }
+            else {
+                for (int index = 0; index < mask.selectedCount(); index++) {
+                    int position = mask.position(index);
+                    if (!other.values()[position]) {
+                        positions[selectedCount++] = position;
+                    }
+                }
+            }
+            if (selectedCount == mask.size() && isAllPositions(positions, selectedCount)) {
+                result.selectAll(mask.size());
+            }
+            else {
+                result.setSelection(mask.size(), selectedCount, false);
+            }
+        }
+        state.trackMask(result, reused);
         return result;
     }
 
     public Mask unionMask(Context context, Mask left, Mask right)
     {
-        Mask result = left.or(right);
-        recordMaskAllocation(context, result);
+        ContextState state = state(context);
+        Mask result = state.borrowMask(Math.min(left.size(), left.selectedCount() + right.selectedCount()));
+        boolean reused = result != null;
+        if (!reused) {
+            result = left.or(right);
+        }
+        else if (left.all() || right.all()) {
+            result.selectAll(left.size());
+        }
+        else if (left.none()) {
+            copyMask(result, right);
+        }
+        else if (right.none()) {
+            copyMask(result, left);
+        }
+        else {
+            int[] positions = result.positionsArray(Math.min(left.size(), left.selectedCount() + right.selectedCount()));
+            int leftIndex = 0;
+            int rightIndex = 0;
+            int outputIndex = 0;
+            while (leftIndex < left.selectedCount() && rightIndex < right.selectedCount()) {
+                int leftPosition = left.position(leftIndex);
+                int rightPosition = right.position(rightIndex);
+                if (leftPosition < rightPosition) {
+                    positions[outputIndex++] = leftPosition;
+                    leftIndex++;
+                }
+                else if (leftPosition > rightPosition) {
+                    positions[outputIndex++] = rightPosition;
+                    rightIndex++;
+                }
+                else {
+                    positions[outputIndex++] = leftPosition;
+                    leftIndex++;
+                    rightIndex++;
+                }
+            }
+            while (leftIndex < left.selectedCount()) {
+                positions[outputIndex++] = left.position(leftIndex++);
+            }
+            while (rightIndex < right.selectedCount()) {
+                positions[outputIndex++] = right.position(rightIndex++);
+            }
+            if (outputIndex == left.size() && isAllPositions(positions, outputIndex)) {
+                result.selectAll(left.size());
+            }
+            else {
+                result.setSelection(left.size(), outputIndex, false);
+            }
+        }
+        state.trackMask(result, reused);
         return result;
     }
 
     public Mask lastMask(Context context, Mask mask, int count)
     {
-        Mask result = mask.last(count);
-        if (result != mask) {
-            recordMaskAllocation(context, result);
+        if (count >= mask.selectedCount()) {
+            return mask;
         }
+
+        ContextState state = state(context);
+        Mask result = state.borrowMask(count);
+        boolean reused = result != null;
+        if (!reused) {
+            result = mask.last(count);
+        }
+        else if (count <= 0) {
+            result.clear(mask.size());
+        }
+        else {
+            int[] positions = result.positionsArray(count);
+            for (int index = 0; index < count; index++) {
+                positions[index] = mask.position(mask.selectedCount() - count + index);
+            }
+            if (count == mask.size() && isAllPositions(positions, count)) {
+                result.selectAll(mask.size());
+            }
+            else {
+                result.setSelection(mask.size(), count, false);
+            }
+        }
+        state.trackMask(result, reused);
         return result;
-    }
-
-    private void recordVectorAllocation(Context context, int size)
-    {
-        recordBytes(context, size * Long.BYTES);
-    }
-
-    private void recordMaskAllocation(Context context, Mask mask)
-    {
-        if (mask.all()) {
-            return;
-        }
-        recordBytes(context, (long) mask.selectedCount() * Integer.BYTES);
-    }
-
-    private void recordBytes(Context context, long bytes)
-    {
-        stats.computeIfAbsent(context, _ -> new Stats()).record(bytes);
     }
 
     @Override
     public String toString()
     {
-        return stats.entrySet().stream()
+        return states.entrySet().stream()
                 .map(e -> "%s: total=%s, peak=%s, current=%s".formatted(
                         e.getKey().name(),
-                        e.getValue().total(),
-                        e.getValue().peak(),
-                        e.getValue().current()))
+                        e.getValue().stats().total(),
+                        e.getValue().stats().peak(),
+                        e.getValue().stats().current()))
                 .collect(Collectors.joining("\n"));
     }
 
     public long totalBytes(Context context)
     {
-        return stats.computeIfAbsent(context, _ -> new Stats()).total();
+        return state(context).stats().total();
     }
 
     public long currentBytes(Context context)
     {
-        return stats.computeIfAbsent(context, _ -> new Stats()).current();
+        return state(context).stats().current();
     }
 
     public long peakBytes(Context context)
     {
-        return stats.computeIfAbsent(context, _ -> new Stats()).peak();
+        return state(context).stats().peak();
     }
 
     public void release(Context context)
     {
-        stats.computeIfAbsent(context, _ -> new Stats()).release();
+        state(context).release();
+    }
+
+    private void releaseVector(Context context, Vector vector)
+    {
+        state(context).releaseVector(vector);
+    }
+
+    private ContextState state(Context context)
+    {
+        return states.computeIfAbsent(context, _ -> new ContextState());
+    }
+
+    private static int[] positions(Mask mask)
+    {
+        int[] positions = new int[mask.selectedCount()];
+        for (int index = 0; index < positions.length; index++) {
+            positions[index] = mask.position(index);
+        }
+        return positions;
+    }
+
+    private static boolean isAllPositions(int[] positions, int selectedCount)
+    {
+        for (int index = 0; index < selectedCount; index++) {
+            if (positions[index] != index) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void copyMask(Mask target, Mask source)
+    {
+        if (source.all()) {
+            target.selectAll(source.size());
+            return;
+        }
+
+        int[] positions = target.positionsArray(source.selectedCount());
+        for (int index = 0; index < source.selectedCount(); index++) {
+            positions[index] = source.position(index);
+        }
+        target.setSelection(source.size(), source.selectedCount(), false);
+    }
+
+    private static long vectorBytes(Vector vector)
+    {
+        return (long) vector.length() * Long.BYTES;
+    }
+
+    private static void clearVector(Vector vector)
+    {
+        switch (vector) {
+            case I64Vector values -> Arrays.fill(values.values(), 0);
+            case BooleanVector values -> Arrays.fill(values.values(), false);
+            case F64Vector values -> Arrays.fill(values.values(), 0);
+            case RleVector _ -> throw new IllegalArgumentException("Allocator pooling does not support RLE vectors");
+            default -> throw new IllegalArgumentException("Unsupported vector type for clearing: " + vector.getClass().getSimpleName());
+        }
+    }
+
+    private static long maskBytes(Mask mask)
+    {
+        if (mask.all()) {
+            return 0;
+        }
+        return (long) mask.capacity() * Integer.BYTES;
+    }
+
+    private static final class ContextState
+    {
+        private final Stats stats = new Stats();
+        private final Map<Class<? extends Vector>, TreeMap<Integer, ArrayDeque<Vector>>> vectorPool = new HashMap<>();
+        private final TreeMap<Integer, ArrayDeque<Mask>> maskPool = new TreeMap<>();
+        private final List<Vector> inUseVectors = new ArrayList<>();
+        private final List<Mask> inUseMasks = new ArrayList<>();
+
+        public Stats stats()
+        {
+            return stats;
+        }
+
+        public Vector borrowVector(Class<? extends Vector> vectorType, int size)
+        {
+            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(vectorType);
+            if (pool == null) {
+                return null;
+            }
+
+            Map.Entry<Integer, ArrayDeque<Vector>> entry = pool.ceilingEntry(size);
+            if (entry == null) {
+                return null;
+            }
+
+            Vector vector = entry.getValue().removeFirst();
+            if (entry.getValue().isEmpty()) {
+                pool.remove(entry.getKey());
+            }
+            return vector;
+        }
+
+        public void trackVector(Vector vector, boolean reused)
+        {
+            inUseVectors.add(vector);
+            stats.acquire(vectorBytes(vector), reused);
+        }
+
+        public void releaseVector(Vector vector)
+        {
+            if (!inUseVectors.remove(vector)) {
+                return;
+            }
+
+            stats.releaseBytes(vectorBytes(vector));
+            vectorPool
+                    .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
+                    .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>())
+                    .addLast(vector);
+        }
+
+        public Mask borrowMask(int requiredCapacity)
+        {
+            Map.Entry<Integer, ArrayDeque<Mask>> entry = maskPool.ceilingEntry(requiredCapacity);
+            if (entry == null) {
+                return null;
+            }
+
+            Mask mask = entry.getValue().removeFirst();
+            if (entry.getValue().isEmpty()) {
+                maskPool.remove(entry.getKey());
+            }
+            return mask;
+        }
+
+        public void trackMask(Mask mask, boolean reused)
+        {
+            inUseMasks.add(mask);
+            stats.acquire(maskBytes(mask), reused);
+        }
+
+        public void release()
+        {
+            for (Vector vector : inUseVectors) {
+                vectorPool
+                        .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
+                        .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>())
+                        .addLast(vector);
+            }
+            for (Mask mask : inUseMasks) {
+                maskPool
+                        .computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>())
+                        .addLast(mask);
+            }
+            inUseVectors.clear();
+            inUseMasks.clear();
+            stats.release();
+        }
     }
 
     // TODO: track amount of reallocated memory (i.e., how much effort is wasted due to potentially poor allocation strategies)
@@ -184,13 +565,18 @@ public class Allocator
         private long peak;
         private long current;
 
-        public void record(long bytes)
+        public void acquire(long bytes, boolean reused)
         {
-            if (bytes > 0) {
+            if (!reused && bytes > 0) {
                 total += bytes;
             }
             current += bytes;
             peak = Math.max(peak, current);
+        }
+
+        public void releaseBytes(long bytes)
+        {
+            current -= bytes;
         }
 
         public void release()
