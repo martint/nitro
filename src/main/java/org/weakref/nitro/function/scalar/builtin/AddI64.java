@@ -44,129 +44,21 @@ public final class AddI64
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            return Streams.ofValues(applyRleRle(leftRle, rightRle));
+            return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, AddI64::apply));
         }
 
         I64Vector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof I64Vector vector ? vector : null,
                 I64Vector.class,
-                requiredLength(mask, Math.max(left.length(), right.length())),
+                I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
-        if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {
-            applyLeftRleRightFlat(leftRle, rightFlat, mask, result);
-        }
-        else if (left instanceof I64Vector leftFlat && right instanceof RleVector rightRle) {
-            applyLeftFlatRightRle(leftFlat, rightRle, mask, result);
-        }
-        else {
-            applyFlatFlat((I64Vector) left, (I64Vector) right, mask, result);
-        }
+        I64BinaryDispatch.applyLong(left, right, mask, result, AddI64::apply);
         return Streams.ofValues(result);
-    }
-
-    private static void applyFlatFlat(I64Vector left, I64Vector right, Mask mask, I64Vector output)
-    {
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                output.values()[position] = apply(left.values()[position], right.values()[position]);
-            }
-            return;
-        }
-
-        for (int position : mask) {
-            output.values()[position] = apply(left.values()[position], right.values()[position]);
-        }
-    }
-
-    private static void applyLeftRleRightFlat(RleVector left, I64Vector right, Mask mask, I64Vector output)
-    {
-        long[] leftValues = ((I64Vector) left.values()).values();
-
-        int position = 0;
-        for (int run = 0; run < left.counts().length; run++) {
-            int runLength = left.counts()[run];
-            long leftValue = leftValues[run];
-
-            for (int offset = 0; offset < runLength; offset++) {
-                if (mask.all() || mask.contains(position)) {
-                    output.values()[position] = apply(leftValue, right.values()[position]);
-                }
-                position++;
-            }
-        }
-    }
-
-    private static void applyLeftFlatRightRle(I64Vector left, RleVector right, Mask mask, I64Vector output)
-    {
-        long[] rightValues = ((I64Vector) right.values()).values();
-
-        int position = 0;
-        for (int run = 0; run < right.counts().length; run++) {
-            int runLength = right.counts()[run];
-            long rightValue = rightValues[run];
-
-            for (int offset = 0; offset < runLength; offset++) {
-                if (mask.all() || mask.contains(position)) {
-                    output.values()[position] = apply(left.values()[position], rightValue);
-                }
-                position++;
-            }
-        }
-    }
-
-    private static RleVector applyRleRle(RleVector left, RleVector right)
-    {
-        long[] leftValues = ((I64Vector) left.values()).values();
-        long[] rightValues = ((I64Vector) right.values()).values();
-
-        int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        long[] values = new long[counts.length];
-
-        int outputIndex = 0;
-        int leftIndex = 0;
-        int rightIndex = 0;
-        int leftCount = 0;
-        int rightCount = 0;
-
-        while (leftIndex < left.counts().length && rightIndex < right.counts().length) {
-            if (leftCount == 0) {
-                leftCount = left.counts()[leftIndex];
-            }
-            if (rightCount == 0) {
-                rightCount = right.counts()[rightIndex];
-            }
-
-            int count = Math.min(leftCount, rightCount);
-            counts[outputIndex] = count;
-            values[outputIndex] = apply(leftValues[leftIndex], rightValues[rightIndex]);
-            outputIndex++;
-
-            leftCount -= count;
-            rightCount -= count;
-
-            if (leftCount == 0) {
-                leftIndex++;
-            }
-            if (rightCount == 0) {
-                rightIndex++;
-            }
-        }
-
-        return new RleVector(counts, new I64Vector(values));
     }
 
     private static long apply(long leftValue, long rightValue)
     {
         return leftValue + rightValue;
-    }
-
-    private static int requiredLength(Mask mask, int defaultLength)
-    {
-        if (mask.none()) {
-            return defaultLength;
-        }
-        return Math.max(defaultLength, mask.maxPosition() + 1);
     }
 }

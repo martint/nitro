@@ -44,129 +44,21 @@ public final class OrBoolean
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            return Streams.of(Stream.VALUES, applyRleRle(leftRle, rightRle));
+            return Streams.of(Stream.VALUES, BooleanBinaryDispatch.rleRle(leftRle, rightRle, OrBoolean::apply));
         }
 
         BooleanVector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
-                requiredLength(mask, Math.max(left.length(), right.length())),
+                BooleanBinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
-        if (left instanceof RleVector leftRle && right instanceof BooleanVector rightFlat) {
-            applyLeftRleRightFlat(leftRle, rightFlat, mask, result);
-        }
-        else if (left instanceof BooleanVector leftFlat && right instanceof RleVector rightRle) {
-            applyLeftFlatRightRle(leftFlat, rightRle, mask, result);
-        }
-        else {
-            applyFlatFlat((BooleanVector) left, (BooleanVector) right, mask, result);
-        }
+        BooleanBinaryDispatch.apply(left, right, mask, result, OrBoolean::apply);
         return Streams.of(Stream.VALUES, result);
-    }
-
-    private static void applyFlatFlat(BooleanVector left, BooleanVector right, Mask mask, BooleanVector output)
-    {
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                output.values()[position] = apply(left.values()[position], right.values()[position]);
-            }
-            return;
-        }
-
-        for (int position : mask) {
-            output.values()[position] = apply(left.values()[position], right.values()[position]);
-        }
-    }
-
-    private static void applyLeftRleRightFlat(RleVector left, BooleanVector right, Mask mask, BooleanVector output)
-    {
-        boolean[] leftValues = ((BooleanVector) left.values()).values();
-
-        int position = 0;
-        for (int run = 0; run < left.counts().length; run++) {
-            int runLength = left.counts()[run];
-            boolean leftValue = leftValues[run];
-
-            for (int offset = 0; offset < runLength; offset++) {
-                if (mask.all() || mask.contains(position)) {
-                    output.values()[position] = apply(leftValue, right.values()[position]);
-                }
-                position++;
-            }
-        }
-    }
-
-    private static void applyLeftFlatRightRle(BooleanVector left, RleVector right, Mask mask, BooleanVector output)
-    {
-        boolean[] rightValues = ((BooleanVector) right.values()).values();
-
-        int position = 0;
-        for (int run = 0; run < right.counts().length; run++) {
-            int runLength = right.counts()[run];
-            boolean rightValue = rightValues[run];
-
-            for (int offset = 0; offset < runLength; offset++) {
-                if (mask.all() || mask.contains(position)) {
-                    output.values()[position] = apply(left.values()[position], rightValue);
-                }
-                position++;
-            }
-        }
-    }
-
-    private static RleVector applyRleRle(RleVector left, RleVector right)
-    {
-        boolean[] leftValues = ((BooleanVector) left.values()).values();
-        boolean[] rightValues = ((BooleanVector) right.values()).values();
-
-        int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        boolean[] values = new boolean[counts.length];
-
-        int outputIndex = 0;
-        int leftIndex = 0;
-        int rightIndex = 0;
-        int leftCount = 0;
-        int rightCount = 0;
-
-        while (leftIndex < left.counts().length && rightIndex < right.counts().length) {
-            if (leftCount == 0) {
-                leftCount = left.counts()[leftIndex];
-            }
-            if (rightCount == 0) {
-                rightCount = right.counts()[rightIndex];
-            }
-
-            int count = Math.min(leftCount, rightCount);
-            counts[outputIndex] = count;
-            values[outputIndex] = apply(leftValues[leftIndex], rightValues[rightIndex]);
-            outputIndex++;
-
-            leftCount -= count;
-            rightCount -= count;
-
-            if (leftCount == 0) {
-                leftIndex++;
-            }
-            if (rightCount == 0) {
-                rightIndex++;
-            }
-        }
-
-        return new RleVector(counts, new BooleanVector(values));
     }
 
     private static boolean apply(boolean leftValue, boolean rightValue)
     {
         return leftValue || rightValue;
-    }
-
-    private static int requiredLength(Mask mask, int defaultLength)
-    {
-        if (mask.none()) {
-            return defaultLength;
-        }
-        return Math.max(defaultLength, mask.maxPosition() + 1);
     }
 }

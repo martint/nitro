@@ -47,132 +47,30 @@ public final class ModuloI64
         Vector existingErrors = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null) {
-            return applyRleRle(leftRle, rightRle);
+            I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, ModuloI64::apply);
+            return Streams.ofValues(result.values()).with(Stream.ERRORS, result.errors());
         }
 
         I64Vector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existingValues instanceof I64Vector vector ? vector : null,
                 I64Vector.class,
-                requiredLength(mask, Math.max(left.length(), right.length())),
+                I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
         BooleanVector errors = context.allocator().allocateOrGrow(
                 ERRORS_CONTEXT,
                 existingErrors instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
-                requiredLength(mask, Math.max(left.length(), right.length())),
+                I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
-        if (left instanceof RleVector leftRle && right instanceof I64Vector rightFlat) {
-            applyLeftRleRightFlat(leftRle, rightFlat, mask, result, errors);
-        }
-        else if (left instanceof I64Vector leftFlat && right instanceof RleVector rightRle) {
-            applyLeftFlatRightRle(leftFlat, rightRle, mask, result, errors);
-        }
-        else {
-            applyFlatFlat((I64Vector) left, (I64Vector) right, mask, result, errors);
-        }
+        I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, ModuloI64::apply);
         return Streams.ofValues(result).with(Stream.ERRORS, errors);
-    }
-
-    private static void applyFlatFlat(I64Vector left, I64Vector right, Mask mask, I64Vector output, BooleanVector errors)
-    {
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                apply(left.values()[position], right.values()[position], output.values(), errors.values(), position);
-            }
-            return;
-        }
-
-        for (int position : mask) {
-            apply(left.values()[position], right.values()[position], output.values(), errors.values(), position);
-        }
-    }
-
-    private static void applyLeftRleRightFlat(RleVector left, I64Vector right, Mask mask, I64Vector output, BooleanVector errors)
-    {
-        long[] leftValues = ((I64Vector) left.values()).values();
-
-        int position = 0;
-        for (int run = 0; run < left.counts().length; run++) {
-            int runLength = left.counts()[run];
-            long leftValue = leftValues[run];
-
-            for (int offset = 0; offset < runLength; offset++) {
-                if (mask.all() || mask.contains(position)) {
-                    apply(leftValue, right.values()[position], output.values(), errors.values(), position);
-                }
-                position++;
-            }
-        }
-    }
-
-    private static void applyLeftFlatRightRle(I64Vector left, RleVector right, Mask mask, I64Vector output, BooleanVector errors)
-    {
-        long[] rightValues = ((I64Vector) right.values()).values();
-
-        int position = 0;
-        for (int run = 0; run < right.counts().length; run++) {
-            int runLength = right.counts()[run];
-            long rightValue = rightValues[run];
-
-            for (int offset = 0; offset < runLength; offset++) {
-                if (mask.all() || mask.contains(position)) {
-                    apply(left.values()[position], rightValue, output.values(), errors.values(), position);
-                }
-                position++;
-            }
-        }
     }
 
     private static void apply(long leftValue, long rightValue, long[] values, boolean[] errors, int position)
     {
         values[position] = result(leftValue, rightValue);
         errors[position] = error(rightValue);
-    }
-
-    private static Streams applyRleRle(RleVector left, RleVector right)
-    {
-        long[] leftValues = ((I64Vector) left.values()).values();
-        long[] rightValues = ((I64Vector) right.values()).values();
-
-        int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        long[] values = new long[counts.length];
-        boolean[] errors = new boolean[counts.length];
-
-        int outputIndex = 0;
-        int leftIndex = 0;
-        int rightIndex = 0;
-        int leftCount = 0;
-        int rightCount = 0;
-
-        while (leftIndex < left.counts().length && rightIndex < right.counts().length) {
-            if (leftCount == 0) {
-                leftCount = left.counts()[leftIndex];
-            }
-            if (rightCount == 0) {
-                rightCount = right.counts()[rightIndex];
-            }
-
-            int count = Math.min(leftCount, rightCount);
-            counts[outputIndex] = count;
-            long rightValue = rightValues[rightIndex];
-            apply(leftValues[leftIndex], rightValue, values, errors, outputIndex);
-            outputIndex++;
-
-            leftCount -= count;
-            rightCount -= count;
-
-            if (leftCount == 0) {
-                leftIndex++;
-            }
-            if (rightCount == 0) {
-                rightIndex++;
-            }
-        }
-
-        return Streams.ofValues(new RleVector(counts, new I64Vector(values)))
-                .with(Stream.ERRORS, new RleVector(counts, new BooleanVector(errors)));
     }
 
     private static long result(long leftValue, long rightValue)
@@ -183,13 +81,5 @@ public final class ModuloI64
     private static boolean error(long rightValue)
     {
         return rightValue == 0;
-    }
-
-    private static int requiredLength(Mask mask, int defaultLength)
-    {
-        if (mask.none()) {
-            return defaultLength;
-        }
-        return Math.max(defaultLength, mask.maxPosition() + 1);
     }
 }
