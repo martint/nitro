@@ -349,6 +349,27 @@ The normalized form should require:
 - only primitive execution calls plus explicit structural operations such as
   copy and merge-like overlay
 
+### Normalization framework
+
+Normalization should be implemented as a rule-driven rewrite framework rather
+than as one hardcoded normalizer method per special form.
+
+In practice, Nitro should have:
+
+- a normalizer that coordinates normalization over a plan
+- a normalization context that owns emitted assignments and fresh-variable
+  allocation
+- a registry-ordered list of normalization rules
+- one rule per special form or rewrite family
+
+That keeps the normalization pass extensible. Adding support for a new special
+form should usually mean registering a new rule instead of editing a central
+switch statement.
+
+The built-in rules for forms such as `if` and `coalesce` should follow the same
+framework as any future rewrites. The core normalizer should be the driver, not
+the place where every transformation is hardcoded.
+
 ### Normalized operation set
 
 The normalized executable subset should stay intentionally small.
