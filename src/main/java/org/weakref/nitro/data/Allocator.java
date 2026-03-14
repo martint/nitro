@@ -369,6 +369,37 @@ public class Allocator
         return result;
     }
 
+    public Mask firstMask(Context context, Mask mask, int count)
+    {
+        if (count >= mask.selectedCount()) {
+            return mask;
+        }
+
+        ContextState state = state(context);
+        Mask result = state.borrowMask(count);
+        boolean reused = result != null;
+        if (!reused) {
+            result = mask.first(count);
+        }
+        else if (count <= 0) {
+            result.clear(mask.size());
+        }
+        else {
+            int[] positions = result.positionsArray(count);
+            for (int index = 0; index < count; index++) {
+                positions[index] = mask.position(index);
+            }
+            if (count == mask.size() && isAllPositions(positions, count)) {
+                result.selectAll(mask.size());
+            }
+            else {
+                result.setSelection(mask.size(), count, false);
+            }
+        }
+        state.trackMask(result, reused);
+        return result;
+    }
+
     @Override
     public String toString()
     {
@@ -399,6 +430,18 @@ public class Allocator
     public void release(Context context)
     {
         state(context).release();
+    }
+
+    public Mask transfer(Context context, Mask mask)
+    {
+        state(context).transferMask(mask);
+        return mask;
+    }
+
+    public <T extends Vector> T transfer(Context context, T vector)
+    {
+        state(context).transferVector(vector);
+        return vector;
     }
 
     private void releaseVector(Context context, Vector vector)
@@ -519,6 +562,14 @@ public class Allocator
                     .addLast(vector);
         }
 
+        public void transferVector(Vector vector)
+        {
+            if (!inUseVectors.remove(vector)) {
+                return;
+            }
+            stats.releaseBytes(vectorBytes(vector));
+        }
+
         public Mask borrowMask(int requiredCapacity)
         {
             Map.Entry<Integer, ArrayDeque<Mask>> entry = maskPool.ceilingEntry(requiredCapacity);
@@ -537,6 +588,14 @@ public class Allocator
         {
             inUseMasks.add(mask);
             stats.acquire(maskBytes(mask), reused);
+        }
+
+        public void transferMask(Mask mask)
+        {
+            if (!inUseMasks.remove(mask)) {
+                return;
+            }
+            stats.releaseBytes(maskBytes(mask));
         }
 
         public void release()

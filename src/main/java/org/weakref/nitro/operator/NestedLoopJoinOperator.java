@@ -154,10 +154,55 @@ public class NestedLoopJoinOperator
         Mask batchMask = produceBatch();
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            Streams streams = result[outputIndex];
-            outputs[outputIndex] = (streams == null) ? Output.values(allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 0, I64Vector::new)) : Output.of(streams);
+            outputs[outputIndex] = resultOutput(outputIndex);
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(
+                batchMask,
+                takenMask -> takenMask == currentOuterMask ? currentOuterBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                outputs);
+    }
+
+    private Output resultOutput(int outputIndex)
+    {
+        Streams streams = result[outputIndex];
+        if (streams == null) {
+            I64Vector empty = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 0, I64Vector::new);
+            return new Output(java.util.Set.of(Stream.VALUES), stream -> empty, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+        }
+
+        int outerColumnCount = outer.outputCount();
+        if (outputIndex < outerColumnCount) {
+            if (streams == outerBuffer[outputIndex]) {
+                return new Output(
+                        streams.asMap().keySet(),
+                        streams::get,
+                        (stream, vector) -> {
+                            result[outputIndex] = null;
+                            outerBuffer[outputIndex] = null;
+                            return allocator.transfer(ALLOCATION_CONTEXT, vector);
+                        });
+            }
+
+            Output sourceOutput = currentOuterBatch.output(outputIndex);
+            return new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
+        }
+
+        int innerIndex = outputIndex - outerColumnCount;
+        if (streams == innerBuffer[innerIndex]) {
+            return new Output(
+                    streams.asMap().keySet(),
+                    streams::get,
+                    (stream, vector) -> {
+                        result[outputIndex] = null;
+                        innerBuffer[innerIndex] = null;
+                        return allocator.transfer(ALLOCATION_CONTEXT, vector);
+                    });
+        }
+
+        return new Output(
+                streams.asMap().keySet(),
+                streams::get,
+                (stream, vector) -> vector.copy(vector.length()));
     }
 
     private void joinWithInnerRow()

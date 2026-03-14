@@ -64,7 +64,13 @@ public class OutputOperator
             }
         }
 
-        return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, 1), Output.lazyValues(this::resultVector));
+        return new Batch(
+                allocator.allocateAllMask(ALLOCATION_CONTEXT, 1),
+                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                new Output(
+                        java.util.Set.of(Stream.VALUES),
+                        stream -> resultVector(),
+                        (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector)));
     }
 
     @Override

@@ -114,6 +114,7 @@ public class TestOperators
                                 new Sum(0),
                                 new CountAll()),
                         new LimitOperator(
+                                allocator,
                                 5,
                                 new ProjectOperator(
                                         allocator,
@@ -212,6 +213,7 @@ public class TestOperators
         assertThat(operator(
                 filterLessThanOrGreaterThan(
                         new LimitOperator(
+                                allocator,
                                 15,
                                 new GeneratorOperator(
                                         allocator,
@@ -239,6 +241,7 @@ public class TestOperators
         assertThat(operator(
                 filterDivisibleBy(
                         new LimitOperator(
+                                allocator,
                                 15,
                                 new GeneratorOperator(
                                         allocator,
@@ -274,6 +277,7 @@ public class TestOperators
                         allocator,
                         List.of(new CountAll()),
                         new LimitOperator(
+                                allocator,
                                 15,
                                 new GeneratorOperator(
                                         allocator,
@@ -357,6 +361,7 @@ public class TestOperators
     {
         assertThat(operator(
                 new LimitOperator(
+                        allocator,
                         5,
                         new GeneratorOperator(
                                 allocator,
@@ -373,6 +378,7 @@ public class TestOperators
 
         assertThat(operator(
                 new LimitOperator(
+                        allocator,
                         15,
                         new GeneratorOperator(
                                 allocator,
@@ -399,6 +405,7 @@ public class TestOperators
 
         assertThat(operator(
                 new LimitOperator(
+                        allocator,
                         15,
                         new GeneratorOperator(
                                 allocator,

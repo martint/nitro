@@ -110,7 +110,7 @@ public class GroupedAggregationOperator
             int output = outputIndex;
             outputs[outputIndex] = resultOutput(output);
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(batchMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
@@ -121,7 +121,7 @@ public class GroupedAggregationOperator
 
     private Output resultOutput(int output)
     {
-        return Output.of(result[output]);
+        return new Output(result[output].asMap().keySet(), result[output]::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
     }
 
     @Override

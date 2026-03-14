@@ -68,9 +68,9 @@ public class FilterOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Output sourceOutput = currentBatch.output(outputIndex);
-            outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow);
+            outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
         }
-        return new Batch(mask, outputs);
+        return new Batch(mask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override

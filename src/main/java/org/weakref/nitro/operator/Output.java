@@ -19,6 +19,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -28,6 +29,7 @@ public final class Output
 {
     private final EnumSet<Stream> exposedStreams;
     private final Function<Stream, Vector> resolver;
+    private final BiFunction<Stream, Vector, Vector> takeResolver;
     private final EnumMap<Stream, Vector> resolvedStreams = new EnumMap<>(Stream.class);
     private final EnumSet<Stream> takenStreams = EnumSet.noneOf(Stream.class);
 
@@ -54,9 +56,15 @@ public final class Output
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
+        this(exposedStreams, resolver, (_, vector) -> vector);
+    }
+
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
+    {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedStreams = exposedStreams.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
+        this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
     }
 
     public Vector borrow(Stream stream)
@@ -73,7 +81,7 @@ public final class Output
 
     public Vector take(Stream stream)
     {
-        Vector vector = borrow(stream);
+        Vector vector = requireNonNull(takeResolver.apply(stream, borrow(stream)), "takeResolver returned null");
         takenStreams.add(stream);
         return vector;
     }

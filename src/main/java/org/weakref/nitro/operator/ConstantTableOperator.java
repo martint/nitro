@@ -77,9 +77,10 @@ public class ConstantTableOperator
         done = true;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = Output.of(Streams.ofValuesAndNulls(columns[outputIndex], nulls[outputIndex]));
+            Streams streams = Streams.ofValuesAndNulls(columns[outputIndex], nulls[outputIndex]);
+            outputs[outputIndex] = new Output(streams.asMap().keySet(), streams::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, count), outputs);
+        return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, count), takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override

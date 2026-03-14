@@ -67,9 +67,12 @@ public class ProjectOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Reference outputReference = outputReferences.get(outputIndex);
-            outputs[outputIndex] = new Output(Set.of(outputReference.stream()), stream -> evaluateOutput(outputReference, stream));
+            outputs[outputIndex] = new Output(
+                    Set.of(outputReference.stream()),
+                    stream -> evaluateOutput(outputReference, stream),
+                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(mask, outputs);
+        return new Batch(mask, ignored -> currentBatch.takeMask(), outputs);
     }
 
     @Override

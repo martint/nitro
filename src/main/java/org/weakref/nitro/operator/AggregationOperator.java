@@ -59,7 +59,7 @@ public class AggregationOperator
             int output = outputIndex;
             outputs[outputIndex] = resultOutput(output);
         }
-        return new Batch(mask, outputs);
+        return new Batch(mask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
@@ -77,7 +77,7 @@ public class AggregationOperator
     private Output resultOutput(int output)
     {
         doAggregationIfNeeded();
-        return Output.of(results[output]);
+        return new Output(results[output].asMap().keySet(), results[output]::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
     }
 
     private void doAggregationIfNeeded()

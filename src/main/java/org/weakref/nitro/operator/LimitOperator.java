@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 
 import static java.lang.Math.toIntExact;
@@ -20,6 +21,9 @@ import static java.lang.Math.toIntExact;
 public class LimitOperator
         implements Operator
 {
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LimitOperator");
+
+    private final Allocator allocator;
     private final long limit;
     private final Operator source;
 
@@ -27,8 +31,9 @@ public class LimitOperator
     private Batch currentBatch;
     private Mask currentMask;
 
-    public LimitOperator(long limit, Operator source)
+    public LimitOperator(Allocator allocator, long limit, Operator source)
     {
+        this.allocator = allocator;
         this.limit = limit;
         this.source = source;
     }
@@ -43,19 +48,19 @@ public class LimitOperator
     public Batch next()
     {
         currentBatch = source.next();
-        currentMask = currentBatch.borrowMask();
+        Mask sourceMask = currentBatch.borrowMask();
 
-        int remaining = toIntExact(Math.min(limit - count, currentMask.count()));
-        currentMask = currentMask.first(remaining);
+        int remaining = toIntExact(Math.min(limit - count, sourceMask.count()));
+        currentMask = allocator.firstMask(ALLOCATION_CONTEXT, sourceMask, remaining);
         source.constrain(currentMask);
         count += remaining;
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Output sourceOutput = currentBatch.output(outputIndex);
-            outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow);
+            outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
         }
-        return new Batch(currentMask, outputs);
+        return new Batch(currentMask, takenMask -> takenMask == sourceMask ? currentBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
@@ -74,5 +79,6 @@ public class LimitOperator
     public void close()
     {
         source.close();
+        allocator.release(ALLOCATION_CONTEXT);
     }
 }

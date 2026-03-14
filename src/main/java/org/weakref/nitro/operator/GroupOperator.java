@@ -61,14 +61,20 @@ public class GroupOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             if (outputIndex == 0) {
-                outputs[outputIndex] = Output.lazyValues(this::groupIds);
+                outputs[outputIndex] = new Output(
+                        java.util.Set.of(Stream.VALUES),
+                        stream -> groupIds(),
+                        (stream, vector) -> {
+                            result = null;
+                            return allocator.transfer(ALLOCATION_CONTEXT, vector);
+                        });
             }
             else {
                 Output sourceOutput = currentBatch.output(outputIndex - 1);
-                outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow);
+                outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
             }
         }
-        return new Batch(mask, outputs);
+        return new Batch(mask, ignored -> currentBatch.takeMask(), outputs);
     }
 
     @Override

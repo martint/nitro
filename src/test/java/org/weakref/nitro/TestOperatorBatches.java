@@ -166,7 +166,7 @@ public class TestOperatorBatches
     void testLimitOperatorProducesLimitedBatch()
     {
         Allocator allocator = new Allocator();
-        Operator operator = new LimitOperator(3, new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))));
+        Operator operator = new LimitOperator(allocator, 3, new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))));
 
         Batch batch = operator.next();
         assertThat(batch.borrowMask().count()).isEqualTo(3);

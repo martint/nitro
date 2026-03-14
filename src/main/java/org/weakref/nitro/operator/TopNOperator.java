@@ -103,9 +103,12 @@ public class TopNOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> result[output]);
+            outputs[outputIndex] = new Output(
+                    java.util.Set.of(Stream.VALUES),
+                    stream -> result[output],
+                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(batchMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     private void reorderBuffer(PriorityQueue<Entry> queue)

@@ -20,10 +20,12 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
 import java.util.stream.StreamSupport;
@@ -157,6 +159,36 @@ public class TestBatchRuntime
         assertThat(second).isSameAs(first);
         assertThat(positions(second)).containsExactly(1, 5);
         assertThat(allocator.totalBytes(context)).isEqualTo(totalBytes);
+    }
+
+    @Test
+    void testTransferredVectorIsNotReturnedToAllocatorPool()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GeneratorOperator(allocator, 4, 4, List.of(new SequenceGenerator(0)));
+
+        Batch batch = operator.next();
+        I64Vector taken = (I64Vector) batch.output(0).take(Stream.VALUES);
+        operator.close();
+
+        I64Vector allocated = allocator.allocate(new Allocator.Context("GeneratorOperator"), I64Vector.class, 4, I64Vector::new);
+
+        assertThat(allocated).isNotSameAs(taken);
+    }
+
+    @Test
+    void testTransferredMaskIsNotReturnedToAllocatorPool()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L)));
+
+        Batch batch = operator.next();
+        Mask taken = batch.takeMask();
+        operator.close();
+
+        Mask allocated = allocator.allocateAllMask(new Allocator.Context("ConstantTableOperator"), 2);
+
+        assertThat(allocated).isNotSameAs(taken);
     }
 
     @Test

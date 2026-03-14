@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Mask;
 
 import java.util.Arrays;
+import java.util.function.Function;
 
 import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
@@ -24,11 +25,18 @@ public final class Batch
 {
     private final Mask mask;
     private final Output[] outputs;
+    private final Function<Mask, Mask> maskTakeResolver;
     private boolean maskTaken;
 
     public Batch(Mask mask, Output... outputs)
     {
+        this(mask, Function.identity(), outputs);
+    }
+
+    public Batch(Mask mask, Function<Mask, Mask> maskTakeResolver, Output... outputs)
+    {
         this.mask = requireNonNull(mask, "mask is null");
+        this.maskTakeResolver = requireNonNull(maskTakeResolver, "maskTakeResolver is null");
         this.outputs = Arrays.copyOf(outputs, outputs.length);
     }
 
@@ -44,7 +52,7 @@ public final class Batch
     {
         Mask borrowedMask = borrowMask();
         maskTaken = true;
-        return borrowedMask;
+        return requireNonNull(maskTakeResolver.apply(borrowedMask), "maskTakeResolver returned null");
     }
 
     public Output output(int outputIndex)

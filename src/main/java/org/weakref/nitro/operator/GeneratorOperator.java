@@ -16,9 +16,11 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.generator.I64Generator;
 
 import java.util.List;
+import java.util.Set;
 
 import static java.lang.Math.toIntExact;
 
@@ -30,7 +32,7 @@ public class GeneratorOperator
 
     private final int batchSize;
     private final List<I64Generator> generators;
-    private final List<I64Vector> results;
+    private final I64Vector[] results;
 
     private final boolean[] filled;
     private final Allocator allocator;
@@ -52,7 +54,7 @@ public class GeneratorOperator
 
         results = generators.stream()
                 .map(_ -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, batchSize, I64Vector::new))
-                .toList();
+                .toArray(I64Vector[]::new);
 
         filled = new boolean[generators.size()];
     }
@@ -60,7 +62,7 @@ public class GeneratorOperator
     @Override
     public int outputCount()
     {
-        return results.size();
+        return results.length;
     }
 
     @Override
@@ -91,9 +93,15 @@ public class GeneratorOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
-            outputs[outputIndex] = Output.lazyValues(() -> outputVector(output));
+            outputs[outputIndex] = new Output(
+                    Set.of(Stream.VALUES),
+                    stream -> outputVector(output),
+                    (stream, vector) -> {
+                        results[output] = null;
+                        return allocator.transfer(ALLOCATION_CONTEXT, vector);
+                    });
         }
-        return new Batch(mask, outputs);
+        return new Batch(mask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
@@ -105,13 +113,17 @@ public class GeneratorOperator
     private I64Vector outputVector(int output)
     {
         if (filled[output] || mask.none()) {
-            return results.get(output);
+            return results[output];
         }
 
         filled[output] = true;
 
         I64Generator generator = generators.get(output);
-        I64Vector result = results.get(output);
+        I64Vector result = results[output];
+        if (result == null) {
+            result = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, batchSize, I64Vector::new);
+            results[output] = result;
+        }
 
         for (int position = 0; position < currentBatchSize; position++) {
             generator.next();
