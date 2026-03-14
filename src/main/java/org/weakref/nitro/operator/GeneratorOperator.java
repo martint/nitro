@@ -70,7 +70,7 @@ public class GeneratorOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         for (int i = 0; i < filled.length; i++) {
             if (!filled[i]) {

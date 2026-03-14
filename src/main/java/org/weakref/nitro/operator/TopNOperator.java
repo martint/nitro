@@ -67,7 +67,7 @@ public class TopNOperator
         }
 
         while (source.hasNext()) {
-            currentBatch = source.nextBatch();
+            currentBatch = source.next();
             Mask mask = currentBatch.borrowMask();
 
             for (int position : mask) {
@@ -97,7 +97,7 @@ public class TopNOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         Mask batchMask = computeTopN();
         Output[] outputs = new Output[outputCount()];

@@ -72,7 +72,7 @@ public class ConstantTableOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         done = true;
         Output[] outputs = new Output[outputCount()];

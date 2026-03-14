@@ -85,7 +85,7 @@ public class NestedLoopJoinOperator
 
         if (outerRemaining == 0) {
             while (outer.hasNext()) {
-                currentOuterBatch = outer.nextBatch();
+                currentOuterBatch = outer.next();
                 currentOuterMask = currentOuterBatch.borrowMask();
                 if (!currentOuterMask.none()) {
                     break;
@@ -149,7 +149,7 @@ public class NestedLoopJoinOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         Mask batchMask = produceBatch();
         Output[] outputs = new Output[outputCount()];
@@ -222,7 +222,7 @@ public class NestedLoopJoinOperator
             innerRowCount = 0;
 
             while (inner.hasNext()) {
-                Batch batch = inner.nextBatch();
+                Batch batch = inner.next();
                 Mask mask = batch.borrowMask();
                 int maskOffset = 0;
                 while (maskOffset < mask.count()) {

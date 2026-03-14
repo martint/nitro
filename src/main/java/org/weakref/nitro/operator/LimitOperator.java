@@ -40,9 +40,9 @@ public class LimitOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
-        currentBatch = source.nextBatch();
+        currentBatch = source.next();
         currentMask = currentBatch.borrowMask();
 
         int remaining = toIntExact(Math.min(limit - count, currentMask.count()));

@@ -64,7 +64,7 @@ public class GroupedAggregationOperator
 
         long maxGroup = -1;
         while (source.hasNext()) {
-            Batch batch = source.nextBatch();
+            Batch batch = source.next();
             Mask mask = batch.borrowMask();
             I64Vector group = (I64Vector) batch.output(groupColumn).borrow(Stream.VALUES);
 
@@ -103,7 +103,7 @@ public class GroupedAggregationOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         Mask batchMask = computeResults();
         Output[] outputs = new Output[outputCount()];

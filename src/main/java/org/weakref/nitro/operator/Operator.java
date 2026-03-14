@@ -22,7 +22,7 @@ public interface Operator
 
     boolean hasNext();
 
-    Batch nextBatch();
+    Batch next();
 
     void constrain(Mask mask);
 

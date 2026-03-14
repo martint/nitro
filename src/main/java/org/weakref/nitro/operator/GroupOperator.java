@@ -52,10 +52,10 @@ public class GroupOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         filled = false;
-        currentBatch = source.nextBatch();
+        currentBatch = source.next();
         mask = currentBatch.borrowMask();
 
         Output[] outputs = new Output[outputCount()];

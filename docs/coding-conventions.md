@@ -23,3 +23,15 @@ return switch (vector) {
 Use polymorphism or real multi-encoding dispatch only when the code genuinely
 supports multiple runtime shapes. If there is only one valid shape, keep the
 assumption explicit so the code is easier to read and maintain.
+
+## Keep one semantic kernel per function
+
+When a function has multiple loop shapes or encoding-specific paths, keep the
+core scalar semantics in one place.
+
+For example, if `flat/flat` and `rle/rle` paths both implement the same
+arithmetic or error rule, factor that rule into one helper and have the loop
+variants call it instead of duplicating the logic.
+
+This reduces the risk that one path drifts semantically from the others while
+still allowing the hot loops themselves to stay specialized and readable.

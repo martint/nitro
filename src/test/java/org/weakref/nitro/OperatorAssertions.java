@@ -77,7 +77,7 @@ public class OperatorAssertions
         {
             List<Row> result = new ArrayList<>();
             while (operator.hasNext()) {
-                Batch batch = operator.nextBatch();
+                Batch batch = operator.next();
                 var mask = batch.borrowMask();
                 if (mask.none()) {
                     continue;

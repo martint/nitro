@@ -45,7 +45,7 @@ public class TableOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         currentPage++;
         Page page = pages.get(currentPage);

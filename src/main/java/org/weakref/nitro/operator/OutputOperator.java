@@ -46,12 +46,12 @@ public class OutputOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         done = true;
 
         while (source.hasNext()) {
-            Batch batch = source.nextBatch();
+            Batch batch = source.next();
             Mask mask = batch.borrowMask();
 
             List<Output> columns = new ArrayList<>();

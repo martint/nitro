@@ -58,9 +58,9 @@ public class ProjectOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
-        currentBatch = source.nextBatch();
+        currentBatch = source.next();
         mask = currentBatch.borrowMask();
         planEvaluator.reset();
 

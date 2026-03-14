@@ -52,9 +52,9 @@ public class FilterOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
-        currentBatch = source.nextBatch();
+        currentBatch = source.next();
         mask = currentBatch.borrowMask();
         BooleanVector predicate = (BooleanVector) planEvaluator.evaluate(predicateReference, mask).get(predicateReference.stream());
         mask = mask.and(predicate);

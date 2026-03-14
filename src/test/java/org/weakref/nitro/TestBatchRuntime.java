@@ -78,7 +78,7 @@ public class TestBatchRuntime
 
         assertThat(operator.hasNext()).isTrue();
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         Output firstOutput = batch.output(0);
         Output secondOutput = batch.output(1);
 

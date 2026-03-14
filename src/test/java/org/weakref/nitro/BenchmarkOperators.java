@@ -204,7 +204,7 @@ public class BenchmarkOperators
     private static void consume(Operator operator)
     {
         while (operator.hasNext()) {
-            var batch = operator.nextBatch();
+            var batch = operator.next();
             var mask = batch.borrowMask();
             if (mask.none()) {
                 continue;

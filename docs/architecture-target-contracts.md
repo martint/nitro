@@ -515,14 +515,8 @@ not use `null` output placeholders.
 - Operators may use `constrain(mask)` to avoid materializing streams that are no
   longer needed.
 - `takeMask()` and `take(stream)` transfer ownership to the caller.
-- After ownership transfer, the batch should no longer assume it can expose the
-  transferred buffer again unless it regenerates or replaces it.
-
-### Transitional rule
-
-Until the operator API becomes explicitly stream-aware, operators may still
-present stream outputs as synthetic logical columns. This is a migration aid,
-not the final model.
+- After ownership transfer, the batch no longer exposes the transferred buffer
+  for that batch.
 
 ### Ownership-aware extensions
 
@@ -626,6 +620,12 @@ explicit enough for planning and runtime decisions.
 Primitive functions should not hide control flow. Their semantics should be
 local to the supplied arguments, mask, output buffers, and calling convention.
 
+Primitive functions should also avoid signaling row-local failures with Java
+exceptions. If a row may fail independently of other rows, that failure should
+be represented in the function's `ERRORS` stream instead. This keeps error
+handling compatible with mask-driven evaluation, branch suppression, and
+partial-batch execution.
+
 The architecture should keep primitive-function metadata minimal.
 
 For now, the important semantic metadata is:
@@ -650,6 +650,11 @@ explicit:
   result for the current batch
 - functions may request framework-mediated transformations or helpers when they
   cannot operate directly on the current input representation
+
+In practice, reusable output should be treated as a writable flat-destination
+concept. Encoded-preserving paths such as RLE-preserving evaluation are
+primarily valid when the function is producing a fresh result rather than
+overlaying into an existing destination.
 
 Conceptually, the calling convention should look like:
 
@@ -691,6 +696,13 @@ representation directly, it should be able to:
 - request help from the framework through callbacks or context services
 
 This avoids forcing the planner to predict every encoding transition in advance.
+
+Today, Nitro's concrete implementation strategy is that primitive functions own
+their encoding dispatch internally. A function is expected to choose among its
+`flat/flat`, `flat/rle`, `rle/flat`, and `rle/rle` paths itself. The
+architecture may later move some of that into framework-generated support, but
+the current contract should reflect that function authors are responsible for
+those runtime choices.
 
 ### Null and error behavior
 
@@ -904,18 +916,15 @@ Those scratch buffers should:
 This is how the evaluator can reduce memory retention without giving up
 allocation reuse.
 
-### ProjectOperator in the target design
+### ProjectOperator in the design
 
-`ProjectOperator` should become a thin adapter around the evaluator:
+`ProjectOperator` is a thin adapter around the evaluator:
 
 - it owns an evaluator for the current batch
 - it maps projected outputs to `Reference`s
 - each output may refer to `VALUES`, `NULLS`, or `ERRORS`
-- requesting one output should be able to reuse partial work from prior output
+- requesting one output can reuse partial work from prior output
   requests in the same batch
-
-This replaces the legacy `ProjectOperator.Execution` mini-engine with evaluator
-references and shared memoization.
 
 ### Output buffer rule
 
@@ -949,6 +958,12 @@ is genuinely encoding-aware.
 
 This applies equally to scalar functions, predicate functions, and any future
 merge-like evaluator operations.
+
+When the evaluation mask covers the whole batch, functions should also prefer
+specialized full-batch loop shapes over sparse masked loops. `mask.all()` is
+not just a minor optimization hint; it is an important execution mode that
+often enables simpler sequential loops, better RLE preservation, and less
+branching in the hot path.
 
 ### Concrete execution decisions
 
@@ -1151,8 +1166,8 @@ stable.
 ### Output contract
 
 Aggregate outputs should be stream-addressable just like scalar expression
-outputs. This avoids reintroducing legacy nullable vector types at the aggregate
-boundary.
+outputs. This avoids reintroducing vector-specific nullable wrappers at the
+aggregate boundary.
 
 ## Future Considerations
 
@@ -1178,19 +1193,6 @@ architecture:
 - Exact grouped-result chunking policy for aggregation output batches.
 - Whether planner- or runtime-visible encoding metadata becomes necessary later,
   beyond the current calling-convention and callback approach.
-
-## Migration Notes
-
-The expected migration sequence is:
-
-1. Extend evaluator-facing references and result access so streams are explicit.
-2. Rebuild `ProjectOperator` on top of the evaluator and projected references.
-3. Introduce stream-aware access in aggregation interfaces.
-4. Migrate existing accumulators away from nullable vectors.
-5. Evolve the operator interface from values-only output access to explicit
-   stream access.
-6. Continue filling out the physical vector layer with additional flat types and
-   encoded vectors such as dictionary.
 
 ## Non-Goals
 

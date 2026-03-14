@@ -49,30 +49,30 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.data.Row.row;
 
-public class TestBatchOperators
+public class TestOperatorBatches
 {
     @Test
-    void testConstantTableOperatorExposesBatchApi()
+    void testConstantTableOperatorProducesBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L)));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
     }
 
     @Test
-    void testGeneratorOperatorExposesBatchApi()
+    void testGeneratorOperatorProducesBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(10)));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(10L, 11L, 12L, 13L, 14L);
     }
 
     @Test
-    void testProjectOperatorExposesBatchApi()
+    void testProjectOperatorProducesProjectedBatch()
     {
         Allocator allocator = new Allocator();
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
@@ -92,12 +92,12 @@ public class TestBatchOperators
                 primitiveRegistry,
                 new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L), row(2L, 20L))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(11L, 22L);
     }
 
     @Test
-    void testFilterOperatorExposesBatchApi()
+    void testFilterOperatorProducesFilteredBatch()
     {
         Allocator allocator = new Allocator();
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
@@ -121,13 +121,13 @@ public class TestBatchOperators
                 new Reference(predicate, Stream.VALUES),
                 allocator);
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L, 1L, 2L, 3L, 4L);
         assertThat(batch.borrowMask().count()).isEqualTo(3);
     }
 
     @Test
-    void testAggregationOperatorExposesBatchApi()
+    void testAggregationOperatorProducesAggregateBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new AggregationOperator(
@@ -135,13 +135,13 @@ public class TestBatchOperators
                 List.of(new Sum(0), new CountAll()),
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
         assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
     }
 
     @Test
-    void testGroupedAggregationOperatorExposesBatchApi()
+    void testGroupedAggregationOperatorProducesGroupedAggregateBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new GroupedAggregationOperator(
@@ -156,25 +156,25 @@ public class TestBatchOperators
                                 row(10L, 2L),
                                 row(20L, 3L)))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         int rowCount = batch.borrowMask().count();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(3L, 3L);
         assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 1L);
     }
 
     @Test
-    void testLimitOperatorExposesBatchApi()
+    void testLimitOperatorProducesLimitedBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new LimitOperator(3, new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(batch.borrowMask().count()).isEqualTo(3);
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L, 1L, 2L, 3L, 4L);
     }
 
     @Test
-    void testGroupOperatorExposesBatchApi()
+    void testGroupOperatorProducesGroupBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new GroupOperator(
@@ -182,12 +182,12 @@ public class TestBatchOperators
                 0,
                 new ConstantTableOperator(allocator, 1, List.of(row(10L), row(10L), row(20L))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(0L, 0L, 1L);
     }
 
     @Test
-    void testTopNOperatorExposesBatchApi()
+    void testTopNOperatorProducesTopNBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new TopNOperator(
@@ -196,12 +196,12 @@ public class TestBatchOperators
                 0,
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(5L), row(3L))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(5L, 3L);
     }
 
     @Test
-    void testNestedLoopJoinOperatorExposesBatchApi()
+    void testNestedLoopJoinOperatorProducesJoinBatch()
     {
         Allocator allocator = new Allocator();
         Operator operator = new NestedLoopJoinOperator(
@@ -209,14 +209,14 @@ public class TestBatchOperators
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L))),
                 new ConstantTableOperator(allocator, 1, List.of(row(10L), row(20L))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         int rowCount = batch.borrowMask().count();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(1L, 2L);
         assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(10L, 10L);
     }
 
     @Test
-    void testTableOperatorExposesBatchApi()
+    void testTableOperatorProducesBatch()
     {
         Operator operator = new TableOperator(
                 1,
@@ -225,7 +225,7 @@ public class TestBatchOperators
                         new org.weakref.nitro.data.Vector[] {new I64Vector(new long[] {7L, 8L})},
                         org.weakref.nitro.data.Mask.all(2))));
 
-        Batch batch = operator.nextBatch();
+        Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(7L, 8L);
     }
 }

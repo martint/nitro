@@ -50,7 +50,7 @@ public class AggregationOperator
     }
 
     @Override
-    public Batch nextBatch()
+    public Batch next()
     {
         done = true;
         Output[] outputs = new Output[outputCount()];
@@ -91,7 +91,7 @@ public class AggregationOperator
             }
 
             while (source.hasNext()) {
-                Batch batch = source.nextBatch();
+                Batch batch = source.next();
                 Mask mask = batch.borrowMask();
 
                 for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
