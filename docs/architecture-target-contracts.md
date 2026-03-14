@@ -210,30 +210,102 @@ execution buffers, not disposable values.
   execution paths.
 - Boolean streams should remain convertible into masks without forcing
   unnecessary copies.
+- Full-batch selection should be representable without materializing every row
+  position eagerly.
 
-### Intended direction
+### Intended shape
 
-The current `Mask` API behaves like a value type. The target runtime behavior
-should be closer to a resettable buffer with logical size and reusable
-capacity.
+Nitro should keep the public execution concept named `Mask`, but the runtime
+implementation should behave like a reusable selection buffer rather than a
+pure value object.
 
 Conceptually:
 
 ```java
-interface MaskBuffer
+final class Mask
 {
-    int count();
+    int size();
 
-    int capacity();
+    int selectedCount();
 
     boolean all();
 
-    void reset();
+    boolean none();
+
+    int position(int index);
+
+    int maxPosition();
+
+    boolean contains(int position);
+
+    void selectAll(int size);
+
+    void clear(int size);
+
+    void copyFrom(Mask other);
+
+    void intersectInPlace(Mask other);
+
+    void differenceInPlace(Mask other);
 }
 ```
 
-This does not require the public API to become mutable immediately, but it does
-mean the implementation should move toward allocator-managed storage.
+This is illustrative, but the important design points are:
+
+- `size` is the row-domain width for the batch
+- `selectedCount` is the number of active rows
+- `all()` means "all rows in `[0, size)` are selected," not "a dense positions
+  array happens to contain every index"
+- sparse positions should be stored in reusable capacity-backed storage when the
+  mask is not `all()`
+- iteration over selected rows should stay efficient in both `all()` and sparse
+  modes
+
+### Internal representation
+
+The recommended initial representation is:
+
+- `size`
+- `selectedCount`
+- `allSelected`
+- `int[] positions` for sparse selection
+
+with these invariants:
+
+- `0 <= selectedCount <= size`
+- if `allSelected`, then `selectedCount == size`
+- if `allSelected`, any sparse positions storage is ignored
+- if not `allSelected`, sparse positions are sorted and strictly increasing
+
+This keeps the implementation simple while still delivering the main benefits:
+
+- zero-allocation full-batch masks
+- explicit row-domain size
+- reusable sparse storage
+- in-place narrowing on owned masks
+
+### Execution behavior
+
+The execution hot paths should prefer:
+
+- `all()` fast paths for full-batch sequential loops
+- direct iteration over selected positions for sparse masks
+
+Membership checks such as `contains(position)` should remain available, but they
+should be treated as a slower fallback rather than the primary execution mode.
+
+### Mutation model
+
+Owned masks should support in-place operations such as:
+
+- `selectAll(size)`
+- `clear(size)`
+- `copyFrom(other)`
+- `intersectInPlace(other)`
+- `differenceInPlace(other)`
+
+This lets operators and the evaluator reuse mask storage across batches instead
+of allocating fresh mask objects for every refinement step.
 
 ### Ownership and handoff
 
@@ -244,6 +316,12 @@ mean the implementation should move toward allocator-managed storage.
   retain or mutate it.
 - Mask-producing operations such as union, difference, complement, and boolean
   filtering should eventually support writing into owned output masks.
+
+### Size compatibility
+
+Mask combination operations such as intersection and difference should operate
+within one row domain. In practice, that means masks involved in an in-place
+operation should agree on `size()`.
 
 ## Target IR Contract
 
@@ -1208,6 +1286,9 @@ architecture:
 - Using OpenJDK Code Reflection as a future mechanism for deriving or
   specializing vectorized adapters from scalar Java function definitions once
   that technology is mature enough for practical use.
+- Whether masks eventually need more internal representations beyond `all` and
+  sparse positions, such as range or bitset forms, if profiling shows those are
+  worthwhile.
 - More formal separation between IR mask semantics and runtime mask-buffer
   storage if implementation experience suggests the current conceptual split is
   still too loose.

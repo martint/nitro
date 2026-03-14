@@ -26,6 +26,7 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
+import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -65,6 +66,48 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllMaskTracksRowDomainWithoutMaterializedPositions()
+    {
+        Mask mask = Mask.all(4);
+
+        assertThat(mask.size()).isEqualTo(4);
+        assertThat(mask.count()).isEqualTo(4);
+        assertThat(mask.all()).isTrue();
+        assertThat(mask.none()).isFalse();
+        assertThat(mask.maxPosition()).isEqualTo(3);
+        assertThat(positions(mask)).containsExactly(0, 1, 2, 3);
+        assertThat(mask.complement().none()).isTrue();
+    }
+
+    @Test
+    void testRangeMaskKeepsOriginalRowDomain()
+    {
+        Mask mask = Mask.range(5, 3);
+
+        assertThat(mask.size()).isEqualTo(8);
+        assertThat(mask.count()).isEqualTo(3);
+        assertThat(mask.all()).isFalse();
+        assertThat(mask.position(0)).isEqualTo(5);
+        assertThat(mask.position(2)).isEqualTo(7);
+        assertThat(mask.contains(6)).isTrue();
+        assertThat(mask.contains(4)).isFalse();
+    }
+
+    @Test
+    void testOwnedMasksSupportInPlaceRefinement()
+    {
+        Mask mask = Mask.all(6);
+        mask.intersectInPlace(Mask.sparse(new int[] {1, 2, 4}, 6));
+
+        assertThat(mask.size()).isEqualTo(6);
+        assertThat(mask.count()).isEqualTo(3);
+        assertThat(positions(mask)).containsExactly(1, 2, 4);
+
+        mask.differenceInPlace(Mask.sparse(new int[] {2}, 6));
+        assertThat(positions(mask)).containsExactly(1, 4);
+    }
+
+    @Test
     void testOperatorOutputsRespectBorrowAndTakeSemantics()
     {
         Allocator allocator = new Allocator();
@@ -94,5 +137,11 @@ public class TestBatchRuntime
                 .hasMessageContaining("already taken");
 
         operator.close();
+    }
+
+    private static List<Integer> positions(Mask mask)
+    {
+        return StreamSupport.stream(mask.spliterator(), false)
+                .toList();
     }
 }
