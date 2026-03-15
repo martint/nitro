@@ -1203,12 +1203,16 @@ At a minimum, builtin numeric and boolean operations should handle:
 
 - flat plus flat
 - flat plus RLE
+- flat plus dictionary
 - RLE plus flat
+- dictionary plus flat
 - RLE plus RLE
+- dictionary plus dictionary
 
-More advanced encodings such as dictionary can still grow incrementally, but
-support for flat and RLE combinations is the minimum bar for saying execution
-is genuinely encoding-aware.
+Support for additional mixed combinations such as dictionary with RLE may grow
+incrementally, but flat, RLE, and dictionary should all fit within the same
+execution rule: choose the loop shape outside the hot loop, then execute the
+loop over concrete arrays and cursors inside it.
 
 This applies equally to scalar functions, predicate functions, and any future
 merge-like evaluator operations.

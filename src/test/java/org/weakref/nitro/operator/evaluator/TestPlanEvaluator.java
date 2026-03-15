@@ -137,6 +137,70 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testAddFunctionSupportsDictionaryInputs()
+    {
+        PrimitiveFunction add = builtinPrimitiveRegistry().get("add");
+
+        Streams flatDictionary = add.apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4})),
+                        Streams.ofValues(new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30})))),
+                Mask.all(4),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        Streams dictionaryFlat = add.apply(
+                List.of(
+                        Streams.ofValues(new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}))),
+                        Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4}))),
+                Mask.all(4),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        Streams dictionaryDictionary = add.apply(
+                List.of(
+                        Streams.ofValues(new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}))),
+                        Streams.ofValues(new DictionaryVector(new int[] {1, 1, 0, 0}, new I64Vector(new long[] {1, 2})))),
+                Mask.all(4),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((I64Vector) flatDictionary.values()).values()).containsExactly(31L, 12L, 23L, 34L);
+        assertThat(((I64Vector) dictionaryFlat.values()).values()).containsExactly(31L, 12L, 23L, 34L);
+        assertThat(((I64Vector) dictionaryDictionary.values()).values()).containsExactly(32L, 12L, 21L, 31L);
+    }
+
+    @Test
+    void testBooleanFunctionSupportsDictionaryInputs()
+    {
+        PrimitiveFunction or = primitiveRegistry().get("or");
+
+        Streams dictionaryFlat = or.apply(
+                List.of(
+                        Streams.ofValues(new DictionaryVector(new int[] {2, 0, 1, 2}, new BooleanVector(new boolean[] {false, true, false}))),
+                        Streams.ofValues(new BooleanVector(new boolean[] {false, false, true, false}))),
+                Mask.all(4),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        Streams dictionaryDictionary = or.apply(
+                List.of(
+                        Streams.ofValues(new DictionaryVector(new int[] {2, 0, 1, 2}, new BooleanVector(new boolean[] {false, true, false}))),
+                        Streams.ofValues(new DictionaryVector(new int[] {1, 1, 0, 0}, new BooleanVector(new boolean[] {false, true})))),
+                Mask.all(4),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((BooleanVector) dictionaryFlat.values()).values()).containsExactly(false, false, true, false);
+        assertThat(((BooleanVector) dictionaryDictionary.values()).values()).containsExactly(true, true, true, false);
+    }
+
+    @Test
     void testExactFunctionsSupportRleInputs()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

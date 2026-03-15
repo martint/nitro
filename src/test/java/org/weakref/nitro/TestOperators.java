@@ -20,6 +20,9 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -30,6 +33,7 @@ import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TopNOperator;
@@ -175,6 +179,53 @@ public class TestOperators
                         row(11L),
                         row(22L),
                         row(33L)));
+    }
+
+    @Test
+    void testProjectOperatorPreservesDictionaryInput()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable projected = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        projected,
+                        new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(new Input(0), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(projected, Stream.VALUES)));
+
+        DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}));
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(4), Output.values(dictionary));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        assertThat(operator(new ProjectOperator(allocator, evaluationPlan, primitiveRegistry, source)))
+                .matchesExactly(List.of(row(30L), row(10L), row(20L), row(30L)));
     }
 
     @Test

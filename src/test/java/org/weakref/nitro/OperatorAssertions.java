@@ -17,6 +17,7 @@ import org.assertj.core.api.AssertProvider;
 import org.assertj.core.api.Descriptable;
 import org.assertj.core.description.Description;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
@@ -97,6 +98,7 @@ public class OperatorAssertions
                         row[i] = switch (values) {
                             case I64Vector v -> nulls != null && nulls.values()[position] ? null : v.values()[position];
                             case BooleanVector v -> v.values()[position] ? 1L : 0L;
+                            case DictionaryVector v -> decodeDictionaryValue(v, nulls, position);
                             default -> throw new UnsupportedOperationException(values.getClass().getSimpleName());
                         };
                     }
@@ -106,6 +108,19 @@ public class OperatorAssertions
             }
             operator.close();
             return result;
+        }
+
+        private static Long decodeDictionaryValue(DictionaryVector values, BooleanVector nulls, int position)
+        {
+            if (nulls != null && nulls.values()[position]) {
+                return null;
+            }
+
+            return switch (values.valueAt(position)) {
+                case Long value -> value;
+                case Boolean value -> value ? 1L : 0L;
+                default -> throw new UnsupportedOperationException(values.values().getClass().getSimpleName());
+            };
         }
     }
 }
