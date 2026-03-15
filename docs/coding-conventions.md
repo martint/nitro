@@ -24,6 +24,11 @@ Use polymorphism or real multi-encoding dispatch only when the code genuinely
 supports multiple runtime shapes. If there is only one valid shape, keep the
 assumption explicit so the code is easier to read and maintain.
 
+When code genuinely supports multiple encodings, dispatch once outside the hot
+loop and keep the chosen loop body concrete. Prefer branching into specialized
+array-based loops over introducing per-row polymorphic access such as
+`value(position)` calls inside the loop.
+
 ## Keep one semantic kernel per function
 
 When a function has multiple loop shapes or encoding-specific paths, keep the

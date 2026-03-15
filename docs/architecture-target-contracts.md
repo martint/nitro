@@ -531,9 +531,20 @@ The recommended direction is:
 - keep masks explicit in the Java IR model
 - allow compact textual sugar that desugars boolean streams into mask
   expressions where appropriate
+- keep mask expressions as masks during evaluation for as long as possible
+- materialize boolean vectors only when some downstream consumer truly needs a
+  boolean stream representation
 
 This gives the implementation precise internal semantics without making every
 human-authored IR example excessively verbose.
+
+When evaluating composite mask expressions:
+
+- `AND` should evaluate the right side only on rows kept by the left side
+- `OR` should evaluate the right side only on rows rejected by the left side
+
+This keeps mask refinement local to the remaining active rows instead of
+repeatedly materializing wider intermediate boolean vectors.
 
 ## Target Operator Contract
 
@@ -803,6 +814,18 @@ architecture may later move some of that into framework-generated support, but
 the current contract should reflect that function authors are responsible for
 those runtime choices.
 
+The important execution boundary is:
+
+- dispatch on encoding outside the hot loop
+- keep the selected loop body concrete and array-based inside the hot loop
+
+Nitro should therefore prefer shared loop-shape utilities and
+function-specific concrete loops over per-row abstraction layers such as
+polymorphic `value(position)` dispatch. The execution contract is defined over
+the active mask and logical row domain, not over exact backing-array length
+equality. Reused pooled vectors may have extra physical capacity as long as
+they cover every row addressed by the current mask.
+
 ### Null and error behavior
 
 The architecture should make room for at least these distinctions:
@@ -1057,6 +1080,16 @@ is genuinely encoding-aware.
 
 This applies equally to scalar functions, predicate functions, and any future
 merge-like evaluator operations.
+
+In practice, shared support should focus on loop-shape utilities such as:
+
+- run merging
+- RLE position tracking
+- mask-aware iteration
+- full-batch versus sparse masked loop selection
+
+Those utilities are the right place to share behavior without pushing
+megamorphic per-row dispatch into the hot path.
 
 When the evaluation mask covers the whole batch, functions should also prefer
 specialized full-batch loop shapes over sparse masked loops. `mask.all()` is
