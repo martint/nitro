@@ -83,8 +83,8 @@ public class TestEvaluationIr
         assertThat(normalizedPlan.assignments().get(0).operation()).isInstanceOf(Copy.class);
         assertThat(normalizedPlan.assignments().get(1).operation()).isInstanceOf(Copy.class);
         assertThat(normalizedPlan.assignments().get(2).operation()).isInstanceOf(Merge.class);
-        assertThat(normalizedPlan.assignments().get(0).mask()).isInstanceOf(NaryAndMask.class);
-        assertThat(normalizedPlan.assignments().get(1).mask()).isInstanceOf(NaryAndMask.class);
+        assertThat(normalizedPlan.assignments().get(0).mask()).isInstanceOf(AndMask.class);
+        assertThat(normalizedPlan.assignments().get(1).mask()).isInstanceOf(AndMask.class);
     }
 
     @Test
@@ -106,24 +106,24 @@ public class TestEvaluationIr
         assertThat(normalizedPlan.streamPlans()).containsEntry(new Reference(result, Stream.VALUES), StreamPlan.MATERIALIZED);
         assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
         assertThat(normalizedPlan.assignments().getLast().operation()).isInstanceOf(Merge.class);
-        assertThat(normalizedPlan.assignments().get(0).mask()).isInstanceOf(NaryAndMask.class);
-        assertThat(normalizedPlan.assignments().get(1).mask()).isInstanceOf(NaryAndMask.class);
+        assertThat(normalizedPlan.assignments().get(0).mask()).isInstanceOf(AndMask.class);
+        assertThat(normalizedPlan.assignments().get(1).mask()).isInstanceOf(AndMask.class);
     }
 
     @Test
     void testNormalizerFlattensNestedBooleanMasks()
     {
         Variable result = new Variable(0);
-        MaskExpression nestedAnd = new AndMask(
+        MaskExpression nestedAnd = new AndMask(List.of(
                 new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
-                new AndMask(
+                new AndMask(List.of(
                         new ReferenceMask(new Reference(new Input(1), Stream.VALUES)),
-                        new ReferenceMask(new Reference(new Input(2), Stream.VALUES))));
-        MaskExpression nestedOr = new OrMask(
+                        new ReferenceMask(new Reference(new Input(2), Stream.VALUES))))));
+        MaskExpression nestedOr = new OrMask(List.of(
                 new ReferenceMask(new Reference(new Input(3), Stream.VALUES)),
-                new OrMask(
+                new OrMask(List.of(
                         new ReferenceMask(new Reference(new Input(4), Stream.VALUES)),
-                        new ReferenceMask(new Reference(new Input(5), Stream.VALUES))));
+                        new ReferenceMask(new Reference(new Input(5), Stream.VALUES))))));
 
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
@@ -135,10 +135,10 @@ public class TestEvaluationIr
         EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
         Assignment assignment = normalizedPlan.assignments().getFirst();
 
-        assertThat(assignment.mask()).isInstanceOf(NaryAndMask.class);
-        assertThat(((NaryAndMask) assignment.mask()).terms()).hasSize(3);
-        assertThat(((Merge) assignment.operation()).condition()).isInstanceOf(NaryOrMask.class);
-        assertThat(((NaryOrMask) ((Merge) assignment.operation()).condition()).terms()).hasSize(3);
+        assertThat(assignment.mask()).isInstanceOf(AndMask.class);
+        assertThat(((AndMask) assignment.mask()).terms()).hasSize(3);
+        assertThat(((Merge) assignment.operation()).condition()).isInstanceOf(OrMask.class);
+        assertThat(((OrMask) ((Merge) assignment.operation()).condition()).terms()).hasSize(3);
         assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
     }
 

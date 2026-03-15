@@ -94,10 +94,8 @@ public final class IrNormalizer
             return switch (expression) {
                 case AllMask _, ReferenceMask _ -> expression;
                 case NotMask(MaskExpression source) -> new NotMask(normalizeMask(source));
-                case AndMask(MaskExpression left, MaskExpression right) -> normalizeAnd(List.of(left, right));
-                case OrMask(MaskExpression left, MaskExpression right) -> normalizeOr(List.of(left, right));
-                case NaryAndMask(List<MaskExpression> terms) -> normalizeAnd(terms);
-                case NaryOrMask(List<MaskExpression> terms) -> normalizeOr(terms);
+                case AndMask(List<MaskExpression> terms) -> normalizeAnd(terms);
+                case OrMask(List<MaskExpression> terms) -> normalizeOr(terms);
             };
         }
 
@@ -107,11 +105,11 @@ public final class IrNormalizer
             for (MaskExpression term : terms) {
                 MaskExpression normalized = normalizeMask(term);
                 switch (normalized) {
-                    case NaryAndMask(List<MaskExpression> nested) -> flattened.addAll(nested);
+                    case AndMask(List<MaskExpression> nested) -> flattened.addAll(nested);
                     default -> flattened.add(normalized);
                 }
             }
-            return flattened.size() == 1 ? flattened.getFirst() : new NaryAndMask(flattened);
+            return flattened.size() == 1 ? flattened.getFirst() : new AndMask(flattened);
         }
 
         private static MaskExpression normalizeOr(List<MaskExpression> terms)
@@ -120,11 +118,11 @@ public final class IrNormalizer
             for (MaskExpression term : terms) {
                 MaskExpression normalized = normalizeMask(term);
                 switch (normalized) {
-                    case NaryOrMask(List<MaskExpression> nested) -> flattened.addAll(nested);
+                    case OrMask(List<MaskExpression> nested) -> flattened.addAll(nested);
                     default -> flattened.add(normalized);
                 }
             }
-            return flattened.size() == 1 ? flattened.getFirst() : new NaryOrMask(flattened);
+            return flattened.size() == 1 ? flattened.getFirst() : new OrMask(flattened);
         }
     }
 

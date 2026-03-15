@@ -41,8 +41,8 @@ public final class IfNormalizationRule
         Variable elseVariable = context.nextVariable();
         MaskExpression conditionMask = new ReferenceMask(condition);
 
-        context.emit(new Assignment(thenVariable, new Copy(whenTrue), new AndMask(assignment.mask(), conditionMask)));
-        context.emit(new Assignment(elseVariable, new Copy(whenFalse), new AndMask(assignment.mask(), new NotMask(conditionMask))));
+        context.emit(new Assignment(thenVariable, new Copy(whenTrue), new AndMask(List.of(assignment.mask(), conditionMask))));
+        context.emit(new Assignment(elseVariable, new Copy(whenFalse), new AndMask(List.of(assignment.mask(), new NotMask(conditionMask)))));
         context.emit(new Assignment(
                 assignment.output(),
                 new Merge(conditionMask, new Reference(thenVariable, whenTrue.stream()), new Reference(elseVariable, whenFalse.stream())),

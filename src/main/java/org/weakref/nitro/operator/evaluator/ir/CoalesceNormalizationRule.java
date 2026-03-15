@@ -42,8 +42,8 @@ public final class CoalesceNormalizationRule
         Variable firstVariable = context.nextVariable();
         Variable secondVariable = context.nextVariable();
 
-        context.emit(new Assignment(firstVariable, new Copy(first), new AndMask(assignment.mask(), firstIsPresent)));
-        context.emit(new Assignment(secondVariable, new Copy(second), new AndMask(assignment.mask(), firstIsNull)));
+        context.emit(new Assignment(firstVariable, new Copy(first), new AndMask(List.of(assignment.mask(), firstIsPresent))));
+        context.emit(new Assignment(secondVariable, new Copy(second), new AndMask(List.of(assignment.mask(), firstIsNull))));
         context.emit(new Assignment(
                 assignment.output(),
                 new Merge(firstIsPresent, new Reference(firstVariable, first.stream()), new Reference(secondVariable, second.stream())),

@@ -30,8 +30,6 @@ import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.Merge;
-import org.weakref.nitro.operator.evaluator.ir.NaryAndMask;
-import org.weakref.nitro.operator.evaluator.ir.NaryOrMask;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
@@ -320,10 +318,8 @@ public final class PlanEvaluator
                         sourceOutcome.nullMask(),
                         sourceOutcome.errorMask());
             }
-            case NaryAndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
-            case NaryOrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
-            case AndMask(MaskExpression left, MaskExpression right) -> evaluateBinaryAnd(left, right, mask);
-            case OrMask(MaskExpression left, MaskExpression right) -> evaluateBinaryOr(left, right, mask);
+            case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
+            case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
         };
     }
 
@@ -443,10 +439,8 @@ public final class PlanEvaluator
                         sourceOutcome.nullMask(),
                         sourceOutcome.errorMask());
             }
-            case NaryAndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
-            case NaryOrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
-            case AndMask(MaskExpression left, MaskExpression right) -> evaluateBinaryAnd(left, right, mask);
-            case OrMask(MaskExpression left, MaskExpression right) -> evaluateBinaryOr(left, right, mask);
+            case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
+            case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
         };
     }
 
@@ -482,38 +476,6 @@ public final class PlanEvaluator
         return averageCostPerRow / decisiveRate;
     }
 
-    private MaskOutcome combineAndOutcomes(Mask domainMask, MaskOutcome left, MaskOutcome right)
-    {
-        Mask survivors = right.survivorsMask(allocator, ALLOCATION_CONTEXT);
-        if (survivors.none()) {
-            return new MaskOutcome(emptyMask(domainMask.size()), emptyMask(domainMask.size()), emptyMask(domainMask.size()));
-        }
-
-        Mask survivingNulls = left.nullMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.nullMask(), survivors);
-        Mask survivingErrors = left.errorMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.errorMask(), survivors);
-        Mask errorMask = unionMasks(survivingErrors, right.errorMask(), domainMask.size());
-        Mask nullMask = unionMasks(survivingNulls, right.nullMask(), domainMask.size());
-        nullMask = errorMask.none() ? nullMask : allocator.differenceMask(ALLOCATION_CONTEXT, nullMask, errorMask);
-        Mask trueMask = subtractMasks(survivors, nullMask, errorMask);
-        return new MaskOutcome(trueMask, nullMask, errorMask);
-    }
-
-    private MaskOutcome combineOrOutcomes(Mask domainMask, MaskOutcome left, MaskOutcome right)
-    {
-        Mask trueMask = unionMasks(left.trueMask(), right.trueMask(), domainMask.size());
-        Mask remainingMask = trueMask.none() ? domainMask : allocator.differenceMask(ALLOCATION_CONTEXT, domainMask, trueMask);
-        if (remainingMask.none()) {
-            return new MaskOutcome(trueMask, emptyMask(domainMask.size()), emptyMask(domainMask.size()));
-        }
-
-        Mask survivingNulls = left.nullMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.nullMask(), remainingMask);
-        Mask survivingErrors = left.errorMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.errorMask(), remainingMask);
-        Mask errorMask = unionMasks(survivingErrors, right.errorMask(), domainMask.size());
-        Mask nullMask = unionMasks(survivingNulls, right.nullMask(), domainMask.size());
-        nullMask = errorMask.none() ? nullMask : allocator.differenceMask(ALLOCATION_CONTEXT, nullMask, errorMask);
-        return new MaskOutcome(trueMask, nullMask, errorMask);
-    }
-
     private Mask unionMasks(Mask left, Mask right, int size)
     {
         if (left.none()) {
@@ -534,28 +496,6 @@ public final class PlanEvaluator
     private Mask emptyMask(int size)
     {
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], size);
-    }
-
-    private MaskOutcome evaluateBinaryAnd(MaskExpression left, MaskExpression right, Mask mask)
-    {
-        MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
-        Mask leftSurvivors = leftOutcome.survivorsMask(allocator, ALLOCATION_CONTEXT);
-        if (leftSurvivors.none()) {
-            return new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
-        }
-        MaskOutcome rightOutcome = evaluateMaskOutcome(right, leftSurvivors);
-        return combineAndOutcomes(mask, leftOutcome, rightOutcome);
-    }
-
-    private MaskOutcome evaluateBinaryOr(MaskExpression left, MaskExpression right, Mask mask)
-    {
-        MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
-        Mask remainingMask = leftOutcome.trueMask().none() ? mask : allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftOutcome.trueMask());
-        if (remainingMask.none()) {
-            return new MaskOutcome(leftOutcome.trueMask(), emptyMask(mask.size()), emptyMask(mask.size()));
-        }
-        MaskOutcome rightOutcome = evaluateMaskOutcome(right, remainingMask);
-        return combineOrOutcomes(mask, leftOutcome, rightOutcome);
     }
 
     private enum BooleanOperator

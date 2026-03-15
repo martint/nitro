@@ -254,9 +254,9 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new OrMask(
-                                        new AndMask(new ReferenceMask(left), new NotMask(new ReferenceMask(right))),
-                                        new AndMask(new NotMask(new ReferenceMask(left)), new ReferenceMask(right))),
+                                new OrMask(List.of(
+                                        new AndMask(List.of(new ReferenceMask(left), new NotMask(new ReferenceMask(right)))),
+                                        new AndMask(List.of(new NotMask(new ReferenceMask(left)), new ReferenceMask(right))))),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),
@@ -383,7 +383,7 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new AndMask(new ReferenceMask(first), new ReferenceMask(second)),
+                                new AndMask(List.of(new ReferenceMask(first), new ReferenceMask(second))),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),
@@ -434,7 +434,7 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new OrMask(new ReferenceMask(first), new ReferenceMask(second)),
+                                new OrMask(List.of(new ReferenceMask(first), new ReferenceMask(second))),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),
@@ -475,57 +475,6 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testBinaryAndMaskRetainsSourceOrderWithoutNormalization()
-    {
-        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
-        Variable result = new Variable(0);
-        Reference first = new Reference(new Input(0), Stream.VALUES);
-        Reference second = new Reference(new Input(1), Stream.VALUES);
-        EvaluationPlan plan = new EvaluationPlan(
-                List.of(new Assignment(
-                        result,
-                        new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new AndMask(new ReferenceMask(first), new ReferenceMask(second)),
-                                new Reference(new Input(2), Stream.VALUES),
-                                new Reference(new Input(3), Stream.VALUES)),
-                        AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES)));
-
-        AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
-            if (reference.equals(first) || reference.equals(second)) {
-                maskSizes.updateAndGet(existing -> {
-                    var updated = new java.util.ArrayList<>(existing);
-                    updated.add(mask.selectedCount());
-                    return List.copyOf(updated);
-                });
-            }
-
-            if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
-                return new BooleanVector(new boolean[] {true, true, true, true, true, false, false, false});
-            }
-            if (reference.equals(new Reference(new Input(1), Stream.VALUES))) {
-                return new BooleanVector(new boolean[] {false, false, false, false, true, false, false, false});
-            }
-            if (reference.equals(new Reference(new Input(2), Stream.VALUES))) {
-                return new I64Vector(new long[] {1, 1, 1, 1, 1, 1, 1, 1});
-            }
-            if (reference.equals(new Reference(new Input(3), Stream.VALUES))) {
-                return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
-            }
-            throw new IllegalArgumentException("Unexpected input " + reference);
-        }, new Allocator());
-
-        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
-        assertThat(maskSizes.get()).containsExactly(8, 5);
-
-        maskSizes.set(List.of());
-        evaluator.reset();
-        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
-        assertThat(maskSizes.get()).containsExactly(8, 5);
-    }
-
-    @Test
     void testAndMaskKeepsNullAndErrorRowsOutOfFinalTrueResult()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
@@ -534,9 +483,9 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new AndMask(
+                                new AndMask(List.of(
                                         new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
-                                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES))),
+                                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),
@@ -563,9 +512,9 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new OrMask(
+                                new OrMask(List.of(
                                         new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
-                                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES))),
+                                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),

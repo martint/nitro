@@ -49,9 +49,8 @@ public final class NormalizedIrValidator
         return switch (expression) {
             case AllMask _, ReferenceMask _ -> true;
             case NotMask(MaskExpression source) -> isNormalizedMask(source);
-            case NaryAndMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
-            case NaryOrMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
-            case AndMask _, OrMask _ -> false;
+            case AndMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
+            case OrMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
         };
     }
 }

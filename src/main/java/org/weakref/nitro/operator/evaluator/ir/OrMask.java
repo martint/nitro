@@ -13,7 +13,16 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public record OrMask(MaskExpression left, MaskExpression right)
+import java.util.List;
+
+import static com.google.common.base.Preconditions.checkArgument;
+
+public record OrMask(List<MaskExpression> terms)
         implements MaskExpression
 {
+    public OrMask
+    {
+        terms = List.copyOf(terms);
+        checkArgument(terms.size() >= 2, "OrMask requires at least 2 terms");
+    }
 }

@@ -13,7 +13,16 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public record AndMask(MaskExpression left, MaskExpression right)
+import java.util.List;
+
+import static com.google.common.base.Preconditions.checkArgument;
+
+public record AndMask(List<MaskExpression> terms)
         implements MaskExpression
 {
+    public AndMask
+    {
+        terms = List.copyOf(terms);
+        checkArgument(terms.size() >= 2, "AndMask requires at least 2 terms");
+    }
 }
