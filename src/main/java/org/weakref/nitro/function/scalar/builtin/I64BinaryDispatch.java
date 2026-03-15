@@ -19,8 +19,6 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 final class I64BinaryDispatch
 {
     private I64BinaryDispatch() {}
@@ -51,10 +49,7 @@ final class I64BinaryDispatch
 
     public static int requiredLength(Mask mask, int defaultLength)
     {
-        if (mask.none()) {
-            return defaultLength;
-        }
-        return Math.max(defaultLength, mask.maxPosition() + 1);
+        return BinaryDispatchSupport.requiredLength(mask, defaultLength);
     }
 
     public static void applyLong(Vector left, Vector right, Mask mask, I64Vector output, LongBinaryKernel kernel)
@@ -84,7 +79,7 @@ final class I64BinaryDispatch
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
         long[] values = new long[counts.length];
 
-        mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
+        BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             values[outputIndex] = kernel.apply(leftValues[leftIndex], rightValues[rightIndex]);
         });
@@ -99,7 +94,7 @@ final class I64BinaryDispatch
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
         boolean[] values = new boolean[counts.length];
 
-        mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
+        BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             values[outputIndex] = kernel.apply(leftValues[leftIndex], rightValues[rightIndex]);
         });
@@ -115,7 +110,7 @@ final class I64BinaryDispatch
         long[] values = new long[counts.length];
         boolean[] errors = new boolean[counts.length];
 
-        mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
+        BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             kernel.apply(leftValues[leftIndex], rightValues[rightIndex], values, errors, outputIndex);
         });
@@ -124,8 +119,8 @@ final class I64BinaryDispatch
 
     private static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)
     {
-        validateLength(left, mask);
-        validateLength(right, mask);
+        BinaryDispatchSupport.validateLength(left, mask);
+        BinaryDispatchSupport.validateLength(right, mask);
 
         switch (left) {
             case I64Vector leftFlat -> {
@@ -163,130 +158,60 @@ final class I64BinaryDispatch
 
     private static void forEachRleFlat(RleVector left, long[] right, Mask mask, LongPairConsumer consumer)
     {
-        LongRleCursor cursor = new LongRleCursor(left);
+        BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
+        long[] leftValues = ((I64Vector) left.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(cursor.valueAt(position), right[position], position);
+                consumer.accept(leftValues[cursor.runIndexAt(position)], right[position], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(cursor.valueAt(position), right[position], position);
+            consumer.accept(leftValues[cursor.runIndexAt(position)], right[position], position);
         }
     }
 
     private static void forEachFlatRle(long[] left, RleVector right, Mask mask, LongPairConsumer consumer)
     {
-        LongRleCursor cursor = new LongRleCursor(right);
+        BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        long[] rightValues = ((I64Vector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(left[position], cursor.valueAt(position), position);
+                consumer.accept(left[position], rightValues[cursor.runIndexAt(position)], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(left[position], cursor.valueAt(position), position);
+            consumer.accept(left[position], rightValues[cursor.runIndexAt(position)], position);
         }
     }
 
     private static void forEachRleRle(RleVector left, RleVector right, Mask mask, LongPairConsumer consumer)
     {
-        LongRleCursor leftCursor = new LongRleCursor(left);
-        LongRleCursor rightCursor = new LongRleCursor(right);
+        BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
+        BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        long[] leftValues = ((I64Vector) left.values()).values();
+        long[] rightValues = ((I64Vector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(leftCursor.valueAt(position), rightCursor.valueAt(position), position);
+                consumer.accept(leftValues[leftCursor.runIndexAt(position)], rightValues[rightCursor.runIndexAt(position)], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(leftCursor.valueAt(position), rightCursor.valueAt(position), position);
+            consumer.accept(leftValues[leftCursor.runIndexAt(position)], rightValues[rightCursor.runIndexAt(position)], position);
         }
     }
 
     private static IllegalArgumentException unsupported(Vector vector)
     {
         return new IllegalArgumentException("Unsupported vector type: " + vector.getClass().getSimpleName());
-    }
-
-    private static void validateLength(Vector vector, Mask mask)
-    {
-        if (mask.none()) {
-            return;
-        }
-
-        int requiredLength = mask.maxPosition() + 1;
-        checkArgument(vector.length() >= requiredLength, "Vector length %s is shorter than required length %s", vector.length(), requiredLength);
-    }
-
-    private static void mergeRuns(int[] leftCounts, int[] rightCounts, RunConsumer consumer)
-    {
-        int outputIndex = 0;
-        int leftIndex = 0;
-        int rightIndex = 0;
-        int leftCount = 0;
-        int rightCount = 0;
-
-        while (leftIndex < leftCounts.length && rightIndex < rightCounts.length) {
-            if (leftCount == 0) {
-                leftCount = leftCounts[leftIndex];
-            }
-            if (rightCount == 0) {
-                rightCount = rightCounts[rightIndex];
-            }
-
-            int count = Math.min(leftCount, rightCount);
-            consumer.accept(outputIndex, leftIndex, rightIndex, count);
-            outputIndex++;
-
-            leftCount -= count;
-            rightCount -= count;
-
-            if (leftCount == 0) {
-                leftIndex++;
-            }
-            if (rightCount == 0) {
-                rightIndex++;
-            }
-        }
-    }
-
-    @FunctionalInterface
-    private interface RunConsumer
-    {
-        void accept(int outputIndex, int leftIndex, int rightIndex, int count);
-    }
-
-    private static final class LongRleCursor
-    {
-        private final int[] counts;
-        private final long[] values;
-        private int runIndex;
-        private int runEnd;
-
-        private LongRleCursor(RleVector vector)
-        {
-            counts = vector.counts();
-            values = ((I64Vector) vector.values()).values();
-            if (counts.length > 0) {
-                runEnd = counts[0];
-            }
-        }
-
-        private long valueAt(int position)
-        {
-            while (position >= runEnd) {
-                runIndex++;
-                runEnd += counts[runIndex];
-            }
-            return values[runIndex];
-        }
     }
 
     public record RleWithErrors(RleVector values, RleVector errors) {}
