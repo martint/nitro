@@ -446,6 +446,12 @@ That metadata should also influence ordinary stream planning. If a boolean
 projected output, its stream plan should be downgraded to scratch-style use
 instead of being memoized or materialized like an ordinary value stream.
 
+That downgrade should apply to the whole produced stream bundle for that
+boolean producer, not just the `VALUES` reference. If `NULLS` or `ERRORS`
+would otherwise be memoized only because they arrive alongside a mask-only
+boolean value stream, they should also stay scratch-oriented unless some stream
+from that bundle is explicitly projected.
+
 Normalization should also apply that same derivation within mask positions
 inside the IR itself, such as `Merge` conditions or assignment masks. If a
 mask position contains a `ReferenceMask` over a boolean-producing reference,

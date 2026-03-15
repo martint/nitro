@@ -129,7 +129,11 @@ public final class IrNormalizer
         java.util.LinkedHashMap<Reference, StreamPlan> normalized = new java.util.LinkedHashMap<>(plan.streamPlans());
         for (Reference reference : maskPlans.keySet()) {
             if (reference.stream() == Stream.VALUES && !plan.outputs().contains(reference)) {
-                normalized.put(reference, StreamPlan.SCRATCH);
+                for (Reference plannedReference : List.copyOf(normalized.keySet())) {
+                    if (plannedReference.producer().equals(reference.producer()) && !plan.outputs().contains(plannedReference)) {
+                        normalized.put(plannedReference, StreamPlan.SCRATCH);
+                    }
+                }
             }
         }
         return normalized;

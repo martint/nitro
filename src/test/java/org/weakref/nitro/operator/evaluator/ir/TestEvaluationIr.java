@@ -229,6 +229,29 @@ public class TestEvaluationIr
     }
 
     @Test
+    void testNormalizerDowngradesSiblingStreamPlansForMaskOnlyProducer()
+    {
+        Variable predicate = new Variable(0);
+        Reference predicateValues = new Reference(predicate, Stream.VALUES);
+        Reference predicateErrors = new Reference(predicate, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        predicate,
+                        new Call("predicate", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(),
+                Map.of(
+                        predicateValues, StreamPlan.MATERIALIZED,
+                        predicateErrors, StreamPlan.MATERIALIZED),
+                Map.of(predicateValues, new ReferenceMask(predicateValues)));
+
+        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+
+        assertThat(normalizedPlan.streamPlans()).containsEntry(predicateValues, StreamPlan.SCRATCH);
+        assertThat(normalizedPlan.streamPlans()).containsEntry(predicateErrors, StreamPlan.SCRATCH);
+    }
+
+    @Test
     void testNormalizerUsesRegisteredRules()
     {
         Variable result = new Variable(0);
