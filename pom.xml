@@ -34,6 +34,36 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+            <dependency>
+                <groupId>commons-codec</groupId>
+                <artifactId>commons-codec</artifactId>
+                <version>1.16.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>commons-logging</groupId>
+                <artifactId>commons-logging</artifactId>
+                <version>1.3.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.14.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-text</artifactId>
+                <version>1.11.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.xerial.snappy</groupId>
+                <artifactId>snappy-java</artifactId>
+                <version>1.1.10.7</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -51,9 +81,45 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.parquet</groupId>
+            <artifactId>parquet-hadoop</artifactId>
+            <version>1.15.2</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
             <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-common</artifactId>
+            <version>3.4.1</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.activation</groupId>
+                    <artifactId>activation</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>javax.servlet</groupId>
+                    <artifactId>javax.servlet-api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-mapreduce-client-core</artifactId>
+            <version>3.4.1</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.servlet</groupId>
+                    <artifactId>javax.servlet-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -88,4 +154,35 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <configuration>
+                    <ignoredUsedUndeclaredDependencies>
+                        <ignoredUsedUndeclaredDependency>org.apache.parquet:parquet-column</ignoredUsedUndeclaredDependency>
+                        <ignoredUsedUndeclaredDependency>org.apache.parquet:parquet-common</ignoredUsedUndeclaredDependency>
+                    </ignoredUsedUndeclaredDependencies>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.basepom.maven</groupId>
+                <artifactId>duplicate-finder-maven-plugin</artifactId>
+                <configuration>
+                    <ignoredDependencies>
+                        <dependency>
+                            <groupId>org.apache.parquet</groupId>
+                            <artifactId>parquet-column</artifactId>
+                        </dependency>
+                    </ignoredDependencies>
+                    <ignoredResourcePatterns>
+                        <ignoredResourcePattern>about.html</ignoredResourcePattern>
+                        <ignoredResourcePattern>yarn-default.xml</ignoredResourcePattern>
+                    </ignoredResourcePatterns>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

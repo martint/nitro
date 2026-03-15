@@ -18,6 +18,8 @@ define the interfaces and responsibilities we want the codebase to converge on.
 - Allow downstream operators to request only the streams they actually need.
 - Preserve mask-driven, additive evaluation so partial work can be reused across
   columns and across stream requests within a batch.
+- Keep the operator/runtime boundary suitable for realistic columnar sources
+  such as Parquet, not just synthetic generators and in-memory tables.
 
 ## Architectural Principles
 
@@ -1517,9 +1519,9 @@ architecture:
 - Trait-based dispatch beyond physical encoding alone, so specialized execution
   can target properties such as ASCII-only strings or other vector-family
   traits without hardcoding those assumptions into the core type system.
-- Wiring Nitro to a Parquet reader or equivalent columnar data source so the
-  architecture can be exercised against realistic datasets, real column
-  encodings, and real-world projection/filter workloads.
+- Broader Parquet integration beyond the current fixed-width scan path,
+  including richer type coverage, better encoding preservation, and stronger
+  interaction with projection/filter planning on real datasets.
 
 ## Non-Goals
 
