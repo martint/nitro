@@ -175,9 +175,8 @@ public final class PlanEvaluator
 
     private Streams evaluateMerge(Stream stream, Merge merge, Mask mask, Streams output)
     {
-        BooleanVector condition = (BooleanVector) evaluateMaskReference(merge.condition(), mask).values();
-        Mask trueMask = allocator.intersectMask(ALLOCATION_CONTEXT, mask, condition);
-        Mask falseMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, condition);
+        Mask trueMask = evaluateMask(merge.condition(), mask);
+        Mask falseMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, trueMask);
 
         Streams result = prepareOutput(output);
         if (!trueMask.none()) {
@@ -189,34 +188,37 @@ public final class PlanEvaluator
         return result;
     }
 
-    private Streams evaluateMaskReference(MaskExpression condition, Mask mask)
-    {
-        Mask conditionMask = evaluateMask(condition, mask);
-        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask.maxPosition() + 1, BooleanVector::new);
-        for (int position : conditionMask) {
-            values.values()[position] = true;
-        }
-        return Streams.of(Stream.VALUES, values);
-    }
-
     private Mask evaluateMask(MaskExpression expression, Mask mask)
     {
         return switch (expression) {
             case AllMask _ -> mask;
             case ReferenceMask(Reference reference) -> allocator.intersectMask(ALLOCATION_CONTEXT, mask, (BooleanVector) evaluate(reference, mask).get(reference.stream()));
-            case NotMask(MaskExpression source) -> allocator.differenceMask(ALLOCATION_CONTEXT, mask, toBooleanVector(evaluateMask(source, mask), mask.maxPosition() + 1));
-            case AndMask(MaskExpression left, MaskExpression right) -> allocator.intersectMask(ALLOCATION_CONTEXT, evaluateMask(left, mask), toBooleanVector(evaluateMask(right, mask), mask.maxPosition() + 1));
-            case OrMask(MaskExpression left, MaskExpression right) -> allocator.unionMask(ALLOCATION_CONTEXT, evaluateMask(left, mask), evaluateMask(right, mask));
-        };
-    }
+            case NotMask(MaskExpression source) -> allocator.differenceMask(ALLOCATION_CONTEXT, mask, evaluateMask(source, mask));
+            case AndMask(MaskExpression left, MaskExpression right) -> {
+                Mask leftMask = evaluateMask(left, mask);
+                if (leftMask.none()) {
+                    yield leftMask;
+                }
+                yield evaluateMask(right, leftMask);
+            }
+            case OrMask(MaskExpression left, MaskExpression right) -> {
+                Mask leftMask = evaluateMask(left, mask);
+                if (leftMask.selectedCount() == mask.selectedCount()) {
+                    yield leftMask;
+                }
 
-    private BooleanVector toBooleanVector(Mask mask, int length)
-    {
-        BooleanVector result = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, length, BooleanVector::new);
-        for (int position : mask) {
-            result.values()[position] = true;
-        }
-        return result;
+                Mask remainingMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftMask);
+                if (remainingMask.none()) {
+                    yield leftMask;
+                }
+
+                Mask rightMask = evaluateMask(right, remainingMask);
+                if (leftMask.none()) {
+                    yield rightMask;
+                }
+                yield allocator.unionMask(ALLOCATION_CONTEXT, leftMask, rightMask);
+            }
+        };
     }
 
     private Streams prepareOutput(Streams output)

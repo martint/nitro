@@ -24,12 +24,15 @@ import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
+import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -241,6 +244,37 @@ public class TestPlanEvaluator
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(10L, 1L, 20L, 1L);
+    }
+
+    @Test
+    void testEvaluatesCompositeMaskExpressions()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        Reference left = new Reference(new Input(0), Stream.VALUES);
+        Reference right = new Reference(new Input(1), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new OrMask(
+                                        new AndMask(new ReferenceMask(left), new NotMask(new ReferenceMask(right))),
+                                        new AndMask(new NotMask(new ReferenceMask(left)), new ReferenceMask(right))),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (index, mask) -> switch (index) {
+            case 0 -> new BooleanVector(new boolean[] {true, true, false, false});
+            case 1 -> new BooleanVector(new boolean[] {false, true, true, false});
+            case 2 -> new I64Vector(new long[] {1, 1, 1, 1});
+            case 3 -> new I64Vector(new long[] {2, 2, 2, 2});
+            default -> throw new IllegalArgumentException("Unexpected input " + index);
+        }, new Allocator());
+
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
+        assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
     }
 
     private static PrimitiveRegistry builtinPrimitiveRegistry()
