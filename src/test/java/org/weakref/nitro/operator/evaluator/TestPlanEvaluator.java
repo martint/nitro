@@ -42,6 +42,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry;
@@ -368,6 +369,108 @@ public class TestPlanEvaluator
         assertThat(((BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS)).values()).containsExactly(false, true, false);
         assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
         assertThat(evaluations).hasValue(1);
+    }
+
+    @Test
+    void testAdaptiveAndReorderingUsesMoreSelectiveTermFirstOnLaterRuns()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        Reference first = new Reference(new Input(0), Stream.VALUES);
+        Reference second = new Reference(new Input(1), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new AndMask(new ReferenceMask(first), new ReferenceMask(second)),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
+            if (reference.equals(first) || reference.equals(second)) {
+                maskSizes.updateAndGet(existing -> {
+                    var updated = new java.util.ArrayList<>(existing);
+                    updated.add(mask.selectedCount());
+                    return List.copyOf(updated);
+                });
+            }
+
+            if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                return new BooleanVector(new boolean[] {true, true, true, true, true, false, false, false});
+            }
+            if (reference.equals(new Reference(new Input(1), Stream.VALUES))) {
+                return new BooleanVector(new boolean[] {false, false, false, false, true, false, false, false});
+            }
+            if (reference.equals(new Reference(new Input(2), Stream.VALUES))) {
+                return new I64Vector(new long[] {1, 1, 1, 1, 1, 1, 1, 1});
+            }
+            if (reference.equals(new Reference(new Input(3), Stream.VALUES))) {
+                return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
+            }
+            throw new IllegalArgumentException("Unexpected input " + reference);
+        }, new Allocator());
+
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
+        assertThat(maskSizes.get()).containsExactly(8, 5);
+
+        maskSizes.set(List.of());
+        evaluator.reset();
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
+        assertThat(maskSizes.get()).containsExactly(8, 1);
+    }
+
+    @Test
+    void testAdaptiveOrReorderingUsesMoreSelectiveTermFirstOnLaterRuns()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        Reference first = new Reference(new Input(0), Stream.VALUES);
+        Reference second = new Reference(new Input(1), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new OrMask(new ReferenceMask(first), new ReferenceMask(second)),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
+            if (reference.equals(first) || reference.equals(second)) {
+                maskSizes.updateAndGet(existing -> {
+                    var updated = new java.util.ArrayList<>(existing);
+                    updated.add(mask.selectedCount());
+                    return List.copyOf(updated);
+                });
+            }
+
+            if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                return new BooleanVector(new boolean[] {true, false, false, false, false, false, false, false});
+            }
+            if (reference.equals(new Reference(new Input(1), Stream.VALUES))) {
+                return new BooleanVector(new boolean[] {true, true, true, true, true, false, false, false});
+            }
+            if (reference.equals(new Reference(new Input(2), Stream.VALUES))) {
+                return new I64Vector(new long[] {1, 1, 1, 1, 1, 1, 1, 1});
+            }
+            if (reference.equals(new Reference(new Input(3), Stream.VALUES))) {
+                return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
+            }
+            throw new IllegalArgumentException("Unexpected input " + reference);
+        }, new Allocator());
+
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
+        assertThat(maskSizes.get()).containsExactly(8, 7);
+
+        maskSizes.set(List.of());
+        evaluator.reset();
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
+        assertThat(maskSizes.get()).containsExactly(8, 3);
     }
 
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)

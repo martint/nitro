@@ -38,6 +38,8 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +58,7 @@ public final class PlanEvaluator
     private final Map<Variable, Assignment> assignments;
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
+    private final Map<MaskExpression, MaskTermStats> maskTermStats = new HashMap<>();
 
     @FunctionalInterface
     public interface InputResolver
@@ -193,30 +196,8 @@ public final class PlanEvaluator
             case AllMask _ -> mask;
             case ReferenceMask(Reference reference) -> allocator.intersectMask(ALLOCATION_CONTEXT, mask, (BooleanVector) evaluate(reference, mask).get(reference.stream()));
             case NotMask(MaskExpression source) -> allocator.differenceMask(ALLOCATION_CONTEXT, mask, evaluateMask(source, mask));
-            case AndMask(MaskExpression left, MaskExpression right) -> {
-                Mask leftMask = evaluateMask(left, mask);
-                if (leftMask.none()) {
-                    yield leftMask;
-                }
-                yield evaluateMask(right, leftMask);
-            }
-            case OrMask(MaskExpression left, MaskExpression right) -> {
-                Mask leftMask = evaluateMask(left, mask);
-                if (leftMask.selectedCount() == mask.selectedCount()) {
-                    yield leftMask;
-                }
-
-                Mask remainingMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftMask);
-                if (remainingMask.none()) {
-                    yield leftMask;
-                }
-
-                Mask rightMask = evaluateMask(right, remainingMask);
-                if (leftMask.none()) {
-                    yield rightMask;
-                }
-                yield allocator.unionMask(ALLOCATION_CONTEXT, leftMask, rightMask);
-            }
+            case AndMask _ -> evaluateAdaptiveAnd(expression, mask);
+            case OrMask _ -> evaluateAdaptiveOr(expression, mask);
         };
     }
 
@@ -328,6 +309,183 @@ public final class PlanEvaluator
                 memoizedStreams.put(streamReference, streams);
                 memoizedMasks.put(streamReference, mask);
             }
+        }
+    }
+
+    private Mask evaluateAdaptiveAnd(MaskExpression expression, Mask mask)
+    {
+        List<MaskExpression> terms = flattenAndTerms(expression);
+        terms = orderTerms(terms, BooleanOperator.AND);
+
+        Mask activeMask = mask;
+        for (MaskExpression term : terms) {
+            Mask termMask = evaluateMeasuredMask(term, activeMask);
+            if (termMask.none()) {
+                return termMask;
+            }
+            activeMask = termMask;
+        }
+        return activeMask;
+    }
+
+    private Mask evaluateAdaptiveOr(MaskExpression expression, Mask mask)
+    {
+        List<MaskExpression> terms = flattenOrTerms(expression);
+        terms = orderTerms(terms, BooleanOperator.OR);
+
+        Mask acceptedMask = null;
+        Mask remainingMask = mask;
+        for (MaskExpression term : terms) {
+            if (remainingMask.none()) {
+                break;
+            }
+
+            Mask termMask = evaluateMeasuredMask(term, remainingMask);
+            if (termMask.none()) {
+                continue;
+            }
+
+            acceptedMask = acceptedMask == null ? termMask : allocator.unionMask(ALLOCATION_CONTEXT, acceptedMask, termMask);
+            if (acceptedMask.selectedCount() == mask.selectedCount()) {
+                return acceptedMask;
+            }
+            remainingMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, acceptedMask);
+        }
+
+        return acceptedMask == null ? allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], mask.size()) : acceptedMask;
+    }
+
+    private Mask evaluateMeasuredMask(MaskExpression term, Mask mask)
+    {
+        long start = System.nanoTime();
+        Mask result = evaluateMaskWithoutReordering(term, mask);
+        long elapsed = System.nanoTime() - start;
+        maskTermStats.computeIfAbsent(term, _ -> new MaskTermStats()).record(mask.selectedCount(), result.selectedCount(), elapsed);
+        return result;
+    }
+
+    private Mask evaluateMaskWithoutReordering(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> mask;
+            case ReferenceMask(Reference reference) -> allocator.intersectMask(ALLOCATION_CONTEXT, mask, (BooleanVector) evaluate(reference, mask).get(reference.stream()));
+            case NotMask(MaskExpression source) -> allocator.differenceMask(ALLOCATION_CONTEXT, mask, evaluateMask(source, mask));
+            case AndMask(MaskExpression left, MaskExpression right) -> {
+                Mask leftMask = evaluateMask(left, mask);
+                if (leftMask.none()) {
+                    yield leftMask;
+                }
+                yield evaluateMask(right, leftMask);
+            }
+            case OrMask(MaskExpression left, MaskExpression right) -> {
+                Mask leftMask = evaluateMask(left, mask);
+                if (leftMask.selectedCount() == mask.selectedCount()) {
+                    yield leftMask;
+                }
+
+                Mask remainingMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftMask);
+                if (remainingMask.none()) {
+                    yield leftMask;
+                }
+
+                Mask rightMask = evaluateMask(right, remainingMask);
+                if (leftMask.none()) {
+                    yield rightMask;
+                }
+                yield allocator.unionMask(ALLOCATION_CONTEXT, leftMask, rightMask);
+            }
+        };
+    }
+
+    private List<MaskExpression> flattenAndTerms(MaskExpression expression)
+    {
+        ArrayList<MaskExpression> terms = new ArrayList<>();
+        flattenAndTerms(expression, terms);
+        return terms;
+    }
+
+    private void flattenAndTerms(MaskExpression expression, List<MaskExpression> terms)
+    {
+        switch (expression) {
+            case AndMask(MaskExpression left, MaskExpression right) -> {
+                flattenAndTerms(left, terms);
+                flattenAndTerms(right, terms);
+            }
+            default -> terms.add(expression);
+        }
+    }
+
+    private List<MaskExpression> flattenOrTerms(MaskExpression expression)
+    {
+        ArrayList<MaskExpression> terms = new ArrayList<>();
+        flattenOrTerms(expression, terms);
+        return terms;
+    }
+
+    private void flattenOrTerms(MaskExpression expression, List<MaskExpression> terms)
+    {
+        switch (expression) {
+            case OrMask(MaskExpression left, MaskExpression right) -> {
+                flattenOrTerms(left, terms);
+                flattenOrTerms(right, terms);
+            }
+            default -> terms.add(expression);
+        }
+    }
+
+    private List<MaskExpression> orderTerms(List<MaskExpression> terms, BooleanOperator operator)
+    {
+        ArrayList<IndexedTerm> indexedTerms = new ArrayList<>(terms.size());
+        for (int index = 0; index < terms.size(); index++) {
+            indexedTerms.add(new IndexedTerm(index, terms.get(index)));
+        }
+        indexedTerms.sort(Comparator
+                .comparingDouble((IndexedTerm indexedTerm) -> score(indexedTerm.term(), operator))
+                .thenComparingInt(IndexedTerm::index));
+        return indexedTerms.stream()
+                .map(IndexedTerm::term)
+                .toList();
+    }
+
+    private double score(MaskExpression expression, BooleanOperator operator)
+    {
+        MaskTermStats stats = maskTermStats.get(expression);
+        if (stats == null || stats.rowsEvaluated == 0 || stats.evaluations == 0) {
+            return Double.POSITIVE_INFINITY;
+        }
+
+        double averageCostPerRow = (double) stats.elapsedNanos / stats.rowsEvaluated;
+        double decisiveRate = switch (operator) {
+            case AND -> (double) (stats.rowsEvaluated - stats.rowsSelected) / stats.rowsEvaluated;
+            case OR -> (double) stats.rowsSelected / stats.rowsEvaluated;
+        };
+        if (decisiveRate <= 0) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return averageCostPerRow / decisiveRate;
+    }
+
+    private enum BooleanOperator
+    {
+        AND,
+        OR
+    }
+
+    private record IndexedTerm(int index, MaskExpression term) {}
+
+    private static final class MaskTermStats
+    {
+        private long rowsEvaluated;
+        private long rowsSelected;
+        private long elapsedNanos;
+        private long evaluations;
+
+        private void record(int inputRows, int outputRows, long nanos)
+        {
+            rowsEvaluated += inputRows;
+            rowsSelected += outputRows;
+            elapsedNanos += nanos;
+            evaluations++;
         }
     }
 }
