@@ -16,6 +16,7 @@ package org.weakref.nitro.operator.evaluator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -268,6 +269,49 @@ public class TestPlanEvaluator
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(10L, 1L, 20L, 1L);
+    }
+
+    @Test
+    void testCopyCanForwardDictionaryInput()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}));
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(new Input(0), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), dictionary)), new Allocator());
+
+        assertThat(evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES)).isSameAs(dictionary);
+    }
+
+    @Test
+    void testMergeCopiesDictionaryInputsIntoMaskedOutput()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
+                new Reference(new Input(1), Stream.VALUES), new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30})),
+                new Reference(new Input(2), Stream.VALUES), new DictionaryVector(new int[] {1, 1, 0, 0}, new I64Vector(new long[] {1, 2})))), new Allocator());
+
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
+        assertThat(resultVector.values()).containsExactly(30L, 2L, 20L, 1L);
     }
 
     @Test

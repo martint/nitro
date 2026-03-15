@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -319,8 +320,18 @@ public final class PlanEvaluator
         return switch (source) {
             case I64Vector sourceValues -> copyLongVector(sourceValues, existing, mask);
             case BooleanVector sourceValues -> copyBooleanVector(sourceValues, existing, mask);
+            case DictionaryVector sourceValues -> copyDictionaryVector(sourceValues, existing, mask);
             case RleVector sourceValues -> copyRleVector(sourceValues, existing, mask);
             default -> throw new IllegalArgumentException("Unsupported vector type for copy: " + source.getClass().getSimpleName());
+        };
+    }
+
+    private Vector copyDictionaryVector(DictionaryVector source, Vector existing, Mask mask)
+    {
+        return switch (source.values()) {
+            case I64Vector values -> copyLongDictionaryVector(source.ids(), values.values(), existing, mask, source.length());
+            case BooleanVector values -> copyBooleanDictionaryVector(source.ids(), values.values(), existing, mask, source.length());
+            default -> throw new IllegalArgumentException("Unsupported dictionary value type for copy: " + source.values().getClass().getSimpleName());
         };
     }
 
@@ -366,6 +377,15 @@ public final class PlanEvaluator
         return target;
     }
 
+    private Vector copyLongDictionaryVector(int[] ids, long[] values, Vector existing, Mask mask, int length)
+    {
+        I64Vector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (I64Vector) existing, I64Vector.class, length, I64Vector::new);
+        for (int position : mask) {
+            target.values()[position] = values[ids[position]];
+        }
+        return target;
+    }
+
     private Vector copyBooleanRleVector(int[] counts, boolean[] values, Vector existing, Mask mask, int length)
     {
         BooleanVector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, length, BooleanVector::new);
@@ -377,6 +397,15 @@ public final class PlanEvaluator
                 runEnd += counts[runIndex];
             }
             target.values()[position] = values[runIndex];
+        }
+        return target;
+    }
+
+    private Vector copyBooleanDictionaryVector(int[] ids, boolean[] values, Vector existing, Mask mask, int length)
+    {
+        BooleanVector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, length, BooleanVector::new);
+        for (int position : mask) {
+            target.values()[position] = values[ids[position]];
         }
         return target;
     }
