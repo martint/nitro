@@ -13,14 +13,16 @@
  */
 package org.weakref.nitro.operator;
 
+import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.column.ColumnReader;
+import org.apache.parquet.column.impl.ColumnReadStoreImpl;
 import org.apache.parquet.column.page.PageReadStore;
-import org.apache.parquet.example.data.Group;
-import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
 import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.io.ColumnIOFactory;
 import org.apache.parquet.io.LocalInputFile;
-import org.apache.parquet.io.MessageColumnIO;
-import org.apache.parquet.io.RecordReader;
+import org.apache.parquet.io.api.Converter;
+import org.apache.parquet.io.api.GroupConverter;
+import org.apache.parquet.io.api.PrimitiveConverter;
+import org.apache.parquet.schema.GroupType;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
@@ -50,6 +52,8 @@ public final class ParquetScanOperator
     private final Allocator allocator;
     private final ParquetFileReader reader;
     private final MessageType schema;
+    private final String createdBy;
+    private final GroupConverter recordConverter;
     private final List<ColumnSpec> columns;
 
     private PageReadStore nextRowGroup;
@@ -63,6 +67,8 @@ public final class ParquetScanOperator
         try {
             reader = ParquetFileReader.open(new LocalInputFile(file));
             schema = reader.getFooter().getFileMetaData().getSchema();
+            createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
+            recordConverter = new NoOpGroupConverter(schema);
             this.columns = columns.stream()
                     .map(this::resolveColumn)
                     .toList();
@@ -96,29 +102,15 @@ public final class ParquetScanOperator
         loadNextRowGroup();
 
         int rowCount = toIntExact(rowGroup.getRowCount());
-        MessageColumnIO columnIO = new ColumnIOFactory().getColumnIO(schema);
-        RecordReader<Group> recordReader = columnIO.getRecordReader(rowGroup, new GroupRecordConverter(schema));
-        ColumnBuffer[] buffers = columns.stream()
-                .map(column -> createBuffer(column, rowCount))
-                .toArray(ColumnBuffer[]::new);
-
-        for (int position = 0; position < rowCount; position++) {
-            Group row = recordReader.read();
-            for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
-                ColumnSpec column = columns.get(columnIndex);
-                ColumnBuffer buffer = buffers[columnIndex];
-                if (row.getFieldRepetitionCount(column.name()) == 0) {
-                    if (buffer.nulls() != null) {
-                        buffer.nulls().values()[position] = true;
-                    }
-                    continue;
-                }
-
-                switch (column.kind()) {
-                    case I64 -> ((I64Vector) buffer.values()).values()[position] = row.getLong(column.name(), 0);
-                    case BOOLEAN -> ((BooleanVector) buffer.values()).values()[position] = row.getBoolean(column.name(), 0);
-                }
-            }
+        ColumnReadStoreImpl columnReadStore = new ColumnReadStoreImpl(rowGroup, recordConverter, schema, createdBy);
+        ColumnBuffer[] buffers = new ColumnBuffer[columns.size()];
+        for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
+            ColumnSpec column = columns.get(columnIndex);
+            ColumnReader columnReader = columnReadStore.getColumnReader(column.descriptor());
+            buffers[columnIndex] = switch (column.kind()) {
+                case I64 -> readI64Column(column, rowCount, columnReader);
+                case BOOLEAN -> readBooleanColumn(column, rowCount, columnReader);
+            };
         }
 
         Output[] outputs = new Output[columns.size()];
@@ -171,22 +163,66 @@ public final class ParquetScanOperator
         checkArgument(primitiveType.getRepetition() != Type.Repetition.REPEATED, "Repeated Parquet columns are not supported: %s", name);
 
         return new ColumnSpec(
-                name,
                 switch (primitiveType.getPrimitiveTypeName()) {
                     case INT64 -> ColumnKind.I64;
                     case BOOLEAN -> ColumnKind.BOOLEAN;
                     default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
                 },
-                primitiveType.getRepetition() != REQUIRED);
+                primitiveType.getRepetition() != REQUIRED,
+                schema.getColumnDescription(new String[] {name}));
     }
 
-    private ColumnBuffer createBuffer(ColumnSpec column, int rowCount)
+    private ColumnBuffer readI64Column(ColumnSpec column, int rowCount, ColumnReader columnReader)
     {
-        Vector values = switch (column.kind()) {
-            case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
-            case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
-        };
+        I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        long[] outputValues = values.values();
+        boolean[] outputNulls = nulls == null ? null : nulls.values();
+        int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+        if (nulls == null) {
+            for (int position = 0; position < rowCount; position++) {
+                outputValues[position] = columnReader.getLong();
+                columnReader.consume();
+            }
+        }
+        else {
+            for (int position = 0; position < rowCount; position++) {
+                if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                    outputValues[position] = columnReader.getLong();
+                }
+                else {
+                    outputNulls[position] = true;
+                }
+                columnReader.consume();
+            }
+        }
+        return new ColumnBuffer(values, nulls);
+    }
+
+    private ColumnBuffer readBooleanColumn(ColumnSpec column, int rowCount, ColumnReader columnReader)
+    {
+        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        boolean[] outputValues = values.values();
+        boolean[] outputNulls = nulls == null ? null : nulls.values();
+        int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+        if (nulls == null) {
+            for (int position = 0; position < rowCount; position++) {
+                outputValues[position] = columnReader.getBoolean();
+                columnReader.consume();
+            }
+        }
+        else {
+            for (int position = 0; position < rowCount; position++) {
+                if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                    outputValues[position] = columnReader.getBoolean();
+                }
+                else {
+                    outputNulls[position] = true;
+                }
+                columnReader.consume();
+            }
+        }
         return new ColumnBuffer(values, nulls);
     }
 
@@ -196,7 +232,38 @@ public final class ParquetScanOperator
         BOOLEAN,
     }
 
-    private record ColumnSpec(String name, ColumnKind kind, boolean nullable) {}
+    private record ColumnSpec(ColumnKind kind, boolean nullable, ColumnDescriptor descriptor) {}
 
     private record ColumnBuffer(Vector values, BooleanVector nulls) {}
+
+    private static final class NoOpGroupConverter
+            extends GroupConverter
+    {
+        private final Converter[] converters;
+
+        private NoOpGroupConverter(GroupType type)
+        {
+            converters = new Converter[type.getFieldCount()];
+            for (int fieldIndex = 0; fieldIndex < type.getFieldCount(); fieldIndex++) {
+                Type field = type.getType(fieldIndex);
+                converters[fieldIndex] = field.isPrimitive() ? new PrimitiveConverter() {} : new NoOpGroupConverter(field.asGroupType());
+            }
+        }
+
+        @Override
+        public Converter getConverter(int fieldIndex)
+        {
+            return converters[fieldIndex];
+        }
+
+        @Override
+        public void start()
+        {
+        }
+
+        @Override
+        public void end()
+        {
+        }
+    }
 }

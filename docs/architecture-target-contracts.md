@@ -21,6 +21,12 @@ define the interfaces and responsibilities we want the codebase to converge on.
 - Keep the operator/runtime boundary suitable for realistic columnar sources
   such as Parquet, not just synthetic generators and in-memory tables.
 
+For real columnar sources such as Parquet, scan operators should prefer
+column-at-a-time, type-specific decode loops that write directly into Nitro
+vectors. They should avoid row materialization and per-row type dispatch in the
+hot path, since those patterns work against JVM optimization and Nitro's
+vectorized execution model.
+
 ## Architectural Principles
 
 ### Operators orchestrate batches
