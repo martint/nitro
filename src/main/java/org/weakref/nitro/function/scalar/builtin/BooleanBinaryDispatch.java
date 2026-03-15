@@ -130,7 +130,7 @@ final class BooleanBinaryDispatch
     private static void forEachFlatRle(boolean[] left, RleVector right, Mask mask, BooleanPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
-        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -147,7 +147,7 @@ final class BooleanBinaryDispatch
     private static void forEachFlatDictionary(boolean[] left, DictionaryVector right, Mask mask, BooleanPairConsumer consumer)
     {
         int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
-        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -165,8 +165,8 @@ final class BooleanBinaryDispatch
     {
         BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
         BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
-        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
-        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -183,9 +183,9 @@ final class BooleanBinaryDispatch
     private static void forEachRleDictionary(RleVector left, DictionaryVector right, Mask mask, BooleanPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
-        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
         int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
-        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -202,7 +202,7 @@ final class BooleanBinaryDispatch
     private static void forEachDictionaryFlat(DictionaryVector left, boolean[] right, Mask mask, BooleanPairConsumer consumer)
     {
         int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
-        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -219,9 +219,9 @@ final class BooleanBinaryDispatch
     private static void forEachDictionaryRle(DictionaryVector left, RleVector right, Mask mask, BooleanPairConsumer consumer)
     {
         int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
-        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
         BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
-        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -238,9 +238,9 @@ final class BooleanBinaryDispatch
     private static void forEachDictionaryDictionary(DictionaryVector left, DictionaryVector right, Mask mask, BooleanPairConsumer consumer)
     {
         int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
-        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        boolean[] leftValues = ((BooleanVector) left.values()).values();
         int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
-        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        boolean[] rightValues = ((BooleanVector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
