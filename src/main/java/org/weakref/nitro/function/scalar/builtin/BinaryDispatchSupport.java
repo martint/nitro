@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -101,10 +100,5 @@ final class BinaryDispatchSupport
             }
             return runIndex;
         }
-    }
-
-    public static int[] dictionaryIds(DictionaryVector vector)
-    {
-        return vector.ids();
     }
 }

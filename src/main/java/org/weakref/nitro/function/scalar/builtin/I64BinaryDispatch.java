@@ -224,7 +224,7 @@ final class I64BinaryDispatch
 
     private static void forEachFlatDictionary(long[] left, DictionaryVector right, Mask mask, LongPairConsumer consumer)
     {
-        int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
+        int[] rightIds = right.ids();
         long[] rightValues = ((I64Vector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -262,7 +262,7 @@ final class I64BinaryDispatch
     {
         BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
         long[] leftValues = ((I64Vector) left.values()).values();
-        int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
+        int[] rightIds = right.ids();
         long[] rightValues = ((I64Vector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -279,7 +279,7 @@ final class I64BinaryDispatch
 
     private static void forEachDictionaryFlat(DictionaryVector left, long[] right, Mask mask, LongPairConsumer consumer)
     {
-        int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
+        int[] leftIds = left.ids();
         long[] leftValues = ((I64Vector) left.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -296,7 +296,7 @@ final class I64BinaryDispatch
 
     private static void forEachDictionaryRle(DictionaryVector left, RleVector right, Mask mask, LongPairConsumer consumer)
     {
-        int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
+        int[] leftIds = left.ids();
         long[] leftValues = ((I64Vector) left.values()).values();
         BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
         long[] rightValues = ((I64Vector) right.values()).values();
@@ -315,9 +315,9 @@ final class I64BinaryDispatch
 
     private static void forEachDictionaryDictionary(DictionaryVector left, DictionaryVector right, Mask mask, LongPairConsumer consumer)
     {
-        int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
+        int[] leftIds = left.ids();
         long[] leftValues = ((I64Vector) left.values()).values();
-        int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
+        int[] rightIds = right.ids();
         long[] rightValues = ((I64Vector) right.values()).values();
         if (mask.all()) {
             int max = mask.maxPosition();
