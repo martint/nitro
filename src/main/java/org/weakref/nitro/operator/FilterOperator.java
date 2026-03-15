@@ -14,12 +14,11 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
-import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 
 public class FilterOperator
         implements Operator
@@ -29,12 +28,12 @@ public class FilterOperator
     private final Operator source;
     private final Allocator allocator;
     private final PlanEvaluator planEvaluator;
-    private final Reference predicateReference;
+    private final MaskExpression predicateMask;
 
     private Batch currentBatch;
     private Mask mask;
 
-    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
+    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, MaskExpression predicateMask, Allocator allocator)
     {
         this.source = source;
         this.allocator = allocator;
@@ -42,7 +41,7 @@ public class FilterOperator
             case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatch.output(index).borrow(reference.stream());
             default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
         }, allocator);
-        this.predicateReference = predicateReference;
+        this.predicateMask = predicateMask;
     }
 
     @Override
@@ -62,8 +61,7 @@ public class FilterOperator
     {
         currentBatch = source.next();
         mask = currentBatch.borrowMask();
-        BooleanVector predicate = (BooleanVector) planEvaluator.evaluate(predicateReference, mask).get(predicateReference.stream());
-        mask = allocator.intersectMask(ALLOCATION_CONTEXT, mask, predicate);
+        mask = planEvaluator.evaluate(predicateMask, mask);
         source.constrain(mask);
         planEvaluator.reset();
 

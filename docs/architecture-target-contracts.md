@@ -424,6 +424,13 @@ kind into one `AndMask` or `OrMask` term list. That keeps reorderable boolean
 structure visible in the IR without carrying separate binary and n-ary node
 types.
 
+Mask-consuming operators should consume `MaskExpression` directly rather than
+requiring a projected boolean `VALUES` reference first. If a filter, branch
+condition, or other row-selection site semantically needs a mask, plans should
+be able to pass a mask expression all the way to that consumer without
+materializing an intermediate boolean vector solely to turn it back into a
+mask.
+
 The normalized form should require:
 
 - explicit stream references

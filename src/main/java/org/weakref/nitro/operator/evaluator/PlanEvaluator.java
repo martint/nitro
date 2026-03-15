@@ -104,6 +104,14 @@ public final class PlanEvaluator
         return evaluateUnmemoized(reference, mask, null);
     }
 
+    public Mask evaluate(MaskExpression expression, Mask mask)
+    {
+        if (mask.none()) {
+            return mask;
+        }
+        return evaluateMask(expression, mask);
+    }
+
     public void reset()
     {
         memoizedMasks.clear();
