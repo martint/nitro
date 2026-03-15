@@ -177,7 +177,7 @@ public final class PlanEvaluator
 
     private Streams evaluateMerge(Stream stream, Merge merge, Mask mask, Streams output)
     {
-        Mask trueMask = evaluateMask(merge.condition(), mask);
+        Mask trueMask = evaluateMaskOutcome(merge.condition(), mask).trueMask();
         Mask falseMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, trueMask);
 
         Streams result = prepareOutput(output);
@@ -192,13 +192,7 @@ public final class PlanEvaluator
 
     private Mask evaluateMask(MaskExpression expression, Mask mask)
     {
-        return switch (expression) {
-            case AllMask _ -> mask;
-            case ReferenceMask(Reference reference) -> allocator.intersectMask(ALLOCATION_CONTEXT, mask, (BooleanVector) evaluate(reference, mask).get(reference.stream()));
-            case NotMask(MaskExpression source) -> allocator.differenceMask(ALLOCATION_CONTEXT, mask, evaluateMask(source, mask));
-            case AndMask _ -> evaluateAdaptiveAnd(expression, mask);
-            case OrMask _ -> evaluateAdaptiveOr(expression, mask);
-        };
+        return evaluateMaskOutcome(expression, mask).trueMask();
     }
 
     private Streams prepareOutput(Streams output)
@@ -312,87 +306,158 @@ public final class PlanEvaluator
         }
     }
 
-    private Mask evaluateAdaptiveAnd(MaskExpression expression, Mask mask)
+    private MaskOutcome evaluateMaskOutcome(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> new MaskOutcome(mask, emptyMask(mask.size()), emptyMask(mask.size()));
+            case ReferenceMask(Reference reference) -> evaluateReferenceMask(reference, mask);
+            case NotMask(MaskExpression source) -> {
+                MaskOutcome sourceOutcome = evaluateMaskOutcome(source, mask);
+                yield new MaskOutcome(
+                        sourceOutcome.falseMask(allocator, ALLOCATION_CONTEXT, mask),
+                        sourceOutcome.nullMask(),
+                        sourceOutcome.errorMask());
+            }
+            case AndMask _ -> evaluateAdaptiveAnd(expression, mask);
+            case OrMask _ -> evaluateAdaptiveOr(expression, mask);
+        };
+    }
+
+    private MaskOutcome evaluateReferenceMask(Reference reference, Mask mask)
+    {
+        BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
+        BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
+        BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+
+        Mask errorMask = errors != null
+                ? allocator.intersectMask(ALLOCATION_CONTEXT, mask, errors)
+                : emptyMask(mask.size());
+
+        Mask remainingAfterErrors = errorMask.none() ? mask : allocator.differenceMask(ALLOCATION_CONTEXT, mask, errorMask);
+        Mask nullMask = nulls != null
+                ? allocator.intersectMask(ALLOCATION_CONTEXT, remainingAfterErrors, nulls)
+                : emptyMask(mask.size());
+
+        Mask presentMask = nullMask.none() ? remainingAfterErrors : allocator.differenceMask(ALLOCATION_CONTEXT, remainingAfterErrors, nullMask);
+        Mask trueMask = allocator.intersectMask(ALLOCATION_CONTEXT, presentMask, values);
+        return new MaskOutcome(trueMask, nullMask, errorMask);
+    }
+
+    private BooleanVector optionalBooleanStream(org.weakref.nitro.operator.evaluator.ir.Producer producer, Stream stream, Mask mask)
+    {
+        try {
+            Streams streams = evaluate(new Reference(producer, stream), mask);
+            return streams.has(stream) ? (BooleanVector) streams.get(stream) : null;
+        }
+        catch (IllegalArgumentException _) {
+            return null;
+        }
+    }
+
+    private MaskOutcome evaluateAdaptiveAnd(MaskExpression expression, Mask mask)
     {
         List<MaskExpression> terms = flattenAndTerms(expression);
         terms = orderTerms(terms, BooleanOperator.AND);
 
         Mask activeMask = mask;
+        Mask nullMask = emptyMask(mask.size());
+        Mask errorMask = emptyMask(mask.size());
         for (MaskExpression term : terms) {
-            Mask termMask = evaluateMeasuredMask(term, activeMask);
-            if (termMask.none()) {
-                return termMask;
+            MaskOutcome termOutcome = evaluateMeasuredOutcome(term, activeMask, BooleanOperator.AND);
+            Mask survivors = termOutcome.survivorsMask(allocator, ALLOCATION_CONTEXT);
+            if (survivors.none()) {
+                return new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
             }
-            activeMask = termMask;
+
+            Mask survivingNulls = nullMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, nullMask, survivors);
+            Mask survivingErrors = errorMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, errorMask, survivors);
+            Mask nextErrorMask = unionMasks(survivingErrors, termOutcome.errorMask(), mask.size());
+            Mask nextNullMask = unionMasks(survivingNulls, termOutcome.nullMask(), mask.size());
+            nextNullMask = nextErrorMask.none() ? nextNullMask : allocator.differenceMask(ALLOCATION_CONTEXT, nextNullMask, nextErrorMask);
+
+            activeMask = survivors;
+            nullMask = nextNullMask;
+            errorMask = nextErrorMask;
         }
-        return activeMask;
+        Mask trueMask = subtractMasks(activeMask, nullMask, errorMask);
+        return new MaskOutcome(trueMask, nullMask, errorMask);
     }
 
-    private Mask evaluateAdaptiveOr(MaskExpression expression, Mask mask)
+    private MaskOutcome evaluateAdaptiveOr(MaskExpression expression, Mask mask)
     {
         List<MaskExpression> terms = flattenOrTerms(expression);
         terms = orderTerms(terms, BooleanOperator.OR);
 
-        Mask acceptedMask = null;
+        Mask acceptedMask = emptyMask(mask.size());
+        Mask nullMask = emptyMask(mask.size());
+        Mask errorMask = emptyMask(mask.size());
         Mask remainingMask = mask;
         for (MaskExpression term : terms) {
             if (remainingMask.none()) {
                 break;
             }
 
-            Mask termMask = evaluateMeasuredMask(term, remainingMask);
-            if (termMask.none()) {
-                continue;
+            MaskOutcome termOutcome = evaluateMeasuredOutcome(term, remainingMask, BooleanOperator.OR);
+            acceptedMask = unionMasks(acceptedMask, termOutcome.trueMask(), mask.size());
+            remainingMask = termOutcome.trueMask().none() ? remainingMask : allocator.differenceMask(ALLOCATION_CONTEXT, remainingMask, termOutcome.trueMask());
+            if (remainingMask.none()) {
+                return new MaskOutcome(acceptedMask, emptyMask(mask.size()), emptyMask(mask.size()));
             }
 
-            acceptedMask = acceptedMask == null ? termMask : allocator.unionMask(ALLOCATION_CONTEXT, acceptedMask, termMask);
-            if (acceptedMask.selectedCount() == mask.selectedCount()) {
-                return acceptedMask;
-            }
-            remainingMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, acceptedMask);
+            Mask survivingNulls = nullMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, nullMask, remainingMask);
+            Mask survivingErrors = errorMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, errorMask, remainingMask);
+            Mask nextErrorMask = unionMasks(survivingErrors, termOutcome.errorMask(), mask.size());
+            Mask nextNullMask = unionMasks(survivingNulls, termOutcome.nullMask(), mask.size());
+            nextNullMask = nextErrorMask.none() ? nextNullMask : allocator.differenceMask(ALLOCATION_CONTEXT, nextNullMask, nextErrorMask);
+            nullMask = nextNullMask;
+            errorMask = nextErrorMask;
         }
 
-        return acceptedMask == null ? allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], mask.size()) : acceptedMask;
+        return new MaskOutcome(acceptedMask, nullMask, errorMask);
     }
 
-    private Mask evaluateMeasuredMask(MaskExpression term, Mask mask)
+    private MaskOutcome evaluateMeasuredOutcome(MaskExpression term, Mask mask, BooleanOperator operator)
     {
         long start = System.nanoTime();
-        Mask result = evaluateMaskWithoutReordering(term, mask);
+        MaskOutcome result = evaluateMaskOutcomeWithoutReordering(term, mask);
         long elapsed = System.nanoTime() - start;
-        maskTermStats.computeIfAbsent(term, _ -> new MaskTermStats()).record(mask.selectedCount(), result.selectedCount(), elapsed);
+        int decisiveRows = switch (operator) {
+            case AND -> result.falseCount(mask);
+            case OR -> result.trueMask().selectedCount();
+        };
+        maskTermStats.computeIfAbsent(term, _ -> new MaskTermStats()).record(mask.selectedCount(), decisiveRows, elapsed, operator);
         return result;
     }
 
-    private Mask evaluateMaskWithoutReordering(MaskExpression expression, Mask mask)
+    private MaskOutcome evaluateMaskOutcomeWithoutReordering(MaskExpression expression, Mask mask)
     {
         return switch (expression) {
-            case AllMask _ -> mask;
-            case ReferenceMask(Reference reference) -> allocator.intersectMask(ALLOCATION_CONTEXT, mask, (BooleanVector) evaluate(reference, mask).get(reference.stream()));
-            case NotMask(MaskExpression source) -> allocator.differenceMask(ALLOCATION_CONTEXT, mask, evaluateMask(source, mask));
+            case AllMask _ -> new MaskOutcome(mask, emptyMask(mask.size()), emptyMask(mask.size()));
+            case ReferenceMask(Reference reference) -> evaluateReferenceMask(reference, mask);
+            case NotMask(MaskExpression source) -> {
+                MaskOutcome sourceOutcome = evaluateMaskOutcome(source, mask);
+                yield new MaskOutcome(
+                        sourceOutcome.falseMask(allocator, ALLOCATION_CONTEXT, mask),
+                        sourceOutcome.nullMask(),
+                        sourceOutcome.errorMask());
+            }
             case AndMask(MaskExpression left, MaskExpression right) -> {
-                Mask leftMask = evaluateMask(left, mask);
-                if (leftMask.none()) {
-                    yield leftMask;
+                MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
+                Mask leftSurvivors = leftOutcome.survivorsMask(allocator, ALLOCATION_CONTEXT);
+                if (leftSurvivors.none()) {
+                    yield new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
                 }
-                yield evaluateMask(right, leftMask);
+                MaskOutcome rightOutcome = evaluateMaskOutcome(right, leftSurvivors);
+                yield combineAndOutcomes(mask, leftOutcome, rightOutcome);
             }
             case OrMask(MaskExpression left, MaskExpression right) -> {
-                Mask leftMask = evaluateMask(left, mask);
-                if (leftMask.selectedCount() == mask.selectedCount()) {
-                    yield leftMask;
-                }
-
-                Mask remainingMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftMask);
+                MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
+                Mask remainingMask = leftOutcome.trueMask().none() ? mask : allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftOutcome.trueMask());
                 if (remainingMask.none()) {
-                    yield leftMask;
+                    yield new MaskOutcome(leftOutcome.trueMask(), emptyMask(mask.size()), emptyMask(mask.size()));
                 }
-
-                Mask rightMask = evaluateMask(right, remainingMask);
-                if (leftMask.none()) {
-                    yield rightMask;
-                }
-                yield allocator.unionMask(ALLOCATION_CONTEXT, leftMask, rightMask);
+                MaskOutcome rightOutcome = evaluateMaskOutcome(right, remainingMask);
+                yield combineOrOutcomes(mask, leftOutcome, rightOutcome);
             }
         };
     }
@@ -456,13 +521,67 @@ public final class PlanEvaluator
 
         double averageCostPerRow = (double) stats.elapsedNanos / stats.rowsEvaluated;
         double decisiveRate = switch (operator) {
-            case AND -> (double) (stats.rowsEvaluated - stats.rowsSelected) / stats.rowsEvaluated;
-            case OR -> (double) stats.rowsSelected / stats.rowsEvaluated;
+            case AND -> (double) stats.falseRows / stats.rowsEvaluated;
+            case OR -> (double) stats.trueRows / stats.rowsEvaluated;
         };
         if (decisiveRate <= 0) {
             return Double.POSITIVE_INFINITY;
         }
         return averageCostPerRow / decisiveRate;
+    }
+
+    private MaskOutcome combineAndOutcomes(Mask domainMask, MaskOutcome left, MaskOutcome right)
+    {
+        Mask survivors = right.survivorsMask(allocator, ALLOCATION_CONTEXT);
+        if (survivors.none()) {
+            return new MaskOutcome(emptyMask(domainMask.size()), emptyMask(domainMask.size()), emptyMask(domainMask.size()));
+        }
+
+        Mask survivingNulls = left.nullMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.nullMask(), survivors);
+        Mask survivingErrors = left.errorMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.errorMask(), survivors);
+        Mask errorMask = unionMasks(survivingErrors, right.errorMask(), domainMask.size());
+        Mask nullMask = unionMasks(survivingNulls, right.nullMask(), domainMask.size());
+        nullMask = errorMask.none() ? nullMask : allocator.differenceMask(ALLOCATION_CONTEXT, nullMask, errorMask);
+        Mask trueMask = subtractMasks(survivors, nullMask, errorMask);
+        return new MaskOutcome(trueMask, nullMask, errorMask);
+    }
+
+    private MaskOutcome combineOrOutcomes(Mask domainMask, MaskOutcome left, MaskOutcome right)
+    {
+        Mask trueMask = unionMasks(left.trueMask(), right.trueMask(), domainMask.size());
+        Mask remainingMask = trueMask.none() ? domainMask : allocator.differenceMask(ALLOCATION_CONTEXT, domainMask, trueMask);
+        if (remainingMask.none()) {
+            return new MaskOutcome(trueMask, emptyMask(domainMask.size()), emptyMask(domainMask.size()));
+        }
+
+        Mask survivingNulls = left.nullMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.nullMask(), remainingMask);
+        Mask survivingErrors = left.errorMask().none() ? emptyMask(domainMask.size()) : allocator.intersectMask(ALLOCATION_CONTEXT, left.errorMask(), remainingMask);
+        Mask errorMask = unionMasks(survivingErrors, right.errorMask(), domainMask.size());
+        Mask nullMask = unionMasks(survivingNulls, right.nullMask(), domainMask.size());
+        nullMask = errorMask.none() ? nullMask : allocator.differenceMask(ALLOCATION_CONTEXT, nullMask, errorMask);
+        return new MaskOutcome(trueMask, nullMask, errorMask);
+    }
+
+    private Mask unionMasks(Mask left, Mask right, int size)
+    {
+        if (left.none()) {
+            return right;
+        }
+        if (right.none()) {
+            return left;
+        }
+        return allocator.unionMask(ALLOCATION_CONTEXT, left, right);
+    }
+
+    private Mask subtractMasks(Mask base, Mask first, Mask second)
+    {
+        Mask result = first.none() ? base : allocator.differenceMask(ALLOCATION_CONTEXT, base, first);
+        return second.none() ? result : allocator.differenceMask(ALLOCATION_CONTEXT, result, second);
+    }
+
+    private Mask emptyMask(int size)
+    {
+        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], size);
     }
 
     private enum BooleanOperator
@@ -476,16 +595,47 @@ public final class PlanEvaluator
     private static final class MaskTermStats
     {
         private long rowsEvaluated;
-        private long rowsSelected;
+        private long trueRows;
+        private long falseRows;
         private long elapsedNanos;
         private long evaluations;
 
-        private void record(int inputRows, int outputRows, long nanos)
+        private void record(int inputRows, int decisiveRows, long nanos, BooleanOperator operator)
         {
             rowsEvaluated += inputRows;
-            rowsSelected += outputRows;
+            switch (operator) {
+                case AND -> falseRows += decisiveRows;
+                case OR -> trueRows += decisiveRows;
+            }
             elapsedNanos += nanos;
             evaluations++;
+        }
+    }
+
+    private record MaskOutcome(Mask trueMask, Mask nullMask, Mask errorMask)
+    {
+        private int falseCount(Mask domainMask)
+        {
+            return domainMask.selectedCount() - trueMask.selectedCount() - nullMask.selectedCount() - errorMask.selectedCount();
+        }
+
+        private Mask falseMask(Allocator allocator, Allocator.Context context, Mask domainMask)
+        {
+            Mask withoutTrue = trueMask.none() ? domainMask : allocator.differenceMask(context, domainMask, trueMask);
+            Mask withoutNull = nullMask.none() ? withoutTrue : allocator.differenceMask(context, withoutTrue, nullMask);
+            return errorMask.none() ? withoutNull : allocator.differenceMask(context, withoutNull, errorMask);
+        }
+
+        private Mask survivorsMask(Allocator allocator, Allocator.Context context)
+        {
+            Mask survivors = trueMask;
+            if (!nullMask.none()) {
+                survivors = survivors.none() ? nullMask : allocator.unionMask(context, survivors, nullMask);
+            }
+            if (!errorMask.none()) {
+                survivors = survivors.none() ? errorMask : allocator.unionMask(context, survivors, errorMask);
+            }
+            return survivors;
         }
     }
 }

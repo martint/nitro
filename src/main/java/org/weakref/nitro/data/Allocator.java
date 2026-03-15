@@ -182,6 +182,54 @@ public class Allocator
         return result;
     }
 
+    public Mask intersectMask(Context context, Mask left, Mask right)
+    {
+        ContextState state = state(context);
+        Mask result = state.borrowMask(Math.min(left.selectedCount(), right.selectedCount()));
+        boolean reused = result != null;
+        if (!reused) {
+            result = left.difference(left.difference(right));
+        }
+        else if (left.none() || right.none()) {
+            result.clear(left.size());
+        }
+        else if (left.all()) {
+            copyMask(result, right);
+        }
+        else if (right.all()) {
+            copyMask(result, left);
+        }
+        else {
+            int[] positions = result.positionsArray(Math.min(left.selectedCount(), right.selectedCount()));
+            int leftIndex = 0;
+            int rightIndex = 0;
+            int outputIndex = 0;
+            while (leftIndex < left.selectedCount() && rightIndex < right.selectedCount()) {
+                int leftPosition = left.position(leftIndex);
+                int rightPosition = right.position(rightIndex);
+                if (leftPosition < rightPosition) {
+                    leftIndex++;
+                }
+                else if (leftPosition > rightPosition) {
+                    rightIndex++;
+                }
+                else {
+                    positions[outputIndex++] = leftPosition;
+                    leftIndex++;
+                    rightIndex++;
+                }
+            }
+            if (outputIndex == left.size() && isAllPositions(positions, outputIndex)) {
+                result.selectAll(left.size());
+            }
+            else {
+                result.setSelection(left.size(), outputIndex, false);
+            }
+        }
+        state.trackMask(result, reused);
+        return result;
+    }
+
     public Mask differenceMask(Context context, Mask left, Mask right)
     {
         ContextState state = state(context);
