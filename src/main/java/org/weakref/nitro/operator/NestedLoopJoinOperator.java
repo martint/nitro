@@ -202,7 +202,7 @@ public class NestedLoopJoinOperator
         return new Output(
                 streams.asMap().keySet(),
                 streams::get,
-                (stream, vector) -> vector.copy(vector.length()));
+                (stream, vector) -> copyStreamVector(streams, stream));
     }
 
     private void joinWithInnerRow()
@@ -381,6 +381,28 @@ public class NestedLoopJoinOperator
             return Streams.ofValuesAndNulls(values, nulls);
         }
         return Streams.ofValues(values);
+    }
+
+    private org.weakref.nitro.data.Vector copyStreamVector(Streams streams, Stream stream)
+    {
+        return switch (stream) {
+            case VALUES -> copyI64((I64Vector) streams.get(Stream.VALUES));
+            case NULLS, ERRORS -> copyBoolean((BooleanVector) streams.get(stream));
+        };
+    }
+
+    private I64Vector copyI64(I64Vector source)
+    {
+        I64Vector copy = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, source.length(), I64Vector::new);
+        System.arraycopy(source.values(), 0, copy.values(), 0, source.length());
+        return copy;
+    }
+
+    private BooleanVector copyBoolean(BooleanVector source)
+    {
+        BooleanVector copy = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, source.length(), BooleanVector::new);
+        System.arraycopy(source.values(), 0, copy.values(), 0, source.length());
+        return copy;
     }
 
     record InnerBatch(Streams[] columns, int length) {}

@@ -17,6 +17,4 @@ public sealed interface Vector
         permits DictionaryVector, FlatVector, RleVector
 {
     int length();
-
-    Vector copy(int size);
 }

@@ -30,12 +30,6 @@ public class BooleanVector
         this.values = values;
     }
 
-    @Override
-    public Vector copy(int size)
-    {
-        return new BooleanVector(java.util.Arrays.copyOf(values, size));
-    }
-
     public boolean[] values()
     {
         return values;

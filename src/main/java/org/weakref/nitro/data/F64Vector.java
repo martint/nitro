@@ -30,12 +30,6 @@ public class F64Vector
         this.values = values;
     }
 
-    @Override
-    public Vector copy(int size)
-    {
-        return new F64Vector(Arrays.copyOf(values, size));
-    }
-
     public double[] values()
     {
         return values;

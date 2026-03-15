@@ -28,6 +28,7 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.StreamSupport;
 
@@ -115,7 +116,7 @@ public class TestBatchRuntime
         assertThat(dictionary.length()).isEqualTo(4);
         assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[0]]).isEqualTo(30L);
         assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[1]]).isEqualTo(10L);
-        assertThat(((DictionaryVector) dictionary.copy(3)).ids()).containsExactly(2, 0, 1);
+        assertThat(new DictionaryVector(Arrays.copyOf(dictionary.ids(), 3), dictionary.values()).ids()).containsExactly(2, 0, 1);
     }
 
     @Test

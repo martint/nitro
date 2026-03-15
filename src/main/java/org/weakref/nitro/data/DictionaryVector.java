@@ -48,14 +48,6 @@ public final class DictionaryVector
     }
 
     @Override
-    public Vector copy(int size)
-    {
-        checkArgument(size >= 0, "size is negative");
-        checkArgument(size <= ids.length, "size exceeds dictionary length");
-        return new DictionaryVector(Arrays.copyOf(ids, size), values);
-    }
-
-    @Override
     public String toString()
     {
         return "Dictionary {ids: " + Arrays.toString(ids) + ", values: " + values + "}";

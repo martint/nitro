@@ -30,12 +30,6 @@ public class I64Vector
         this.values = values;
     }
 
-    @Override
-    public Vector copy(int size)
-    {
-        return new I64Vector(Arrays.copyOf(values, size));
-    }
-
     public long[] values()
     {
         return values;
