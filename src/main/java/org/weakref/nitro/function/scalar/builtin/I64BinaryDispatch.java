@@ -78,65 +78,65 @@ final class I64BinaryDispatch
         forEachPair(left, right, mask, (leftValue, rightValue, position) -> kernel.apply(leftValue, rightValue, null, errorValues, position));
     }
 
-    public static RleVector rleRleLong(RleVector left, RleVector right, LongBinaryKernel kernel)
+    public static RleVector rleRleLong(RleVector left, RleVector right, I64Vector output, LongBinaryKernel kernel)
     {
         long[] leftValues = ((I64Vector) left.values()).values();
         long[] rightValues = ((I64Vector) right.values()).values();
 
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        long[] values = new long[counts.length];
+        long[] values = output.values();
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             values[outputIndex] = kernel.apply(leftValues[leftIndex], rightValues[rightIndex]);
         });
-        return new RleVector(counts, new I64Vector(values));
+        return new RleVector(counts, output);
     }
 
-    public static RleVector rleRleBoolean(RleVector left, RleVector right, BooleanBinaryKernel kernel)
+    public static RleVector rleRleBoolean(RleVector left, RleVector right, BooleanVector output, BooleanBinaryKernel kernel)
     {
         long[] leftValues = ((I64Vector) left.values()).values();
         long[] rightValues = ((I64Vector) right.values()).values();
 
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        boolean[] values = new boolean[counts.length];
+        boolean[] values = output.values();
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             values[outputIndex] = kernel.apply(leftValues[leftIndex], rightValues[rightIndex]);
         });
-        return new RleVector(counts, new BooleanVector(values));
+        return new RleVector(counts, output);
     }
 
-    public static RleWithErrors rleRleLongWithErrors(RleVector left, RleVector right, LongErrorKernel kernel)
+    public static RleWithErrors rleRleLongWithErrors(RleVector left, RleVector right, I64Vector valuesOutput, BooleanVector errorsOutput, LongErrorKernel kernel)
     {
         long[] leftValues = ((I64Vector) left.values()).values();
         long[] rightValues = ((I64Vector) right.values()).values();
 
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        long[] values = new long[counts.length];
-        boolean[] errors = new boolean[counts.length];
+        long[] values = valuesOutput.values();
+        boolean[] errors = errorsOutput.values();
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             kernel.apply(leftValues[leftIndex], rightValues[rightIndex], values, errors, outputIndex);
         });
-        return new RleWithErrors(new RleVector(counts, new I64Vector(values)), new RleVector(counts, new BooleanVector(errors)));
+        return new RleWithErrors(new RleVector(counts, valuesOutput), new RleVector(counts, errorsOutput));
     }
 
-    public static RleVector rleRleErrorsOnly(RleVector left, RleVector right, LongErrorKernel kernel)
+    public static RleVector rleRleErrorsOnly(RleVector left, RleVector right, BooleanVector errorsOutput, LongErrorKernel kernel)
     {
         long[] leftValues = ((I64Vector) left.values()).values();
         long[] rightValues = ((I64Vector) right.values()).values();
 
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        boolean[] errors = new boolean[counts.length];
+        boolean[] errors = errorsOutput.values();
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             kernel.apply(leftValues[leftIndex], rightValues[rightIndex], null, errors, outputIndex);
         });
-        return new RleVector(counts, new BooleanVector(errors));
+        return new RleVector(counts, errorsOutput);
     }
 
     private static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)

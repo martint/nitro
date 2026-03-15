@@ -51,14 +51,19 @@ public final class SubtractExactI64
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null) {
             if (requestValues && requestErrors) {
-                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, SubtractExactI64::apply);
+                int resultLength = RleVector.computeTargetRleLength(leftRle, rightRle);
+                I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, resultLength, I64Vector::new);
+                BooleanVector errors = context.allocator().allocate(ERRORS_CONTEXT, BooleanVector.class, resultLength, BooleanVector::new);
+                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, SubtractExactI64::apply);
                 return Streams.ofValues(result.values()).with(Stream.ERRORS, result.errors());
             }
             if (requestErrors) {
-                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, SubtractExactI64::apply));
+                BooleanVector errors = context.allocator().allocate(ERRORS_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
+                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, SubtractExactI64::apply));
             }
             if (requestValues) {
-                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, SubtractExactI64::result));
+                I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, SubtractExactI64::result));
             }
             return Streams.empty();
         }

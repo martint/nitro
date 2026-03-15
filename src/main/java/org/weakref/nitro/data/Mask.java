@@ -565,20 +565,6 @@ public class Mask
         return new Mask(size, selectedCount, false, Arrays.copyOf(positions, selectedCount));
     }
 
-    private BooleanVector toVector()
-    {
-        BooleanVector booleanVector = new BooleanVector(size);
-        if (allSelected) {
-            Arrays.fill(booleanVector.values(), true);
-            return booleanVector;
-        }
-
-        for (int index = 0; index < selectedCount; index++) {
-            booleanVector.values()[positions[index]] = true;
-        }
-        return booleanVector;
-    }
-
     private void ensureCapacity(int capacity)
     {
         if (positions.length >= capacity) {

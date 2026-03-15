@@ -46,19 +46,19 @@ final class BooleanBinaryDispatch
         forEachPair(left, right, mask, (leftValue, rightValue, position) -> values[position] = kernel.apply(leftValue, rightValue));
     }
 
-    public static RleVector rleRle(RleVector left, RleVector right, Kernel kernel)
+    public static RleVector rleRle(RleVector left, RleVector right, BooleanVector output, Kernel kernel)
     {
         boolean[] leftValues = ((BooleanVector) left.values()).values();
         boolean[] rightValues = ((BooleanVector) right.values()).values();
 
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
-        boolean[] values = new boolean[counts.length];
+        boolean[] values = output.values();
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
             values[outputIndex] = kernel.apply(leftValues[leftIndex], rightValues[rightIndex]);
         });
-        return new RleVector(counts, new BooleanVector(values));
+        return new RleVector(counts, output);
     }
 
     private static void forEachPair(Vector left, Vector right, Mask mask, BooleanPairConsumer consumer)

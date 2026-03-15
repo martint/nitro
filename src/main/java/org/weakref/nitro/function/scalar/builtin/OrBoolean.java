@@ -48,7 +48,8 @@ public final class OrBoolean
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            return Streams.of(Stream.VALUES, BooleanBinaryDispatch.rleRle(leftRle, rightRle, OrBoolean::apply));
+            BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
+            return Streams.of(Stream.VALUES, BooleanBinaryDispatch.rleRle(leftRle, rightRle, values, OrBoolean::apply));
         }
 
         BooleanVector result = context.allocator().allocateOrGrow(

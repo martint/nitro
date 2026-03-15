@@ -48,7 +48,8 @@ public final class AddI64
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, AddI64::apply));
+            I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+            return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, AddI64::apply));
         }
 
         I64Vector result = context.allocator().allocateOrGrow(
