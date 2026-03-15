@@ -20,7 +20,6 @@ import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 public class FilterOperator
         implements Operator
@@ -39,7 +38,10 @@ public class FilterOperator
     {
         this.source = source;
         this.allocator = allocator;
-        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (index, currentMask) -> currentBatch.output(index).borrow(Stream.VALUES), allocator);
+        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (reference, currentMask) -> switch (reference.producer()) {
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatch.output(index).borrow(reference.stream());
+            default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
+        }, allocator);
         this.predicateReference = predicateReference;
     }
 

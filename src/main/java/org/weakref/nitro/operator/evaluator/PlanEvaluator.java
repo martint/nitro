@@ -60,7 +60,7 @@ public final class PlanEvaluator
     @FunctionalInterface
     public interface InputResolver
     {
-        Vector get(int index, Mask mask);
+        Vector resolve(Reference reference, Mask mask);
     }
 
     public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator)
@@ -93,8 +93,8 @@ public final class PlanEvaluator
             }
 
             Streams updated = evaluateUnmemoized(reference, remaining, existingOutput);
-            memoizedStreams.put(reference, updated);
-            memoizedMasks.put(reference, existingMask == null ? remaining : allocator.unionMask(ALLOCATION_CONTEXT, existingMask, remaining));
+            Mask updatedMask = existingMask == null ? remaining : allocator.unionMask(ALLOCATION_CONTEXT, existingMask, remaining);
+            memoizeStreams(reference, updated, updatedMask);
             return updated;
         }
 
@@ -118,8 +118,7 @@ public final class PlanEvaluator
 
     private Streams evaluateInput(Reference reference, int inputIndex, Mask mask)
     {
-        checkArgument(reference.stream() == Stream.VALUES, "Input streams currently support only VALUES: %s", reference);
-        return Streams.ofValues(input.get(inputIndex, mask));
+        return Streams.of(reference.stream(), input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), reference.stream()), mask));
     }
 
     private Streams evaluateVariable(Reference reference, Variable variable, Mask mask, Streams output)
@@ -318,5 +317,17 @@ public final class PlanEvaluator
             indexedAssignments.put(assignment.output(), assignment);
         }
         return indexedAssignments;
+    }
+
+    private void memoizeStreams(Reference reference, Streams streams, Mask mask)
+    {
+        for (Stream stream : streams.asMap().keySet()) {
+            Reference streamReference = new Reference(reference.producer(), stream);
+            StreamPlan streamPlan = plan.streamPlans().get(streamReference);
+            if (streamPlan != null && streamPlan.memoizationPolicy() == MemoizationPolicy.MEMOIZE) {
+                memoizedStreams.put(streamReference, streams);
+                memoizedMasks.put(streamReference, mask);
+            }
+        }
     }
 }

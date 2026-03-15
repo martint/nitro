@@ -41,6 +41,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry;
@@ -59,11 +60,9 @@ public class TestPlanEvaluator
                 List.of(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)),
                 Map.of(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (index, mask) -> switch (index) {
-            case 0 -> new I64Vector(new long[] {1, 2, 3});
-            case 1 -> new I64Vector(new long[] {10, 20, 30});
-            default -> throw new IllegalArgumentException("Unexpected input " + index);
-        }, new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}))), new Allocator());
 
         I64Vector result = (I64Vector) evaluator.evaluate(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result.values()).containsExactly(11L, 22L, 33L);
@@ -84,12 +83,10 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (index, mask) -> switch (index) {
-            case 0 -> new BooleanVector(new boolean[] {true, false, true, false});
-            case 1 -> new I64Vector(new long[] {1, 1, 1, 1});
-            case 2 -> new I64Vector(new long[] {2, 2, 2, 2});
-            default -> throw new IllegalArgumentException("Unexpected input " + index);
-        }, new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
@@ -235,12 +232,10 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (index, mask) -> switch (index) {
-            case 0 -> new BooleanVector(new boolean[] {true, false, true, false});
-            case 1 -> new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 20}));
-            case 2 -> new I64Vector(new long[] {1, 1, 1, 1});
-            default -> throw new IllegalArgumentException("Unexpected input " + index);
-        }, new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
+                new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 20})),
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}))), new Allocator());
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(10L, 1L, 20L, 1L);
@@ -265,16 +260,77 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (index, mask) -> switch (index) {
-            case 0 -> new BooleanVector(new boolean[] {true, true, false, false});
-            case 1 -> new BooleanVector(new boolean[] {false, true, true, false});
-            case 2 -> new I64Vector(new long[] {1, 1, 1, 1});
-            case 3 -> new I64Vector(new long[] {2, 2, 2, 2});
-            default -> throw new IllegalArgumentException("Unexpected input " + index);
-        }, new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, false, false}),
+                new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {false, true, true, false}),
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
+    }
+
+    @Test
+    void testEvaluatesErrorsStreamDirectly()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable quotient = new Variable(0);
+        Reference errors = new Reference(quotient, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        quotient,
+                        new Call("divide", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(errors),
+                Map.of(errors, StreamPlan.MATERIALIZED));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {20, 21, 22}),
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {5, 0, 2}))), new Allocator());
+
+        BooleanVector errorsVector = (BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS);
+        assertThat(errorsVector.values()).containsExactly(false, true, false);
+    }
+
+    @Test
+    void testMemoizesSiblingValueAndErrorStreamsTogether()
+    {
+        AtomicInteger evaluations = new AtomicInteger();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("counting", (inputs, mask, output, context) -> {
+            evaluations.incrementAndGet();
+            return Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))
+                    .with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+        });
+
+        Variable result = new Variable(0);
+        Reference values = new Reference(result, Stream.VALUES);
+        Reference errors = new Reference(result, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("counting", List.of()), AllMask.ALL)),
+                List.of(values, errors),
+                Map.of(
+                        values, StreamPlan.MATERIALIZED,
+                        errors, StreamPlan.MATERIALIZED));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+        assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
+        assertThat(evaluations).hasValue(1);
+    }
+
+    private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
+    {
+        return (reference, mask) -> {
+            org.weakref.nitro.data.Vector vector = inputs.get(reference);
+            if (vector == null) {
+                throw new IllegalArgumentException("Unexpected input " + reference);
+            }
+            return vector;
+        };
     }
 
     private static PrimitiveRegistry builtinPrimitiveRegistry()

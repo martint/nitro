@@ -19,7 +19,9 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -166,6 +168,38 @@ public class TestOperators
                         row(11L),
                         row(22L),
                         row(33L)));
+    }
+
+    @Test
+    void testProjectOperatorCanProjectErrorsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable quotient = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        quotient,
+                        new Call("divide", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(quotient, Stream.ERRORS)),
+                Map.of(new Reference(quotient, Stream.ERRORS), StreamPlan.MATERIALIZED));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(20L, 5L),
+                                row(21L, 0L),
+                                row(22L, 2L))))) {
+            Batch batch = operator.next();
+            BooleanVector errors = (BooleanVector) batch.output(0).borrow(Stream.ERRORS);
+            assertThat(errors.values()).containsExactly(false, true, false);
+        }
     }
 
     @Test
