@@ -45,7 +45,8 @@ public final class IrNormalizer
                 .collect(java.util.stream.Collectors.toMap(
                         Map.Entry::getKey,
                         entry -> normalizeMaskExpression(entry.getValue())));
-        EvaluationPlan normalizedPlan = new EvaluationPlan(context.assignments(), plan.outputs(), plan.streamPlans(), normalizedMaskPlans);
+        Map<Reference, StreamPlan> normalizedStreamPlans = normalizeStreamPlans(plan, normalizedMaskPlans);
+        EvaluationPlan normalizedPlan = new EvaluationPlan(context.assignments(), plan.outputs(), normalizedStreamPlans, normalizedMaskPlans);
         return resolveMaskReferences(normalizedPlan);
     }
 
@@ -121,6 +122,17 @@ public final class IrNormalizer
                         Map.Entry::getKey,
                         entry -> MaskExpressionResolver.resolve(plan, entry.getValue())));
         return new EvaluationPlan(resolvedAssignments, plan.outputs(), plan.streamPlans(), resolvedMaskPlans);
+    }
+
+    private static Map<Reference, StreamPlan> normalizeStreamPlans(EvaluationPlan plan, Map<Reference, MaskExpression> maskPlans)
+    {
+        java.util.LinkedHashMap<Reference, StreamPlan> normalized = new java.util.LinkedHashMap<>(plan.streamPlans());
+        for (Reference reference : maskPlans.keySet()) {
+            if (reference.stream() == Stream.VALUES && !plan.outputs().contains(reference)) {
+                normalized.put(reference, StreamPlan.SCRATCH);
+            }
+        }
+        return normalized;
     }
 
     private static MaskExpression normalizeMaskExpression(MaskExpression expression)

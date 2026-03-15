@@ -441,6 +441,11 @@ mask plans for mask-only consumers. That lets operators and evaluators consult
 precomputed `MaskExpression` metadata instead of rediscovering the same boolean
 producer structure ad hoc at each consuming site.
 
+That metadata should also influence ordinary stream planning. If a boolean
+`VALUES` reference exists only to support mask consumers and is not itself a
+projected output, its stream plan should be downgraded to scratch-style use
+instead of being memoized or materialized like an ordinary value stream.
+
 Normalization should also apply that same derivation within mask positions
 inside the IR itself, such as `Merge` conditions or assignment masks. If a
 mask position contains a `ReferenceMask` over a boolean-producing reference,

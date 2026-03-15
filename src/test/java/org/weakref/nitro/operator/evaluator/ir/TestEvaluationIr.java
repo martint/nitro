@@ -184,7 +184,7 @@ public class TestEvaluationIr
                                 new Reference(left, Stream.VALUES),
                                 new Reference(right, Stream.VALUES))), AllMask.ALL)),
                 List.of(),
-                Map.of(),
+                Map.of(predicateValues, StreamPlan.MATERIALIZED),
                 Map.of(predicateValues, new ReferenceMask(predicateValues)));
 
         EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
@@ -192,6 +192,40 @@ public class TestEvaluationIr
         assertThat(normalizedPlan.maskPlans()).containsKey(predicateValues);
         assertThat(normalizedPlan.maskPlans().get(predicateValues)).isInstanceOf(OrMask.class);
         assertThat(((OrMask) normalizedPlan.maskPlans().get(predicateValues)).terms()).hasSize(2);
+        assertThat(normalizedPlan.streamPlans()).containsEntry(predicateValues, StreamPlan.SCRATCH);
+    }
+
+    @Test
+    void testNormalizerKeepsProjectedMaskReferenceMaterialized()
+    {
+        Variable predicate = new Variable(0);
+        Reference predicateValues = new Reference(predicate, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        predicate,
+                        new Call("identity", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(predicateValues),
+                Map.of(predicateValues, StreamPlan.MATERIALIZED),
+                Map.of(predicateValues, new ReferenceMask(predicateValues)));
+
+        EvaluationPlan normalizedPlan = new IrNormalizer(List.of(new IrNormalizationRule()
+        {
+            @Override
+            public boolean matches(Assignment candidate)
+            {
+                return candidate.operation() instanceof Call(String name, List<Reference> ignored) && name.equals("identity");
+            }
+
+            @Override
+            public void apply(Assignment candidate, IrNormalizer.Context context)
+            {
+                Call call = (Call) candidate.operation();
+                context.emit(new Assignment(candidate.output(), new Copy(call.arguments().getFirst()), candidate.mask()));
+            }
+        })).normalizePlan(plan);
+
+        assertThat(normalizedPlan.streamPlans()).containsEntry(predicateValues, StreamPlan.MATERIALIZED);
     }
 
     @Test
