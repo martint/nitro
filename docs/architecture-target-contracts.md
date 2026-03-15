@@ -59,9 +59,21 @@ Additional streams may be introduced later if needed, but the key idea is that
 nullability and error state are not hidden inside value vectors.
 
 When a logical output does not expose a `NULLS` stream, that should mean "all
-rows are non-null" for that batch rather than "nullability is unknown." This
-keeps absence of the null stream a valid fast path instead of forcing operators
-to synthesize all-false null vectors eagerly.
+rows are non-null" for that batch rather than "nullability is unknown."
+
+When a logical output does not expose an `ERRORS` stream, that should mean "no
+rows failed" for that batch rather than "error state is unknown."
+
+In both cases, absence should be interpreted as an all-false boolean stream
+over the relevant row domain:
+
+- absent `NULLS` means every row is "not null"
+- absent `ERRORS` means every row is "not failed"
+
+This keeps stream absence a valid fast path instead of forcing operators to
+synthesize explicit all-false vectors eagerly, while still giving the evaluator
+and operator boundary a precise semantic contract when those streams are
+requested explicitly.
 
 ### Vectors are physical encodings
 
@@ -145,6 +157,9 @@ The exact API can vary, but the semantics should stay consistent.
   operations.
 - Recycling should return the buffer to allocator-managed pools rather than
   letting it become ordinary garbage.
+- Once a buffer has been transferred, it must immediately become ineligible for
+  scratch reuse by the previous owner, even if that owner resets its local
+  state right afterward.
 - Operators may keep private reusable scratch buffers when ownership never
   leaves the operator.
 - Operators may transfer ownership of buffers downstream when doing so avoids a
@@ -165,6 +180,11 @@ The allocator should:
 - track allocations and peak usage by context
 - support operator-local scratch reuse
 - support ownership transfer and recycling
+
+Ownership transfer should be object-based rather than context-name-based. If a
+buffer was allocated under one context and later transferred by another
+component, the allocator must detach it from the context that actually owns it
+before any pool can reuse it.
 
 ### Conceptual shape
 
@@ -314,6 +334,10 @@ of allocating fresh mask objects for every refinement step.
 - An operator may keep and reuse its owned masks internally across batches.
 - Ownership transfer of a mask should be explicit if downstream is expected to
   retain or mutate it.
+- A derived mask may be evaluator-owned or operator-owned while it is still
+  scratch state, but once a batch publishes that mask through `next()`, the
+  mask becomes batch-owned and must no longer be eligible for upstream scratch
+  reuse.
 - Mask-producing operations such as union, difference, complement, and boolean
   filtering should eventually support writing into owned output masks.
 
@@ -788,6 +812,10 @@ The exact container is less important than these rules:
 - results remain batch-local and mask-aware
 - the carrier type of the error stream is intentionally left open; it may be
   boolean in some phases and richer in others
+
+Runtime APIs should make that optionality explicit. Callers should be able to
+ask for an optional stream with a `borrowOrNull`-style access pattern instead
+of open-coding stream membership checks at each call site.
 
 When one evaluation produces multiple sibling streams such as `VALUES`,
 `NULLS`, and `ERRORS`, those streams should be treated as one produced bundle
