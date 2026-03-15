@@ -30,6 +30,8 @@ import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.Merge;
+import org.weakref.nitro.operator.evaluator.ir.NaryAndMask;
+import org.weakref.nitro.operator.evaluator.ir.NaryOrMask;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
@@ -318,8 +320,10 @@ public final class PlanEvaluator
                         sourceOutcome.nullMask(),
                         sourceOutcome.errorMask());
             }
-            case AndMask _ -> evaluateAdaptiveAnd(expression, mask);
-            case OrMask _ -> evaluateAdaptiveOr(expression, mask);
+            case NaryAndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
+            case NaryOrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
+            case AndMask(MaskExpression left, MaskExpression right) -> evaluateBinaryAnd(left, right, mask);
+            case OrMask(MaskExpression left, MaskExpression right) -> evaluateBinaryOr(left, right, mask);
         };
     }
 
@@ -354,9 +358,8 @@ public final class PlanEvaluator
         }
     }
 
-    private MaskOutcome evaluateAdaptiveAnd(MaskExpression expression, Mask mask)
+    private MaskOutcome evaluateAdaptiveAnd(List<MaskExpression> terms, Mask mask)
     {
-        List<MaskExpression> terms = flattenAndTerms(expression);
         terms = orderTerms(terms, BooleanOperator.AND);
 
         Mask activeMask = mask;
@@ -383,9 +386,8 @@ public final class PlanEvaluator
         return new MaskOutcome(trueMask, nullMask, errorMask);
     }
 
-    private MaskOutcome evaluateAdaptiveOr(MaskExpression expression, Mask mask)
+    private MaskOutcome evaluateAdaptiveOr(List<MaskExpression> terms, Mask mask)
     {
-        List<MaskExpression> terms = flattenOrTerms(expression);
         terms = orderTerms(terms, BooleanOperator.OR);
 
         Mask acceptedMask = emptyMask(mask.size());
@@ -441,61 +443,11 @@ public final class PlanEvaluator
                         sourceOutcome.nullMask(),
                         sourceOutcome.errorMask());
             }
-            case AndMask(MaskExpression left, MaskExpression right) -> {
-                MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
-                Mask leftSurvivors = leftOutcome.survivorsMask(allocator, ALLOCATION_CONTEXT);
-                if (leftSurvivors.none()) {
-                    yield new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
-                }
-                MaskOutcome rightOutcome = evaluateMaskOutcome(right, leftSurvivors);
-                yield combineAndOutcomes(mask, leftOutcome, rightOutcome);
-            }
-            case OrMask(MaskExpression left, MaskExpression right) -> {
-                MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
-                Mask remainingMask = leftOutcome.trueMask().none() ? mask : allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftOutcome.trueMask());
-                if (remainingMask.none()) {
-                    yield new MaskOutcome(leftOutcome.trueMask(), emptyMask(mask.size()), emptyMask(mask.size()));
-                }
-                MaskOutcome rightOutcome = evaluateMaskOutcome(right, remainingMask);
-                yield combineOrOutcomes(mask, leftOutcome, rightOutcome);
-            }
+            case NaryAndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
+            case NaryOrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
+            case AndMask(MaskExpression left, MaskExpression right) -> evaluateBinaryAnd(left, right, mask);
+            case OrMask(MaskExpression left, MaskExpression right) -> evaluateBinaryOr(left, right, mask);
         };
-    }
-
-    private List<MaskExpression> flattenAndTerms(MaskExpression expression)
-    {
-        ArrayList<MaskExpression> terms = new ArrayList<>();
-        flattenAndTerms(expression, terms);
-        return terms;
-    }
-
-    private void flattenAndTerms(MaskExpression expression, List<MaskExpression> terms)
-    {
-        switch (expression) {
-            case AndMask(MaskExpression left, MaskExpression right) -> {
-                flattenAndTerms(left, terms);
-                flattenAndTerms(right, terms);
-            }
-            default -> terms.add(expression);
-        }
-    }
-
-    private List<MaskExpression> flattenOrTerms(MaskExpression expression)
-    {
-        ArrayList<MaskExpression> terms = new ArrayList<>();
-        flattenOrTerms(expression, terms);
-        return terms;
-    }
-
-    private void flattenOrTerms(MaskExpression expression, List<MaskExpression> terms)
-    {
-        switch (expression) {
-            case OrMask(MaskExpression left, MaskExpression right) -> {
-                flattenOrTerms(left, terms);
-                flattenOrTerms(right, terms);
-            }
-            default -> terms.add(expression);
-        }
     }
 
     private List<MaskExpression> orderTerms(List<MaskExpression> terms, BooleanOperator operator)
@@ -582,6 +534,28 @@ public final class PlanEvaluator
     private Mask emptyMask(int size)
     {
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], size);
+    }
+
+    private MaskOutcome evaluateBinaryAnd(MaskExpression left, MaskExpression right, Mask mask)
+    {
+        MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
+        Mask leftSurvivors = leftOutcome.survivorsMask(allocator, ALLOCATION_CONTEXT);
+        if (leftSurvivors.none()) {
+            return new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
+        }
+        MaskOutcome rightOutcome = evaluateMaskOutcome(right, leftSurvivors);
+        return combineAndOutcomes(mask, leftOutcome, rightOutcome);
+    }
+
+    private MaskOutcome evaluateBinaryOr(MaskExpression left, MaskExpression right, Mask mask)
+    {
+        MaskOutcome leftOutcome = evaluateMaskOutcome(left, mask);
+        Mask remainingMask = leftOutcome.trueMask().none() ? mask : allocator.differenceMask(ALLOCATION_CONTEXT, mask, leftOutcome.trueMask());
+        if (remainingMask.none()) {
+            return new MaskOutcome(leftOutcome.trueMask(), emptyMask(mask.size()), emptyMask(mask.size()));
+        }
+        MaskOutcome rightOutcome = evaluateMaskOutcome(right, remainingMask);
+        return combineOrOutcomes(mask, leftOutcome, rightOutcome);
     }
 
     private enum BooleanOperator

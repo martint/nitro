@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import java.util.List;
 import java.util.Set;
 
 public final class NormalizedIrValidator
@@ -24,7 +25,8 @@ public final class NormalizedIrValidator
     public static boolean isNormalized(EvaluationPlan plan)
     {
         return plan.assignments().stream()
-                .noneMatch(assignment -> assignment.operation() instanceof Call call && SPECIAL_FORMS.contains(call.name()));
+                .noneMatch(assignment -> assignment.operation() instanceof Call call && SPECIAL_FORMS.contains(call.name()))
+                && plan.assignments().stream().allMatch(assignment -> isNormalizedMask(assignment.mask()) && isNormalizedOperation(assignment.operation()));
     }
 
     public static void validate(EvaluationPlan plan)
@@ -32,5 +34,24 @@ public final class NormalizedIrValidator
         if (!isNormalized(plan)) {
             throw new IllegalArgumentException("Plan is not normalized");
         }
+    }
+
+    private static boolean isNormalizedOperation(Operation operation)
+    {
+        return switch (operation) {
+            case Merge merge -> isNormalizedMask(merge.condition());
+            default -> true;
+        };
+    }
+
+    private static boolean isNormalizedMask(MaskExpression expression)
+    {
+        return switch (expression) {
+            case AllMask _, ReferenceMask _ -> true;
+            case NotMask(MaskExpression source) -> isNormalizedMask(source);
+            case NaryAndMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
+            case NaryOrMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
+            case AndMask _, OrMask _ -> false;
+        };
     }
 }

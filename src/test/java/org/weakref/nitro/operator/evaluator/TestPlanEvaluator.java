@@ -29,6 +29,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -378,7 +379,7 @@ public class TestPlanEvaluator
         Variable result = new Variable(0);
         Reference first = new Reference(new Input(0), Stream.VALUES);
         Reference second = new Reference(new Input(1), Stream.VALUES);
-        EvaluationPlan plan = new EvaluationPlan(
+        EvaluationPlan plan = IrNormalizer.normalize(new EvaluationPlan(
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
@@ -386,7 +387,7 @@ public class TestPlanEvaluator
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES)));
+                List.of(new Reference(result, Stream.VALUES))));
 
         AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
@@ -429,7 +430,7 @@ public class TestPlanEvaluator
         Variable result = new Variable(0);
         Reference first = new Reference(new Input(0), Stream.VALUES);
         Reference second = new Reference(new Input(1), Stream.VALUES);
-        EvaluationPlan plan = new EvaluationPlan(
+        EvaluationPlan plan = IrNormalizer.normalize(new EvaluationPlan(
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
@@ -437,7 +438,7 @@ public class TestPlanEvaluator
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)),
                         AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES)));
+                List.of(new Reference(result, Stream.VALUES))));
 
         AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
@@ -471,6 +472,57 @@ public class TestPlanEvaluator
         evaluator.reset();
         evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
         assertThat(maskSizes.get()).containsExactly(8, 3);
+    }
+
+    @Test
+    void testBinaryAndMaskRetainsSourceOrderWithoutNormalization()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        Reference first = new Reference(new Input(0), Stream.VALUES);
+        Reference second = new Reference(new Input(1), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new AndMask(new ReferenceMask(first), new ReferenceMask(second)),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
+            if (reference.equals(first) || reference.equals(second)) {
+                maskSizes.updateAndGet(existing -> {
+                    var updated = new java.util.ArrayList<>(existing);
+                    updated.add(mask.selectedCount());
+                    return List.copyOf(updated);
+                });
+            }
+
+            if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                return new BooleanVector(new boolean[] {true, true, true, true, true, false, false, false});
+            }
+            if (reference.equals(new Reference(new Input(1), Stream.VALUES))) {
+                return new BooleanVector(new boolean[] {false, false, false, false, true, false, false, false});
+            }
+            if (reference.equals(new Reference(new Input(2), Stream.VALUES))) {
+                return new I64Vector(new long[] {1, 1, 1, 1, 1, 1, 1, 1});
+            }
+            if (reference.equals(new Reference(new Input(3), Stream.VALUES))) {
+                return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
+            }
+            throw new IllegalArgumentException("Unexpected input " + reference);
+        }, new Allocator());
+
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
+        assertThat(maskSizes.get()).containsExactly(8, 5);
+
+        maskSizes.set(List.of());
+        evaluator.reset();
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
+        assertThat(maskSizes.get()).containsExactly(8, 5);
     }
 
     @Test

@@ -391,6 +391,14 @@ record OrMask(MaskExpression left, MaskExpression right) implements MaskExpressi
 {
 }
 
+record NaryAndMask(List<MaskExpression> terms) implements MaskExpression
+{
+}
+
+record NaryOrMask(List<MaskExpression> terms) implements MaskExpression
+{
+}
+
 record Assignment(Variable output, Operation operation, MaskExpression mask, Type type)
 {
 }
@@ -417,6 +425,11 @@ The general form may contain:
 - special forms such as `if`, `coalesce`, `case`, `try`, `and`, and `or`
 - compact producer assignments with implicit companion-stream behavior
 - textual sugar for masks and boolean-to-mask conversion
+
+Binary `AndMask` and `OrMask` are still useful in the general form, but
+normalized plans should flatten nested boolean mask trees into explicit
+`NaryAndMask` and `NaryOrMask` nodes. That keeps reorderable boolean structure
+visible in the IR instead of leaving flattening as an evaluator-only detail.
 
 The normalized form should require:
 
@@ -1151,8 +1164,8 @@ The following execution choices should guide the runtime design:
   repeated rows when that avoids copying, but planning and correctness should
   still be expressed in terms of masks.
 - Runtime adaptive reordering is allowed for normalized deterministic n-ary
-  boolean forms such as `AND` and `OR`, provided that short-circuit, null, and
-  error semantics remain unchanged.
+  boolean mask forms such as `NaryAndMask` and `NaryOrMask`, provided that
+  short-circuit, null, and error semantics remain unchanged.
 - Adaptive reordering should be driven by observed cost and selectivity, but it
   should be scoped narrowly to forms whose semantics are order-insensitive under
   the established rules.
@@ -1164,13 +1177,20 @@ The following execution choices should guide the runtime design:
 
 ### Adaptive reordering safety
 
-Adaptive reordering should be allowed only for normalized n-ary boolean forms
-whose terms are:
+Adaptive reordering should be allowed only for normalized n-ary boolean mask
+forms whose terms are:
 
 - deterministic
 - side-effect free
-- explicitly marked reorderable
 - row-local in their null and error behavior
+
+The key boundary is normalization, not ad hoc evaluator pattern matching:
+
+- nested binary `AndMask` and `OrMask` trees may appear in general IR
+- normalization should flatten reorderable boolean chains into `NaryAndMask`
+  and `NaryOrMask`
+- adaptive reordering should apply only to those normalized n-ary forms
+- binary forms that survive outside normalization should retain source order
 
 For reorderable `AND` and `OR`, Nitro should adopt order-insensitive row
 semantics rather than strict left-to-right evaluation semantics.

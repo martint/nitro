@@ -66,7 +66,7 @@ public final class IrNormalizer
 
         public void emit(Assignment assignment)
         {
-            assignments.add(assignment);
+            assignments.add(normalizeMasks(assignment));
         }
 
         public Variable nextVariable()
@@ -77,6 +77,54 @@ public final class IrNormalizer
         private List<Assignment> assignments()
         {
             return assignments;
+        }
+
+        private static Assignment normalizeMasks(Assignment assignment)
+        {
+            MaskExpression mask = normalizeMask(assignment.mask());
+            Operation operation = switch (assignment.operation()) {
+                case Merge merge -> new Merge(normalizeMask(merge.condition()), merge.whenTrue(), merge.whenFalse());
+                default -> assignment.operation();
+            };
+            return new Assignment(assignment.output(), operation, mask);
+        }
+
+        private static MaskExpression normalizeMask(MaskExpression expression)
+        {
+            return switch (expression) {
+                case AllMask _, ReferenceMask _ -> expression;
+                case NotMask(MaskExpression source) -> new NotMask(normalizeMask(source));
+                case AndMask(MaskExpression left, MaskExpression right) -> normalizeAnd(List.of(left, right));
+                case OrMask(MaskExpression left, MaskExpression right) -> normalizeOr(List.of(left, right));
+                case NaryAndMask(List<MaskExpression> terms) -> normalizeAnd(terms);
+                case NaryOrMask(List<MaskExpression> terms) -> normalizeOr(terms);
+            };
+        }
+
+        private static MaskExpression normalizeAnd(List<MaskExpression> terms)
+        {
+            ArrayList<MaskExpression> flattened = new ArrayList<>();
+            for (MaskExpression term : terms) {
+                MaskExpression normalized = normalizeMask(term);
+                switch (normalized) {
+                    case NaryAndMask(List<MaskExpression> nested) -> flattened.addAll(nested);
+                    default -> flattened.add(normalized);
+                }
+            }
+            return flattened.size() == 1 ? flattened.getFirst() : new NaryAndMask(flattened);
+        }
+
+        private static MaskExpression normalizeOr(List<MaskExpression> terms)
+        {
+            ArrayList<MaskExpression> flattened = new ArrayList<>();
+            for (MaskExpression term : terms) {
+                MaskExpression normalized = normalizeMask(term);
+                switch (normalized) {
+                    case NaryOrMask(List<MaskExpression> nested) -> flattened.addAll(nested);
+                    default -> flattened.add(normalized);
+                }
+            }
+            return flattened.size() == 1 ? flattened.getFirst() : new NaryOrMask(flattened);
         }
     }
 
