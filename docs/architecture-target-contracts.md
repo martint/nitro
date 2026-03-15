@@ -90,6 +90,12 @@ Nitro should provide builtin flat vectors for common physical types such as
 `I64`, `I32`, `F64`, and boolean, while still allowing custom vector
 implementations outside a closed builtin type list.
 
+That should extend to additional physical types over time, including
+variable-width families such as string and binary data. The vector contract
+should therefore stay open to layouts whose payload is not a single primitive
+array, for example offset-plus-bytes representations or other custom storage
+schemes appropriate for variable-width values.
+
 Vectors should not be forced to embed nullability. A null stream is just
 another vector, typically a boolean-typed one.
 
@@ -1226,6 +1232,14 @@ incrementally, but flat, RLE, and dictionary should all fit within the same
 execution rule: choose the loop shape outside the hot loop, then execute the
 loop over concrete arrays and cursors inside it.
 
+Physical encoding is not the only dimension that may matter for dispatch.
+Logical or physical traits associated with a vector family may also justify
+specialized execution paths, for example a string vector whose values are known
+to be ASCII-only. The dispatch model should therefore remain open to
+trait-directed specialization as long as the same hot-loop rule still holds:
+select the specialized path outside the loop, then execute over concrete typed
+state inside it.
+
 That same rule applies to access patterns within a single encoding. Execution
 helpers may abstract over loop shape, run tracking, and mask traversal, but
 they should still hand concrete typed arrays or cursor state into the actual
@@ -1497,6 +1511,15 @@ architecture:
 - Exact grouped-result chunking policy for aggregation output batches.
 - Whether planner- or runtime-visible encoding metadata becomes necessary later,
   beyond the current calling-convention and callback approach.
+- Support for additional physical data types, especially variable-width types
+  such as strings and binary values, and the vector/storage conventions needed
+  to keep those types compatible with the stream-first execution model.
+- Trait-based dispatch beyond physical encoding alone, so specialized execution
+  can target properties such as ASCII-only strings or other vector-family
+  traits without hardcoding those assumptions into the core type system.
+- Wiring Nitro to a Parquet reader or equivalent columnar data source so the
+  architecture can be exercised against realistic datasets, real column
+  encodings, and real-world projection/filter workloads.
 
 ## Non-Goals
 
