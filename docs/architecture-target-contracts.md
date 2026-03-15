@@ -546,6 +546,17 @@ When evaluating composite mask expressions:
 This keeps mask refinement local to the remaining active rows instead of
 repeatedly materializing wider intermediate boolean vectors.
 
+`ReferenceMask` should mean more than "read this boolean vector and treat true
+as selected." When a boolean reference is used as a mask, evaluation should
+consider the sibling streams of the same producer as well:
+
+- `VALUES` determines which rows are true
+- `NULLS` marks rows whose truth value is unknown
+- `ERRORS` marks rows with row-local failure
+
+This makes mask evaluation row-local null/error-aware rather than raw
+boolean-only and aligns mask semantics with the rest of the stream model.
+
 ## Target Operator Contract
 
 The current `Operator` API should remain the batch protocol, but its meaning
@@ -694,6 +705,14 @@ interface InputResolver
 
 This lets the evaluator request only the specific upstream stream it needs.
 
+In practice, some evaluation steps will need multiple sibling streams for the
+same producer, for example when a `ReferenceMask` needs `VALUES`, `NULLS`, and
+`ERRORS` together. The important contract is therefore:
+
+- stream selection is explicit at the call boundary
+- callers may request multiple sibling streams of the same producer
+- input resolution must not assume `VALUES` is the only meaningful stream
+
 ### Result access
 
 Expression evaluation should produce a stream bundle rather than privileging
@@ -721,6 +740,12 @@ The exact container is less important than these rules:
 - results remain batch-local and mask-aware
 - the carrier type of the error stream is intentionally left open; it may be
   boolean in some phases and richer in others
+
+When one evaluation produces multiple sibling streams such as `VALUES`,
+`NULLS`, and `ERRORS`, those streams should be treated as one produced bundle
+for memoization purposes. Requesting one sibling stream should allow later
+requests for the others to reuse the same batch-local work instead of
+recomputing the producer independently per stream.
 
 ### Primitive function contract
 
@@ -1038,6 +1063,12 @@ Those scratch buffers should:
 This is how the evaluator can reduce memory retention without giving up
 allocation reuse.
 
+Because mask refinement is itself part of the execution hot path, the allocator
+should also support pooled mask-mask operations in addition to mask-vector
+operations. In particular, reusable intersection, difference, and union of
+owned masks should be treated as first-class allocator services rather than as
+incidental conveniences.
+
 ### ProjectOperator in the design
 
 `ProjectOperator` is a thin adapter around the evaluator:
@@ -1125,6 +1156,8 @@ The following execution choices should guide the runtime design:
 - Adaptive reordering should be driven by observed cost and selectivity, but it
   should be scoped narrowly to forms whose semantics are order-insensitive under
   the established rules.
+- This optimization belongs to boolean `MaskExpression` chains, not to
+  arbitrary expression trees.
 - Primitive execution functions should advertise enough behavior for the runtime
   to know whether they support direct masked writes, preserve encodings, or
   require flattening as a fallback.
@@ -1156,6 +1189,17 @@ For `OR`, per row:
 
 This means errors observed during evaluation may be provisional until the row is
 known not to be decided by a suppressing `FALSE` or `TRUE`.
+
+Operationally, a reorderable evaluator should maintain row-local state for at
+least:
+
+- rows already decided `TRUE` or `FALSE`
+- rows with provisional `NULL`
+- rows with provisional `ERROR`
+- rows still active for later terms
+
+Later decisive `FALSE` for `AND` or `TRUE` for `OR` may suppress those
+provisional null/error states for the affected rows.
 
 If multiple unsuppressed terms produce errors for the same row, the visible
 error should be chosen deterministically by source order rather than runtime
