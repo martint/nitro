@@ -59,6 +59,9 @@ import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -244,6 +247,48 @@ public class TestOperators
             Batch batch = operator.next();
             BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
             assertThat(nulls.values()).containsExactly(false, true, false);
+        }
+    }
+
+    @Test
+    void testProjectOperatorSharesProjectedSiblingStreamsWithoutValues()
+    {
+        AtomicInteger evaluations = new AtomicInteger();
+        AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("nullable_error", (inputs, mask, requested, output, context) -> {
+            evaluations.incrementAndGet();
+            requestedStreams.set(Set.copyOf(requested));
+            Streams result = Streams.empty();
+            if (requested.contains(Stream.NULLS)) {
+                result = result.with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            if (requested.contains(Stream.ERRORS)) {
+                result = result.with(Stream.ERRORS, new BooleanVector(new boolean[] {true, false, false}));
+            }
+            return result;
+        });
+
+        Variable result = new Variable(0);
+        Reference nulls = new Reference(result, Stream.NULLS);
+        Reference errors = new Reference(result, Stream.ERRORS);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("nullable_error", List.of()),
+                        AllMask.ALL)),
+                List.of(nulls, errors));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(allocator, 0, List.of(row(), row(), row())))) {
+            Batch batch = operator.next();
+            assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, true, false);
+            assertThat(((BooleanVector) batch.output(1).borrow(Stream.ERRORS)).values()).containsExactly(true, false, false);
+            assertThat(evaluations).hasValue(1);
+            assertThat(requestedStreams.get()).containsExactlyInAnyOrder(Stream.NULLS, Stream.ERRORS);
         }
     }
 

@@ -33,6 +33,7 @@ import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.Merge;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
+import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -59,6 +60,7 @@ public final class PlanEvaluator
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
+    private final Map<Producer, Set<Stream>> projectedStreamsByProducer;
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
     private final Map<MaskExpression, MaskTermStats> maskTermStats = new HashMap<>();
@@ -81,6 +83,7 @@ public final class PlanEvaluator
                 .filter(entry -> entry.getValue().memoizationPolicy() == MemoizationPolicy.MEMOIZE)
                 .map(entry -> entry.getKey().producer())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        this.projectedStreamsByProducer = projectedStreamsByProducer(plan.outputs());
     }
 
     public Streams evaluate(Reference reference, Mask mask)
@@ -173,14 +176,16 @@ public final class PlanEvaluator
 
     private Set<Stream> requestedStreamsFor(Reference reference)
     {
-        if (!memoizedProducers.contains(reference.producer())) {
-            return Set.of(reference.stream());
-        }
-
         java.util.EnumSet<Stream> requested = java.util.EnumSet.of(reference.stream());
-        for (Reference plannedReference : plan.streamPlans().keySet()) {
-            if (plannedReference.producer().equals(reference.producer()) && isMemoized(plannedReference)) {
-                requested.add(plannedReference.stream());
+        Set<Stream> projectedStreams = projectedStreamsByProducer.get(reference.producer());
+        if (projectedStreams != null) {
+            requested.addAll(projectedStreams);
+        }
+        if (memoizedProducers.contains(reference.producer())) {
+            for (Reference plannedReference : plan.streamPlans().keySet()) {
+                if (plannedReference.producer().equals(reference.producer()) && isMemoized(plannedReference)) {
+                    requested.add(plannedReference.stream());
+                }
             }
         }
         return Set.copyOf(requested);
@@ -321,6 +326,17 @@ public final class PlanEvaluator
             indexedAssignments.put(assignment.output(), assignment);
         }
         return indexedAssignments;
+    }
+
+    private static Map<Producer, Set<Stream>> projectedStreamsByProducer(List<Reference> outputs)
+    {
+        Map<Producer, java.util.EnumSet<Stream>> projected = new HashMap<>();
+        for (Reference output : outputs) {
+            projected.computeIfAbsent(output.producer(), _ -> java.util.EnumSet.noneOf(Stream.class))
+                    .add(output.stream());
+        }
+        return projected.entrySet().stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Set.copyOf(entry.getValue())));
     }
 
     private void memoizeStreams(Reference reference, Streams streams, Mask mask)

@@ -18,10 +18,13 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class ProjectOperator
@@ -32,6 +35,7 @@ public class ProjectOperator
 
     private final PlanEvaluator planEvaluator;
     private final List<Reference> outputReferences;
+    private final Map<Producer, Streams> evaluatedOutputBundles = new HashMap<>();
 
     private final Operator source;
     private Batch currentBatch;
@@ -66,6 +70,7 @@ public class ProjectOperator
         currentBatch = source.next();
         mask = currentBatch.borrowMask();
         planEvaluator.reset();
+        evaluatedOutputBundles.clear();
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
@@ -90,7 +95,8 @@ public class ProjectOperator
         if (stream != outputReference.stream()) {
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
         }
-        return planEvaluator.evaluate(outputReference, mask).get(stream);
+        Streams bundle = evaluatedOutputBundles.computeIfAbsent(outputReference.producer(), _ -> planEvaluator.evaluate(outputReference, mask));
+        return bundle.get(stream);
     }
 
     @Override

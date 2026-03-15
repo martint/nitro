@@ -800,6 +800,11 @@ single requested stream to a requested sibling-set for that producer. That lets
 one function evaluation produce the full memoized bundle in one pass instead of
 discovering sibling streams later and re-entering the primitive.
 
+Projected outputs should follow the same bundle rule even when the plan does
+not separately memoize them. If multiple projected outputs expose sibling
+streams from the same producer, the operator should evaluate that producer once
+for the batch and let those outputs share the resulting stream bundle.
+
 ### Primitive function contract
 
 Normalized execution should rely on primitive functions whose behavior is

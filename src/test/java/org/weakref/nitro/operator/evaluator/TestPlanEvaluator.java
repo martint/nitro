@@ -360,6 +360,71 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testCopyOfErrorsRequestsOnlyErrors()
+    {
+        AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("source", (inputs, mask, requested, output, context) -> {
+            requestedStreams.set(Set.copyOf(requested));
+            return Streams.of(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+        });
+
+        Variable source = new Variable(0);
+        Variable copied = new Variable(1);
+        Reference copiedErrors = new Reference(copied, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(source, new Call("source", List.of()), AllMask.ALL),
+                        new Assignment(copied, new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(source, Stream.ERRORS)), AllMask.ALL)),
+                List.of(copiedErrors));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(copiedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+        assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
+    }
+
+    @Test
+    void testMergeOfErrorsRequestsOnlyErrors()
+    {
+        AtomicReference<Set<Stream>> trueRequestedStreams = new AtomicReference<>(Set.of());
+        AtomicReference<Set<Stream>> falseRequestedStreams = new AtomicReference<>(Set.of());
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("when_true", (inputs, mask, requested, output, context) -> {
+            trueRequestedStreams.set(Set.copyOf(requested));
+            return Streams.of(Stream.ERRORS, new BooleanVector(new boolean[] {true, true, false}));
+        });
+        primitiveRegistry.register("when_false", (inputs, mask, requested, output, context) -> {
+            falseRequestedStreams.set(Set.copyOf(requested));
+            return Streams.of(Stream.ERRORS, new BooleanVector(new boolean[] {false, false, true}));
+        });
+
+        Variable whenTrue = new Variable(0);
+        Variable whenFalse = new Variable(1);
+        Variable merged = new Variable(2);
+        Reference mergedErrors = new Reference(merged, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(whenTrue, new Call("when_true", List.of()), AllMask.ALL),
+                        new Assignment(whenFalse, new Call("when_false", List.of()), AllMask.ALL),
+                        new Assignment(
+                                merged,
+                                new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                        new Reference(whenTrue, Stream.ERRORS),
+                                        new Reference(whenFalse, Stream.ERRORS)),
+                                AllMask.ALL)),
+                List.of(mergedErrors));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(true, false, false);
+        assertThat(trueRequestedStreams.get()).containsExactly(Stream.ERRORS);
+        assertThat(falseRequestedStreams.get()).containsExactly(Stream.ERRORS);
+    }
+
+    @Test
     void testRequestsOnlyErrorsWhenOnlyErrorsAreProjected()
     {
         AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());
