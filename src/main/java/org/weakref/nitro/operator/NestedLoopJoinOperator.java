@@ -249,7 +249,7 @@ public class NestedLoopJoinOperator
         I64Vector outputValues = (I64Vector) output.values();
         BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
         I64Vector inputValues = (I64Vector) input.values();
-        BooleanVector inputNulls = input.has(Stream.NULLS) ? (BooleanVector) input.get(Stream.NULLS) : null;
+        BooleanVector inputNulls = (BooleanVector) input.getOrNull(Stream.NULLS);
         long value = inputValues.values()[position];
         boolean isNull = inputNulls != null && inputNulls.values()[position];
 
@@ -309,7 +309,8 @@ public class NestedLoopJoinOperator
     private int copyAndCompact(Output input, Mask mask, int maskStart, Streams output, int outputStart)
     {
         long[] inputValues = ((I64Vector) input.borrow(Stream.VALUES)).values();
-        boolean[] inputNulls = input.streams().contains(Stream.NULLS) ? ((BooleanVector) input.borrow(Stream.NULLS)).values() : null;
+        BooleanVector inputNullsVector = (BooleanVector) input.borrowOrNull(Stream.NULLS);
+        boolean[] inputNulls = inputNullsVector != null ? inputNullsVector.values() : null;
         I64Vector outputValues = (I64Vector) output.values();
         BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
 
@@ -375,8 +376,9 @@ public class NestedLoopJoinOperator
     private static Streams toStreams(Output output)
     {
         I64Vector values = (I64Vector) output.borrow(Stream.VALUES);
-        if (output.streams().contains(Stream.NULLS)) {
-            return Streams.ofValuesAndNulls(values, (BooleanVector) output.borrow(Stream.NULLS));
+        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        if (nulls != null) {
+            return Streams.ofValuesAndNulls(values, nulls);
         }
         return Streams.ofValues(values);
     }

@@ -97,7 +97,7 @@ public class OutputOperator
         for (int column = 0; column < columns.size(); column++) {
             Output block = columns.get(column);
             I64Vector values = (I64Vector) block.borrow(Stream.VALUES);
-            BooleanVector nulls = block.streams().contains(Stream.NULLS) ? (BooleanVector) block.borrow(Stream.NULLS) : null;
+            BooleanVector nulls = (BooleanVector) block.borrowOrNull(Stream.NULLS);
 
             if (nulls != null && nulls.values()[position]) {
                 System.out.print("null");

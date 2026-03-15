@@ -482,14 +482,46 @@ public class Allocator
 
     public Mask transfer(Context context, Mask mask)
     {
-        state(context).transferMask(mask);
+        transferMask(mask, context);
         return mask;
     }
 
     public <T extends Vector> T transfer(Context context, T vector)
     {
-        state(context).transferVector(vector);
+        transferVector(vector, context);
         return vector;
+    }
+
+    private void transferMask(Mask mask, Context preferredContext)
+    {
+        ContextState preferredState = states.get(preferredContext);
+        if (preferredState != null && preferredState.transferMask(mask)) {
+            return;
+        }
+        for (Map.Entry<Context, ContextState> entry : states.entrySet()) {
+            if (entry.getKey().equals(preferredContext)) {
+                continue;
+            }
+            if (entry.getValue().transferMask(mask)) {
+                return;
+            }
+        }
+    }
+
+    private void transferVector(Vector vector, Context preferredContext)
+    {
+        ContextState preferredState = states.get(preferredContext);
+        if (preferredState != null && preferredState.transferVector(vector)) {
+            return;
+        }
+        for (Map.Entry<Context, ContextState> entry : states.entrySet()) {
+            if (entry.getKey().equals(preferredContext)) {
+                continue;
+            }
+            if (entry.getValue().transferVector(vector)) {
+                return;
+            }
+        }
     }
 
     private void releaseVector(Context context, Vector vector)
@@ -610,12 +642,13 @@ public class Allocator
                     .addLast(vector);
         }
 
-        public void transferVector(Vector vector)
+        public boolean transferVector(Vector vector)
         {
             if (!inUseVectors.remove(vector)) {
-                return;
+                return false;
             }
             stats.releaseBytes(vectorBytes(vector));
+            return true;
         }
 
         public Mask borrowMask(int requiredCapacity)
@@ -638,12 +671,13 @@ public class Allocator
             stats.acquire(maskBytes(mask), reused);
         }
 
-        public void transferMask(Mask mask)
+        public boolean transferMask(Mask mask)
         {
             if (!inUseMasks.remove(mask)) {
-                return;
+                return false;
             }
             stats.releaseBytes(maskBytes(mask));
+            return true;
         }
 
         public void release()

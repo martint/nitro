@@ -46,7 +46,7 @@ public class ProjectOperator
         this.allocator = allocator;
         this.source = source;
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (reference, currentMask) -> switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatch.output(index).borrow(reference.stream());
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatch.output(index).borrowOrNull(reference.stream());
             default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
         }, allocator);
         this.outputReferences = evaluationPlan.outputs();

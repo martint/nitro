@@ -69,7 +69,8 @@ public class FilterOperator
         currentBatch = source.next();
         mask = currentBatch.borrowMask();
         mask = planEvaluator.evaluate(predicateMask, mask);
-        source.constrain(mask);
+        Mask batchMask = allocator.transfer(ALLOCATION_CONTEXT, mask);
+        source.constrain(batchMask);
         planEvaluator.reset();
 
         Output[] outputs = new Output[outputCount()];
@@ -77,7 +78,7 @@ public class FilterOperator
             Output sourceOutput = currentBatch.output(outputIndex);
             outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
         }
-        return new Batch(mask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchMask, outputs);
     }
 
     @Override

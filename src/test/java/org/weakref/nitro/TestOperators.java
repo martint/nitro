@@ -57,6 +57,7 @@ import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -209,6 +210,38 @@ public class TestOperators
     }
 
     @Test
+    void testProjectOperatorSynthesizesAbsentErrorsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable sum = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        sum,
+                        new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(sum, Stream.ERRORS)),
+                Map.of(new Reference(sum, Stream.ERRORS), StreamPlan.MATERIALIZED));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(20L, 5L),
+                                row(21L, 1L),
+                                row(22L, 2L))))) {
+            Batch batch = operator.next();
+            BooleanVector errors = (BooleanVector) batch.output(0).borrow(Stream.ERRORS);
+            assertThat(Arrays.copyOf(errors.values(), batch.borrowMask().count())).containsExactly(false, false, false);
+        }
+    }
+
+    @Test
     void testProjectOperatorCanProjectNullsStream()
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
@@ -247,6 +280,38 @@ public class TestOperators
             Batch batch = operator.next();
             BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
             assertThat(nulls.values()).containsExactly(false, true, false);
+        }
+    }
+
+    @Test
+    void testProjectOperatorSynthesizesAbsentNullsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable sum = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        sum,
+                        new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(sum, Stream.NULLS)),
+                Map.of(new Reference(sum, Stream.NULLS), StreamPlan.MATERIALIZED));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(20L, 5L),
+                                row(21L, 1L),
+                                row(22L, 2L))))) {
+            Batch batch = operator.next();
+            BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            assertThat(Arrays.copyOf(nulls.values(), batch.borrowMask().count())).containsExactly(false, false, false);
         }
     }
 

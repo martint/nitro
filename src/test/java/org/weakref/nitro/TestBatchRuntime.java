@@ -54,6 +54,17 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testOptionalStreamAccessReturnsNullWhenStreamIsAbsent()
+    {
+        I64Vector values = new I64Vector(new long[] {11, 12, 13});
+        Streams streams = Streams.ofValues(values);
+        Output output = Output.of(streams);
+
+        assertThat(streams.getOrNull(Stream.NULLS)).isNull();
+        assertThat(output.borrowOrNull(Stream.NULLS)).isNull();
+    }
+
+    @Test
     void testSimpleBatchInvalidatesMaskAfterTake()
     {
         Mask mask = Mask.range(5, 3);
@@ -189,6 +200,38 @@ public class TestBatchRuntime
         Mask allocated = allocator.allocateAllMask(new Allocator.Context("ConstantTableOperator"), 2);
 
         assertThat(allocated).isNotSameAs(taken);
+    }
+
+    @Test
+    void testTransferDetachesMaskFromItsOwningContext()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context owner = new Allocator.Context("Owner");
+        Allocator.Context borrower = new Allocator.Context("Borrower");
+
+        Mask mask = allocator.allocateRangeMask(owner, 3, 2);
+        allocator.transfer(borrower, mask);
+        allocator.release(owner);
+
+        Mask allocated = allocator.allocateRangeMask(owner, 0, 2);
+
+        assertThat(allocated).isNotSameAs(mask);
+    }
+
+    @Test
+    void testTransferDetachesVectorFromItsOwningContext()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context owner = new Allocator.Context("Owner");
+        Allocator.Context borrower = new Allocator.Context("Borrower");
+
+        I64Vector vector = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+        allocator.transfer(borrower, vector);
+        allocator.release(owner);
+
+        I64Vector allocated = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+
+        assertThat(allocated).isNotSameAs(vector);
     }
 
     @Test

@@ -93,7 +93,7 @@ public class OperatorAssertions
                     for (int i = 0; i < columns.size(); i++) {
                         Output output = columns.get(i);
                         Vector values = output.borrow(Stream.VALUES);
-                        BooleanVector nulls = output.streams().contains(Stream.NULLS) ? (BooleanVector) output.borrow(Stream.NULLS) : null;
+                        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
                         row[i] = switch (values) {
                             case I64Vector v -> nulls != null && nulls.values()[position] ? null : v.values()[position];
                             case BooleanVector v -> v.values()[position] ? 1L : 0L;

@@ -360,6 +360,21 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testSynthesizesAbsentInputNullsAndErrors()
+    {
+        Reference inputNulls = new Reference(new Input(0), Stream.NULLS);
+        Reference inputErrors = new Reference(new Input(0), Stream.ERRORS);
+        PlanEvaluator evaluator = new PlanEvaluator(
+                new EvaluationPlan(List.of(), List.of(inputNulls, inputErrors)),
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}))),
+                new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(inputNulls, Mask.all(3)).get(Stream.NULLS)).values()).containsExactly(false, false, false);
+        assertThat(((BooleanVector) evaluator.evaluate(inputErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, false, false);
+    }
+
+    @Test
     void testCopyOfErrorsRequestsOnlyErrors()
     {
         AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());

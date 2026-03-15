@@ -41,6 +41,7 @@ import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -138,7 +139,16 @@ public final class PlanEvaluator
 
     private Streams evaluateInput(Reference reference, int inputIndex, Mask mask)
     {
-        return Streams.of(reference.stream(), input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), reference.stream()), mask));
+        Vector inputVector;
+        try {
+            inputVector = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), reference.stream()), mask);
+        }
+        catch (IllegalArgumentException _) {
+            checkArgument(reference.stream() != Stream.VALUES, "Missing VALUES stream for input %s", reference);
+            inputVector = null;
+        }
+        Streams result = inputVector == null ? Streams.empty() : Streams.of(reference.stream(), inputVector);
+        return completeRequestedStreams(Set.of(reference.stream()), result, mask);
     }
 
     private Streams evaluateVariable(Reference reference, Variable variable, Mask mask, Streams output)
@@ -156,15 +166,16 @@ public final class PlanEvaluator
 
     private Streams evaluateLiteral(Set<Stream> requestedStreams, Literal literal, Mask mask)
     {
-        if (!requestedStreams.contains(Stream.VALUES)) {
-            return Streams.empty();
+        Streams result = Streams.empty();
+        if (requestedStreams.contains(Stream.VALUES)) {
+            int length = mask.maxPosition() + 1;
+            result = switch (literal.value()) {
+                case Long value -> Streams.ofValues(fillLong(value, length));
+                case Boolean value -> Streams.of(Stream.VALUES, fillBoolean(value, length));
+                default -> throw new IllegalArgumentException("Unsupported literal value: " + literal.value());
+            };
         }
-        int length = mask.maxPosition() + 1;
-        return switch (literal.value()) {
-            case Long value -> Streams.ofValues(fillLong(value, length));
-            case Boolean value -> Streams.of(Stream.VALUES, fillBoolean(value, length));
-            default -> throw new IllegalArgumentException("Unsupported literal value: " + literal.value());
-        };
+        return completeRequestedStreams(requestedStreams, result, mask);
     }
 
     private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)
@@ -173,7 +184,9 @@ public final class PlanEvaluator
         List<Streams> inputs = call.arguments().stream()
                 .map(argument -> evaluate(argument, mask))
                 .toList();
-        return function.apply(inputs, mask, requestedStreamsFor(reference), prepareOutput(output), executionContext);
+        Set<Stream> requestedStreams = requestedStreamsFor(reference);
+        Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
+        return completeRequestedStreams(requestedStreams, result, mask);
     }
 
     private Set<Stream> requestedStreamsFor(Reference reference)
@@ -211,7 +224,7 @@ public final class PlanEvaluator
             Vector target = existing == null ? sourceVector : copyVector(sourceVector, existing, mask);
             result = result.with(stream, target);
         }
-        return result;
+        return completeRequestedStreams(requestedStreams, result, mask);
     }
 
     private Streams evaluateMerge(Set<Stream> requestedStreams, Merge merge, Mask mask, Streams output)
@@ -226,7 +239,7 @@ public final class PlanEvaluator
                 result = result.with(stream, merged);
             }
         }
-        return result;
+        return completeRequestedStreams(requestedStreams, result, mask);
     }
 
     private Vector evaluateMergeStream(Stream stream, Merge merge, Mask mask, Mask trueMask, Mask falseMask, Streams output)
@@ -250,13 +263,13 @@ public final class PlanEvaluator
     {
         if (source == null) {
             checkArgument(stream != Stream.VALUES, "VALUES stream cannot be absent for active merge branch");
-            return ensureBooleanTarget(target, fullMask.maxPosition() + 1);
+            return fillFalseBoolean(target, branchMask, fullMask.maxPosition() + 1);
         }
 
         Streams sourceStreams = evaluate(source, branchMask);
         if (!sourceStreams.has(source.stream())) {
             checkArgument(stream != Stream.VALUES, "VALUES stream not produced for active merge branch: %s", source);
-            return ensureBooleanTarget(target, fullMask.maxPosition() + 1);
+            return fillFalseBoolean(target, branchMask, fullMask.maxPosition() + 1);
         }
 
         Vector sourceVector = sourceStreams.get(source.stream());
@@ -266,9 +279,18 @@ public final class PlanEvaluator
         return copyVector(sourceVector, target, branchMask);
     }
 
-    private Vector ensureBooleanTarget(Vector existing, int length)
+    private BooleanVector fillFalseBoolean(Vector existing, Mask mask, int length)
     {
-        return allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, length, BooleanVector::new);
+        BooleanVector target = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, length, BooleanVector::new);
+        if (mask.all()) {
+            Arrays.fill(target.values(), 0, mask.size(), false);
+        }
+        else {
+            for (int position : mask) {
+                target.values()[position] = false;
+            }
+        }
+        return target;
     }
 
     private Mask evaluateMask(MaskExpression expression, Mask mask)
@@ -462,13 +484,23 @@ public final class PlanEvaluator
 
     private BooleanVector optionalBooleanStream(org.weakref.nitro.operator.evaluator.ir.Producer producer, Stream stream, Mask mask)
     {
-        try {
-            Streams streams = evaluate(new Reference(producer, stream), mask);
-            return streams.has(stream) ? (BooleanVector) streams.get(stream) : null;
+        return (BooleanVector) evaluate(new Reference(producer, stream), mask).getOrNull(stream);
+    }
+
+    private Streams completeRequestedStreams(Set<Stream> requestedStreams, Streams streams, Mask mask)
+    {
+        Streams completed = streams;
+        int length = mask.maxPosition() + 1;
+        for (Stream stream : requestedStreams) {
+            if (completed.has(stream)) {
+                continue;
+            }
+            switch (stream) {
+                case NULLS, ERRORS -> completed = completed.with(stream, fillFalseBoolean(null, mask, length));
+                case VALUES -> throw new IllegalArgumentException("VALUES stream not produced for request");
+            }
         }
-        catch (IllegalArgumentException _) {
-            return null;
-        }
+        return completed;
     }
 
     private MaskOutcome evaluateAdaptiveAnd(List<MaskExpression> terms, Mask mask)

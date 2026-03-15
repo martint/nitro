@@ -79,6 +79,15 @@ public final class Output
         return resolvedStreams.computeIfAbsent(stream, key -> requireNonNull(resolver.apply(key), "resolver returned null"));
     }
 
+    public Vector borrowOrNull(Stream stream)
+    {
+        requireNonNull(stream, "stream is null");
+        if (!exposedStreams.contains(stream)) {
+            return null;
+        }
+        return borrow(stream);
+    }
+
     public Vector take(Stream stream)
     {
         Vector vector = requireNonNull(takeResolver.apply(stream, borrow(stream)), "takeResolver returned null");

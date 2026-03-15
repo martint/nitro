@@ -76,6 +76,12 @@ public final class Streams
         return vector;
     }
 
+    public Vector getOrNull(Stream stream)
+    {
+        requireNonNull(stream, "stream is null");
+        return vectors.get(stream);
+    }
+
     public Vector values()
     {
         return get(Stream.VALUES);
