@@ -874,6 +874,12 @@ plan intends to memoize a full producer bundle, the evaluator may request both
 `VALUES` and `ERRORS` together so later sibling lookups can reuse one produced
 result.
 
+The same bundle-selective rule should apply to non-primitive operations such as
+`Literal`, `Copy`, and `Merge`. If a downstream consumer requests only
+`NULLS` or `ERRORS` from a producer chain built out of those operations, the
+evaluator should preserve that intent instead of materializing `VALUES` by
+default.
+
 ### Type-system independence
 
 Scalar registration at this layer should remain independent of any frontend

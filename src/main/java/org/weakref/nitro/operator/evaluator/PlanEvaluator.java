@@ -147,16 +147,18 @@ public final class PlanEvaluator
         checkArgument(assignment != null, "Unknown variable: %s", variable);
 
         return switch (assignment.operation()) {
-            case Literal literal -> evaluateLiteral(reference, literal, mask);
-            case Copy(Reference source) -> copy(reference.stream(), source, mask, output);
+            case Literal literal -> evaluateLiteral(requestedStreamsFor(reference), literal, mask);
+            case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
-            case Merge merge -> evaluateMerge(reference.stream(), merge, mask, output);
+            case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
         };
     }
 
-    private Streams evaluateLiteral(Reference reference, Literal literal, Mask mask)
+    private Streams evaluateLiteral(Set<Stream> requestedStreams, Literal literal, Mask mask)
     {
-        checkArgument(reference.stream() == Stream.VALUES, "Literal currently supports only VALUES: %s", reference);
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return Streams.empty();
+        }
         int length = mask.maxPosition() + 1;
         return switch (literal.value()) {
             case Long value -> Streams.ofValues(fillLong(value, length));
@@ -191,37 +193,82 @@ public final class PlanEvaluator
         return Set.copyOf(requested);
     }
 
-    private Streams copy(Stream targetStream, Reference source, Mask mask, Streams output)
+    private Streams copy(Set<Stream> requestedStreams, Reference source, Mask mask, Streams output)
     {
-        Streams sourceStreams = evaluate(source, mask);
-        Vector sourceVector = sourceStreams.get(source.stream());
+        Streams result = Streams.empty();
+        for (Stream stream : requestedStreams) {
+            Reference sourceReference = remapReference(source, stream);
+            if (sourceReference == null) {
+                continue;
+            }
+            Streams sourceStreams = evaluate(sourceReference, mask);
+            if (!sourceStreams.has(sourceReference.stream())) {
+                continue;
+            }
 
-        if (targetStream != source.stream()) {
-            throw new IllegalArgumentException("Cross-stream copy is not yet supported: " + source + " -> " + targetStream);
+            Vector sourceVector = sourceStreams.get(sourceReference.stream());
+            Vector existing = output != null && output.has(stream) ? output.get(stream) : null;
+            Vector target = existing == null ? sourceVector : copyVector(sourceVector, existing, mask);
+            result = result.with(stream, target);
         }
-
-        if (output == null) {
-            return Streams.of(targetStream, sourceVector);
-        }
-
-        Vector target = output.has(targetStream) ? output.get(targetStream) : null;
-        target = copyVector(sourceVector, target, mask);
-        return Streams.of(targetStream, target);
+        return result;
     }
 
-    private Streams evaluateMerge(Stream stream, Merge merge, Mask mask, Streams output)
+    private Streams evaluateMerge(Set<Stream> requestedStreams, Merge merge, Mask mask, Streams output)
     {
         Mask trueMask = evaluateMaskOutcome(merge.condition(), mask).trueMask();
         Mask falseMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, trueMask);
 
-        Streams result = prepareOutput(output);
-        if (!trueMask.none()) {
-            result = copy(stream, merge.whenTrue(), trueMask, result);
-        }
-        if (!falseMask.none()) {
-            result = copy(stream, merge.whenFalse(), falseMask, result);
+        Streams result = Streams.empty();
+        for (Stream stream : requestedStreams) {
+            Vector merged = evaluateMergeStream(stream, merge, mask, trueMask, falseMask, output);
+            if (merged != null) {
+                result = result.with(stream, merged);
+            }
         }
         return result;
+    }
+
+    private Vector evaluateMergeStream(Stream stream, Merge merge, Mask mask, Mask trueMask, Mask falseMask, Streams output)
+    {
+        Reference trueReference = remapReference(merge.whenTrue(), stream);
+        Reference falseReference = remapReference(merge.whenFalse(), stream);
+        Vector existing = output != null && output.has(stream) ? output.get(stream) : null;
+        boolean singleBranch = trueMask.none() || falseMask.none();
+        Vector target = existing;
+
+        if (!trueMask.none()) {
+            target = mergeBranchInto(stream, trueReference, trueMask, mask, target, singleBranch && falseMask.none());
+        }
+        if (!falseMask.none()) {
+            target = mergeBranchInto(stream, falseReference, falseMask, mask, target, singleBranch && trueMask.none());
+        }
+        return target;
+    }
+
+    private Vector mergeBranchInto(Stream stream, Reference source, Mask branchMask, Mask fullMask, Vector target, boolean allowForward)
+    {
+        if (source == null) {
+            checkArgument(stream != Stream.VALUES, "VALUES stream cannot be absent for active merge branch");
+            return ensureBooleanTarget(target, fullMask.maxPosition() + 1);
+        }
+
+        Streams sourceStreams = evaluate(source, branchMask);
+        if (!sourceStreams.has(source.stream())) {
+            checkArgument(stream != Stream.VALUES, "VALUES stream not produced for active merge branch: %s", source);
+            return ensureBooleanTarget(target, fullMask.maxPosition() + 1);
+        }
+
+        Vector sourceVector = sourceStreams.get(source.stream());
+        if (allowForward && target == null) {
+            return sourceVector;
+        }
+        return copyVector(sourceVector, target, branchMask);
+    }
+
+    private Vector ensureBooleanTarget(Vector existing, int length)
+    {
+        return allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, length, BooleanVector::new);
     }
 
     private Mask evaluateMask(MaskExpression expression, Mask mask)
@@ -232,6 +279,17 @@ public final class PlanEvaluator
     private Streams prepareOutput(Streams output)
     {
         return output == null ? Streams.empty() : output;
+    }
+
+    private static Reference remapReference(Reference reference, Stream requestedStream)
+    {
+        if (reference.stream() == requestedStream) {
+            return reference;
+        }
+        if (reference.stream() == Stream.VALUES) {
+            return new Reference(reference.producer(), requestedStream);
+        }
+        return null;
     }
 
     private Vector copyVector(Vector source, Vector existing, Mask mask)
