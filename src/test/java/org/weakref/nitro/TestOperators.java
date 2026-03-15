@@ -48,8 +48,10 @@ import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
@@ -274,6 +276,45 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(1L, 10L),
                         row(2L, 20L)));
+    }
+
+    @Test
+    void testFilterOperatorUsesPlannedMaskExpressionForPredicateReference()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literalThreshold = new Variable(0);
+        Variable predicate = new Variable(1);
+        Reference predicateValues = new Reference(predicate, Stream.VALUES);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literalThreshold, new Literal(3L), AllMask.ALL),
+                        new Assignment(
+                                predicate,
+                                new Call("lt", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literalThreshold, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(),
+                Map.of(),
+                Map.of(predicateValues, new NotMask(new ReferenceMask(predicateValues))));
+
+        assertThat(operator(
+                new FilterOperator(
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(2L, 20L),
+                                        row(3L, 30L),
+                                        row(4L, 40L))),
+                        evaluationPlan,
+                primitiveRegistry,
+                        predicateValues,
+                        allocator)))
+                .matchesExactly(List.of(
+                        row(3L, 30L),
+                        row(4L, 40L)));
     }
 
     @Test

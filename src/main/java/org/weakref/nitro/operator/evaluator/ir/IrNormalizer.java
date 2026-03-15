@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator.ir;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public final class IrNormalizer
 {
@@ -40,7 +41,11 @@ public final class IrNormalizer
         for (Assignment assignment : plan.assignments()) {
             normalizeAssignment(assignment, context);
         }
-        EvaluationPlan normalizedPlan = new EvaluationPlan(context.assignments(), plan.outputs(), plan.streamPlans());
+        Map<Reference, MaskExpression> normalizedMaskPlans = plan.maskPlans().entrySet().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        Map.Entry::getKey,
+                        entry -> normalizeMaskExpression(entry.getValue())));
+        EvaluationPlan normalizedPlan = new EvaluationPlan(context.assignments(), plan.outputs(), plan.streamPlans(), normalizedMaskPlans);
         return resolveMaskReferences(normalizedPlan);
     }
 
@@ -82,48 +87,12 @@ public final class IrNormalizer
 
         private static Assignment normalizeMasks(Assignment assignment)
         {
-            MaskExpression mask = normalizeMask(assignment.mask());
+            MaskExpression mask = normalizeMaskExpression(assignment.mask());
             Operation operation = switch (assignment.operation()) {
-                case Merge merge -> new Merge(normalizeMask(merge.condition()), merge.whenTrue(), merge.whenFalse());
+                case Merge merge -> new Merge(normalizeMaskExpression(merge.condition()), merge.whenTrue(), merge.whenFalse());
                 default -> assignment.operation();
             };
             return new Assignment(assignment.output(), operation, mask);
-        }
-
-        private static MaskExpression normalizeMask(MaskExpression expression)
-        {
-            return switch (expression) {
-                case AllMask _, ReferenceMask _ -> expression;
-                case NotMask(MaskExpression source) -> new NotMask(normalizeMask(source));
-                case AndMask(List<MaskExpression> terms) -> normalizeAnd(terms);
-                case OrMask(List<MaskExpression> terms) -> normalizeOr(terms);
-            };
-        }
-
-        private static MaskExpression normalizeAnd(List<MaskExpression> terms)
-        {
-            ArrayList<MaskExpression> flattened = new ArrayList<>();
-            for (MaskExpression term : terms) {
-                MaskExpression normalized = normalizeMask(term);
-                switch (normalized) {
-                    case AndMask(List<MaskExpression> nested) -> flattened.addAll(nested);
-                    default -> flattened.add(normalized);
-                }
-            }
-            return flattened.size() == 1 ? flattened.getFirst() : new AndMask(flattened);
-        }
-
-        private static MaskExpression normalizeOr(List<MaskExpression> terms)
-        {
-            ArrayList<MaskExpression> flattened = new ArrayList<>();
-            for (MaskExpression term : terms) {
-                MaskExpression normalized = normalizeMask(term);
-                switch (normalized) {
-                    case OrMask(List<MaskExpression> nested) -> flattened.addAll(nested);
-                    default -> flattened.add(normalized);
-                }
-            }
-            return flattened.size() == 1 ? flattened.getFirst() : new OrMask(flattened);
         }
     }
 
@@ -147,7 +116,47 @@ public final class IrNormalizer
                     return new Assignment(assignment.output(), operation, mask);
                 })
                 .toList();
-        return new EvaluationPlan(resolvedAssignments, plan.outputs(), plan.streamPlans());
+        Map<Reference, MaskExpression> resolvedMaskPlans = plan.maskPlans().entrySet().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        Map.Entry::getKey,
+                        entry -> MaskExpressionResolver.resolve(plan, entry.getValue())));
+        return new EvaluationPlan(resolvedAssignments, plan.outputs(), plan.streamPlans(), resolvedMaskPlans);
+    }
+
+    private static MaskExpression normalizeMaskExpression(MaskExpression expression)
+    {
+        return switch (expression) {
+            case AllMask _, ReferenceMask _ -> expression;
+            case NotMask(MaskExpression source) -> new NotMask(normalizeMaskExpression(source));
+            case AndMask(List<MaskExpression> terms) -> normalizeAnd(terms);
+            case OrMask(List<MaskExpression> terms) -> normalizeOr(terms);
+        };
+    }
+
+    private static MaskExpression normalizeAnd(List<MaskExpression> terms)
+    {
+        ArrayList<MaskExpression> flattened = new ArrayList<>();
+        for (MaskExpression term : terms) {
+            MaskExpression normalized = normalizeMaskExpression(term);
+            switch (normalized) {
+                case AndMask(List<MaskExpression> nested) -> flattened.addAll(nested);
+                default -> flattened.add(normalized);
+            }
+        }
+        return flattened.size() == 1 ? flattened.getFirst() : new AndMask(flattened);
+    }
+
+    private static MaskExpression normalizeOr(List<MaskExpression> terms)
+    {
+        ArrayList<MaskExpression> flattened = new ArrayList<>();
+        for (MaskExpression term : terms) {
+            MaskExpression normalized = normalizeMaskExpression(term);
+            switch (normalized) {
+                case OrMask(List<MaskExpression> nested) -> flattened.addAll(nested);
+                default -> flattened.add(normalized);
+            }
+        }
+        return flattened.size() == 1 ? flattened.getFirst() : new OrMask(flattened);
     }
 
     private static final class VariableAllocator

@@ -170,6 +170,31 @@ public class TestEvaluationIr
     }
 
     @Test
+    void testNormalizerPreservesAndResolvesMaskPlans()
+    {
+        Variable left = new Variable(0);
+        Variable right = new Variable(1);
+        Variable predicate = new Variable(2);
+        Reference predicateValues = new Reference(predicate, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(left, new Copy(new Reference(new Input(0), Stream.VALUES)), AllMask.ALL),
+                        new Assignment(right, new Copy(new Reference(new Input(1), Stream.VALUES)), AllMask.ALL),
+                        new Assignment(predicate, new Call("or", List.of(
+                                new Reference(left, Stream.VALUES),
+                                new Reference(right, Stream.VALUES))), AllMask.ALL)),
+                List.of(),
+                Map.of(),
+                Map.of(predicateValues, new ReferenceMask(predicateValues)));
+
+        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+
+        assertThat(normalizedPlan.maskPlans()).containsKey(predicateValues);
+        assertThat(normalizedPlan.maskPlans().get(predicateValues)).isInstanceOf(OrMask.class);
+        assertThat(((OrMask) normalizedPlan.maskPlans().get(predicateValues)).terms()).hasSize(2);
+    }
+
+    @Test
     void testNormalizerUsesRegisteredRules()
     {
         Variable result = new Variable(0);

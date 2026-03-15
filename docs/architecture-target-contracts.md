@@ -436,6 +436,11 @@ convenience, planning or normalization may derive a `MaskExpression` from the
 referenced producer graph for obvious boolean forms such as `and`, `or`, and
 `not`. That conversion should happen before execution reaches the hot loop.
 
+The planning model should also have an explicit place to record those derived
+mask plans for mask-only consumers. That lets operators and evaluators consult
+precomputed `MaskExpression` metadata instead of rediscovering the same boolean
+producer structure ad hoc at each consuming site.
+
 Normalization should also apply that same derivation within mask positions
 inside the IR itself, such as `Merge` conditions or assignment masks. If a
 mask position contains a `ReferenceMask` over a boolean-producing reference,

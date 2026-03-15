@@ -16,11 +16,16 @@ package org.weakref.nitro.operator.evaluator.ir;
 import java.util.List;
 import java.util.Map;
 
-public record EvaluationPlan(List<Assignment> assignments, List<Reference> outputs, Map<Reference, StreamPlan> streamPlans)
+public record EvaluationPlan(List<Assignment> assignments, List<Reference> outputs, Map<Reference, StreamPlan> streamPlans, Map<Reference, MaskExpression> maskPlans)
 {
     public EvaluationPlan(List<Assignment> assignments, List<Reference> outputs)
     {
-        this(assignments, outputs, Map.of());
+        this(assignments, outputs, Map.of(), Map.of());
+    }
+
+    public EvaluationPlan(List<Assignment> assignments, List<Reference> outputs, Map<Reference, StreamPlan> streamPlans)
+    {
+        this(assignments, outputs, streamPlans, Map.of());
     }
 
     public EvaluationPlan
@@ -28,5 +33,6 @@ public record EvaluationPlan(List<Assignment> assignments, List<Reference> outpu
         assignments = List.copyOf(assignments);
         outputs = List.copyOf(outputs);
         streamPlans = Map.copyOf(streamPlans);
+        maskPlans = Map.copyOf(maskPlans);
     }
 }
