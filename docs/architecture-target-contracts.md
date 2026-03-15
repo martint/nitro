@@ -431,6 +431,11 @@ be able to pass a mask expression all the way to that consumer without
 materializing an intermediate boolean vector solely to turn it back into a
 mask.
 
+When a mask-only consumer is given a boolean `VALUES` reference for
+convenience, planning or normalization may derive a `MaskExpression` from the
+referenced producer graph for obvious boolean forms such as `and`, `or`, and
+`not`. That conversion should happen before execution reaches the hot loop.
+
 The normalized form should require:
 
 - explicit stream references

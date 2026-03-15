@@ -19,6 +19,8 @@ import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
+import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 public class FilterOperator
         implements Operator
@@ -32,6 +34,11 @@ public class FilterOperator
 
     private Batch currentBatch;
     private Mask mask;
+
+    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
+    {
+        this(source, evaluationPlan, primitiveRegistry, MaskExpressionResolver.resolve(evaluationPlan, predicateReference), allocator);
+    }
 
     public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, MaskExpression predicateMask, Allocator allocator)
     {

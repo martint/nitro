@@ -39,7 +39,6 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
@@ -119,7 +118,7 @@ public class TestOperatorBatches
                 new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))),
                 evaluationPlan,
                 primitiveRegistry,
-                new ReferenceMask(new Reference(predicate, Stream.VALUES)),
+                new Reference(predicate, Stream.VALUES),
                 allocator);
 
         Batch batch = operator.next();

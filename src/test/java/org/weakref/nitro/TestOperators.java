@@ -46,13 +46,10 @@ import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
-import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
-import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
@@ -85,13 +82,15 @@ public class TestOperators
         Variable forty = new Variable(1);
         Variable lessThanTwenty = new Variable(2);
         Variable greaterThanForty = new Variable(3);
+        Variable predicate = new Variable(4);
         EvaluationPlan filterPlan = plan(
                 List.of(
                         literal(twenty, 20),
                         literal(forty, 40),
                         call(lessThanTwenty, "lt", values(new Input(0)), values(twenty)),
-                        call(greaterThanForty, "lt", values(forty), values(new Input(0)))),
-                List.of());
+                        call(greaterThanForty, "lt", values(forty), values(new Input(0))),
+                        call(predicate, "or", values(lessThanTwenty), values(greaterThanForty))),
+                values(predicate));
 
         Variable two = new Variable(0);
         Variable doubled = new Variable(1);
@@ -134,7 +133,7 @@ public class TestOperators
                                                                 new SequenceGenerator(100))),
                                                 filterPlan,
                                                 primitiveRegistry,
-                                                new OrMask(List.of(mask(lessThanTwenty), mask(greaterThanForty))),
+                                                values(predicate),
                                                 allocator))))))
                 .matchesExactly(List.of(row(200L, 208L, 1020L, 5L)));
     }
@@ -270,7 +269,7 @@ public class TestOperators
                                         row(4L, 40L))),
                         evaluationPlan,
                         primitiveRegistry,
-                        new ReferenceMask(new Reference(predicate, Stream.VALUES)),
+                        new Reference(predicate, Stream.VALUES),
                         allocator)))
                 .matchesExactly(List.of(
                         row(1L, 10L),
@@ -856,9 +855,9 @@ public class TestOperators
                         call(remainder, "modulo", values(new Input(inputColumn)), values(divisorLiteral)),
                         literal(one, 1),
                         call(predicate, "lt", values(remainder), values(one))),
-                List.of());
+                values(predicate));
 
-        return new FilterOperator(source, evaluationPlan, primitiveRegistry, mask(predicate), allocator);
+        return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
     }
 
     private FilterOperator filterLessThanOrGreaterThan(Operator source, int inputColumn, long lowerBound, long upperBound, PrimitiveRegistry primitiveRegistry)
@@ -867,25 +866,22 @@ public class TestOperators
         Variable upperLiteral = new Variable(1);
         Variable lessThanLower = new Variable(2);
         Variable greaterThanUpper = new Variable(3);
+        Variable predicate = new Variable(4);
         EvaluationPlan evaluationPlan = plan(
                 List.of(
                         literal(lowerLiteral, lowerBound),
                         literal(upperLiteral, upperBound),
                         call(lessThanLower, "lt", values(new Input(inputColumn)), values(lowerLiteral)),
-                        call(greaterThanUpper, "lt", values(upperLiteral), values(new Input(inputColumn)))),
-                List.of());
+                        call(greaterThanUpper, "lt", values(upperLiteral), values(new Input(inputColumn))),
+                        call(predicate, "or", values(lessThanLower), values(greaterThanUpper))),
+                values(predicate));
 
-        return new FilterOperator(source, evaluationPlan, primitiveRegistry, new OrMask(List.of(mask(lessThanLower), mask(greaterThanUpper))), allocator);
+        return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
     }
 
     private static EvaluationPlan plan(List<Assignment> assignments, Reference... outputs)
     {
         return new EvaluationPlan(assignments, List.of(outputs));
-    }
-
-    private static EvaluationPlan plan(List<Assignment> assignments, List<Reference> outputs)
-    {
-        return new EvaluationPlan(assignments, outputs);
     }
 
     private static Assignment literal(Variable output, long value)
@@ -901,10 +897,5 @@ public class TestOperators
     private static Reference values(Producer producer)
     {
         return new Reference(producer, Stream.VALUES);
-    }
-
-    private static MaskExpression mask(Producer producer)
-    {
-        return new ReferenceMask(values(producer));
     }
 }
