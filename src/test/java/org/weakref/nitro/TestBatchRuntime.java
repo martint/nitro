@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
@@ -104,6 +105,17 @@ public class TestBatchRuntime
         assertThat(mask.position(2)).isEqualTo(7);
         assertThat(mask.contains(6)).isTrue();
         assertThat(mask.contains(4)).isFalse();
+    }
+
+    @Test
+    void testDictionaryVectorDereferencesBaseValues()
+    {
+        DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}));
+
+        assertThat(dictionary.length()).isEqualTo(4);
+        assertThat(dictionary.valueAt(0)).isEqualTo(30L);
+        assertThat(dictionary.valueAt(1)).isEqualTo(10L);
+        assertThat(((DictionaryVector) dictionary.copy(3)).ids()).containsExactly(2, 0, 1);
     }
 
     @Test

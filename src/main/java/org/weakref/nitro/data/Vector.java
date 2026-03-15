@@ -14,7 +14,7 @@
 package org.weakref.nitro.data;
 
 public sealed interface Vector
-        permits FlatVector, RleVector
+        permits DictionaryVector, FlatVector, RleVector
 {
     int length();
 
