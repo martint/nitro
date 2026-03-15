@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -100,5 +103,26 @@ final class BinaryDispatchSupport
             }
             return runIndex;
         }
+    }
+
+    public static long[] i64Values(Vector vector)
+    {
+        return switch (vector) {
+            case I64Vector values -> values.values();
+            default -> throw new IllegalArgumentException("Unsupported i64 vector type: " + vector.getClass().getSimpleName());
+        };
+    }
+
+    public static boolean[] booleanValues(Vector vector)
+    {
+        return switch (vector) {
+            case BooleanVector values -> values.values();
+            default -> throw new IllegalArgumentException("Unsupported boolean vector type: " + vector.getClass().getSimpleName());
+        };
+    }
+
+    public static int[] dictionaryIds(DictionaryVector vector)
+    {
+        return vector.ids();
     }
 }

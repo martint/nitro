@@ -14,6 +14,7 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -69,6 +70,7 @@ final class BooleanBinaryDispatch
             case BooleanVector leftFlat -> {
                 switch (right) {
                     case BooleanVector rightFlat -> forEachFlatFlat(leftFlat.values(), rightFlat.values(), mask, consumer);
+                    case DictionaryVector rightDictionary -> forEachFlatDictionary(leftFlat.values(), rightDictionary, mask, consumer);
                     case RleVector rightRle -> forEachFlatRle(leftFlat.values(), rightRle, mask, consumer);
                     default -> throw unsupported(right);
                 }
@@ -76,7 +78,16 @@ final class BooleanBinaryDispatch
             case RleVector leftRle -> {
                 switch (right) {
                     case BooleanVector rightFlat -> forEachRleFlat(leftRle, rightFlat.values(), mask, consumer);
+                    case DictionaryVector rightDictionary -> forEachRleDictionary(leftRle, rightDictionary, mask, consumer);
                     case RleVector rightRle -> forEachRleRle(leftRle, rightRle, mask, consumer);
+                    default -> throw unsupported(right);
+                }
+            }
+            case DictionaryVector leftDictionary -> {
+                switch (right) {
+                    case BooleanVector rightFlat -> forEachDictionaryFlat(leftDictionary, rightFlat.values(), mask, consumer);
+                    case DictionaryVector rightDictionary -> forEachDictionaryDictionary(leftDictionary, rightDictionary, mask, consumer);
+                    case RleVector rightRle -> forEachDictionaryRle(leftDictionary, rightRle, mask, consumer);
                     default -> throw unsupported(right);
                 }
             }
@@ -119,7 +130,7 @@ final class BooleanBinaryDispatch
     private static void forEachFlatRle(boolean[] left, RleVector right, Mask mask, BooleanPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
-        boolean[] rightValues = ((BooleanVector) right.values()).values();
+        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -133,12 +144,29 @@ final class BooleanBinaryDispatch
         }
     }
 
+    private static void forEachFlatDictionary(boolean[] left, DictionaryVector right, Mask mask, BooleanPairConsumer consumer)
+    {
+        int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
+        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[position], rightValues[rightIds[position]], position);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            consumer.accept(left[position], rightValues[rightIds[position]], position);
+        }
+    }
+
     private static void forEachRleRle(RleVector left, RleVector right, Mask mask, BooleanPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
         BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
-        boolean[] leftValues = ((BooleanVector) left.values()).values();
-        boolean[] rightValues = ((BooleanVector) right.values()).values();
+        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -149,6 +177,80 @@ final class BooleanBinaryDispatch
 
         for (int position : mask) {
             consumer.accept(leftValues[leftCursor.runIndexAt(position)], rightValues[rightCursor.runIndexAt(position)], position);
+        }
+    }
+
+    private static void forEachRleDictionary(RleVector left, DictionaryVector right, Mask mask, BooleanPairConsumer consumer)
+    {
+        BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
+        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
+        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(leftValues[leftCursor.runIndexAt(position)], rightValues[rightIds[position]], position);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            consumer.accept(leftValues[leftCursor.runIndexAt(position)], rightValues[rightIds[position]], position);
+        }
+    }
+
+    private static void forEachDictionaryFlat(DictionaryVector left, boolean[] right, Mask mask, BooleanPairConsumer consumer)
+    {
+        int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
+        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(leftValues[leftIds[position]], right[position], position);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            consumer.accept(leftValues[leftIds[position]], right[position], position);
+        }
+    }
+
+    private static void forEachDictionaryRle(DictionaryVector left, RleVector right, Mask mask, BooleanPairConsumer consumer)
+    {
+        int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
+        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(leftValues[leftIds[position]], rightValues[rightCursor.runIndexAt(position)], position);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            consumer.accept(leftValues[leftIds[position]], rightValues[rightCursor.runIndexAt(position)], position);
+        }
+    }
+
+    private static void forEachDictionaryDictionary(DictionaryVector left, DictionaryVector right, Mask mask, BooleanPairConsumer consumer)
+    {
+        int[] leftIds = BinaryDispatchSupport.dictionaryIds(left);
+        boolean[] leftValues = BinaryDispatchSupport.booleanValues(left.values());
+        int[] rightIds = BinaryDispatchSupport.dictionaryIds(right);
+        boolean[] rightValues = BinaryDispatchSupport.booleanValues(right.values());
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(leftValues[leftIds[position]], rightValues[rightIds[position]], position);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            consumer.accept(leftValues[leftIds[position]], rightValues[rightIds[position]], position);
         }
     }
 
