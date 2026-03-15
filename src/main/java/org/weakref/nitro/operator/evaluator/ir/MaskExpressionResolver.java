@@ -34,6 +34,11 @@ public final class MaskExpressionResolver
         return new MaskExpressionResolver(plan).resolve(reference);
     }
 
+    public static MaskExpression resolve(EvaluationPlan plan, MaskExpression expression)
+    {
+        return new MaskExpressionResolver(plan).resolveExpression(expression);
+    }
+
     private MaskExpression resolve(Reference reference)
     {
         checkArgument(reference.stream() == Stream.VALUES, "Mask references must use the VALUES stream: %s", reference);
@@ -66,6 +71,21 @@ public final class MaskExpressionResolver
             }
             case Copy(Reference source) -> resolve(source);
             default -> new ReferenceMask(reference);
+        };
+    }
+
+    private MaskExpression resolveExpression(MaskExpression expression)
+    {
+        return switch (expression) {
+            case AllMask _ -> expression;
+            case ReferenceMask(Reference reference) -> reference.stream() == Stream.VALUES ? resolve(reference) : expression;
+            case NotMask(MaskExpression source) -> new NotMask(resolveExpression(source));
+            case AndMask(List<MaskExpression> terms) -> new AndMask(terms.stream()
+                    .map(this::resolveExpression)
+                    .toList());
+            case OrMask(List<MaskExpression> terms) -> new OrMask(terms.stream()
+                    .map(this::resolveExpression)
+                    .toList());
         };
     }
 }

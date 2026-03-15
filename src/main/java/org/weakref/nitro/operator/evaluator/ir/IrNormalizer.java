@@ -40,7 +40,8 @@ public final class IrNormalizer
         for (Assignment assignment : plan.assignments()) {
             normalizeAssignment(assignment, context);
         }
-        return new EvaluationPlan(context.assignments(), plan.outputs(), plan.streamPlans());
+        EvaluationPlan normalizedPlan = new EvaluationPlan(context.assignments(), plan.outputs(), plan.streamPlans());
+        return resolveMaskReferences(normalizedPlan);
     }
 
     private void normalizeAssignment(Assignment assignment, Context context)
@@ -132,6 +133,21 @@ public final class IrNormalizer
                 .mapToInt(assignment -> assignment.output().id())
                 .max()
                 .orElse(-1) + 1;
+    }
+
+    private static EvaluationPlan resolveMaskReferences(EvaluationPlan plan)
+    {
+        List<Assignment> resolvedAssignments = plan.assignments().stream()
+                .map(assignment -> {
+                    MaskExpression mask = MaskExpressionResolver.resolve(plan, assignment.mask());
+                    Operation operation = switch (assignment.operation()) {
+                        case Merge merge -> new Merge(MaskExpressionResolver.resolve(plan, merge.condition()), merge.whenTrue(), merge.whenFalse());
+                        default -> assignment.operation();
+                    };
+                    return new Assignment(assignment.output(), operation, mask);
+                })
+                .toList();
+        return new EvaluationPlan(resolvedAssignments, plan.outputs(), plan.streamPlans());
     }
 
     private static final class VariableAllocator

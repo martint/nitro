@@ -28,6 +28,7 @@ import org.weakref.nitro.operator.evaluator.ir.Copy;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
+import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.Merge;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -333,6 +334,11 @@ public final class PlanEvaluator
 
     private MaskOutcome evaluateReferenceMask(Reference reference, Mask mask)
     {
+        MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
+        if (!(resolved instanceof ReferenceMask(Reference resolvedReference) && resolvedReference.equals(reference))) {
+            return evaluateMaskOutcome(resolved, mask);
+        }
+
         BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);

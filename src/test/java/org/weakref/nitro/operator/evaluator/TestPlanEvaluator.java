@@ -273,6 +273,42 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testEvaluatesMergeConditionThroughBooleanReferenceMask()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable leftOnly = new Variable(0);
+        Variable rightOnly = new Variable(1);
+        Variable predicate = new Variable(2);
+        Variable result = new Variable(3);
+        Reference left = new Reference(new Input(0), Stream.VALUES);
+        Reference right = new Reference(new Input(1), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(leftOnly, new Call("lt", List.of(left, new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(rightOnly, new Call("lt", List.of(new Reference(new Input(3), Stream.VALUES), right)), AllMask.ALL),
+                        new Assignment(predicate, new Call("or", List.of(
+                                new Reference(leftOnly, Stream.VALUES),
+                                new Reference(rightOnly, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(result, new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(predicate, Stream.VALUES)),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                left, new I64Vector(new long[] {1, 5, 7, 3}),
+                right, new I64Vector(new long[] {9, 2, 6, 1}),
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {4, 4, 4, 4}),
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {4, 4, 4, 4}),
+                new Reference(new Input(4), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
+                new Reference(new Input(5), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
+
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
+        assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 1L);
+    }
+
+    @Test
     void testEvaluatesErrorsStreamDirectly()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

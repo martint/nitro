@@ -436,6 +436,16 @@ convenience, planning or normalization may derive a `MaskExpression` from the
 referenced producer graph for obvious boolean forms such as `and`, `or`, and
 `not`. That conversion should happen before execution reaches the hot loop.
 
+Normalization should also apply that same derivation within mask positions
+inside the IR itself, such as `Merge` conditions or assignment masks. If a
+mask position contains a `ReferenceMask` over a boolean-producing reference,
+normalization should prefer replacing it with the derived mask tree so later
+planning and execution retain explicit mask structure.
+
+The evaluator may still perform the same derivation as a fallback when a plan
+reaches execution with an unresolved boolean `ReferenceMask`, but that should
+be treated as a recovery path rather than the preferred steady state.
+
 The normalized form should require:
 
 - explicit stream references

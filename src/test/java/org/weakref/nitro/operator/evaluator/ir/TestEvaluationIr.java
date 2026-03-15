@@ -143,6 +143,33 @@ public class TestEvaluationIr
     }
 
     @Test
+    void testNormalizerResolvesBooleanReferenceMasksIntoMaskTrees()
+    {
+        Variable left = new Variable(0);
+        Variable right = new Variable(1);
+        Variable predicate = new Variable(2);
+        Variable result = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(left, new Copy(new Reference(new Input(0), Stream.VALUES)), AllMask.ALL),
+                        new Assignment(right, new Copy(new Reference(new Input(1), Stream.VALUES)), AllMask.ALL),
+                        new Assignment(predicate, new Call("or", List.of(
+                                new Reference(left, Stream.VALUES),
+                                new Reference(right, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(result, new Merge(
+                                new ReferenceMask(new Reference(predicate, Stream.VALUES)),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES)), AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        Merge merge = (Merge) normalizedPlan.assignments().getLast().operation();
+
+        assertThat(merge.condition()).isInstanceOf(OrMask.class);
+        assertThat(((OrMask) merge.condition()).terms()).hasSize(2);
+    }
+
+    @Test
     void testNormalizerUsesRegisteredRules()
     {
         Variable result = new Variable(0);
