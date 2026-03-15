@@ -146,7 +146,7 @@ public final class PlanEvaluator
         return switch (assignment.operation()) {
             case Literal literal -> evaluateLiteral(reference, literal, mask);
             case Copy(Reference source) -> copy(reference.stream(), source, mask, output);
-            case Call call -> evaluateCall(reference.stream(), call, mask, output);
+            case Call call -> evaluateCall(reference, call, mask, output);
             case Merge merge -> evaluateMerge(reference.stream(), merge, mask, output);
         };
     }
@@ -162,13 +162,28 @@ public final class PlanEvaluator
         };
     }
 
-    private Streams evaluateCall(Stream stream, Call call, Mask mask, Streams output)
+    private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)
     {
         PrimitiveFunction function = primitiveRegistry.get(call.name());
         List<Streams> inputs = call.arguments().stream()
                 .map(argument -> evaluate(argument, mask))
                 .toList();
-        return function.apply(inputs, mask, prepareOutput(output), executionContext);
+        return function.apply(inputs, mask, requestedStreamsFor(reference), prepareOutput(output), executionContext);
+    }
+
+    private Set<Stream> requestedStreamsFor(Reference reference)
+    {
+        if (!memoizedProducers.contains(reference.producer())) {
+            return Set.of(reference.stream());
+        }
+
+        java.util.EnumSet<Stream> requested = java.util.EnumSet.of(reference.stream());
+        for (Reference plannedReference : plan.streamPlans().keySet()) {
+            if (plannedReference.producer().equals(reference.producer()) && isMemoized(plannedReference)) {
+                requested.add(plannedReference.stream());
+            }
+        }
+        return Set.copyOf(requested);
     }
 
     private Streams copy(Stream targetStream, Reference source, Mask mask, Streams output)

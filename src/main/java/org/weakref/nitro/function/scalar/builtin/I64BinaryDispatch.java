@@ -71,6 +71,12 @@ final class I64BinaryDispatch
         forEachPair(left, right, mask, (leftValue, rightValue, position) -> kernel.apply(leftValue, rightValue, values, errorValues, position));
     }
 
+    public static void applyErrorsOnly(Vector left, Vector right, Mask mask, BooleanVector errors, LongErrorKernel kernel)
+    {
+        boolean[] errorValues = errors.values();
+        forEachPair(left, right, mask, (leftValue, rightValue, position) -> kernel.apply(leftValue, rightValue, null, errorValues, position));
+    }
+
     public static RleVector rleRleLong(RleVector left, RleVector right, LongBinaryKernel kernel)
     {
         long[] leftValues = ((I64Vector) left.values()).values();
@@ -115,6 +121,21 @@ final class I64BinaryDispatch
             kernel.apply(leftValues[leftIndex], rightValues[rightIndex], values, errors, outputIndex);
         });
         return new RleWithErrors(new RleVector(counts, new I64Vector(values)), new RleVector(counts, new BooleanVector(errors)));
+    }
+
+    public static RleVector rleRleErrorsOnly(RleVector left, RleVector right, LongErrorKernel kernel)
+    {
+        long[] leftValues = ((I64Vector) left.values()).values();
+        long[] rightValues = ((I64Vector) right.values()).values();
+
+        int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
+        boolean[] errors = new boolean[counts.length];
+
+        BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
+            counts[outputIndex] = count;
+            kernel.apply(leftValues[leftIndex], rightValues[rightIndex], null, errors, outputIndex);
+        });
+        return new RleVector(counts, new BooleanVector(errors));
     }
 
     private static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)

@@ -15,8 +15,10 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Primitive execution contract for normalized evaluator calls.
@@ -27,5 +29,5 @@ import java.util.List;
 @FunctionalInterface
 public interface PrimitiveFunction
 {
-    Streams apply(List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context);
+    Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context);
 }

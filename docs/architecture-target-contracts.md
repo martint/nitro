@@ -795,6 +795,11 @@ for memoization purposes. Requesting one sibling stream should allow later
 requests for the others to reuse the same batch-local work instead of
 recomputing the producer independently per stream.
 
+When a producer bundle is planned for memoization, the evaluator may widen a
+single requested stream to a requested sibling-set for that producer. That lets
+one function evaluation produce the full memoized bundle in one pass instead of
+discovering sibling streams later and re-entering the primitive.
+
 ### Primitive function contract
 
 Normalized execution should rely on primitive functions whose behavior is
@@ -826,6 +831,7 @@ Primitive functions should follow a calling convention that makes these rules
 explicit:
 
 - functions execute under an explicit mask
+- functions are told which output streams the caller wants from this evaluation
 - functions may be given a reusable output destination
 - if a reusable output is supplied, functions must preserve positions outside
   the active mask
@@ -847,6 +853,7 @@ interface PrimitiveFunction
     Streams apply(
             List<Streams> inputs,
             Mask mask,
+            Set<Stream> requestedStreams,
             Streams output,
             ExecutionContext context);
 }
@@ -854,6 +861,13 @@ interface PrimitiveFunction
 
 This is illustrative only, but the chosen signature should make output reuse
 and masked writes part of the contract rather than implicit behavior.
+
+`requestedStreams` is a request set, not a prohibition against reusing already
+available sibling streams. A caller may ask only for `ERRORS`, for example, and
+the primitive should be free to skip `VALUES` work when it can. But when the
+plan intends to memoize a full producer bundle, the evaluator may request both
+`VALUES` and `ERRORS` together so later sibling lookups can reuse one produced
+result.
 
 ### Type-system independence
 

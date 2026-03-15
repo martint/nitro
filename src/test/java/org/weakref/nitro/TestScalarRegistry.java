@@ -23,6 +23,9 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -59,9 +62,9 @@ public class TestScalarRegistry
             implements PrimitiveFunction
     {
         @Override
-        public Streams apply(java.util.List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context)
+        public Streams apply(java.util.List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
         {
-            return new AddI64().apply(inputs, mask, output, context);
+            return new AddI64().apply(inputs, mask, requestedStreams, output, context);
         }
     }
 }

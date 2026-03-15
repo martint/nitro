@@ -42,6 +42,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -104,6 +105,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new RleVector(new int[] {2, 2}, new I64Vector(new long[] {1, 5}))),
                         Streams.ofValues(new RleVector(new int[] {1, 3}, new I64Vector(new long[] {10, 20})))),
                 Mask.all(4),
+                Set.of(Stream.VALUES),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -123,6 +125,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new RleVector(new int[] {2, 2}, new I64Vector(new long[] {1, 5}))),
                         Streams.ofValues(new RleVector(new int[] {1, 3}, new I64Vector(new long[] {10, 4})))),
                 Mask.all(4),
+                Set.of(Stream.VALUES),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -142,6 +145,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new RleVector(new int[] {2, 2}, new I64Vector(new long[] {1, 5}))),
                         Streams.ofValues(new RleVector(new int[] {1, 3}, new I64Vector(new long[] {10, 20})))),
                 Mask.all(4),
+                Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -155,6 +159,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 30}))),
                         Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4}))),
                 Mask.all(4),
+                Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -173,6 +178,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new I64Vector(new long[] {Long.MAX_VALUE, 1})),
                         Streams.ofValues(new I64Vector(new long[] {1, 2}))),
                 Mask.all(2),
+                Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -184,6 +190,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new I64Vector(new long[] {Long.MIN_VALUE, 10})),
                         Streams.ofValues(new I64Vector(new long[] {1, 3}))),
                 Mask.all(2),
+                Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -201,6 +208,7 @@ public class TestPlanEvaluator
                         Streams.ofValues(new I64Vector(new long[] {20, 21, 22})),
                         Streams.ofValues(new I64Vector(new long[] {5, 0, 2}))),
                 Mask.all(3),
+                Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
@@ -212,11 +220,30 @@ public class TestPlanEvaluator
                         Streams.ofValues(new RleVector(new int[] {2, 1}, new I64Vector(new long[] {20, 22}))),
                         Streams.ofValues(new I64Vector(new long[] {6, 0, 5}))),
                 Mask.all(3),
+                Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
                 new PrimitiveExecutionContext(new Allocator()));
 
         assertThat(((I64Vector) modulo.values()).values()).containsExactly(2L, 0L, 2L);
         assertThat(((BooleanVector) modulo.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+    }
+
+    @Test
+    void testDivideCanProduceOnlyErrorsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
+        Streams divide = primitiveRegistry.get("divide").apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {20, 21, 22})),
+                        Streams.ofValues(new I64Vector(new long[] {5, 0, 2}))),
+                Mask.all(3),
+                Set.of(Stream.ERRORS),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(divide.has(Stream.VALUES)).isFalse();
+        assertThat(((BooleanVector) divide.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
     }
 
     @Test
@@ -333,14 +360,45 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testRequestsOnlyErrorsWhenOnlyErrorsAreProjected()
+    {
+        AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("counting", (inputs, mask, requested, output, context) -> {
+            requestedStreams.set(Set.copyOf(requested));
+            return Streams.of(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+        });
+
+        Variable result = new Variable(0);
+        Reference errors = new Reference(result, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("counting", List.of()), AllMask.ALL)),
+                List.of(errors),
+                Map.of(errors, StreamPlan.MATERIALIZED));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+        assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
+    }
+
+    @Test
     void testMemoizesSiblingValueAndErrorStreamsTogether()
     {
         AtomicInteger evaluations = new AtomicInteger();
+        AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register("counting", (inputs, mask, output, context) -> {
+        primitiveRegistry.register("counting", (inputs, mask, requested, output, context) -> {
             evaluations.incrementAndGet();
-            return Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))
-                    .with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+            requestedStreams.set(Set.copyOf(requested));
+            Streams result = Streams.empty();
+            if (requested.contains(Stream.VALUES)) {
+                result = result.with(Stream.VALUES, new I64Vector(new long[] {1, 2, 3}));
+            }
+            if (requested.contains(Stream.ERRORS)) {
+                result = result.with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            return result;
         });
 
         Variable result = new Variable(0);
@@ -358,14 +416,23 @@ public class TestPlanEvaluator
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
         assertThat(evaluations).hasValue(1);
+        assertThat(requestedStreams.get()).containsExactlyInAnyOrder(Stream.VALUES, Stream.ERRORS);
     }
 
     @Test
     void testEvaluatesNullsStreamDirectly()
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register("nullable", (inputs, mask, output, context) -> Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))
-                .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false})));
+        primitiveRegistry.register("nullable", (inputs, mask, requestedStreams, output, context) -> {
+            Streams result = Streams.empty();
+            if (requestedStreams.contains(Stream.VALUES)) {
+                result = result.with(Stream.VALUES, new I64Vector(new long[] {1, 2, 3}));
+            }
+            if (requestedStreams.contains(Stream.NULLS)) {
+                result = result.with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            return result;
+        });
 
         Variable result = new Variable(0);
         Reference nulls = new Reference(result, Stream.NULLS);
@@ -385,10 +452,16 @@ public class TestPlanEvaluator
     {
         AtomicInteger evaluations = new AtomicInteger();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register("nullable", (inputs, mask, output, context) -> {
+        primitiveRegistry.register("nullable", (inputs, mask, requestedStreams, output, context) -> {
             evaluations.incrementAndGet();
-            return Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))
-                    .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            Streams result = Streams.empty();
+            if (requestedStreams.contains(Stream.VALUES)) {
+                result = result.with(Stream.VALUES, new I64Vector(new long[] {1, 2, 3}));
+            }
+            if (requestedStreams.contains(Stream.NULLS)) {
+                result = result.with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            return result;
         });
 
         Variable result = new Variable(0);
@@ -413,10 +486,16 @@ public class TestPlanEvaluator
     {
         AtomicInteger evaluations = new AtomicInteger();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register("predicate", (inputs, mask, output, context) -> {
+        primitiveRegistry.register("predicate", (inputs, mask, requestedStreams, output, context) -> {
             evaluations.incrementAndGet();
-            return Streams.ofValues(new BooleanVector(new boolean[] {true, false, true}))
-                    .with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+            Streams result = Streams.empty();
+            if (requestedStreams.contains(Stream.VALUES)) {
+                result = result.with(Stream.VALUES, new BooleanVector(new boolean[] {true, false, true}));
+            }
+            if (requestedStreams.contains(Stream.ERRORS)) {
+                result = result.with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            return result;
         });
 
         Variable result = new Variable(0);

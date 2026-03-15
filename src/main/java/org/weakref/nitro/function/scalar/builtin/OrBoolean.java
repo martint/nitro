@@ -25,6 +25,7 @@ import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -35,9 +36,12 @@ public final class OrBoolean
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OrBoolean");
 
     @Override
-    public Streams apply(List<Streams> inputs, Mask mask, Streams output, PrimitiveExecutionContext context)
+    public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for or");
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return Streams.empty();
+        }
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();

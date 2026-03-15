@@ -209,10 +209,16 @@ public class TestOperators
     void testProjectOperatorCanProjectNullsStream()
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register("nullable_copy", (inputs, mask, output, context) -> {
+        primitiveRegistry.register("nullable_copy", (inputs, mask, requestedStreams, output, context) -> {
             long[] inputValues = ((org.weakref.nitro.data.I64Vector) inputs.getFirst().values()).values();
-            return Streams.ofValues(new org.weakref.nitro.data.I64Vector(inputValues.clone()))
-                    .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            Streams result = Streams.empty();
+            if (requestedStreams.contains(Stream.VALUES)) {
+                result = result.with(Stream.VALUES, new org.weakref.nitro.data.I64Vector(inputValues.clone()));
+            }
+            if (requestedStreams.contains(Stream.NULLS)) {
+                result = result.with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            return result;
         });
 
         Variable result = new Variable(0);
