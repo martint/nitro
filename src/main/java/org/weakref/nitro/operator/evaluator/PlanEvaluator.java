@@ -44,6 +44,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -57,6 +58,7 @@ public final class PlanEvaluator
     private final Allocator allocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
+    private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
     private final Map<MaskExpression, MaskTermStats> maskTermStats = new HashMap<>();
@@ -75,6 +77,10 @@ public final class PlanEvaluator
         this.allocator = allocator;
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
+        this.memoizedProducers = plan.streamPlans().entrySet().stream()
+                .filter(entry -> entry.getValue().memoizationPolicy() == MemoizationPolicy.MEMOIZE)
+                .map(entry -> entry.getKey().producer())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     public Streams evaluate(Reference reference, Mask mask)
@@ -83,8 +89,7 @@ public final class PlanEvaluator
             return Streams.empty();
         }
 
-        StreamPlan streamPlan = plan.streamPlans().get(reference);
-        if (streamPlan != null && streamPlan.memoizationPolicy() == MemoizationPolicy.MEMOIZE) {
+        if (isMemoized(reference)) {
             Streams existingOutput = memoizedStreams.get(reference);
             Mask existingMask = memoizedMasks.get(reference);
             if (existingOutput != null && existingMask != null && existingMask.containsAll(mask)) {
@@ -305,14 +310,23 @@ public final class PlanEvaluator
 
     private void memoizeStreams(Reference reference, Streams streams, Mask mask)
     {
+        if (!memoizedProducers.contains(reference.producer())) {
+            return;
+        }
+
         for (Stream stream : streams.asMap().keySet()) {
             Reference streamReference = new Reference(reference.producer(), stream);
-            StreamPlan streamPlan = plan.streamPlans().get(streamReference);
-            if (streamPlan != null && streamPlan.memoizationPolicy() == MemoizationPolicy.MEMOIZE) {
+            if (isMemoized(streamReference)) {
                 memoizedStreams.put(streamReference, streams);
                 memoizedMasks.put(streamReference, mask);
             }
         }
+    }
+
+    private boolean isMemoized(Reference reference)
+    {
+        StreamPlan streamPlan = plan.streamPlans().get(reference);
+        return streamPlan != null && streamPlan.memoizationPolicy() == MemoizationPolicy.MEMOIZE;
     }
 
     private MaskOutcome evaluateMaskOutcome(MaskExpression expression, Mask mask)

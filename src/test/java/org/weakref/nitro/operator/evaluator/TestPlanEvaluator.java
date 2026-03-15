@@ -409,6 +409,35 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDoesNotMemoizeScratchOnlyMaskBundle()
+    {
+        AtomicInteger evaluations = new AtomicInteger();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("predicate", (inputs, mask, output, context) -> {
+            evaluations.incrementAndGet();
+            return Streams.ofValues(new BooleanVector(new boolean[] {true, false, true}))
+                    .with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false}));
+        });
+
+        Variable result = new Variable(0);
+        Reference values = new Reference(result, Stream.VALUES);
+        Reference errors = new Reference(result, Stream.ERRORS);
+        EvaluationPlan normalizedPlan = IrNormalizer.normalize(new EvaluationPlan(
+                List.of(new Assignment(result, new Call("predicate", List.of()), AllMask.ALL)),
+                List.of(),
+                Map.of(
+                        values, StreamPlan.MATERIALIZED,
+                        errors, StreamPlan.MATERIALIZED),
+                Map.of(values, new ReferenceMask(values))));
+
+        PlanEvaluator evaluator = new PlanEvaluator(normalizedPlan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+        assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
+        assertThat(evaluations).hasValue(2);
+    }
+
+    @Test
     void testAdaptiveAndReorderingUsesMoreSelectiveTermFirstOnLaterRuns()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();

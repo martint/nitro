@@ -452,6 +452,10 @@ would otherwise be memoized only because they arrive alongside a mask-only
 boolean value stream, they should also stay scratch-oriented unless some stream
 from that bundle is explicitly projected.
 
+The evaluator should consult that distinction at the producer-bundle level when
+deciding whether to memoize. A scratch-oriented mask-only producer should not
+even be treated as a memoization candidate when its stream bundle is produced.
+
 Normalization should also apply that same derivation within mask positions
 inside the IR itself, such as `Merge` conditions or assignment masks. If a
 mask position contains a `ReferenceMask` over a boolean-producing reference,
