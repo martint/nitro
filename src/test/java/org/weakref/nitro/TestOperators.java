@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
@@ -199,6 +200,42 @@ public class TestOperators
             Batch batch = operator.next();
             BooleanVector errors = (BooleanVector) batch.output(0).borrow(Stream.ERRORS);
             assertThat(errors.values()).containsExactly(false, true, false);
+        }
+    }
+
+    @Test
+    void testProjectOperatorCanProjectNullsStream()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("nullable_copy", (inputs, mask, output, context) -> {
+            long[] inputValues = ((org.weakref.nitro.data.I64Vector) inputs.getFirst().values()).values();
+            return Streams.ofValues(new org.weakref.nitro.data.I64Vector(inputValues.clone()))
+                    .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+        });
+
+        Variable result = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("nullable_copy", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.NULLS)),
+                Map.of(new Reference(result, Stream.NULLS), StreamPlan.MATERIALIZED));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row(10L),
+                                row(20L),
+                                row(30L))))) {
+            Batch batch = operator.next();
+            BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            assertThat(nulls.values()).containsExactly(false, true, false);
         }
     }
 

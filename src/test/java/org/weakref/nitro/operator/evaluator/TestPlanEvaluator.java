@@ -322,6 +322,54 @@ public class TestPlanEvaluator
         assertThat(evaluations).hasValue(1);
     }
 
+    @Test
+    void testEvaluatesNullsStreamDirectly()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("nullable", (inputs, mask, output, context) -> Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))
+                .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false})));
+
+        Variable result = new Variable(0);
+        Reference nulls = new Reference(result, Stream.NULLS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("nullable", List.of()), AllMask.ALL)),
+                List.of(nulls),
+                Map.of(nulls, StreamPlan.MATERIALIZED));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        BooleanVector nullsVector = (BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS);
+        assertThat(nullsVector.values()).containsExactly(false, true, false);
+    }
+
+    @Test
+    void testMemoizesSiblingValueAndNullStreamsTogether()
+    {
+        AtomicInteger evaluations = new AtomicInteger();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("nullable", (inputs, mask, output, context) -> {
+            evaluations.incrementAndGet();
+            return Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))
+                    .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+        });
+
+        Variable result = new Variable(0);
+        Reference values = new Reference(result, Stream.VALUES);
+        Reference nulls = new Reference(result, Stream.NULLS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("nullable", List.of()), AllMask.ALL)),
+                List.of(values, nulls),
+                Map.of(
+                        values, StreamPlan.MATERIALIZED,
+                        nulls, StreamPlan.MATERIALIZED));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        assertThat(((BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS)).values()).containsExactly(false, true, false);
+        assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
+        assertThat(evaluations).hasValue(1);
+    }
+
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> {
