@@ -93,6 +93,12 @@ implementations outside a closed builtin type list.
 Vectors should not be forced to embed nullability. A null stream is just
 another vector, typically a boolean-typed one.
 
+The runtime vector contract should stay focused on physical encodings and
+typed access patterns. Hot-path execution should not depend on generic boxed
+per-element access such as `Object valueAt(int position)`. Callers should
+branch on concrete vector shape outside the hot loop and then use the
+type-specific arrays, runs, or ids exposed by that concrete encoding.
+
 The physical encoding of a given logical stream is a runtime property of each
 produced batch, not a fixed property of the logical column or expression.
 
@@ -133,6 +139,12 @@ mediator for:
 No operator or function should allocate execution buffers directly with `new`
 once the runtime path is mature. All execution buffers should come from the
 allocator or a pool owned by the allocator.
+
+This rule applies to copies and materialization as well as fresh allocation.
+Vector interfaces should not expose convenience methods that clone or
+materialize new execution buffers behind the allocator's back. Any such copy
+must flow through allocator-mediated routines so pooling, accounting, and
+ownership transfer remain correct.
 
 ### Ownership modes
 
@@ -1213,6 +1225,11 @@ Support for additional mixed combinations such as dictionary with RLE may grow
 incrementally, but flat, RLE, and dictionary should all fit within the same
 execution rule: choose the loop shape outside the hot loop, then execute the
 loop over concrete arrays and cursors inside it.
+
+That same rule applies to access patterns within a single encoding. Execution
+helpers may abstract over loop shape, run tracking, and mask traversal, but
+they should still hand concrete typed arrays or cursor state into the actual
+hot loop rather than reintroducing boxed or polymorphic per-row access.
 
 This applies equally to scalar functions, predicate functions, and any future
 merge-like evaluator operations.
