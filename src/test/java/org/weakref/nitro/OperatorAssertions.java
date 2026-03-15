@@ -19,6 +19,7 @@ import org.assertj.core.description.Description;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
@@ -116,11 +117,30 @@ public class OperatorAssertions
                 return null;
             }
 
-            return switch (values.valueAt(position)) {
-                case Long value -> value;
-                case Boolean value -> value ? 1L : 0L;
-                default -> throw new UnsupportedOperationException(values.values().getClass().getSimpleName());
+            return decodeValue(values.values(), values.ids()[position]);
+        }
+
+        private static Long decodeValue(Vector values, int position)
+        {
+            return switch (values) {
+                case I64Vector vector -> vector.values()[position];
+                case BooleanVector vector -> vector.values()[position] ? 1L : 0L;
+                case DictionaryVector vector -> decodeValue(vector.values(), vector.ids()[position]);
+                case RleVector vector -> decodeRleValue(vector, position);
+                default -> throw new UnsupportedOperationException(values.getClass().getSimpleName());
             };
+        }
+
+        private static Long decodeRleValue(RleVector values, int position)
+        {
+            int count = 0;
+            for (int index = 0; index < values.counts().length; index++) {
+                count += values.counts()[index];
+                if (position < count) {
+                    return decodeValue(values.values(), index);
+                }
+            }
+            throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + values.length());
         }
     }
 }

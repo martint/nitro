@@ -48,12 +48,6 @@ public class I64Vector
     }
 
     @Override
-    public Object valueAt(int position)
-    {
-        return values[position];
-    }
-
-    @Override
     public String toString()
     {
         return "I64Vector" + Arrays.toString(values);

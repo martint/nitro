@@ -91,21 +91,6 @@ public final class RleVector
     }
 
     @Override
-    public Object valueAt(int position)
-    {
-        int count = 0;
-
-        for (int i = 0; i < counts.length; i++) {
-            count += counts[i];
-            if (position < count) {
-                return values.valueAt(i);
-            }
-        }
-
-        throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + length);
-    }
-
-    @Override
     public String toString()
     {
         return "RLE {length: " + length + ", counts: " + Arrays.toString(counts) + ", values: " + values + "}";

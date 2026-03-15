@@ -18,7 +18,5 @@ public sealed interface Vector
 {
     int length();
 
-    Object valueAt(int position);
-
     Vector copy(int size);
 }

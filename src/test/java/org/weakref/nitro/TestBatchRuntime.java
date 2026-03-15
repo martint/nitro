@@ -113,8 +113,8 @@ public class TestBatchRuntime
         DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}));
 
         assertThat(dictionary.length()).isEqualTo(4);
-        assertThat(dictionary.valueAt(0)).isEqualTo(30L);
-        assertThat(dictionary.valueAt(1)).isEqualTo(10L);
+        assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[0]]).isEqualTo(30L);
+        assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[1]]).isEqualTo(10L);
         assertThat(((DictionaryVector) dictionary.copy(3)).ids()).containsExactly(2, 0, 1);
     }
 

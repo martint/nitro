@@ -48,12 +48,6 @@ public class F64Vector
     }
 
     @Override
-    public Object valueAt(int position)
-    {
-        return values[position];
-    }
-
-    @Override
     public String toString()
     {
         return "F64Vector" + Arrays.toString(values);

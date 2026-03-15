@@ -48,12 +48,6 @@ public final class DictionaryVector
     }
 
     @Override
-    public Object valueAt(int position)
-    {
-        return values.valueAt(ids[position]);
-    }
-
-    @Override
     public Vector copy(int size)
     {
         checkArgument(size >= 0, "size is negative");

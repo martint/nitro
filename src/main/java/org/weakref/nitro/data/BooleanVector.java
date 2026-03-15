@@ -48,12 +48,6 @@ public class BooleanVector
     }
 
     @Override
-    public Object valueAt(int position)
-    {
-        return values[position];
-    }
-
-    @Override
     public String toString()
     {
         return "BooleanVector" + Arrays.toString(values);
