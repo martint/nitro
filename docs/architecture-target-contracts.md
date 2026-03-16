@@ -27,6 +27,10 @@ vectors. They should avoid row materialization and per-row type dispatch in the
 hot path, since those patterns work against JVM optimization and Nitro's
 vectorized execution model.
 
+When the source format already exposes a compact column encoding such as a
+dictionary-backed page, scan operators should preserve that encoding into
+Nitro vectors when practical instead of eagerly flattening it away.
+
 ## Architectural Principles
 
 ### Operators orchestrate batches

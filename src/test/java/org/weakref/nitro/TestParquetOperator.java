@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.Batch;
@@ -86,6 +87,11 @@ public class TestParquetOperator
                 new ParquetRow(20, true, 400L)));
 
         assertDictionaryEncoding(file, "x");
+
+        try (ParquetScanOperator scan = new ParquetScanOperator(new Allocator(), file, List.of("x", "flag", "maybe"))) {
+            Batch batch = scan.next();
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+        }
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable doubled = new Variable(0);
