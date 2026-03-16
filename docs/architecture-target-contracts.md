@@ -151,6 +151,12 @@ Arrays should follow the same rule for structural access. A first-class
 index nulls, child element nulls, and child element errors instead of hiding
 that behavior behind an opaque scalar call.
 
+That does not mean every array operation should become a dedicated IR node.
+Computational nested operations such as reductions, membership checks, or
+other derived predicates may still live comfortably as ordinary scalar
+functions when the evaluator does not benefit from seeing through them as
+structure.
+
 Map value access should surface absence and nullability through streams rather
 than sentinel values. For example, a missing map, a null lookup key, a missing
 entry, and a present entry with a null value may all produce an all-false or
