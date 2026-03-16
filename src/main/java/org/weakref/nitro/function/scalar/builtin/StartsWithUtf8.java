@@ -24,18 +24,15 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.util.List;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
-@ScalarFunction(name = "eq_utf8")
-public final class EqualUtf8
+@ScalarFunction(name = "starts_with_utf8")
+public final class StartsWithUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualUtf8");
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("StartsWithUtf8");
 
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.applyEquals("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
+        return Utf8BinaryDispatch.applyStartsWith("starts_with_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
     }
 }

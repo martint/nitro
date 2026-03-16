@@ -19,9 +19,11 @@ import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
+import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -39,12 +41,14 @@ public final class TestPrimitiveFunctions
                 AddI64.class,
                 EqualUtf8.class,
                 LessThanI64.class,
+                LessThanUtf8.class,
                 AddExactI64.class,
                 SubtractExactI64.class,
                 MultiplyI64.class,
                 DivideI64.class,
                 ModuloI64.class,
-                OrBoolean.class)) {
+                OrBoolean.class,
+                StartsWithUtf8.class)) {
             primitiveRegistry.register(scalarRegistry.register(functionClass));
         }
         return primitiveRegistry;

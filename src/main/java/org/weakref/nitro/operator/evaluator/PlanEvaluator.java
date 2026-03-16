@@ -183,11 +183,27 @@ public final class PlanEvaluator
     {
         PrimitiveFunction function = primitiveRegistry.get(call.name());
         List<Streams> inputs = call.arguments().stream()
-                .map(argument -> evaluate(argument, mask))
+                .map(argument -> evaluateArgument(argument, mask))
                 .toList();
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
         return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private Streams evaluateArgument(Reference argument, Mask mask)
+    {
+        Streams bundle = evaluate(argument, mask);
+        if (argument.stream() != Stream.VALUES) {
+            return bundle;
+        }
+
+        for (Stream siblingStream : List.of(Stream.NULLS, Stream.ERRORS)) {
+            Streams siblingBundle = evaluate(new Reference(argument.producer(), siblingStream), mask);
+            if (siblingBundle.has(siblingStream)) {
+                bundle = bundle.with(siblingStream, siblingBundle.get(siblingStream));
+            }
+        }
+        return bundle;
     }
 
     private Set<Stream> requestedStreamsFor(Reference reference)
