@@ -32,6 +32,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.operator.Batch;
@@ -61,8 +62,11 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
+import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
@@ -618,6 +622,41 @@ public class TestParquetOperator
     }
 
     @Test
+    void testParquetScanReadsOptionalMapColumns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("optional-maps.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+            Batch batch = operator.next();
+            MapVector maps = (MapVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector mapNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            BinaryVector keys = (BinaryVector) maps.keyValues();
+            I64Vector values = (I64Vector) maps.valueValues();
+            BooleanVector valueNulls = (BooleanVector) maps.valueStreamOrNull(Stream.NULLS);
+
+            assertThat(mapNulls.values()).startsWith(false, true, false, false);
+            assertThat(maps.length(0)).isEqualTo(2);
+            assertThat(maps.length(1)).isEqualTo(0);
+            assertThat(maps.length(2)).isEqualTo(0);
+            assertThat(maps.length(3)).isEqualTo(1);
+
+            assertThat(keys.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(keys.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+            assertThat(keys.utf8Value(0)).isEqualTo("alpha");
+            assertThat(keys.utf8Value(1)).isEqualTo("beta");
+            assertThat(keys.utf8Value(2)).isEqualTo("gamma");
+
+            assertThat(values.values()).startsWith(10L, 0L, 30L);
+            assertThat(valueNulls.values()).startsWith(false, true, false);
+        }
+    }
+
+    @Test
     void testProjectExtractsOptionalStructField()
             throws IOException
     {
@@ -734,6 +773,84 @@ public class TestParquetOperator
                 .matchesExactly(List.of(
                         Row.row(51L, 2L),
                         Row.row(52L, 2L)));
+    }
+
+    @Test
+    void testCardinalityProjectsOptionalMapColumns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("map-cardinality.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable cardinality = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        cardinality,
+                        new Call("cardinality", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(cardinality, Stream.VALUES),
+                        new Reference(cardinality, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(2L, 0L, 0L, 1L);
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
+    void testCardinalityFeedsGroupingForRequiredMaps()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRequiredMapParquetFile("required-map-grouping.parquet", List.of(
+                new MapParquetRow(orderedMap("a", 1L, "b", 2L)),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("c", 3L)),
+                new MapParquetRow(orderedMap("d", 4L, "e", 5L)),
+                new MapParquetRow(Map.of())));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable cardinality = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        cardinality,
+                        new Call("cardinality", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(cardinality, Stream.VALUES),
+                        new Reference(cardinality, Stream.VALUES)));
+
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        new Allocator(),
+                        0,
+                        List.of(
+                                new First(1),
+                                new CountAll()),
+                        new GroupOperator(
+                                new Allocator(),
+                                0,
+                                new ProjectOperator(
+                                        new Allocator(),
+                                        projectionPlan,
+                                        primitiveRegistry,
+                                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))))
+                .matchesExactly(List.of(
+                        Row.row(2L, 2L),
+                        Row.row(0L, 2L),
+                        Row.row(1L, 1L)));
     }
 
     @Test
@@ -974,6 +1091,60 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeOptionalMapParquetFile(String name, List<MapParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .optionalGroup().as(mapType())
+                    .repeatedGroup()
+                        .required(BINARY).as(stringType()).named("key")
+                        .optional(INT64).named("value")
+                    .named("key_value")
+                .named("items")
+                .named("nitro_optional_map_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (MapParquetRow row : rows) {
+                Group group = groups.newGroup();
+                appendMap(group, "items", row.items());
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
+    private java.nio.file.Path writeRequiredMapParquetFile(String name, List<MapParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .requiredGroup().as(mapType())
+                    .repeatedGroup()
+                        .required(BINARY).as(stringType()).named("key")
+                        .optional(INT64).named("value")
+                    .named("key_value")
+                .named("items")
+                .named("nitro_required_map_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (MapParquetRow row : rows) {
+                Group group = groups.newGroup();
+                appendMap(group, "items", row.items());
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private java.nio.file.Path writeOptionalStructParquetFile(String name, List<OptionalStructParquetRow> rows)
             throws IOException
     {
@@ -1016,6 +1187,30 @@ public class TestParquetOperator
             bytes[index] = (byte) values[index];
         }
         return bytes;
+    }
+
+    private static void appendMap(Group group, String fieldName, Map<String, Long> entries)
+    {
+        if (entries == null) {
+            return;
+        }
+        Group mapGroup = group.addGroup(fieldName);
+        for (Map.Entry<String, Long> entry : entries.entrySet()) {
+            Group keyValue = mapGroup.addGroup("key_value")
+                    .append("key", entry.getKey());
+            if (entry.getValue() != null) {
+                keyValue.append("value", entry.getValue());
+            }
+        }
+    }
+
+    private static Map<String, Long> orderedMap(Object... entries)
+    {
+        LinkedHashMap<String, Long> map = new LinkedHashMap<>();
+        for (int index = 0; index < entries.length; index += 2) {
+            map.put((String) entries[index], (Long) entries[index + 1]);
+        }
+        return map;
     }
 
     private static void assertDictionaryEncoding(java.nio.file.Path file, String columnName)
@@ -1072,4 +1267,6 @@ public class TestParquetOperator
     private record StructParquetRow(long id, String name, Boolean active) {}
 
     private record OptionalStructParquetRow(StructParquetRow person) {}
+
+    private record MapParquetRow(Map<String, Long> items) {}
 }

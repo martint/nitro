@@ -80,6 +80,11 @@ public class Allocator
         return allocate(context, ArrayVector.class, positionCount, ArrayVector::new);
     }
 
+    public MapVector allocateMap(Context context, int positionCount)
+    {
+        return allocate(context, MapVector.class, positionCount, MapVector::new);
+    }
+
     public <T extends Vector> T allocateOrGrow(Context context, T vector, Class<T> vectorType, int size, IntFunction<T> vectorAllocator)
     {
         if (vector == null) {
@@ -597,6 +602,7 @@ public class Allocator
             case F64Vector values -> (long) values.values().length * Double.BYTES;
             case BinaryVector values -> (long) values.offsets().length * Integer.BYTES + values.data().length;
             case ArrayVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.elements());
+            case MapVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.keys()) + streamsBytes(values.values());
             case StructVector values -> values.fields().values().stream().mapToLong(Allocator::streamsBytes).sum();
             case DictionaryVector values -> (long) values.ids().length * Integer.BYTES;
             case RleVector values -> (long) values.counts().length * Integer.BYTES;
@@ -625,6 +631,10 @@ public class Allocator
             case ArrayVector values -> {
                 Arrays.fill(values.offsets(), 0);
                 values.clearElements();
+            }
+            case MapVector values -> {
+                Arrays.fill(values.offsets(), 0);
+                values.clearEntries();
             }
             case StructVector values -> values.clearFields();
             case DictionaryVector _ -> throw new IllegalArgumentException("Allocator pooling does not support dictionary vectors");

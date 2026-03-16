@@ -41,6 +41,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
@@ -60,6 +61,7 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
+import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
@@ -125,7 +127,10 @@ public final class ParquetScanOperator
 
         int rowCount = toIntExact(rowGroup.getRowCount());
         ColumnPages[] columnPages = columns.stream()
-                .map(column -> column.kind() == ColumnKind.STRUCT ? null : captureColumnPages(rowGroup, column.descriptor()))
+                .map(column -> switch (column.kind()) {
+                    case STRUCT, MAP -> null;
+                    default -> captureColumnPages(rowGroup, column.descriptor());
+                })
                 .toArray(ColumnPages[]::new);
         ColumnBuffer[] buffers = new ColumnBuffer[columns.size()];
         for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
@@ -135,6 +140,7 @@ public final class ParquetScanOperator
                 case BOOLEAN -> readBooleanColumn(column, rowCount, createColumnReader(columnPages[columnIndex]));
                 case BINARY -> readBinaryColumn(column, columnPages[columnIndex], rowCount);
                 case ARRAY_I64 -> readArrayI64Column(column, columnPages[columnIndex], rowCount);
+                case MAP -> readMapColumn(column, rowGroup, rowCount);
                 case STRUCT -> readStructColumn(column, rowGroup, rowCount);
             };
         }
@@ -207,10 +213,48 @@ public final class ParquetScanOperator
                     null,
                     null,
                     false,
-                    List.of());
+                    List.of(),
+                    null);
         }
 
         GroupType groupType = type.asGroupType();
+        if (mapType().equals(groupType.getLogicalTypeAnnotation())) {
+            checkArgument(groupType.getFieldCount() == 1, "Parquet map column must contain one repeated entries field: %s", name);
+            GroupType entriesType = groupType.getType(0).asGroupType();
+            checkArgument(entriesType.getRepetition() == Type.Repetition.REPEATED, "Parquet map entries field must be repeated: %s", name);
+            checkArgument(entriesType.getFieldCount() == 2, "Parquet map entries field must contain key and value: %s", name);
+
+            Type keyType = entriesType.getType(0);
+            checkArgument(keyType.isPrimitive(), "Parquet map keys must be primitive: %s", name);
+            PrimitiveType primitiveKeyType = keyType.asPrimitiveType();
+            checkArgument(primitiveKeyType.getRepetition() == REQUIRED, "Parquet map keys must be required: %s", name);
+            ColumnKind keyKind = switch (primitiveKeyType.getPrimitiveTypeName()) {
+                case INT64 -> ColumnKind.I64;
+                case BINARY -> ColumnKind.BINARY;
+                default -> throw new IllegalArgumentException("Unsupported Parquet map key type for column %s: %s".formatted(name, primitiveKeyType.getPrimitiveTypeName()));
+            };
+
+            Type valueType = entriesType.getType(1);
+            checkArgument(valueType.isPrimitive(), "Parquet map values must be primitive: %s", name);
+            PrimitiveType primitiveValueType = valueType.asPrimitiveType();
+            checkArgument(primitiveValueType.getPrimitiveTypeName() == INT64, "Unsupported Parquet map value type for column %s: %s", name, primitiveValueType.getPrimitiveTypeName());
+
+            return new ColumnSpec(
+                    name,
+                    ColumnKind.MAP,
+                    groupType.getRepetition() != REQUIRED,
+                    null,
+                    Set.of(),
+                    type,
+                    null,
+                    null,
+                    false,
+                    List.of(),
+                    new MapSpec(
+                            entriesType.getName(),
+                            new MapComponentSpec(keyType.getName(), keyKind, false, schema.getColumnDescription(new String[] {name, entriesType.getName(), keyType.getName()}), binaryTraits(primitiveKeyType)),
+                            new MapComponentSpec(valueType.getName(), ColumnKind.I64, primitiveValueType.getRepetition() != REQUIRED, schema.getColumnDescription(new String[] {name, entriesType.getName(), valueType.getName()}), Set.of())));
+        }
         if (groupType.getRepetition() == Type.Repetition.REPEATED) {
             checkArgument(groupType.getFieldCount() == 1, "Repeated Parquet groups must have one field: %s", name);
             Type elementType = groupType.getType(0);
@@ -228,7 +272,8 @@ public final class ParquetScanOperator
                     null,
                     elementType.getName(),
                     primitiveElementType.getRepetition() != REQUIRED,
-                    List.of());
+                    List.of(),
+                    null);
         }
 
         checkArgument(groupType.getRepetition() != Type.Repetition.REPEATED, "Unsupported repeated Parquet group column: %s", name);
@@ -260,7 +305,8 @@ public final class ParquetScanOperator
                 groupType,
                 null,
                 false,
-                structFields);
+                structFields,
+                null);
     }
 
     private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount)
@@ -309,6 +355,81 @@ public final class ParquetScanOperator
         }
         values.setElements(elementNulls == null ? Streams.ofValues(elementValues) : Streams.ofValuesAndNulls(elementValues, elementNulls));
         return new ColumnBuffer(values, null);
+    }
+
+    private ColumnBuffer readMapColumn(ColumnSpec column, PageReadStore rowGroup, int rowCount)
+    {
+        checkArgument(column.mapSpec() != null, "Map column is missing map metadata: %s", column.name());
+
+        MapVector values = allocator.allocateMap(ALLOCATION_CONTEXT, rowCount);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
+        MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
+        List<ColumnPages> mapPages = captureMapColumnPages(rowGroup, column);
+
+        int entryCount = 0;
+        int keyBinaryCapacity = 0;
+        RecordReader<Group> recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, mapPages), new GroupRecordConverter(projectedSchema));
+        for (int position = 0; position < rowCount; position++) {
+            Group row = recordReader.read();
+            if (column.nullable() && row.getFieldRepetitionCount(column.name()) == 0) {
+                values.offsets()[position + 1] = entryCount;
+                continue;
+            }
+            Group mapGroup = row.getGroup(column.name(), 0);
+            int valueCount = mapGroup.getFieldRepetitionCount(column.mapSpec().entriesName());
+            entryCount += valueCount;
+            values.offsets()[position + 1] = entryCount;
+            if (column.mapSpec().key().kind() == ColumnKind.BINARY) {
+                for (int valueIndex = 0; valueIndex < valueCount; valueIndex++) {
+                    keyBinaryCapacity += mapGroup.getGroup(column.mapSpec().entriesName(), valueIndex).getBinary(column.mapSpec().key().name(), 0).length();
+                }
+            }
+        }
+
+        Vector keyValues = switch (column.mapSpec().key().kind()) {
+            case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
+            case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, keyBinaryCapacity);
+            default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
+        };
+        I64Vector valueValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
+        BooleanVector valueNulls = column.mapSpec().value().nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, entryCount, BooleanVector::new) : null;
+
+        recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, mapPages), new GroupRecordConverter(projectedSchema));
+        int entryIndex = 0;
+        for (int position = 0; position < rowCount; position++) {
+            Group row = recordReader.read();
+            if (column.nullable() && row.getFieldRepetitionCount(column.name()) == 0) {
+                nulls.values()[position] = true;
+                continue;
+            }
+            Group mapGroup = row.getGroup(column.name(), 0);
+            int valueCount = mapGroup.getFieldRepetitionCount(column.mapSpec().entriesName());
+            for (int valueIndex = 0; valueIndex < valueCount; valueIndex++) {
+                Group entry = mapGroup.getGroup(column.mapSpec().entriesName(), valueIndex);
+                switch (column.mapSpec().key().kind()) {
+                    case I64 -> ((I64Vector) keyValues).values()[entryIndex] = entry.getLong(column.mapSpec().key().name(), 0);
+                    case BINARY -> ((BinaryVector) keyValues).setBytes(entryIndex, entry.getBinary(column.mapSpec().key().name(), 0).getBytesUnsafe());
+                    default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
+                }
+
+                if (column.mapSpec().value().nullable() && entry.getFieldRepetitionCount(column.mapSpec().value().name()) == 0) {
+                    valueNulls.values()[entryIndex] = true;
+                }
+                else {
+                    valueValues.values()[entryIndex] = entry.getLong(column.mapSpec().value().name(), 0);
+                }
+                entryIndex++;
+            }
+        }
+
+        if (keyValues instanceof BinaryVector binaryKeyValues) {
+            applyBinaryTraits(binaryKeyValues, column.mapSpec().key().binaryTraits(), entryCount);
+        }
+        values.setEntries(
+                Streams.ofValues(keyValues),
+                valueNulls == null ? Streams.ofValues(valueValues) : Streams.ofValuesAndNulls(valueValues, valueNulls));
+        return new ColumnBuffer(values, nulls);
     }
 
     private ColumnBuffer readStructColumn(ColumnSpec column, PageReadStore rowGroup, int rowCount)
@@ -396,6 +517,13 @@ public final class ParquetScanOperator
             values.setField(field.name(), fieldStreams);
         }
         return new ColumnBuffer(values, nulls);
+    }
+
+    private static List<ColumnPages> captureMapColumnPages(PageReadStore rowGroup, ColumnSpec column)
+    {
+        return List.of(
+                captureColumnPages(rowGroup, column.mapSpec().key().descriptor()),
+                captureColumnPages(rowGroup, column.mapSpec().value().descriptor()));
     }
 
     private static List<ColumnPages> captureStructColumnPages(PageReadStore rowGroup, ColumnSpec column)
@@ -684,15 +812,26 @@ public final class ParquetScanOperator
         BOOLEAN,
         BINARY,
         ARRAY_I64,
+        MAP,
         STRUCT,
     }
 
-    private record ColumnSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits, Type projectedType, GroupType structType, String elementName, boolean elementNullable, List<StructFieldSpec> structFields)
+    private record ColumnSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits, Type projectedType, GroupType structType, String elementName, boolean elementNullable, List<StructFieldSpec> structFields, MapSpec mapSpec)
     {
         private ColumnSpec
         {
             binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
             structFields = List.copyOf(structFields);
+        }
+    }
+
+    private record MapSpec(String entriesName, MapComponentSpec key, MapComponentSpec value) {}
+
+    private record MapComponentSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits)
+    {
+        private MapComponentSpec
+        {
+            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
         }
     }
 

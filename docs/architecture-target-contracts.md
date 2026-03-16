@@ -95,7 +95,7 @@ Examples:
 
 - flat vectors for primitive types
 - flat variable-width vectors such as `BinaryVector`
-- flat nested vectors such as `ArrayVector` and `StructVector`
+- flat nested vectors such as `ArrayVector`, `StructVector`, and `MapVector`
 - `ConstantVector`
 - `RleVector`
 - future `DictionaryVector`
@@ -114,12 +114,12 @@ The current runtime already has a first builtin variable-width family for
 binary/string payloads. That should be treated as the beginning of a broader
 variable-width design space rather than a closed final layout.
 
-The runtime now also has an initial nested-value family in `ArrayVector` and
-`StructVector`, currently exercised by repeated `INT64` Parquet input, optional
-and required top-level struct Parquet input, field extraction, and simple
-primitives such as `cardinality`. That should be treated as the beginning of a
-broader nested design space rather than a final layout for arrays, maps, or
-structs.
+The runtime now also has an initial nested-value family in `ArrayVector`,
+`StructVector`, and `MapVector`, currently exercised by repeated `INT64`
+Parquet input, top-level struct Parquet input, top-level map Parquet input,
+field extraction, and simple primitives such as `cardinality`. That should be
+treated as the beginning of a broader nested design space rather than a final
+layout for arrays, maps, or structs.
 
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
@@ -128,7 +128,10 @@ elements even when the parent array positions are all non-null, and a
 `VALUES` and optional `NULLS` even when the parent struct stream itself also
 has a separate `NULLS` stream. Field extraction should combine parent-struct
 nulls with child-field nulls when producing a child reference, while the
-container vector keeps those levels distinct internally. That child-stream
+container vector keeps those levels distinct internally. A `MapVector` may
+likewise carry separate key and value stream bundles, while the parent map
+stream may independently carry `NULLS` for absent maps and the value bundle may
+carry its own `NULLS` for absent values within present maps. That child-stream
 model should compose with the same explicit-stream contracts used for top-level
 values instead of inventing a separate nullability mechanism for nested data.
 
@@ -1569,10 +1572,10 @@ architecture:
   conventions needed to keep those types compatible with the stream-first
   execution model.
 - Broader nested data-type support beyond the current `ArrayVector`,
-  `StructVector`, repeated-`INT64` Parquet path, and top-level struct Parquet
-  path, including maps, richer element streams, deeper nesting, and the
-  execution rules needed to handle nested values without collapsing them back
-  into row-oriented execution.
+  `StructVector`, `MapVector`, repeated-`INT64` Parquet path, top-level struct
+  Parquet path, and top-level map Parquet path, including richer child streams,
+  deeper nesting, and the execution rules needed to handle nested values
+  without collapsing them back into row-oriented execution.
 - Broader trait-based dispatch beyond the current UTF-8 and ASCII string
   example, so specialized execution can target additional vector-family traits
   without hardcoding those assumptions into the core type system.

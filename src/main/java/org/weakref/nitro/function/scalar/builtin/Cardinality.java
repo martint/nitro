@@ -18,6 +18,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
@@ -76,9 +77,13 @@ public final class Cardinality
             applyFlat(arrayValues, inputNulls, mask, output);
             return;
         }
+        if (values instanceof MapVector mapValues) {
+            applyFlat(mapValues, inputNulls, mask, output);
+            return;
+        }
         if (values instanceof DictionaryVector dictionaryValues) {
-            checkArgument(dictionaryValues.values() instanceof ArrayVector, "cardinality requires ArrayVector dictionary values");
-            applyDictionary((ArrayVector) dictionaryValues.values(), dictionaryValues.ids(), inputNulls, mask, output);
+            checkArgument(dictionaryValues.values() instanceof ArrayVector || dictionaryValues.values() instanceof MapVector, "cardinality requires ArrayVector or MapVector dictionary values");
+            applyDictionary(dictionaryValues.values(), dictionaryValues.ids(), inputNulls, mask, output);
             return;
         }
         throw new IllegalArgumentException("Unsupported cardinality vector type: " + values.getClass().getSimpleName());
@@ -98,17 +103,31 @@ public final class Cardinality
         }
     }
 
-    private static void applyDictionary(ArrayVector values, int[] ids, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyFlat(MapVector values, BooleanVector inputNulls, Mask mask, I64Vector output)
     {
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : values.length(ids[position]);
+                outputValues[position] = isNull(inputNulls, position) ? 0 : values.length(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : values.length(ids[position]);
+            outputValues[position] = isNull(inputNulls, position) ? 0 : values.length(position);
+        }
+    }
+
+    private static void applyDictionary(Vector values, int[] ids, BooleanVector inputNulls, Mask mask, I64Vector output)
+    {
+        long[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = isNull(inputNulls, position) ? 0 : cardinalityLength(values, ids[position]);
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = isNull(inputNulls, position) ? 0 : cardinalityLength(values, ids[position]);
         }
     }
 
@@ -129,5 +148,14 @@ public final class Cardinality
     private static boolean isNull(BooleanVector nulls, int position)
     {
         return nulls != null && nulls.values()[position];
+    }
+
+    private static int cardinalityLength(Vector values, int position)
+    {
+        return switch (values) {
+            case ArrayVector vector -> vector.length(position);
+            case MapVector vector -> vector.length(position);
+            default -> throw new IllegalArgumentException("Unsupported cardinality vector type: " + values.getClass().getSimpleName());
+        };
     }
 }
