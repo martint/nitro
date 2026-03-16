@@ -461,6 +461,59 @@ public class TestParquetOperator
     }
 
     @Test
+    void testGroupOperatorGroupsDictionaryBackedUtf8StringsDirectly()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("grouped-utf8-ascii-direct.parquet", true, List.of(
+                new BinaryParquetRow("alpha", bytes(1)),
+                new BinaryParquetRow("beta", bytes(2)),
+                new BinaryParquetRow("alpha", bytes(3)),
+                new BinaryParquetRow("gamma", bytes(4)),
+                new BinaryParquetRow("beta", bytes(5))));
+
+        try (GroupOperator operator = new GroupOperator(
+                new Allocator(),
+                0,
+                new ParquetScanOperator(new Allocator(), file, List.of("name")))) {
+            Batch batch = operator.next();
+            I64Vector groups = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            org.weakref.nitro.data.Vector names = batch.output(1).borrow(Stream.VALUES);
+
+            assertThat(groups.values()).containsExactly(0L, 1L, 0L, 2L, 1L);
+            assertThat(names).isInstanceOf(DictionaryVector.class);
+            DictionaryVector dictionary = (DictionaryVector) names;
+            BinaryVector values = (BinaryVector) dictionary.values();
+            assertThat(values.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(values.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+        }
+    }
+
+    @Test
+    void testGroupOperatorGroupsUtf8StringsDirectly()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("grouped-utf8-direct.parquet", false, List.of(
+                new BinaryParquetRow("élan", bytes(1)),
+                new BinaryParquetRow("beta", bytes(2)),
+                new BinaryParquetRow("élan", bytes(3)),
+                new BinaryParquetRow("ångstrom", bytes(4)),
+                new BinaryParquetRow("beta", bytes(5))));
+
+        try (GroupOperator operator = new GroupOperator(
+                new Allocator(),
+                0,
+                new ParquetScanOperator(new Allocator(), file, List.of("name")))) {
+            Batch batch = operator.next();
+            I64Vector groups = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BinaryVector names = binaryValues(batch.output(1).borrow(Stream.VALUES));
+
+            assertThat(groups.values()).containsExactly(0L, 1L, 0L, 2L, 1L);
+            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isFalse();
+        }
+    }
+
+    @Test
     void testCardinalityProjectsRepeatedI64Columns()
             throws IOException
     {

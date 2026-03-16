@@ -147,6 +147,14 @@ key lookups over UTF-8 string keys may use the same UTF-8 and ASCII traits used
 by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
 
+Trait-aware dispatch should also matter in core operators, not only in scalar
+functions. Core operators such as grouping should be able to consume
+binary/string vectors directly without forcing callers to pre-hash them, but
+they should still keep encoding and type-specific mechanics out of the
+operator itself by delegating to shared helpers. For UTF-8 string grouping in
+particular, hashing and equality can operate on the underlying bytes directly
+without inventing separate ASCII and general UTF-8 hashing algorithms.
+
 Struct field extraction remains the clearest case for a dedicated structural
 IR node because it exposes an existing child stream bundle directly rather
 than computing a derived value. It is also the one nested access form that the

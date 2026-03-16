@@ -13,8 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import it.unimi.dsi.fastutil.longs.Long2LongMap;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -29,8 +27,7 @@ public class GroupOperator
 
     private final int groupByColumn;
     private final Operator source;
-
-    private final Long2LongMap groups = new Long2LongOpenHashMap();
+    private final GroupingState groupingState = new GroupingState();
     private boolean filled;
     private Batch currentBatch;
     private Mask mask;
@@ -41,8 +38,6 @@ public class GroupOperator
         this.allocator = allocator;
         this.groupByColumn = groupByColumn;
         this.source = source;
-
-        groups.defaultReturnValue(-1);
     }
 
     @Override
@@ -100,22 +95,11 @@ public class GroupOperator
         if (!filled && !mask.none()) {
             filled = true;
             result = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
-
-            // TODO: support arbitrary types
-            long[] values = values(currentBatch.output(groupByColumn).borrow(Stream.VALUES));
-
-            for (int position : mask) {
-                // TODO: handle nulls
-                long value = values[position];
-                long group = groups.size();
-
-                long existing = groups.putIfAbsent(value, group);
-                if (existing != -1) {
-                    group = existing;
-                }
-
-                result.values()[position] = group;
-            }
+            groupingState.assignGroups(
+                    currentBatch.output(groupByColumn).borrow(Stream.VALUES),
+                    currentBatch.output(groupByColumn).borrowOrNull(Stream.NULLS),
+                    mask,
+                    result);
         }
     }
 
@@ -124,10 +108,5 @@ public class GroupOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
-    }
-
-    private static long[] values(Vector vector)
-    {
-        return ((I64Vector) vector).values();
     }
 }
