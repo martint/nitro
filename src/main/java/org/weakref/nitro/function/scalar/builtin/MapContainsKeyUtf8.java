@@ -41,7 +41,7 @@ public final class MapContainsKeyUtf8
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for map_contains_key_utf8");
-        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS) && !requestedStreams.contains(Stream.ERRORS)) {
             return Streams.empty();
         }
 
@@ -54,6 +54,8 @@ public final class MapContainsKeyUtf8
         KeyAccess keys = keyAccess("map_contains_key_utf8", keyInput);
         BooleanVector mapNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
         BooleanVector keyNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        BooleanVector mapErrors = (BooleanVector) inputs.get(0).getOrNull(Stream.ERRORS);
+        BooleanVector keyErrors = (BooleanVector) inputs.get(1).getOrNull(Stream.ERRORS);
 
         Streams result = Streams.empty();
         int requiredLength = Math.max(mask.maxPosition() + 1, mapInput.length());
@@ -76,6 +78,16 @@ public final class MapContainsKeyUtf8
                     BooleanVector::new);
             applyValues(maps, mapInput, mapKeys, keys, mapNulls, keyNulls, mask, outputValues);
             result = result.with(Stream.VALUES, outputValues);
+        }
+        if (requestedStreams.contains(Stream.ERRORS) && (mapErrors != null || keyErrors != null)) {
+            BooleanVector outputErrors = context.allocator().allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.ERRORS) && output.get(Stream.ERRORS) instanceof BooleanVector vector ? vector : null,
+                    BooleanVector.class,
+                    requiredLength,
+                    BooleanVector::new);
+            applyErrors(mapErrors, keyErrors, mask, outputErrors);
+            result = result.with(Stream.ERRORS, outputErrors);
         }
         return result;
     }
@@ -123,6 +135,20 @@ public final class MapContainsKeyUtf8
         }
     }
 
+    private static void applyErrors(BooleanVector mapErrors, BooleanVector keyErrors, Mask mask, BooleanVector output)
+    {
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = isError(mapErrors, position) || isError(keyErrors, position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = isError(mapErrors, position) || isError(keyErrors, position);
+        }
+    }
+
     private static MapVector requireMapVector(Vector vector)
     {
         return switch (vector) {
@@ -152,6 +178,11 @@ public final class MapContainsKeyUtf8
     private static boolean isNull(BooleanVector nulls, int position)
     {
         return nulls != null && nulls.values()[position];
+    }
+
+    private static boolean isError(BooleanVector errors, int position)
+    {
+        return errors != null && errors.values()[position];
     }
 
     private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)

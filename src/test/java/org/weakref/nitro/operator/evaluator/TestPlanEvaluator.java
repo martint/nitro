@@ -30,14 +30,11 @@ import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
-import org.weakref.nitro.operator.evaluator.ir.ArrayElement;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
-import org.weakref.nitro.operator.evaluator.ir.MapContainsKey;
-import org.weakref.nitro.operator.evaluator.ir.MapLookup;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -151,7 +148,9 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         lookup,
-                        new MapLookup(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        new Call("element_at_i64_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(
                         new Reference(lookup, Stream.VALUES),
@@ -212,7 +211,9 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         lookup,
-                        new MapLookup(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        new Call("element_at_i64_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(new Reference(lookup, Stream.ERRORS)));
 
@@ -254,7 +255,9 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         contains,
-                        new MapContainsKey(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        new Call("map_contains_key_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(
                         new Reference(contains, Stream.VALUES),
@@ -319,7 +322,9 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         element,
-                        new ArrayElement(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        new Call("array_element_i64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(
                         new Reference(element, Stream.VALUES),

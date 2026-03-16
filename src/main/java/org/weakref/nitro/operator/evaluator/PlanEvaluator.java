@@ -14,12 +14,10 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.StructVector;
@@ -27,14 +25,11 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
-import org.weakref.nitro.operator.evaluator.ir.ArrayElement;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.Copy;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
-import org.weakref.nitro.operator.evaluator.ir.MapContainsKey;
-import org.weakref.nitro.operator.evaluator.ir.MapLookup;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
@@ -58,7 +53,6 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static java.lang.Math.toIntExact;
 
 public final class PlanEvaluator
 {
@@ -168,11 +162,8 @@ public final class PlanEvaluator
 
         return switch (assignment.operation()) {
             case Literal literal -> evaluateLiteral(requestedStreamsFor(reference), literal, mask);
-            case ArrayElement element -> evaluateArrayElement(requestedStreamsFor(reference), element, mask, output);
             case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
-            case MapContainsKey containsKey -> evaluateMapContainsKey(requestedStreamsFor(reference), containsKey, mask, output);
-            case MapLookup lookup -> evaluateMapLookup(requestedStreamsFor(reference), lookup, mask, output);
             case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
             case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
         };
@@ -200,63 +191,6 @@ public final class PlanEvaluator
                 .toList();
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
-        return completeRequestedStreams(requestedStreams, result, mask);
-    }
-
-    private Streams evaluateArrayElement(Set<Stream> requestedStreams, ArrayElement element, Mask mask, Streams output)
-    {
-        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS) && !requestedStreams.contains(Stream.ERRORS)) {
-            return Streams.empty();
-        }
-
-        Streams sourceStreams = evaluateArgument(element.source(), mask);
-        Streams indexStreams = evaluateArgument(element.index(), mask);
-        Vector arrayInput = sourceStreams.values();
-        Vector indexInput = indexStreams.values();
-        checkArgument(arrayInput.length() == indexInput.length(), "Array element inputs must have the same logical length");
-
-        ArrayVector arrays = requireArrayVector(arrayInput);
-        I64Vector elementValues = requireI64Vector("array element", arrays.elementValues());
-        BooleanVector arrayNulls = (BooleanVector) sourceStreams.getOrNull(Stream.NULLS);
-        BooleanVector indexNulls = (BooleanVector) indexStreams.getOrNull(Stream.NULLS);
-        BooleanVector elementNulls = arrays.elementNulls();
-        BooleanVector arrayErrors = (BooleanVector) sourceStreams.getOrNull(Stream.ERRORS);
-        BooleanVector indexErrors = (BooleanVector) indexStreams.getOrNull(Stream.ERRORS);
-        BooleanVector elementErrors = (BooleanVector) arrays.elementStreamOrNull(Stream.ERRORS);
-        IndexAccess indexAccess = indexAccess("array element", indexInput);
-
-        Streams result = Streams.empty();
-        int requiredLength = Math.max(mask.maxPosition() + 1, arrayInput.length());
-        if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyArrayElementNulls(arrays, arrayInput, elementNulls, indexAccess, arrayNulls, indexNulls, mask, outputNulls);
-            result = result.with(Stream.NULLS, outputNulls);
-        }
-        if (requestedStreams.contains(Stream.VALUES)) {
-            I64Vector outputValues = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof I64Vector vector ? vector : null,
-                    I64Vector.class,
-                    requiredLength,
-                    I64Vector::new);
-            applyArrayElementValues(arrays, arrayInput, elementValues, elementNulls, indexAccess, arrayNulls, indexNulls, mask, outputValues);
-            result = result.with(Stream.VALUES, outputValues);
-        }
-        if (requestedStreams.contains(Stream.ERRORS)) {
-            BooleanVector outputErrors = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.ERRORS) && output.get(Stream.ERRORS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyArrayElementErrors(arrays, arrayInput, elementErrors, indexAccess, arrayErrors, indexErrors, arrayNulls, indexNulls, mask, outputErrors);
-            result = result.with(Stream.ERRORS, outputErrors);
-        }
         return completeRequestedStreams(requestedStreams, result, mask);
     }
 
@@ -348,108 +282,6 @@ public final class PlanEvaluator
             Vector merged = mergeOptionalBooleanStreams(sourceStreams.getOrNull(stream), fieldStreams.getOrNull(stream), existing, mask);
             if (merged != null) {
                 result = result.with(stream, merged);
-            }
-        }
-        return completeRequestedStreams(requestedStreams, result, mask);
-    }
-
-    private Streams evaluateMapLookup(Set<Stream> requestedStreams, MapLookup lookup, Mask mask, Streams output)
-    {
-        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS) && !requestedStreams.contains(Stream.ERRORS)) {
-            return Streams.empty();
-        }
-
-        Streams sourceStreams = evaluateArgument(lookup.source(), mask);
-        Streams keyStreams = evaluateArgument(lookup.key(), mask);
-        Vector mapInput = sourceStreams.values();
-        Vector keyInput = keyStreams.values();
-        checkArgument(mapInput.length() == keyInput.length(), "Map lookup inputs must have the same logical length");
-
-        MapVector maps = requireMapVector(mapInput);
-        BinaryVector mapKeys = requireUtf8Binary("map lookup", maps.keyValues());
-        I64Vector mapValues = (I64Vector) maps.valueValues();
-        BooleanVector mapValueNulls = (BooleanVector) maps.valueStreamOrNull(Stream.NULLS);
-        BooleanVector mapNulls = (BooleanVector) sourceStreams.getOrNull(Stream.NULLS);
-        BooleanVector keyNulls = (BooleanVector) keyStreams.getOrNull(Stream.NULLS);
-        KeyAccess keyAccess = keyAccess("map lookup", keyInput);
-
-        Streams result = Streams.empty();
-        int requiredLength = Math.max(mask.maxPosition() + 1, mapInput.length());
-        if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyMapLookupNulls(maps, mapInput, mapKeys, mapValues, mapValueNulls, keyAccess, mapNulls, keyNulls, mask, outputNulls);
-            result = result.with(Stream.NULLS, outputNulls);
-        }
-        if (requestedStreams.contains(Stream.VALUES)) {
-            I64Vector outputValues = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof I64Vector vector ? vector : null,
-                    I64Vector.class,
-                    requiredLength,
-                    I64Vector::new);
-            applyMapLookupValues(maps, mapInput, mapKeys, mapValues, mapValueNulls, keyAccess, mapNulls, keyNulls, mask, outputValues);
-            result = result.with(Stream.VALUES, outputValues);
-        }
-        if (requestedStreams.contains(Stream.ERRORS)) {
-            Vector existing = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
-            Vector merged = mergeOptionalBooleanStreams(sourceStreams.getOrNull(Stream.ERRORS), keyStreams.getOrNull(Stream.ERRORS), existing, mask);
-            if (merged != null) {
-                result = result.with(Stream.ERRORS, merged);
-            }
-        }
-        return completeRequestedStreams(requestedStreams, result, mask);
-    }
-
-    private Streams evaluateMapContainsKey(Set<Stream> requestedStreams, MapContainsKey containsKey, Mask mask, Streams output)
-    {
-        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS) && !requestedStreams.contains(Stream.ERRORS)) {
-            return Streams.empty();
-        }
-
-        Streams sourceStreams = evaluateArgument(containsKey.source(), mask);
-        Streams keyStreams = evaluateArgument(containsKey.key(), mask);
-        Vector mapInput = sourceStreams.values();
-        Vector keyInput = keyStreams.values();
-        checkArgument(mapInput.length() == keyInput.length(), "Map contains inputs must have the same logical length");
-
-        MapVector maps = requireMapVector(mapInput);
-        BinaryVector mapKeys = requireUtf8Binary("map contains", maps.keyValues());
-        BooleanVector mapNulls = (BooleanVector) sourceStreams.getOrNull(Stream.NULLS);
-        BooleanVector keyNulls = (BooleanVector) keyStreams.getOrNull(Stream.NULLS);
-        KeyAccess keyAccess = keyAccess("map contains", keyInput);
-
-        Streams result = Streams.empty();
-        int requiredLength = Math.max(mask.maxPosition() + 1, mapInput.length());
-        if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyMapContainsNulls(mapNulls, keyNulls, mask, outputNulls);
-            result = result.with(Stream.NULLS, outputNulls);
-        }
-        if (requestedStreams.contains(Stream.VALUES)) {
-            BooleanVector outputValues = allocator.allocateOrGrow(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyMapContainsValues(maps, mapInput, keyAccess, mapKeys, mapNulls, keyNulls, mask, outputValues);
-            result = result.with(Stream.VALUES, outputValues);
-        }
-        if (requestedStreams.contains(Stream.ERRORS)) {
-            Vector existing = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
-            Vector merged = mergeOptionalBooleanStreams(sourceStreams.getOrNull(Stream.ERRORS), keyStreams.getOrNull(Stream.ERRORS), existing, mask);
-            if (merged != null) {
-                result = result.with(Stream.ERRORS, merged);
             }
         }
         return completeRequestedStreams(requestedStreams, result, mask);
@@ -769,237 +601,6 @@ public final class PlanEvaluator
         return completed;
     }
 
-    private static void applyMapLookupValues(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, I64Vector output)
-    {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
-        long[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position)
-                        ? 0
-                        : lookupMapValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii).value();
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position)
-                    ? 0
-                    : lookupMapValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii).value();
-        }
-    }
-
-    private static void applyMapContainsValues(MapVector maps, Vector mapInput, KeyAccess keys, BinaryVector mapKeys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
-    {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
-        boolean[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = !isNull(mapNulls, position) && !isNull(keyNulls, position)
-                        && containsMapKey(maps, mapInput, position, mapKeys, keys.values(), keys.position(position), ascii);
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = !isNull(mapNulls, position) && !isNull(keyNulls, position)
-                    && containsMapKey(maps, mapInput, position, mapKeys, keys.values(), keys.position(position), ascii);
-        }
-    }
-
-    private static void applyArrayElementValues(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, BooleanVector elementNulls, IndexAccess indexes, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, I64Vector output)
-    {
-        long[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
-                        ? 0
-                        : lookupArrayElement(arrays, arrayInput, elementValues, elementNulls, indexes, position).value();
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
-                    ? 0
-                    : lookupArrayElement(arrays, arrayInput, elementValues, elementNulls, indexes, position).value();
-        }
-    }
-
-    private static void applyMapLookupNulls(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
-    {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
-        boolean[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position)
-                        || lookupMapValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii).nullValue();
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position)
-                    || lookupMapValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii).nullValue();
-        }
-    }
-
-    private static void applyArrayElementNulls(ArrayVector arrays, Vector arrayInput, BooleanVector elementNulls, IndexAccess indexes, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, BooleanVector output)
-    {
-        boolean[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
-                        || lookupArrayElement(arrays, arrayInput, null, elementNulls, indexes, position).nullValue();
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
-                    || lookupArrayElement(arrays, arrayInput, null, elementNulls, indexes, position).nullValue();
-        }
-    }
-
-    private static void applyMapContainsNulls(BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
-    {
-        boolean[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position);
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position);
-        }
-    }
-
-    private static void applyArrayElementErrors(ArrayVector arrays, Vector arrayInput, BooleanVector elementErrors, IndexAccess indexes, BooleanVector arrayErrors, BooleanVector indexErrors, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, BooleanVector output)
-    {
-        boolean[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isError(arrayErrors, position)
-                        || isError(indexErrors, position)
-                        || (!isNull(arrayNulls, position) && !isNull(indexNulls, position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = isError(arrayErrors, position)
-                    || isError(indexErrors, position)
-                    || (!isNull(arrayNulls, position) && !isNull(indexNulls, position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
-        }
-    }
-
-    private static LookupResult lookupMapValue(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
-    {
-        int mapPosition = switch (mapInput) {
-            case DictionaryVector vector -> vector.ids()[position];
-            default -> position;
-        };
-        for (int entryIndex = maps.startOffset(mapPosition); entryIndex < maps.endOffset(mapPosition); entryIndex++) {
-            if (ascii ? binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition) : mapKeys.utf8Value(entryIndex).equals(lookupKeys.utf8Value(lookupPosition))) {
-                boolean nullValue = mapValueNulls != null && mapValueNulls.values()[entryIndex];
-                return new LookupResult(nullValue ? 0 : mapValues.values()[entryIndex], nullValue);
-            }
-        }
-        return new LookupResult(0, true);
-    }
-
-    private static ArrayElementResult lookupArrayElement(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, BooleanVector elementNulls, IndexAccess indexes, int position)
-    {
-        int arrayPosition = switch (arrayInput) {
-            case DictionaryVector vector -> vector.ids()[position];
-            default -> position;
-        };
-        long index = indexes.value(position);
-        if (index < 0 || index >= arrays.length(arrayPosition)) {
-            return new ArrayElementResult(0, true);
-        }
-        int elementPosition = arrays.startOffset(arrayPosition) + toIntExact(index);
-        boolean nullValue = elementNulls != null && elementNulls.values()[elementPosition];
-        long value = elementValues == null || nullValue ? 0 : elementValues.values()[elementPosition];
-        return new ArrayElementResult(value, nullValue);
-    }
-
-    private static boolean lookupArrayElementError(ArrayVector arrays, Vector arrayInput, BooleanVector elementErrors, IndexAccess indexes, int position)
-    {
-        if (elementErrors == null) {
-            return false;
-        }
-        int arrayPosition = switch (arrayInput) {
-            case DictionaryVector vector -> vector.ids()[position];
-            default -> position;
-        };
-        long index = indexes.value(position);
-        if (index < 0 || index >= arrays.length(arrayPosition)) {
-            return false;
-        }
-        int elementPosition = arrays.startOffset(arrayPosition) + toIntExact(index);
-        return elementErrors.values()[elementPosition];
-    }
-
-    private static boolean containsMapKey(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
-    {
-        int mapPosition = switch (mapInput) {
-            case DictionaryVector vector -> vector.ids()[position];
-            default -> position;
-        };
-        for (int entryIndex = maps.startOffset(mapPosition); entryIndex < maps.endOffset(mapPosition); entryIndex++) {
-            if (ascii ? binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition) : mapKeys.utf8Value(entryIndex).equals(lookupKeys.utf8Value(lookupPosition))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static MapVector requireMapVector(Vector vector)
-    {
-        return switch (vector) {
-            case MapVector maps -> maps;
-            case DictionaryVector dictionary when dictionary.values() instanceof MapVector maps -> maps;
-            default -> throw new IllegalArgumentException("Map lookup requires MapVector input");
-        };
-    }
-
-    private static ArrayVector requireArrayVector(Vector vector)
-    {
-        return switch (vector) {
-            case ArrayVector arrays -> arrays;
-            case DictionaryVector dictionary when dictionary.values() instanceof ArrayVector arrays -> arrays;
-            default -> throw new IllegalArgumentException("Array element requires ArrayVector input");
-        };
-    }
-
-    private static KeyAccess keyAccess(String operation, Vector vector)
-    {
-        return switch (vector) {
-            case BinaryVector values -> new KeyAccess(values, false, null);
-            case DictionaryVector dictionary when dictionary.values() instanceof BinaryVector values -> new KeyAccess(values, true, dictionary.ids());
-            default -> throw new IllegalArgumentException(operation + " requires BinaryVector key input");
-        };
-    }
-
-    private static BinaryVector requireUtf8Binary(String operation, Vector vector)
-    {
-        checkArgument(vector instanceof BinaryVector, "%s requires BinaryVector inputs", operation);
-        BinaryVector values = (BinaryVector) vector;
-        checkArgument(values.hasTrait(BinaryVector.Trait.UTF8_STRING), "%s requires UTF8_STRING inputs", operation);
-        return values;
-    }
-
-    private static I64Vector requireI64Vector(String operation, Vector vector)
-    {
-        checkArgument(vector instanceof I64Vector, "%s requires I64Vector inputs", operation);
-        return (I64Vector) vector;
-    }
-
-    private static IndexAccess indexAccess(String operation, Vector vector)
-    {
-        return switch (vector) {
-            case I64Vector values -> new IndexAccess(values, false, null);
-            case DictionaryVector dictionary when dictionary.values() instanceof I64Vector values -> new IndexAccess(values, true, dictionary.ids());
-            default -> throw new IllegalArgumentException(operation + " requires I64Vector index input");
-        };
-    }
-
     private static boolean isNull(BooleanVector nulls, int position)
     {
         return nulls != null && nulls.values()[position];
@@ -1187,19 +788,6 @@ public final class PlanEvaluator
             return dictionary ? ids[position] : position;
         }
     }
-
-    private record IndexAccess(I64Vector values, boolean dictionary, int[] ids)
-    {
-        private long value(int position)
-        {
-            int indexPosition = dictionary ? ids[position] : position;
-            return values.values()[indexPosition];
-        }
-    }
-
-    private record LookupResult(long value, boolean nullValue) {}
-
-    private record ArrayElementResult(long value, boolean nullValue) {}
 
     private static final class MaskTermStats
     {

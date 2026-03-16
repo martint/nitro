@@ -147,26 +147,21 @@ key lookups over UTF-8 string keys may use the same UTF-8 and ASCII traits used
 by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
 
-Nested map access should also be representable as first-class IR operations,
-not only as opaque scalar calls. Structural nodes such as `MapLookup` and
-`MapContainsKey` can then preserve evaluator visibility into sibling `NULLS`
-and `ERRORS` behavior in the same way that `StructField` preserves visibility
-into struct-field access.
+Struct field extraction remains the clearest case for a dedicated structural
+IR node because it exposes an existing child stream bundle directly. Other
+nested access patterns such as map lookup, map membership checks, and array
+element access currently live in the primitive-function layer instead. That
+keeps the executable IR small while still allowing those operations to carry
+explicit `VALUES`, `NULLS`, and `ERRORS` streams through ordinary function
+calls.
 
-Arrays should follow the same rule for structural access. A first-class
-`ArrayElement` operation can preserve visibility into parent-array nulls,
-index nulls, child element nulls, and child element errors instead of hiding
-that behavior behind an opaque scalar call.
-
-That does not mean every array operation should become a dedicated IR node.
 Computational nested operations such as reductions, membership checks, or
-other derived predicates may still live comfortably as ordinary scalar
-functions when the evaluator does not benefit from seeing through them as
-structure. The current array reductions follow that rule: `array_sum_i64` and
-`array_min_i64` remain ordinary functions instead of structural IR nodes.
-The same applies to nested-to-nested helpers such as `map_keys` and
-`map_values`, which expose derived nested values without requiring a dedicated
-IR form.
+other derived predicates should also stay comfortably in the function layer
+when the evaluator does not benefit from seeing through them as structure. The
+current array reductions follow that rule: `array_sum_i64` and `array_min_i64`
+remain ordinary functions. The same applies to nested-to-nested helpers such
+as `map_keys` and `map_values`, which expose derived nested values without
+requiring a dedicated IR form.
 
 Map value access should surface absence and nullability through streams rather
 than sentinel values. For example, a missing map, a null lookup key, a missing
@@ -637,8 +632,7 @@ The evaluator should only need to execute a handful of operation kinds:
 - `Call`
 - `Copy`
 - `Merge`
-- structural nested access such as `StructField`, `ArrayElement`,
-  `MapLookup`, and `MapContainsKey`
+- `StructField`
 
 Their intended roles are:
 
@@ -647,10 +641,9 @@ Their intended roles are:
   and an explicit mask
 - `Copy`: perform a masked identity write from one stream into an output
 - `Merge`: represent semantic overlay of partial results under explicit masks
-- `StructField` / `ArrayElement` / `MapLookup` / `MapContainsKey`: expose
-  nested child data or nested predicates through first-class IR operations
-  when the evaluator should retain visibility into structural nullability and
-  stream behavior
+- `StructField`: expose existing struct child streams directly when the
+  evaluator should retain visibility into structural nullability and stream
+  behavior
 
 Everything else should be lowered into combinations of these operations plus
 explicit mask expressions and stream references.

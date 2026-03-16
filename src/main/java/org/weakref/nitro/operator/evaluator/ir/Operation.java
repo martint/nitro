@@ -14,6 +14,6 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 public sealed interface Operation
-        permits ArrayElement, Call, Copy, Literal, MapContainsKey, MapLookup, Merge, StructField
+        permits Call, Copy, Literal, Merge, StructField
 {
 }
