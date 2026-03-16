@@ -140,10 +140,11 @@ key lookups over UTF-8 string keys may use the same UTF-8 and ASCII traits used
 by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
 
-Nested map access should also be representable as a first-class IR operation,
-not only as an opaque scalar call. A structural `MapLookup` node can then
-preserve evaluator visibility into sibling `NULLS` and `ERRORS` behavior in
-the same way that `StructField` preserves visibility into struct-field access.
+Nested map access should also be representable as first-class IR operations,
+not only as opaque scalar calls. Structural nodes such as `MapLookup` and
+`MapContainsKey` can then preserve evaluator visibility into sibling `NULLS`
+and `ERRORS` behavior in the same way that `StructField` preserves visibility
+into struct-field access.
 
 Map value access should surface absence and nullability through streams rather
 than sentinel values. For example, a missing map, a null lookup key, a missing
@@ -610,7 +611,8 @@ The evaluator should only need to execute a handful of operation kinds:
 - `Call`
 - `Copy`
 - `Merge`
-- structural nested access such as `StructField` and `MapLookup`
+- structural nested access such as `StructField`, `MapLookup`, and
+  `MapContainsKey`
 
 Their intended roles are:
 
@@ -619,9 +621,9 @@ Their intended roles are:
   and an explicit mask
 - `Copy`: perform a masked identity write from one stream into an output
 - `Merge`: represent semantic overlay of partial results under explicit masks
-- `StructField` / `MapLookup`: expose nested child data through first-class IR
-  operations when the evaluator should retain visibility into structural
-  nullability and stream behavior
+- `StructField` / `MapLookup` / `MapContainsKey`: expose nested child data or
+  nested predicates through first-class IR operations when the evaluator
+  should retain visibility into structural nullability and stream behavior
 
 Everything else should be lowered into combinations of these operations plus
 explicit mask expressions and stream references.

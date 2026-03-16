@@ -52,6 +52,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.MapContainsKey;
 import org.weakref.nitro.operator.evaluator.ir.MapLookup;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
@@ -870,9 +871,9 @@ public class TestParquetOperator
         EvaluationPlan projectionPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         contains,
-                        new Call("map_contains_key_utf8", List.of(
+                        new MapContainsKey(
                                 new Reference(new Input(0), Stream.VALUES),
-                                new Reference(new Input(1), Stream.VALUES))),
+                                new Reference(new Input(1), Stream.VALUES)),
                         AllMask.ALL)),
                 List.of(
                         new Reference(contains, Stream.VALUES),
@@ -908,9 +909,9 @@ public class TestParquetOperator
         EvaluationPlan filterPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         predicate,
-                        new Call("map_contains_key_utf8", List.of(
+                        new MapContainsKey(
                                 new Reference(new Input(0), Stream.VALUES),
-                                new Reference(new Input(1), Stream.VALUES))),
+                                new Reference(new Input(1), Stream.VALUES)),
                         AllMask.ALL)),
                 List.of());
 

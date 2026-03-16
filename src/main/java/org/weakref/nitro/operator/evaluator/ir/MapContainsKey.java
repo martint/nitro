@@ -13,7 +13,14 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Operation
-        permits Call, Copy, Literal, MapContainsKey, MapLookup, Merge, StructField
+import static java.util.Objects.requireNonNull;
+
+public record MapContainsKey(Reference source, Reference key)
+        implements Operation
 {
+    public MapContainsKey
+    {
+        source = requireNonNull(source, "source is null");
+        key = requireNonNull(key, "key is null");
+    }
 }

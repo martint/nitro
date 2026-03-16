@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.Copy;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.MapContainsKey;
 import org.weakref.nitro.operator.evaluator.ir.MapLookup;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
@@ -166,6 +167,7 @@ public final class PlanEvaluator
             case Literal literal -> evaluateLiteral(requestedStreamsFor(reference), literal, mask);
             case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
+            case MapContainsKey containsKey -> evaluateMapContainsKey(requestedStreamsFor(reference), containsKey, mask, output);
             case MapLookup lookup -> evaluateMapLookup(requestedStreamsFor(reference), lookup, mask, output);
             case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
             case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
@@ -330,6 +332,56 @@ public final class PlanEvaluator
                     requiredLength,
                     I64Vector::new);
             applyMapLookupValues(maps, mapInput, mapKeys, mapValues, mapValueNulls, keyAccess, mapNulls, keyNulls, mask, outputValues);
+            result = result.with(Stream.VALUES, outputValues);
+        }
+        if (requestedStreams.contains(Stream.ERRORS)) {
+            Vector existing = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
+            Vector merged = mergeOptionalBooleanStreams(sourceStreams.getOrNull(Stream.ERRORS), keyStreams.getOrNull(Stream.ERRORS), existing, mask);
+            if (merged != null) {
+                result = result.with(Stream.ERRORS, merged);
+            }
+        }
+        return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private Streams evaluateMapContainsKey(Set<Stream> requestedStreams, MapContainsKey containsKey, Mask mask, Streams output)
+    {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS) && !requestedStreams.contains(Stream.ERRORS)) {
+            return Streams.empty();
+        }
+
+        Streams sourceStreams = evaluateArgument(containsKey.source(), mask);
+        Streams keyStreams = evaluateArgument(containsKey.key(), mask);
+        Vector mapInput = sourceStreams.values();
+        Vector keyInput = keyStreams.values();
+        checkArgument(mapInput.length() == keyInput.length(), "Map contains inputs must have the same logical length");
+
+        MapVector maps = requireMapVector(mapInput);
+        BinaryVector mapKeys = requireUtf8Binary("map contains", maps.keyValues());
+        BooleanVector mapNulls = (BooleanVector) sourceStreams.getOrNull(Stream.NULLS);
+        BooleanVector keyNulls = (BooleanVector) keyStreams.getOrNull(Stream.NULLS);
+        KeyAccess keyAccess = keyAccess("map contains", keyInput);
+
+        Streams result = Streams.empty();
+        int requiredLength = Math.max(mask.maxPosition() + 1, mapInput.length());
+        if (requestedStreams.contains(Stream.NULLS)) {
+            BooleanVector outputNulls = allocator.allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
+                    BooleanVector.class,
+                    requiredLength,
+                    BooleanVector::new);
+            applyMapContainsNulls(mapNulls, keyNulls, mask, outputNulls);
+            result = result.with(Stream.NULLS, outputNulls);
+        }
+        if (requestedStreams.contains(Stream.VALUES)) {
+            BooleanVector outputValues = allocator.allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
+                    BooleanVector.class,
+                    requiredLength,
+                    BooleanVector::new);
+            applyMapContainsValues(maps, mapInput, keyAccess, mapKeys, mapNulls, keyNulls, mask, outputValues);
             result = result.with(Stream.VALUES, outputValues);
         }
         if (requestedStreams.contains(Stream.ERRORS)) {
@@ -675,6 +727,23 @@ public final class PlanEvaluator
         }
     }
 
+    private static void applyMapContainsValues(MapVector maps, Vector mapInput, KeyAccess keys, BinaryVector mapKeys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
+    {
+        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = !isNull(mapNulls, position) && !isNull(keyNulls, position)
+                        && containsMapKey(maps, mapInput, position, mapKeys, keys.values(), keys.position(position), ascii);
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = !isNull(mapNulls, position) && !isNull(keyNulls, position)
+                    && containsMapKey(maps, mapInput, position, mapKeys, keys.values(), keys.position(position), ascii);
+        }
+    }
+
     private static void applyMapLookupNulls(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
     {
         boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
@@ -692,6 +761,20 @@ public final class PlanEvaluator
         }
     }
 
+    private static void applyMapContainsNulls(BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
+    {
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position);
+        }
+    }
+
     private static LookupResult lookupMapValue(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
     {
         int mapPosition = switch (mapInput) {
@@ -705,6 +788,20 @@ public final class PlanEvaluator
             }
         }
         return new LookupResult(0, true);
+    }
+
+    private static boolean containsMapKey(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
+    {
+        int mapPosition = switch (mapInput) {
+            case DictionaryVector vector -> vector.ids()[position];
+            default -> position;
+        };
+        for (int entryIndex = maps.startOffset(mapPosition); entryIndex < maps.endOffset(mapPosition); entryIndex++) {
+            if (ascii ? binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition) : mapKeys.utf8Value(entryIndex).equals(lookupKeys.utf8Value(lookupPosition))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static MapVector requireMapVector(Vector vector)
