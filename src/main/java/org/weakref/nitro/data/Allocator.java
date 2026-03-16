@@ -58,6 +58,21 @@ public class Allocator
         return typedVector;
     }
 
+    public BinaryVector allocateBinary(Context context, int positionCount, int byteCapacity)
+    {
+        ContextState state = state(context);
+        BinaryVector vector = state.borrowBinaryVector(positionCount, byteCapacity);
+        boolean reused = vector != null;
+        if (!reused) {
+            vector = new BinaryVector(positionCount, byteCapacity);
+        }
+        else {
+            clearVector(vector);
+        }
+        state.trackVector(vector, reused);
+        return vector;
+    }
+
     public <T extends Vector> T allocateOrGrow(Context context, T vector, Class<T> vectorType, int size, IntFunction<T> vectorAllocator)
     {
         if (vector == null) {
@@ -569,7 +584,15 @@ public class Allocator
 
     private static long vectorBytes(Vector vector)
     {
-        return (long) vector.length() * Long.BYTES;
+        return switch (vector) {
+            case I64Vector values -> (long) values.values().length * Long.BYTES;
+            case BooleanVector values -> values.values().length;
+            case F64Vector values -> (long) values.values().length * Double.BYTES;
+            case BinaryVector values -> (long) values.offsets().length * Integer.BYTES + values.data().length;
+            case DictionaryVector values -> (long) values.ids().length * Integer.BYTES;
+            case RleVector values -> (long) values.counts().length * Integer.BYTES;
+            default -> throw new IllegalArgumentException("Unsupported vector type for sizing: " + vector.getClass().getSimpleName());
+        };
     }
 
     private static void clearVector(Vector vector)
@@ -578,6 +601,11 @@ public class Allocator
             case I64Vector values -> Arrays.fill(values.values(), 0);
             case BooleanVector values -> Arrays.fill(values.values(), false);
             case F64Vector values -> Arrays.fill(values.values(), 0);
+            case BinaryVector values -> {
+                Arrays.fill(values.offsets(), 0);
+                Arrays.fill(values.data(), (byte) 0);
+            }
+            case DictionaryVector _ -> throw new IllegalArgumentException("Allocator pooling does not support dictionary vectors");
             case RleVector _ -> throw new IllegalArgumentException("Allocator pooling does not support RLE vectors");
             default -> throw new IllegalArgumentException("Unsupported vector type for clearing: " + vector.getClass().getSimpleName());
         }
@@ -595,6 +623,7 @@ public class Allocator
     {
         private final Stats stats = new Stats();
         private final Map<Class<? extends Vector>, TreeMap<Integer, ArrayDeque<Vector>>> vectorPool = new HashMap<>();
+        private final List<BinaryVector> binaryVectorPool = new ArrayList<>();
         private final TreeMap<Integer, ArrayDeque<Mask>> maskPool = new TreeMap<>();
         private final List<Vector> inUseVectors = new ArrayList<>();
         private final List<Mask> inUseMasks = new ArrayList<>();
@@ -606,6 +635,9 @@ public class Allocator
 
         public Vector borrowVector(Class<? extends Vector> vectorType, int size)
         {
+            if (vectorType == BinaryVector.class) {
+                throw new IllegalArgumentException("Use allocateBinary for BinaryVector");
+            }
             TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(vectorType);
             if (pool == null) {
                 return null;
@@ -623,6 +655,26 @@ public class Allocator
             return vector;
         }
 
+        public BinaryVector borrowBinaryVector(int positionCount, int byteCapacity)
+        {
+            int bestIndex = -1;
+            BinaryVector best = null;
+            for (int index = 0; index < binaryVectorPool.size(); index++) {
+                BinaryVector candidate = binaryVectorPool.get(index);
+                if (candidate.length() < positionCount || candidate.byteCapacity() < byteCapacity) {
+                    continue;
+                }
+                if (best == null || candidate.byteCapacity() < best.byteCapacity()) {
+                    best = candidate;
+                    bestIndex = index;
+                }
+            }
+            if (bestIndex < 0) {
+                return null;
+            }
+            return binaryVectorPool.remove(bestIndex);
+        }
+
         public void trackVector(Vector vector, boolean reused)
         {
             inUseVectors.add(vector);
@@ -636,6 +688,10 @@ public class Allocator
             }
 
             stats.releaseBytes(vectorBytes(vector));
+            if (vector instanceof BinaryVector binaryVector) {
+                binaryVectorPool.add(binaryVector);
+                return;
+            }
             vectorPool
                     .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
                     .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>())
@@ -683,10 +739,15 @@ public class Allocator
         public void release()
         {
             for (Vector vector : inUseVectors) {
-                vectorPool
-                        .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
-                        .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>())
-                        .addLast(vector);
+                if (vector instanceof BinaryVector binaryVector) {
+                    binaryVectorPool.add(binaryVector);
+                }
+                else {
+                    vectorPool
+                            .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
+                            .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>())
+                            .addLast(vector);
+                }
             }
             for (Mask mask : inUseMasks) {
                 maskPool

@@ -27,6 +27,7 @@ import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
@@ -48,6 +49,8 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import java.io.IOException;
 import java.util.List;
 
+import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -129,6 +132,56 @@ public class TestParquetOperator
         }
     }
 
+    @Test
+    void testParquetScanReadsVariableWidthColumns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("binary.parquet", false, List.of(
+                new BinaryParquetRow("alice", bytes(1, 2, 3)),
+                new BinaryParquetRow("bob", null),
+                new BinaryParquetRow("charlie", bytes(4, 5))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
+            Batch batch = operator.next();
+            BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+            BinaryVector payloads = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+            BooleanVector payloadNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(names.utf8Value(0)).isEqualTo("alice");
+            assertThat(names.utf8Value(1)).isEqualTo("bob");
+            assertThat(names.utf8Value(2)).isEqualTo("charlie");
+
+            assertThat(payloadNulls.values()[0]).isFalse();
+            assertThat(payloadNulls.values()[1]).isTrue();
+            assertThat(payloadNulls.values()[2]).isFalse();
+            assertThat(payloads.copyBytes(0)).containsExactly((byte) 1, (byte) 2, (byte) 3);
+            assertThat(payloads.copyBytes(2)).containsExactly((byte) 4, (byte) 5);
+        }
+    }
+
+    @Test
+    void testParquetScanPreservesDictionaryEncodingForStrings()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("dictionary-strings.parquet", true, List.of(
+                new BinaryParquetRow("alpha", bytes(9)),
+                new BinaryParquetRow("beta", bytes(8)),
+                new BinaryParquetRow("alpha", null),
+                new BinaryParquetRow("beta", bytes(7))));
+
+        assertDictionaryEncoding(file, "name");
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
+            Batch batch = operator.next();
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+            DictionaryVector names = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(names.values()).isInstanceOf(BinaryVector.class);
+            BinaryVector dictionaryValues = (BinaryVector) names.values();
+            assertThat(dictionaryValues.utf8Value(names.ids()[0])).isEqualTo("alpha");
+            assertThat(dictionaryValues.utf8Value(names.ids()[1])).isEqualTo("beta");
+        }
+    }
+
     private java.nio.file.Path writeParquetFile(String name, boolean dictionaryEnabled, List<ParquetRow> rows)
             throws IOException
     {
@@ -157,6 +210,41 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, List<BinaryParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .required(BINARY).as(stringType()).named("name")
+                .optional(BINARY).named("payload")
+                .named("nitro_binary_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(dictionaryEnabled)
+                .build()) {
+            for (BinaryParquetRow row : rows) {
+                Group group = groups.newGroup()
+                        .append("name", row.name());
+                if (row.payload() != null) {
+                    group.append("payload", org.apache.parquet.io.api.Binary.fromConstantByteArray(row.payload()));
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
+    private static byte[] bytes(int... values)
+    {
+        byte[] bytes = new byte[values.length];
+        for (int index = 0; index < values.length; index++) {
+            bytes[index] = (byte) values[index];
+        }
+        return bytes;
+    }
+
     private static void assertDictionaryEncoding(java.nio.file.Path file, String columnName)
             throws IOException
     {
@@ -171,4 +259,6 @@ public class TestParquetOperator
     }
 
     private record ParquetRow(long x, boolean flag, Long maybe) {}
+
+    private record BinaryParquetRow(String name, byte[] payload) {}
 }

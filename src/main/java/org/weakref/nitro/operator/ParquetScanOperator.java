@@ -31,6 +31,7 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
@@ -50,6 +51,7 @@ import java.util.PrimitiveIterator;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
@@ -119,10 +121,10 @@ public final class ParquetScanOperator
         ColumnBuffer[] buffers = new ColumnBuffer[columns.size()];
         for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
             ColumnSpec column = columns.get(columnIndex);
-            ColumnReader columnReader = columnReadStore.getColumnReader(column.descriptor());
             buffers[columnIndex] = switch (column.kind()) {
-                case I64 -> readI64Column(column, columnPages[columnIndex], rowCount, columnReader);
-                case BOOLEAN -> readBooleanColumn(column, rowCount, columnReader);
+                case I64 -> readI64Column(column, columnPages[columnIndex], rowCount, columnReadStore.getColumnReader(column.descriptor()));
+                case BOOLEAN -> readBooleanColumn(column, rowCount, columnReadStore.getColumnReader(column.descriptor()));
+                case BINARY -> readBinaryColumn(column, columnPages[columnIndex], rowCount);
             };
         }
 
@@ -179,6 +181,7 @@ public final class ParquetScanOperator
                 switch (primitiveType.getPrimitiveTypeName()) {
                     case INT64 -> ColumnKind.I64;
                     case BOOLEAN -> ColumnKind.BOOLEAN;
+                    case BINARY -> ColumnKind.BINARY;
                     default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
                 },
                 primitiveType.getRepetition() != REQUIRED,
@@ -289,6 +292,111 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
+    private ColumnBuffer readBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount)
+    {
+        if (columnPages.dictionaryEncoded()) {
+            return readDictionaryBinaryColumn(column, columnPages, rowCount);
+        }
+        return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages), createColumnReader(columnPages));
+    }
+
+    private ColumnBuffer readDictionaryBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount)
+    {
+        if (columnPages.dictionaryPage() == null || columnPages.dictionaryPage().getDictionarySize() == 0) {
+            return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages), createColumnReader(columnPages));
+        }
+
+        try {
+            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage().copy());
+            int dictionaryByteCapacity = 0;
+            for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
+                dictionaryByteCapacity += dictionary.decodeToBinary(index).length();
+            }
+            BinaryVector dictionaryValues = allocator.allocateBinary(ALLOCATION_CONTEXT, columnPages.dictionaryPage().getDictionarySize(), dictionaryByteCapacity);
+            for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
+                dictionaryValues.setBytes(index, dictionary.decodeToBinary(index).getBytesUnsafe());
+            }
+
+            ColumnReader columnReader = createColumnReader(columnPages);
+            int[] ids = new int[rowCount];
+            BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            boolean[] outputNulls = nulls == null ? null : nulls.values();
+            int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+            if (nulls == null) {
+                for (int position = 0; position < rowCount; position++) {
+                    ids[position] = columnReader.getCurrentValueDictionaryID();
+                    columnReader.consume();
+                }
+            }
+            else {
+                for (int position = 0; position < rowCount; position++) {
+                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    columnReader.consume();
+                }
+            }
+            return new ColumnBuffer(new DictionaryVector(ids, dictionaryValues), nulls);
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);
+        }
+    }
+
+    private ColumnBuffer readFlatBinaryColumn(ColumnSpec column, int rowCount, int byteCapacity, ColumnReader columnReader)
+    {
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, byteCapacity);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        boolean[] outputNulls = nulls == null ? null : nulls.values();
+        int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+        if (nulls == null) {
+            for (int position = 0; position < rowCount; position++) {
+                values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                columnReader.consume();
+            }
+        }
+        else {
+            for (int position = 0; position < rowCount; position++) {
+                if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                    values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                }
+                else {
+                    values.setNull(position);
+                    outputNulls[position] = true;
+                }
+                columnReader.consume();
+            }
+        }
+        return new ColumnBuffer(values, nulls);
+    }
+
+    private int requiredBinaryByteCapacity(ColumnSpec column, int rowCount, ColumnPages columnPages)
+    {
+        ColumnReader columnReader = createColumnReader(columnPages);
+        int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+        int byteCapacity = 0;
+        for (int position = 0; position < rowCount; position++) {
+            if (!column.nullable() || columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                byteCapacity += columnReader.getBinary().length();
+            }
+            columnReader.consume();
+        }
+        return byteCapacity;
+    }
+
+    private ColumnReader createColumnReader(ColumnPages columnPages)
+    {
+        return new ColumnReadStoreImpl(
+                new ReplayPageReadStore(columnPages.totalValueCount(), List.of(columnPages)),
+                recordConverter,
+                schema,
+                createdBy)
+                .getColumnReader(columnPages.descriptor());
+    }
+
     private static ColumnPages captureColumnPages(PageReadStore rowGroup, ColumnDescriptor descriptor)
     {
         PageReader pageReader = rowGroup.getPageReader(descriptor);
@@ -323,6 +431,7 @@ public final class ParquetScanOperator
     {
         I64,
         BOOLEAN,
+        BINARY,
     }
 
     private record ColumnSpec(ColumnKind kind, boolean nullable, ColumnDescriptor descriptor) {}
@@ -389,6 +498,14 @@ public final class ParquetScanOperator
         private final Map<ColumnDescriptor, ColumnPages> columns = new HashMap<>();
 
         private ReplayPageReadStore(long rowCount, ColumnPages[] columns)
+        {
+            this.rowCount = rowCount;
+            for (ColumnPages column : columns) {
+                this.columns.put(column.descriptor(), column);
+            }
+        }
+
+        private ReplayPageReadStore(long rowCount, List<ColumnPages> columns)
         {
             this.rowCount = rowCount;
             for (ColumnPages column : columns) {

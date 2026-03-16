@@ -94,19 +94,24 @@ Vectors represent a single stream in some physical layout.
 Examples:
 
 - flat vectors for primitive types
+- flat variable-width vectors such as `BinaryVector`
 - `ConstantVector`
 - `RleVector`
 - future `DictionaryVector`
 
 Nitro should provide builtin flat vectors for common physical types such as
-`I64`, `I32`, `F64`, and boolean, while still allowing custom vector
-implementations outside a closed builtin type list.
+`I64`, `I32`, `F64`, boolean, and binary/string payloads, while still allowing
+custom vector implementations outside a closed builtin type list.
 
 That should extend to additional physical types over time, including
 variable-width families such as string and binary data. The vector contract
 should therefore stay open to layouts whose payload is not a single primitive
 array, for example offset-plus-bytes representations or other custom storage
 schemes appropriate for variable-width values.
+
+The current runtime already has a first builtin variable-width family for
+binary/string payloads. That should be treated as the beginning of a broader
+variable-width design space rather than a closed final layout.
 
 Vectors should not be forced to embed nullability. A null stream is just
 another vector, typically a boolean-typed one.
@@ -1523,18 +1528,19 @@ architecture:
 - Exact grouped-result chunking policy for aggregation output batches.
 - Whether planner- or runtime-visible encoding metadata becomes necessary later,
   beyond the current calling-convention and callback approach.
-- Support for additional physical data types, especially variable-width types
-  such as strings and binary values, and the vector/storage conventions needed
-  to keep those types compatible with the stream-first execution model.
+- Support for additional physical data types beyond the current builtin
+  primitive and binary/string families, along with the vector/storage
+  conventions needed to keep those types compatible with the stream-first
+  execution model.
 - Support for nested data types such as arrays, maps, and structs, including
   the vector/layout conventions and stream semantics needed to evaluate nested
   values without collapsing them back into row-oriented execution.
 - Trait-based dispatch beyond physical encoding alone, so specialized execution
   can target properties such as ASCII-only strings or other vector-family
   traits without hardcoding those assumptions into the core type system.
-- Broader Parquet integration beyond the current fixed-width scan path,
-  including richer type coverage, better encoding preservation, and stronger
-  interaction with projection/filter planning on real datasets.
+- Broader Parquet integration beyond the current fixed-width and binary/string
+  scan paths, including richer type coverage, better encoding preservation, and
+  stronger interaction with projection/filter planning on real datasets.
 
 ## Non-Goals
 
