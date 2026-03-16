@@ -926,6 +926,91 @@ public class TestParquetOperator
     }
 
     @Test
+    void testMapKeysProjectsNestedKeyArrays()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("map-keys.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable keys = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        keys,
+                        new Call("map_keys", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(keys, Stream.VALUES),
+                        new Reference(keys, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+            BinaryVector keysVector = (BinaryVector) arrays.elementValues();
+
+            assertThat(arrays.length(0)).isEqualTo(2);
+            assertThat(arrays.length(1)).isEqualTo(0);
+            assertThat(arrays.length(2)).isEqualTo(0);
+            assertThat(arrays.length(3)).isEqualTo(1);
+            assertThat(keysVector.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(keysVector.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+            assertThat(keysVector.utf8Value(0)).isEqualTo("alpha");
+            assertThat(keysVector.utf8Value(1)).isEqualTo("beta");
+            assertThat(keysVector.utf8Value(2)).isEqualTo("gamma");
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
+    void testCardinalityConsumesMapKeys()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("map-keys-cardinality.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable keys = new Variable(0);
+        Variable cardinality = new Variable(1);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(
+                                keys,
+                                new Call("map_keys", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(
+                                cardinality,
+                                new Call("cardinality", List.of(new Reference(keys, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(
+                        new Reference(cardinality, Stream.VALUES),
+                        new Reference(cardinality, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(2L, 0L, 0L, 1L);
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
     void testCardinalityFeedsGroupingForRequiredMaps()
             throws IOException
     {
