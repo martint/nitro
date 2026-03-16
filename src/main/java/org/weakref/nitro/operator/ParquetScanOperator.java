@@ -237,7 +237,11 @@ public final class ParquetScanOperator
             Type valueType = entriesType.getType(1);
             checkArgument(valueType.isPrimitive(), "Parquet map values must be primitive: %s", name);
             PrimitiveType primitiveValueType = valueType.asPrimitiveType();
-            checkArgument(primitiveValueType.getPrimitiveTypeName() == INT64, "Unsupported Parquet map value type for column %s: %s", name, primitiveValueType.getPrimitiveTypeName());
+            ColumnKind valueKind = switch (primitiveValueType.getPrimitiveTypeName()) {
+                case INT64 -> ColumnKind.I64;
+                case BINARY -> ColumnKind.BINARY;
+                default -> throw new IllegalArgumentException("Unsupported Parquet map value type for column %s: %s".formatted(name, primitiveValueType.getPrimitiveTypeName()));
+            };
 
             return new ColumnSpec(
                     name,
@@ -253,7 +257,7 @@ public final class ParquetScanOperator
                     new MapSpec(
                             entriesType.getName(),
                             new MapComponentSpec(keyType.getName(), keyKind, false, schema.getColumnDescription(new String[] {name, entriesType.getName(), keyType.getName()}), binaryTraits(primitiveKeyType)),
-                            new MapComponentSpec(valueType.getName(), ColumnKind.I64, primitiveValueType.getRepetition() != REQUIRED, schema.getColumnDescription(new String[] {name, entriesType.getName(), valueType.getName()}), Set.of())));
+                            new MapComponentSpec(valueType.getName(), valueKind, primitiveValueType.getRepetition() != REQUIRED, schema.getColumnDescription(new String[] {name, entriesType.getName(), valueType.getName()}), binaryTraits(primitiveValueType))));
         }
         if (groupType.getRepetition() == Type.Repetition.REPEATED) {
             checkArgument(groupType.getFieldCount() == 1, "Repeated Parquet groups must have one field: %s", name);
@@ -369,6 +373,7 @@ public final class ParquetScanOperator
 
         int entryCount = 0;
         int keyBinaryCapacity = 0;
+        int valueBinaryCapacity = 0;
         RecordReader<Group> recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, mapPages), new GroupRecordConverter(projectedSchema));
         for (int position = 0; position < rowCount; position++) {
             Group row = recordReader.read();
@@ -385,6 +390,14 @@ public final class ParquetScanOperator
                     keyBinaryCapacity += mapGroup.getGroup(column.mapSpec().entriesName(), valueIndex).getBinary(column.mapSpec().key().name(), 0).length();
                 }
             }
+            if (column.mapSpec().value().kind() == ColumnKind.BINARY) {
+                for (int valueIndex = 0; valueIndex < valueCount; valueIndex++) {
+                    Group entry = mapGroup.getGroup(column.mapSpec().entriesName(), valueIndex);
+                    if (!column.mapSpec().value().nullable() || entry.getFieldRepetitionCount(column.mapSpec().value().name()) > 0) {
+                        valueBinaryCapacity += entry.getBinary(column.mapSpec().value().name(), 0).length();
+                    }
+                }
+            }
         }
 
         Vector keyValues = switch (column.mapSpec().key().kind()) {
@@ -392,7 +405,11 @@ public final class ParquetScanOperator
             case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, keyBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
         };
-        I64Vector valueValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
+        Vector valueValues = switch (column.mapSpec().value().kind()) {
+            case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
+            case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, valueBinaryCapacity);
+            default -> throw new IllegalArgumentException("Unsupported map value kind: " + column.mapSpec().value().kind());
+        };
         BooleanVector valueNulls = column.mapSpec().value().nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, entryCount, BooleanVector::new) : null;
 
         recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, mapPages), new GroupRecordConverter(projectedSchema));
@@ -415,9 +432,16 @@ public final class ParquetScanOperator
 
                 if (column.mapSpec().value().nullable() && entry.getFieldRepetitionCount(column.mapSpec().value().name()) == 0) {
                     valueNulls.values()[entryIndex] = true;
+                    if (valueValues instanceof BinaryVector binaryValues) {
+                        binaryValues.setNull(entryIndex);
+                    }
                 }
                 else {
-                    valueValues.values()[entryIndex] = entry.getLong(column.mapSpec().value().name(), 0);
+                    switch (column.mapSpec().value().kind()) {
+                        case I64 -> ((I64Vector) valueValues).values()[entryIndex] = entry.getLong(column.mapSpec().value().name(), 0);
+                        case BINARY -> ((BinaryVector) valueValues).setBytes(entryIndex, entry.getBinary(column.mapSpec().value().name(), 0).getBytesUnsafe());
+                        default -> throw new IllegalArgumentException("Unsupported map value kind: " + column.mapSpec().value().kind());
+                    }
                 }
                 entryIndex++;
             }
@@ -425,6 +449,9 @@ public final class ParquetScanOperator
 
         if (keyValues instanceof BinaryVector binaryKeyValues) {
             applyBinaryTraits(binaryKeyValues, column.mapSpec().key().binaryTraits(), entryCount);
+        }
+        if (valueValues instanceof BinaryVector binaryValueValues) {
+            applyBinaryTraits(binaryValueValues, column.mapSpec().value().binaryTraits(), entryCount);
         }
         values.setEntries(
                 Streams.ofValues(keyValues),

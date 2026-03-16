@@ -75,6 +75,18 @@ public class Allocator
         return vector;
     }
 
+    public BinaryVector allocateOrGrowBinary(Context context, BinaryVector vector, int positionCount, int byteCapacity)
+    {
+        if (vector == null) {
+            return allocateBinary(context, positionCount, byteCapacity);
+        }
+        if (vector.length() < positionCount || vector.byteCapacity() < byteCapacity) {
+            releaseVector(context, vector);
+            return allocateBinary(context, positionCount, byteCapacity);
+        }
+        return vector;
+    }
+
     public ArrayVector allocateArray(Context context, int positionCount)
     {
         return allocate(context, ArrayVector.class, positionCount, ArrayVector::new);

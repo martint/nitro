@@ -1084,6 +1084,47 @@ public class TestParquetOperator
     }
 
     @Test
+    void testElementAtUtf8Utf8ProjectsValuesAndNulls()
+            throws IOException
+    {
+        java.nio.file.Path file = writeUtf8MapLookupParquetFile("map-element-at-utf8.parquet", List.of(
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("alpha", "one", "beta", null), "alpha"),
+                new MapLookupUtf8ParquetRow(null, "alpha"),
+                new MapLookupUtf8ParquetRow(Map.of(), "missing"),
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("gamma", "three"), null),
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("delta", "four"), "missing"),
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("epsilon", "five"), "epsilon"),
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("zeta", null), "zeta")));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable element = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        element,
+                        new Call("element_at_utf8_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(element, Stream.VALUES),
+                        new Reference(element, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+            Batch batch = operator.next();
+            org.weakref.nitro.data.Vector values = batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(utf8Value(values, 0)).isEqualTo("one");
+            assertThat(utf8Value(values, 5)).isEqualTo("five");
+            assertThat(nulls.values()).startsWith(false, true, true, true, true, false, true);
+        }
+    }
+
+    @Test
     void testArraySumProjectsNullableElements()
             throws IOException
     {
@@ -1470,6 +1511,37 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeUtf8MapLookupParquetFile(String name, List<MapLookupUtf8ParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .optionalGroup().as(mapType())
+                    .repeatedGroup()
+                        .required(BINARY).as(stringType()).named("key")
+                        .optional(BINARY).as(stringType()).named("value")
+                    .named("key_value")
+                .named("items")
+                .optional(BINARY).as(stringType()).named("needle")
+                .named("nitro_utf8_map_lookup_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (MapLookupUtf8ParquetRow row : rows) {
+                Group group = groups.newGroup();
+                appendUtf8Map(group, "items", row.items());
+                if (row.needle() != null) {
+                    group.append("needle", row.needle());
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private java.nio.file.Path writeOptionalStructParquetFile(String name, List<OptionalStructParquetRow> rows)
             throws IOException
     {
@@ -1538,6 +1610,30 @@ public class TestParquetOperator
         return map;
     }
 
+    private static void appendUtf8Map(Group group, String fieldName, Map<String, String> entries)
+    {
+        if (entries == null) {
+            return;
+        }
+        Group mapGroup = group.addGroup(fieldName);
+        for (Map.Entry<String, String> entry : entries.entrySet()) {
+            Group keyValue = mapGroup.addGroup("key_value")
+                    .append("key", entry.getKey());
+            if (entry.getValue() != null) {
+                keyValue.append("value", entry.getValue());
+            }
+        }
+    }
+
+    private static Map<String, String> orderedUtf8Map(Object... entries)
+    {
+        LinkedHashMap<String, String> map = new LinkedHashMap<>();
+        for (int index = 0; index < entries.length; index += 2) {
+            map.put((String) entries[index], (String) entries[index + 1]);
+        }
+        return map;
+    }
+
     private static void assertDictionaryEncoding(java.nio.file.Path file, String columnName)
             throws IOException
     {
@@ -1600,4 +1696,6 @@ public class TestParquetOperator
     private record MapParquetRow(Map<String, Long> items) {}
 
     private record MapLookupParquetRow(Map<String, Long> items, String needle) {}
+
+    private record MapLookupUtf8ParquetRow(Map<String, String> items, String needle) {}
 }

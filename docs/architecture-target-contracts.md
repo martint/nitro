@@ -116,11 +116,11 @@ variable-width design space rather than a closed final layout.
 
 The runtime now also has an initial nested-value family in `ArrayVector`,
 `StructVector`, and `MapVector`, currently exercised by repeated `INT64`
-Parquet input, top-level struct Parquet input, top-level map Parquet input,
-field extraction, and simple primitives such as `cardinality` and
-`map_contains_key_utf8` and `element_at_i64_utf8`. That should be treated as
-the beginning of a broader nested design space rather than a final layout for
-arrays, maps, or structs.
+Parquet input, top-level struct Parquet input, top-level map Parquet input
+with `i64` and UTF-8 string values, field extraction, and simple primitives
+such as `cardinality`, `map_contains_key_utf8`, `element_at_i64_utf8`, and
+`element_at_utf8_utf8`. That should be treated as the beginning of a broader
+nested design space rather than a final layout for arrays, maps, or structs.
 
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array

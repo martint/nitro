@@ -21,6 +21,7 @@ import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
+import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
@@ -49,6 +50,7 @@ public final class TestPrimitiveFunctions
                 ArraySumI64.class,
                 Cardinality.class,
                 ElementAtI64Utf8.class,
+                ElementAtUtf8Utf8.class,
                 EqualUtf8.class,
                 HashUtf8.class,
                 LessThanI64.class,
