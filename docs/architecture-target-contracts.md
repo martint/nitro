@@ -117,9 +117,9 @@ variable-width design space rather than a closed final layout.
 The runtime now also has an initial nested-value family in `ArrayVector`,
 `StructVector`, and `MapVector`, currently exercised by repeated `INT64`
 Parquet input, top-level struct Parquet input, top-level map Parquet input,
-field extraction, and simple primitives such as `cardinality`. That should be
-treated as the beginning of a broader nested design space rather than a final
-layout for arrays, maps, or structs.
+field extraction, and simple primitives such as `cardinality` and
+`map_contains_key_utf8`. That should be treated as the beginning of a broader
+nested design space rather than a final layout for arrays, maps, or structs.
 
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
@@ -134,6 +134,10 @@ stream may independently carry `NULLS` for absent maps and the value bundle may
 carry its own `NULLS` for absent values within present maps. That child-stream
 model should compose with the same explicit-stream contracts used for top-level
 values instead of inventing a separate nullability mechanism for nested data.
+Trait-aware dispatch should compose with nested vectors too. For example, map
+key lookups over UTF-8 string keys may use the same UTF-8 and ASCII traits used
+by top-level binary/string primitives, without requiring a different logical
+type system for nested keys.
 
 Vectors may also carry trait metadata that is narrower than their physical
 family. For example, a `BinaryVector` may be known to represent UTF-8 strings,

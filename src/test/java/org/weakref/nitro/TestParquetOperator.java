@@ -854,6 +854,81 @@ public class TestParquetOperator
     }
 
     @Test
+    void testMapContainsKeyUtf8ProjectsValuesAndNulls()
+            throws IOException
+    {
+        java.nio.file.Path file = writeMapLookupParquetFile("map-lookup.parquet", List.of(
+                new MapLookupParquetRow(orderedMap("alpha", 10L, "beta", null), "alpha"),
+                new MapLookupParquetRow(null, "alpha"),
+                new MapLookupParquetRow(Map.of(), "missing"),
+                new MapLookupParquetRow(orderedMap("gamma", 30L), null),
+                new MapLookupParquetRow(orderedMap("delta", 40L), "missing")));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable contains = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        contains,
+                        new Call("map_contains_key_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(contains, Stream.VALUES),
+                        new Reference(contains, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+            Batch batch = operator.next();
+            BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(true, false, false, false, false);
+            assertThat(nulls.values()).startsWith(false, true, false, true, false);
+        }
+    }
+
+    @Test
+    void testMapContainsKeyUtf8FiltersParquetMaps()
+            throws IOException
+    {
+        java.nio.file.Path file = writeMapLookupParquetFile("map-filter.parquet", List.of(
+                new MapLookupParquetRow(orderedMap("alpha", 10L, "beta", null), "alpha"),
+                new MapLookupParquetRow(null, "alpha"),
+                new MapLookupParquetRow(Map.of(), "missing"),
+                new MapLookupParquetRow(orderedMap("gamma", 30L), null),
+                new MapLookupParquetRow(orderedMap("delta", 40L), "delta")));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable predicate = new Variable(0);
+        EvaluationPlan filterPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        predicate,
+                        new Call("map_contains_key_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of());
+
+        try (FilterOperator operator = new FilterOperator(
+                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")),
+                filterPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                new Allocator())) {
+            Batch batch = operator.next();
+            assertThat(batch.borrowMask()).containsExactly(0, 4);
+
+            org.weakref.nitro.data.Vector needles = batch.output(1).borrow(Stream.VALUES);
+            assertThat(utf8Value(needles, 0)).isEqualTo("alpha");
+            assertThat(utf8Value(needles, 4)).isEqualTo("delta");
+        }
+    }
+
+    @Test
     void testArraySumProjectsNullableElements()
             throws IOException
     {
@@ -1145,6 +1220,37 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeMapLookupParquetFile(String name, List<MapLookupParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .optionalGroup().as(mapType())
+                    .repeatedGroup()
+                        .required(BINARY).as(stringType()).named("key")
+                        .optional(INT64).named("value")
+                    .named("key_value")
+                .named("items")
+                .optional(BINARY).as(stringType()).named("needle")
+                .named("nitro_map_lookup_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (MapLookupParquetRow row : rows) {
+                Group group = groups.newGroup();
+                appendMap(group, "items", row.items());
+                if (row.needle() != null) {
+                    group.append("needle", row.needle());
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private java.nio.file.Path writeOptionalStructParquetFile(String name, List<OptionalStructParquetRow> rows)
             throws IOException
     {
@@ -1269,4 +1375,6 @@ public class TestParquetOperator
     private record OptionalStructParquetRow(StructParquetRow person) {}
 
     private record MapParquetRow(Map<String, Long> items) {}
+
+    private record MapLookupParquetRow(Map<String, Long> items, String needle) {}
 }
