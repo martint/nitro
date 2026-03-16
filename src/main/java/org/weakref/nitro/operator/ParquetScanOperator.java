@@ -42,15 +42,18 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.PrimitiveIterator;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
+import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
@@ -185,7 +188,8 @@ public final class ParquetScanOperator
                     default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
                 },
                 primitiveType.getRepetition() != REQUIRED,
-                schema.getColumnDescription(new String[] {name}));
+                schema.getColumnDescription(new String[] {name}),
+                binaryTraits(primitiveType));
     }
 
     private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader)
@@ -316,6 +320,7 @@ public final class ParquetScanOperator
             for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
                 dictionaryValues.setBytes(index, dictionary.decodeToBinary(index).getBytesUnsafe());
             }
+            applyBinaryTraits(dictionaryValues, column.binaryTraits(), dictionaryValues.length());
 
             ColumnReader columnReader = createColumnReader(columnPages);
             int[] ids = new int[rowCount];
@@ -370,7 +375,40 @@ public final class ParquetScanOperator
                 columnReader.consume();
             }
         }
+        applyBinaryTraits(values, column.binaryTraits(), rowCount);
         return new ColumnBuffer(values, nulls);
+    }
+
+    private static Set<BinaryVector.Trait> binaryTraits(PrimitiveType primitiveType)
+    {
+        if (primitiveType.getPrimitiveTypeName() != BINARY) {
+            return Set.of();
+        }
+        if (stringType().equals(primitiveType.getLogicalTypeAnnotation())) {
+            return Set.of(BinaryVector.Trait.UTF8_STRING);
+        }
+        return Set.of();
+    }
+
+    private static void applyBinaryTraits(BinaryVector values, Set<BinaryVector.Trait> declaredTraits, int positionCount)
+    {
+        values.addTraits(declaredTraits);
+        if (values.hasTrait(BinaryVector.Trait.UTF8_STRING) && isAsciiOnly(values, positionCount)) {
+            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        }
+    }
+
+    private static boolean isAsciiOnly(BinaryVector values, int positionCount)
+    {
+        byte[] data = values.data();
+        for (int position = 0; position < positionCount; position++) {
+            for (int index = values.startOffset(position); index < values.endOffset(position); index++) {
+                if ((data[index] & 0x80) != 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private int requiredBinaryByteCapacity(ColumnSpec column, int rowCount, ColumnPages columnPages)
@@ -434,7 +472,13 @@ public final class ParquetScanOperator
         BINARY,
     }
 
-    private record ColumnSpec(ColumnKind kind, boolean nullable, ColumnDescriptor descriptor) {}
+    private record ColumnSpec(ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits)
+    {
+        private ColumnSpec
+        {
+            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
+        }
+    }
 
     private record ColumnBuffer(Vector values, BooleanVector nulls) {}
 

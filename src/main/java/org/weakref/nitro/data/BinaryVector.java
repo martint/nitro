@@ -15,15 +15,25 @@ package org.weakref.nitro.data;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 public final class BinaryVector
         implements FlatVector
 {
+    public enum Trait
+    {
+        UTF8_STRING,
+        ASCII_ONLY,
+    }
+
     private final int positionCount;
     private final int[] offsets;
     private final byte[] data;
+    private final EnumSet<Trait> traits = EnumSet.noneOf(Trait.class);
 
     public BinaryVector(int positionCount, int byteCapacity)
     {
@@ -47,6 +57,31 @@ public final class BinaryVector
     public byte[] data()
     {
         return data;
+    }
+
+    public Set<Trait> traits()
+    {
+        return Set.copyOf(traits);
+    }
+
+    public boolean hasTrait(Trait trait)
+    {
+        return traits.contains(requireNonNull(trait, "trait is null"));
+    }
+
+    public void addTrait(Trait trait)
+    {
+        traits.add(requireNonNull(trait, "trait is null"));
+    }
+
+    public void addTraits(Set<Trait> traits)
+    {
+        this.traits.addAll(requireNonNull(traits, "traits is null"));
+    }
+
+    public void clearTraits()
+    {
+        traits.clear();
     }
 
     public int byteCapacity()
@@ -106,6 +141,6 @@ public final class BinaryVector
     @Override
     public String toString()
     {
-        return "BinaryVector{positions=" + positionCount + ", byteCapacity=" + data.length + "}";
+        return "BinaryVector{positions=" + positionCount + ", byteCapacity=" + data.length + ", traits=" + traits + "}";
     }
 }

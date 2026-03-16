@@ -113,6 +113,12 @@ The current runtime already has a first builtin variable-width family for
 binary/string payloads. That should be treated as the beginning of a broader
 variable-width design space rather than a closed final layout.
 
+Vectors may also carry trait metadata that is narrower than their physical
+family. For example, a `BinaryVector` may be known to represent UTF-8 strings,
+and some string vectors may be known to contain only ASCII characters. Those
+traits should remain optional and additive: they refine dispatch choices
+without redefining the underlying vector family.
+
 Vectors should not be forced to embed nullability. A null stream is just
 another vector, typically a boolean-typed one.
 
@@ -1257,6 +1263,11 @@ trait-directed specialization as long as the same hot-loop rule still holds:
 select the specialized path outside the loop, then execute over concrete typed
 state inside it.
 
+Source operators may attach traits when the input format makes them cheap or
+obvious to derive. For example, a Parquet scan over string-typed columns may
+mark a binary/string vector as UTF-8, and may further mark it as ASCII-only
+when that property can be established while decoding.
+
 That same rule applies to access patterns within a single encoding. Execution
 helpers may abstract over loop shape, run tracking, and mask traversal, but
 they should still hand concrete typed arrays or cursor state into the actual
@@ -1535,9 +1546,9 @@ architecture:
 - Support for nested data types such as arrays, maps, and structs, including
   the vector/layout conventions and stream semantics needed to evaluate nested
   values without collapsing them back into row-oriented execution.
-- Trait-based dispatch beyond physical encoding alone, so specialized execution
-  can target properties such as ASCII-only strings or other vector-family
-  traits without hardcoding those assumptions into the core type system.
+- Broader trait-based dispatch beyond the current UTF-8 and ASCII string
+  example, so specialized execution can target additional vector-family traits
+  without hardcoding those assumptions into the core type system.
 - Broader Parquet integration beyond the current fixed-width and binary/string
   scan paths, including richer type coverage, better encoding preservation, and
   stronger interaction with projection/filter planning on real datasets.

@@ -36,6 +36,9 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -47,6 +50,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.io.IOException;
+import java.util.EnumSet;
 import java.util.List;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
@@ -147,6 +151,9 @@ public class TestParquetOperator
             BinaryVector payloads = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
             BooleanVector payloadNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
 
+            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+            assertThat(payloads.traits()).isEmpty();
             assertThat(names.utf8Value(0)).isEqualTo("alice");
             assertThat(names.utf8Value(1)).isEqualTo("bob");
             assertThat(names.utf8Value(2)).isEqualTo("charlie");
@@ -177,8 +184,83 @@ public class TestParquetOperator
             DictionaryVector names = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
             assertThat(names.values()).isInstanceOf(BinaryVector.class);
             BinaryVector dictionaryValues = (BinaryVector) names.values();
+            assertThat(dictionaryValues.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(dictionaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(dictionaryValues.utf8Value(names.ids()[0])).isEqualTo("alpha");
             assertThat(dictionaryValues.utf8Value(names.ids()[1])).isEqualTo("beta");
+        }
+    }
+
+    @Test
+    void testEqualUtf8PropagatesNullsOnAsciiStrings()
+            throws IOException
+    {
+        java.nio.file.Path file = writeUtf8PairParquetFile("ascii-pairs.parquet", true, List.of(
+                new Utf8PairRow("alpha", "alpha"),
+                new Utf8PairRow("beta", null),
+                new Utf8PairRow("gamma", "delta")));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name"))) {
+            Batch batch = operator.next();
+            BinaryVector left = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+            BinaryVector right = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+            BooleanVector rightNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(left.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(left.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+            assertThat(right.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(right.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+
+            Streams result = eqUtf8().apply(
+                    List.of(
+                            Streams.ofValues(left),
+                            Streams.ofValues(right).with(Stream.NULLS, rightNulls)),
+                    batch.borrowMask(),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(new Allocator()));
+            BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+
+            assertThat(values.values()[0]).isTrue();
+            assertThat(values.values()[1]).isFalse();
+            assertThat(values.values()[2]).isFalse();
+            assertThat(nulls.values()[0]).isFalse();
+            assertThat(nulls.values()[1]).isTrue();
+            assertThat(nulls.values()[2]).isFalse();
+        }
+    }
+
+    @Test
+    void testEqualUtf8SupportsNonAsciiStrings()
+            throws IOException
+    {
+        java.nio.file.Path file = writeUtf8PairParquetFile("unicode-pairs.parquet", true, List.of(
+                new Utf8PairRow("élan", "élan"),
+                new Utf8PairRow("élan", "été")));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name"))) {
+            Batch batch = operator.next();
+            var leftValues = batch.output(0).borrow(Stream.VALUES);
+            var rightValues = batch.output(1).borrow(Stream.VALUES);
+            BinaryVector left = binaryValues(leftValues);
+            BinaryVector right = binaryValues(rightValues);
+
+            assertThat(left.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(left.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isFalse();
+            assertThat(right.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(right.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isFalse();
+
+            Streams result = eqUtf8().apply(
+                    List.of(Streams.ofValues((org.weakref.nitro.data.Vector) leftValues), Streams.ofValues((org.weakref.nitro.data.Vector) rightValues)),
+                    batch.borrowMask(),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(new Allocator()));
+            BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
+
+            assertThat(values.values()[0]).isTrue();
+            assertThat(values.values()[1]).isFalse();
         }
     }
 
@@ -236,6 +318,32 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeUtf8PairParquetFile(String name, boolean dictionaryEnabled, List<Utf8PairRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .required(BINARY).as(stringType()).named("left_name")
+                .optional(BINARY).as(stringType()).named("right_name")
+                .named("nitro_utf8_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(dictionaryEnabled)
+                .build()) {
+            for (Utf8PairRow row : rows) {
+                Group group = groups.newGroup()
+                        .append("left_name", row.left());
+                if (row.right() != null) {
+                    group.append("right_name", row.right());
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private static byte[] bytes(int... values)
     {
         byte[] bytes = new byte[values.length];
@@ -258,7 +366,23 @@ public class TestParquetOperator
         }
     }
 
+    private static PrimitiveFunction eqUtf8()
+    {
+        return TestPrimitiveFunctions.primitiveRegistry().get("eq_utf8");
+    }
+
+    private static BinaryVector binaryValues(org.weakref.nitro.data.Vector values)
+    {
+        return switch (values) {
+            case BinaryVector vector -> vector;
+            case DictionaryVector vector -> (BinaryVector) vector.values();
+            default -> throw new IllegalArgumentException("Expected binary-backed vector but got " + values.getClass().getSimpleName());
+        };
+    }
+
     private record ParquetRow(long x, boolean flag, Long maybe) {}
 
     private record BinaryParquetRow(String name, byte[] payload) {}
+
+    private record Utf8PairRow(String left, String right) {}
 }

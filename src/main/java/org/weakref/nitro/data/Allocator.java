@@ -602,6 +602,7 @@ public class Allocator
             case BooleanVector values -> Arrays.fill(values.values(), false);
             case F64Vector values -> Arrays.fill(values.values(), 0);
             case BinaryVector values -> {
+                values.clearTraits();
                 Arrays.fill(values.offsets(), 0);
                 Arrays.fill(values.data(), (byte) 0);
             }
