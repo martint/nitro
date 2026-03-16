@@ -123,6 +123,12 @@ such as `cardinality`, `map_contains_key_utf8`, `element_at_i64_utf8`,
 `array_min_i64`. That should be treated as the beginning of a broader nested
 design space rather than a final layout for arrays, maps, or structs.
 
+That nested map path is now exercised for both fixed-width and variable-width
+value families, including `map_values` over `map<string, i64>` and
+`map<string, string>` Parquet input. Nested output functions should preserve
+the child stream bundle and its traits where possible instead of eagerly
+rewriting nested values into a different representation.
+
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
 elements even when the parent array positions are all non-null, and a

@@ -1094,6 +1094,92 @@ public class TestParquetOperator
     }
 
     @Test
+    void testMapValuesProjectsNestedUtf8ValueArrays()
+            throws IOException
+    {
+        java.nio.file.Path file = writeUtf8MapLookupParquetFile("map-values-utf8.parquet", List.of(
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("alpha", "one", "beta", null), null),
+                new MapLookupUtf8ParquetRow(null, null),
+                new MapLookupUtf8ParquetRow(Map.of(), null),
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("gamma", "three"), null)));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable valuesArray = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        valuesArray,
+                        new Call("map_values", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(valuesArray, Stream.VALUES),
+                        new Reference(valuesArray, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+            BinaryVector values = (BinaryVector) arrays.elementValues();
+            BooleanVector elementNulls = arrays.elementNulls();
+
+            assertThat(arrays.length(0)).isEqualTo(2);
+            assertThat(arrays.length(1)).isEqualTo(0);
+            assertThat(arrays.length(2)).isEqualTo(0);
+            assertThat(arrays.length(3)).isEqualTo(1);
+            assertThat(values.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(values.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+            assertThat(values.utf8Value(0)).isEqualTo("one");
+            assertThat(values.utf8Value(2)).isEqualTo("three");
+            assertThat(elementNulls.values()).startsWith(false, true, false);
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
+    void testCardinalityConsumesUtf8MapValues()
+            throws IOException
+    {
+        java.nio.file.Path file = writeUtf8MapLookupParquetFile("map-values-utf8-cardinality.parquet", List.of(
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("alpha", "one", "beta", null), null),
+                new MapLookupUtf8ParquetRow(null, null),
+                new MapLookupUtf8ParquetRow(Map.of(), null),
+                new MapLookupUtf8ParquetRow(orderedUtf8Map("gamma", "three"), null)));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable valuesArray = new Variable(0);
+        Variable cardinality = new Variable(1);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(
+                                valuesArray,
+                                new Call("map_values", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(
+                                cardinality,
+                                new Call("cardinality", List.of(new Reference(valuesArray, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(
+                        new Reference(cardinality, Stream.VALUES),
+                        new Reference(cardinality, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(2L, 0L, 0L, 1L);
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
     void testCardinalityFeedsGroupingForRequiredMaps()
             throws IOException
     {
