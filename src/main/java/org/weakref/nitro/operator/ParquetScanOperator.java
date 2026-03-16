@@ -42,6 +42,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -124,17 +125,17 @@ public final class ParquetScanOperator
 
         int rowCount = toIntExact(rowGroup.getRowCount());
         ColumnPages[] columnPages = columns.stream()
-                .map(column -> captureColumnPages(rowGroup, column.descriptor()))
+                .map(column -> column.kind() == ColumnKind.STRUCT ? null : captureColumnPages(rowGroup, column.descriptor()))
                 .toArray(ColumnPages[]::new);
-        ColumnReadStoreImpl columnReadStore = new ColumnReadStoreImpl(new ReplayPageReadStore(rowCount, columnPages), recordConverter, schema, createdBy);
         ColumnBuffer[] buffers = new ColumnBuffer[columns.size()];
         for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
             ColumnSpec column = columns.get(columnIndex);
             buffers[columnIndex] = switch (column.kind()) {
-                case I64 -> readI64Column(column, columnPages[columnIndex], rowCount, columnReadStore.getColumnReader(column.descriptor()));
-                case BOOLEAN -> readBooleanColumn(column, rowCount, columnReadStore.getColumnReader(column.descriptor()));
+                case I64 -> readI64Column(column, columnPages[columnIndex], rowCount, createColumnReader(columnPages[columnIndex]));
+                case BOOLEAN -> readBooleanColumn(column, rowCount, createColumnReader(columnPages[columnIndex]));
                 case BINARY -> readBinaryColumn(column, columnPages[columnIndex], rowCount);
                 case ARRAY_I64 -> readArrayI64Column(column, columnPages[columnIndex], rowCount);
+                case STRUCT -> readStructColumn(column, rowGroup, rowCount);
             };
         }
 
@@ -204,26 +205,62 @@ public final class ParquetScanOperator
                     binaryTraits(primitiveType),
                     type,
                     null,
-                    false);
+                    null,
+                    false,
+                    List.of());
         }
 
         GroupType groupType = type.asGroupType();
-        checkArgument(groupType.getRepetition() == Type.Repetition.REPEATED, "Unsupported Parquet group column: %s", name);
-        checkArgument(groupType.getFieldCount() == 1, "Repeated Parquet groups must have one field: %s", name);
-        Type elementType = groupType.getType(0);
-        checkArgument(elementType.isPrimitive(), "Repeated Parquet group elements must be primitive: %s", name);
-        PrimitiveType primitiveElementType = elementType.asPrimitiveType();
-        checkArgument(primitiveElementType.getPrimitiveTypeName() == INT64, "Unsupported repeated Parquet group element type for column %s: %s", name, primitiveElementType.getPrimitiveTypeName());
+        if (groupType.getRepetition() == Type.Repetition.REPEATED) {
+            checkArgument(groupType.getFieldCount() == 1, "Repeated Parquet groups must have one field: %s", name);
+            Type elementType = groupType.getType(0);
+            checkArgument(elementType.isPrimitive(), "Repeated Parquet group elements must be primitive: %s", name);
+            PrimitiveType primitiveElementType = elementType.asPrimitiveType();
+            checkArgument(primitiveElementType.getPrimitiveTypeName() == INT64, "Unsupported repeated Parquet group element type for column %s: %s", name, primitiveElementType.getPrimitiveTypeName());
+
+            return new ColumnSpec(
+                    name,
+                    ColumnKind.ARRAY_I64,
+                    false,
+                    schema.getColumnDescription(new String[] {name, elementType.getName()}),
+                    Set.of(),
+                    type,
+                    null,
+                    elementType.getName(),
+                    primitiveElementType.getRepetition() != REQUIRED,
+                    List.of());
+        }
+
+        checkArgument(groupType.getRepetition() == REQUIRED, "Unsupported Parquet group column: %s", name);
+        List<StructFieldSpec> structFields = groupType.getFields().stream()
+                .map(field -> {
+                    checkArgument(field.isPrimitive(), "Struct field must be primitive: %s.%s", name, field.getName());
+                    PrimitiveType primitiveField = field.asPrimitiveType();
+                    return new StructFieldSpec(
+                            field.getName(),
+                            switch (primitiveField.getPrimitiveTypeName()) {
+                                case INT64 -> ColumnKind.I64;
+                                case BOOLEAN -> ColumnKind.BOOLEAN;
+                                case BINARY -> ColumnKind.BINARY;
+                                default -> throw new IllegalArgumentException("Unsupported Parquet struct field type for column %s.%s: %s".formatted(name, field.getName(), primitiveField.getPrimitiveTypeName()));
+                            },
+                            primitiveField.getRepetition() != REQUIRED,
+                            schema.getColumnDescription(new String[] {name, field.getName()}),
+                            binaryTraits(primitiveField));
+                })
+                .toList();
 
         return new ColumnSpec(
                 name,
-                ColumnKind.ARRAY_I64,
+                ColumnKind.STRUCT,
                 false,
-                schema.getColumnDescription(new String[] {name, elementType.getName()}),
+                null,
                 Set.of(),
                 type,
-                elementType.getName(),
-                primitiveElementType.getRepetition() != REQUIRED);
+                groupType,
+                null,
+                false,
+                structFields);
     }
 
     private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount)
@@ -272,6 +309,87 @@ public final class ParquetScanOperator
         }
         values.setElements(elementNulls == null ? Streams.ofValues(elementValues) : Streams.ofValuesAndNulls(elementValues, elementNulls));
         return new ColumnBuffer(values, null);
+    }
+
+    private ColumnBuffer readStructColumn(ColumnSpec column, PageReadStore rowGroup, int rowCount)
+    {
+        StructVector values = allocator.allocate(ALLOCATION_CONTEXT, StructVector.class, rowCount, StructVector::new);
+        MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
+        MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
+        List<ColumnPages> fieldPages = captureStructColumnPages(rowGroup, column);
+        ReplayPageReadStore replayPageStore = new ReplayPageReadStore(rowCount, fieldPages);
+
+        int[] binaryCapacities = new int[column.structFields().size()];
+        RecordReader<Group> recordReader = columnIo.getRecordReader(replayPageStore, new GroupRecordConverter(projectedSchema));
+        for (int position = 0; position < rowCount; position++) {
+            Group row = recordReader.read();
+            Group struct = row.getGroup(column.name(), 0);
+            for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
+                StructFieldSpec field = column.structFields().get(fieldIndex);
+                if (field.kind() == ColumnKind.BINARY && struct.getFieldRepetitionCount(field.name()) > 0) {
+                    binaryCapacities[fieldIndex] += struct.getBinary(field.name(), 0).length();
+                }
+            }
+        }
+
+        Vector[] fieldValues = new Vector[column.structFields().size()];
+        BooleanVector[] fieldNulls = new BooleanVector[column.structFields().size()];
+        for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
+            StructFieldSpec field = column.structFields().get(fieldIndex);
+            fieldValues[fieldIndex] = switch (field.kind()) {
+                case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
+                case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
+                case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, binaryCapacities[fieldIndex]);
+                default -> throw new IllegalArgumentException("Unsupported struct field kind: " + field.kind());
+            };
+            fieldNulls[fieldIndex] = field.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        }
+
+        recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, fieldPages), new GroupRecordConverter(projectedSchema));
+        for (int position = 0; position < rowCount; position++) {
+            Group row = recordReader.read();
+            Group struct = row.getGroup(column.name(), 0);
+            for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
+                StructFieldSpec field = column.structFields().get(fieldIndex);
+                BooleanVector nulls = fieldNulls[fieldIndex];
+                if (struct.getFieldRepetitionCount(field.name()) == 0) {
+                    if (nulls != null) {
+                        nulls.values()[position] = true;
+                    }
+                    if (fieldValues[fieldIndex] instanceof BinaryVector binaryValues) {
+                        binaryValues.setNull(position);
+                    }
+                    continue;
+                }
+
+                switch (field.kind()) {
+                    case I64 -> ((I64Vector) fieldValues[fieldIndex]).values()[position] = struct.getLong(field.name(), 0);
+                    case BOOLEAN -> ((BooleanVector) fieldValues[fieldIndex]).values()[position] = struct.getBoolean(field.name(), 0);
+                    case BINARY -> ((BinaryVector) fieldValues[fieldIndex]).setBytes(position, struct.getBinary(field.name(), 0).getBytesUnsafe());
+                    default -> throw new IllegalArgumentException("Unsupported struct field kind: " + field.kind());
+                }
+            }
+        }
+
+        for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
+            StructFieldSpec field = column.structFields().get(fieldIndex);
+            if (fieldValues[fieldIndex] instanceof BinaryVector binaryValues) {
+                applyBinaryTraits(binaryValues, field.binaryTraits(), rowCount);
+            }
+            Streams fieldStreams = Streams.ofValues(fieldValues[fieldIndex]);
+            if (fieldNulls[fieldIndex] != null) {
+                fieldStreams = fieldStreams.with(Stream.NULLS, fieldNulls[fieldIndex]);
+            }
+            values.setField(field.name(), fieldStreams);
+        }
+        return new ColumnBuffer(values, null);
+    }
+
+    private static List<ColumnPages> captureStructColumnPages(PageReadStore rowGroup, ColumnSpec column)
+    {
+        return column.structFields().stream()
+                .map(field -> captureColumnPages(rowGroup, field.descriptor()))
+                .toList();
     }
 
     private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader)
@@ -553,11 +671,21 @@ public final class ParquetScanOperator
         BOOLEAN,
         BINARY,
         ARRAY_I64,
+        STRUCT,
     }
 
-    private record ColumnSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits, Type projectedType, String elementName, boolean elementNullable)
+    private record ColumnSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits, Type projectedType, GroupType structType, String elementName, boolean elementNullable, List<StructFieldSpec> structFields)
     {
         private ColumnSpec
+        {
+            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
+            structFields = List.copyOf(structFields);
+        }
+    }
+
+    private record StructFieldSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits)
+    {
+        private StructFieldSpec
         {
             binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
         }

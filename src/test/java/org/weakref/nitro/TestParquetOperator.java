@@ -33,6 +33,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -553,6 +554,40 @@ public class TestParquetOperator
     }
 
     @Test
+    void testParquetScanReadsStructColumns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeStructParquetFile("structs.parquet", List.of(
+                new StructParquetRow(11, "alice", true),
+                new StructParquetRow(12, null, false),
+                new StructParquetRow(13, "carol", null)));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("person"))) {
+            Batch batch = operator.next();
+            StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
+
+            I64Vector ids = (I64Vector) struct.fieldValues("id");
+            BinaryVector names = (BinaryVector) struct.fieldValues("name");
+            BooleanVector nameNulls = (BooleanVector) struct.fieldStreamOrNull("name", Stream.NULLS);
+            BooleanVector active = (BooleanVector) struct.fieldValues("active");
+            BooleanVector activeNulls = (BooleanVector) struct.fieldStreamOrNull("active", Stream.NULLS);
+
+            assertThat(struct.length()).isEqualTo(3);
+            assertThat(struct.fieldNames()).containsExactlyInAnyOrder("id", "name", "active");
+            assertThat(ids.values()).startsWith(11L, 12L, 13L);
+
+            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+            assertThat(names.utf8Value(0)).isEqualTo("alice");
+            assertThat(names.utf8Value(2)).isEqualTo("carol");
+            assertThat(nameNulls.values()).startsWith(false, true, false);
+
+            assertThat(active.values()).startsWith(true, false, false);
+            assertThat(activeNulls.values()).startsWith(false, false, true);
+        }
+    }
+
+    @Test
     void testArraySumProjectsNullableElements()
             throws IOException
     {
@@ -757,6 +792,39 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeStructParquetFile(String name, List<StructParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .requiredGroup()
+                    .required(INT64).named("id")
+                    .optional(BINARY).as(stringType()).named("name")
+                    .optional(BOOLEAN).named("active")
+                .named("person")
+                .named("nitro_struct_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (StructParquetRow row : rows) {
+                Group group = groups.newGroup();
+                Group person = group.addGroup("person")
+                        .append("id", row.id());
+                if (row.name() != null) {
+                    person.append("name", row.name());
+                }
+                if (row.active() != null) {
+                    person.append("active", row.active());
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private static byte[] bytes(int... values)
     {
         byte[] bytes = new byte[values.length];
@@ -816,4 +884,6 @@ public class TestParquetOperator
     private record ArrayParquetRow(List<Long> items) {}
 
     private record NullableArrayParquetRow(List<Long> items) {}
+
+    private record StructParquetRow(long id, String name, Boolean active) {}
 }

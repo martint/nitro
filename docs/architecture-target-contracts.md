@@ -95,7 +95,7 @@ Examples:
 
 - flat vectors for primitive types
 - flat variable-width vectors such as `BinaryVector`
-- flat nested vectors such as `ArrayVector`
+- flat nested vectors such as `ArrayVector` and `StructVector`
 - `ConstantVector`
 - `RleVector`
 - future `DictionaryVector`
@@ -114,17 +114,19 @@ The current runtime already has a first builtin variable-width family for
 binary/string payloads. That should be treated as the beginning of a broader
 variable-width design space rather than a closed final layout.
 
-The runtime now also has an initial nested-value family in `ArrayVector`,
-currently exercised by repeated `INT64` Parquet input and simple primitives
-such as `cardinality`. That should be treated as the beginning of a broader
-nested design space rather than a final layout for arrays, maps, or structs.
+The runtime now also has an initial nested-value family in `ArrayVector` and
+`StructVector`, currently exercised by repeated `INT64` Parquet input, required
+top-level struct Parquet input, and simple primitives such as `cardinality`.
+That should be treated as the beginning of a broader nested design space rather
+than a final layout for arrays, maps, or structs.
 
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
-elements even when the parent array positions are all non-null. That child
-stream model should compose with the same explicit-stream contracts used for
-top-level values instead of inventing a separate nullability mechanism for
-nested data.
+elements even when the parent array positions are all non-null, and a
+`StructVector` may carry one `Streams` bundle per field with each field's own
+`VALUES` and optional `NULLS`. That child-stream model should compose with the
+same explicit-stream contracts used for top-level values instead of inventing a
+separate nullability mechanism for nested data.
 
 Vectors may also carry trait metadata that is narrower than their physical
 family. For example, a `BinaryVector` may be known to represent UTF-8 strings,
@@ -1562,10 +1564,11 @@ architecture:
   primitive and binary/string families, along with the vector/storage
   conventions needed to keep those types compatible with the stream-first
   execution model.
-- Broader nested data-type support beyond the current `ArrayVector` and
-  repeated-`INT64` Parquet path, including maps, structs, richer element
-  streams, and the execution rules needed to handle nested values without
-  collapsing them back into row-oriented execution.
+- Broader nested data-type support beyond the current `ArrayVector`,
+  `StructVector`, repeated-`INT64` Parquet path, and required top-level struct
+  Parquet path, including maps, richer element streams, deeper nesting, and the
+  execution rules needed to handle nested values without collapsing them back
+  into row-oriented execution.
 - Broader trait-based dispatch beyond the current UTF-8 and ASCII string
   example, so specialized execution can target additional vector-family traits
   without hardcoding those assumptions into the core type system.

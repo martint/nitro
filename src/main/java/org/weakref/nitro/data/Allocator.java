@@ -597,6 +597,7 @@ public class Allocator
             case F64Vector values -> (long) values.values().length * Double.BYTES;
             case BinaryVector values -> (long) values.offsets().length * Integer.BYTES + values.data().length;
             case ArrayVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.elements());
+            case StructVector values -> values.fields().values().stream().mapToLong(Allocator::streamsBytes).sum();
             case DictionaryVector values -> (long) values.ids().length * Integer.BYTES;
             case RleVector values -> (long) values.counts().length * Integer.BYTES;
             default -> throw new IllegalArgumentException("Unsupported vector type for sizing: " + vector.getClass().getSimpleName());
@@ -625,6 +626,7 @@ public class Allocator
                 Arrays.fill(values.offsets(), 0);
                 values.clearElements();
             }
+            case StructVector values -> values.clearFields();
             case DictionaryVector _ -> throw new IllegalArgumentException("Allocator pooling does not support dictionary vectors");
             case RleVector _ -> throw new IllegalArgumentException("Allocator pooling does not support RLE vectors");
             default -> throw new IllegalArgumentException("Unsupported vector type for clearing: " + vector.getClass().getSimpleName());
