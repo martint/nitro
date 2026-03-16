@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -26,6 +27,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
+import org.weakref.nitro.operator.evaluator.ir.ArrayElement;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.Copy;
@@ -56,6 +58,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.Math.toIntExact;
 
 public final class PlanEvaluator
 {
@@ -165,6 +168,7 @@ public final class PlanEvaluator
 
         return switch (assignment.operation()) {
             case Literal literal -> evaluateLiteral(requestedStreamsFor(reference), literal, mask);
+            case ArrayElement element -> evaluateArrayElement(requestedStreamsFor(reference), element, mask, output);
             case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
             case MapContainsKey containsKey -> evaluateMapContainsKey(requestedStreamsFor(reference), containsKey, mask, output);
@@ -196,6 +200,63 @@ public final class PlanEvaluator
                 .toList();
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
+        return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private Streams evaluateArrayElement(Set<Stream> requestedStreams, ArrayElement element, Mask mask, Streams output)
+    {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS) && !requestedStreams.contains(Stream.ERRORS)) {
+            return Streams.empty();
+        }
+
+        Streams sourceStreams = evaluateArgument(element.source(), mask);
+        Streams indexStreams = evaluateArgument(element.index(), mask);
+        Vector arrayInput = sourceStreams.values();
+        Vector indexInput = indexStreams.values();
+        checkArgument(arrayInput.length() == indexInput.length(), "Array element inputs must have the same logical length");
+
+        ArrayVector arrays = requireArrayVector(arrayInput);
+        I64Vector elementValues = requireI64Vector("array element", arrays.elementValues());
+        BooleanVector arrayNulls = (BooleanVector) sourceStreams.getOrNull(Stream.NULLS);
+        BooleanVector indexNulls = (BooleanVector) indexStreams.getOrNull(Stream.NULLS);
+        BooleanVector elementNulls = arrays.elementNulls();
+        BooleanVector arrayErrors = (BooleanVector) sourceStreams.getOrNull(Stream.ERRORS);
+        BooleanVector indexErrors = (BooleanVector) indexStreams.getOrNull(Stream.ERRORS);
+        BooleanVector elementErrors = (BooleanVector) arrays.elementStreamOrNull(Stream.ERRORS);
+        IndexAccess indexAccess = indexAccess("array element", indexInput);
+
+        Streams result = Streams.empty();
+        int requiredLength = Math.max(mask.maxPosition() + 1, arrayInput.length());
+        if (requestedStreams.contains(Stream.NULLS)) {
+            BooleanVector outputNulls = allocator.allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
+                    BooleanVector.class,
+                    requiredLength,
+                    BooleanVector::new);
+            applyArrayElementNulls(arrays, arrayInput, elementNulls, indexAccess, arrayNulls, indexNulls, mask, outputNulls);
+            result = result.with(Stream.NULLS, outputNulls);
+        }
+        if (requestedStreams.contains(Stream.VALUES)) {
+            I64Vector outputValues = allocator.allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof I64Vector vector ? vector : null,
+                    I64Vector.class,
+                    requiredLength,
+                    I64Vector::new);
+            applyArrayElementValues(arrays, arrayInput, elementValues, elementNulls, indexAccess, arrayNulls, indexNulls, mask, outputValues);
+            result = result.with(Stream.VALUES, outputValues);
+        }
+        if (requestedStreams.contains(Stream.ERRORS)) {
+            BooleanVector outputErrors = allocator.allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.ERRORS) && output.get(Stream.ERRORS) instanceof BooleanVector vector ? vector : null,
+                    BooleanVector.class,
+                    requiredLength,
+                    BooleanVector::new);
+            applyArrayElementErrors(arrays, arrayInput, elementErrors, indexAccess, arrayErrors, indexErrors, arrayNulls, indexNulls, mask, outputErrors);
+            result = result.with(Stream.ERRORS, outputErrors);
+        }
         return completeRequestedStreams(requestedStreams, result, mask);
     }
 
@@ -744,6 +805,24 @@ public final class PlanEvaluator
         }
     }
 
+    private static void applyArrayElementValues(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, BooleanVector elementNulls, IndexAccess indexes, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, I64Vector output)
+    {
+        long[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+                        ? 0
+                        : lookupArrayElement(arrays, arrayInput, elementValues, elementNulls, indexes, position).value();
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+                    ? 0
+                    : lookupArrayElement(arrays, arrayInput, elementValues, elementNulls, indexes, position).value();
+        }
+    }
+
     private static void applyMapLookupNulls(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
     {
         boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
@@ -761,6 +840,22 @@ public final class PlanEvaluator
         }
     }
 
+    private static void applyArrayElementNulls(ArrayVector arrays, Vector arrayInput, BooleanVector elementNulls, IndexAccess indexes, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, BooleanVector output)
+    {
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+                        || lookupArrayElement(arrays, arrayInput, null, elementNulls, indexes, position).nullValue();
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+                    || lookupArrayElement(arrays, arrayInput, null, elementNulls, indexes, position).nullValue();
+        }
+    }
+
     private static void applyMapContainsNulls(BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
     {
         boolean[] outputValues = output.values();
@@ -772,6 +867,24 @@ public final class PlanEvaluator
         }
         for (int position : mask) {
             outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position);
+        }
+    }
+
+    private static void applyArrayElementErrors(ArrayVector arrays, Vector arrayInput, BooleanVector elementErrors, IndexAccess indexes, BooleanVector arrayErrors, BooleanVector indexErrors, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, BooleanVector output)
+    {
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = isError(arrayErrors, position)
+                        || isError(indexErrors, position)
+                        || (!isNull(arrayNulls, position) && !isNull(indexNulls, position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = isError(arrayErrors, position)
+                    || isError(indexErrors, position)
+                    || (!isNull(arrayNulls, position) && !isNull(indexNulls, position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
         }
     }
 
@@ -788,6 +901,39 @@ public final class PlanEvaluator
             }
         }
         return new LookupResult(0, true);
+    }
+
+    private static ArrayElementResult lookupArrayElement(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, BooleanVector elementNulls, IndexAccess indexes, int position)
+    {
+        int arrayPosition = switch (arrayInput) {
+            case DictionaryVector vector -> vector.ids()[position];
+            default -> position;
+        };
+        long index = indexes.value(position);
+        if (index < 0 || index >= arrays.length(arrayPosition)) {
+            return new ArrayElementResult(0, true);
+        }
+        int elementPosition = arrays.startOffset(arrayPosition) + toIntExact(index);
+        boolean nullValue = elementNulls != null && elementNulls.values()[elementPosition];
+        long value = elementValues == null || nullValue ? 0 : elementValues.values()[elementPosition];
+        return new ArrayElementResult(value, nullValue);
+    }
+
+    private static boolean lookupArrayElementError(ArrayVector arrays, Vector arrayInput, BooleanVector elementErrors, IndexAccess indexes, int position)
+    {
+        if (elementErrors == null) {
+            return false;
+        }
+        int arrayPosition = switch (arrayInput) {
+            case DictionaryVector vector -> vector.ids()[position];
+            default -> position;
+        };
+        long index = indexes.value(position);
+        if (index < 0 || index >= arrays.length(arrayPosition)) {
+            return false;
+        }
+        int elementPosition = arrays.startOffset(arrayPosition) + toIntExact(index);
+        return elementErrors.values()[elementPosition];
     }
 
     private static boolean containsMapKey(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
@@ -813,6 +959,15 @@ public final class PlanEvaluator
         };
     }
 
+    private static ArrayVector requireArrayVector(Vector vector)
+    {
+        return switch (vector) {
+            case ArrayVector arrays -> arrays;
+            case DictionaryVector dictionary when dictionary.values() instanceof ArrayVector arrays -> arrays;
+            default -> throw new IllegalArgumentException("Array element requires ArrayVector input");
+        };
+    }
+
     private static KeyAccess keyAccess(String operation, Vector vector)
     {
         return switch (vector) {
@@ -830,9 +985,29 @@ public final class PlanEvaluator
         return values;
     }
 
+    private static I64Vector requireI64Vector(String operation, Vector vector)
+    {
+        checkArgument(vector instanceof I64Vector, "%s requires I64Vector inputs", operation);
+        return (I64Vector) vector;
+    }
+
+    private static IndexAccess indexAccess(String operation, Vector vector)
+    {
+        return switch (vector) {
+            case I64Vector values -> new IndexAccess(values, false, null);
+            case DictionaryVector dictionary when dictionary.values() instanceof I64Vector values -> new IndexAccess(values, true, dictionary.ids());
+            default -> throw new IllegalArgumentException(operation + " requires I64Vector index input");
+        };
+    }
+
     private static boolean isNull(BooleanVector nulls, int position)
     {
         return nulls != null && nulls.values()[position];
+    }
+
+    private static boolean isError(BooleanVector errors, int position)
+    {
+        return errors != null && errors.values()[position];
     }
 
     private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
@@ -1013,7 +1188,18 @@ public final class PlanEvaluator
         }
     }
 
+    private record IndexAccess(I64Vector values, boolean dictionary, int[] ids)
+    {
+        private long value(int position)
+        {
+            int indexPosition = dictionary ? ids[position] : position;
+            return values.values()[indexPosition];
+        }
+    }
+
     private record LookupResult(long value, boolean nullValue) {}
+
+    private record ArrayElementResult(long value, boolean nullValue) {}
 
     private static final class MaskTermStats
     {

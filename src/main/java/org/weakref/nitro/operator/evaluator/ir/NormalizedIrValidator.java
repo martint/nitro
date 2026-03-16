@@ -39,6 +39,7 @@ public final class NormalizedIrValidator
     private static boolean isNormalizedOperation(Operation operation)
     {
         return switch (operation) {
+            case ArrayElement _ -> true;
             case MapContainsKey _ -> true;
             case Merge merge -> isNormalizedMask(merge.condition());
             case MapLookup _ -> true;

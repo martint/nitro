@@ -13,7 +13,14 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Operation
-        permits ArrayElement, Call, Copy, Literal, MapContainsKey, MapLookup, Merge, StructField
+import static java.util.Objects.requireNonNull;
+
+public record ArrayElement(Reference source, Reference index)
+        implements Operation
 {
+    public ArrayElement
+    {
+        source = requireNonNull(source, "source is null");
+        index = requireNonNull(index, "index is null");
+    }
 }

@@ -41,6 +41,7 @@ public class TestEvaluationIr
         Variable structField = new Variable(4);
         Variable mapValue = new Variable(5);
         Variable mapContains = new Variable(6);
+        Variable arrayElement = new Variable(7);
         Reference conditionValues = new Reference(condition, Stream.VALUES);
         Reference thenValues = new Reference(new Input(0), Stream.VALUES);
         Reference elseValues = new Reference(new Input(1), Stream.VALUES);
@@ -51,15 +52,17 @@ public class TestEvaluationIr
                         new Assignment(result, new Merge(new ReferenceMask(conditionValues), thenValues, elseValues), AllMask.ALL),
                         new Assignment(structField, new StructField(new Reference(new Input(3), Stream.VALUES), "name"), AllMask.ALL),
                         new Assignment(mapValue, new MapLookup(new Reference(new Input(4), Stream.VALUES), new Reference(new Input(5), Stream.VALUES)), AllMask.ALL),
-                        new Assignment(mapContains, new MapContainsKey(new Reference(new Input(6), Stream.VALUES), new Reference(new Input(7), Stream.VALUES)), AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES), new Reference(structField, Stream.VALUES), new Reference(mapValue, Stream.VALUES), new Reference(mapContains, Stream.VALUES)));
+                        new Assignment(mapContains, new MapContainsKey(new Reference(new Input(6), Stream.VALUES), new Reference(new Input(7), Stream.VALUES)), AllMask.ALL),
+                        new Assignment(arrayElement, new ArrayElement(new Reference(new Input(8), Stream.VALUES), new Reference(new Input(9), Stream.VALUES)), AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES), new Reference(structField, Stream.VALUES), new Reference(mapValue, Stream.VALUES), new Reference(mapContains, Stream.VALUES), new Reference(arrayElement, Stream.VALUES)));
 
-        assertThat(plan.assignments()).hasSize(5);
+        assertThat(plan.assignments()).hasSize(6);
         assertThat(plan.assignments().get(1).operation()).isInstanceOf(Merge.class);
         assertThat(plan.assignments().get(2).operation()).isInstanceOf(StructField.class);
         assertThat(plan.assignments().get(3).operation()).isInstanceOf(MapLookup.class);
         assertThat(plan.assignments().get(4).operation()).isInstanceOf(MapContainsKey.class);
-        assertThat(plan.outputs()).containsExactly(new Reference(result, Stream.VALUES), new Reference(structField, Stream.VALUES), new Reference(mapValue, Stream.VALUES), new Reference(mapContains, Stream.VALUES));
+        assertThat(plan.assignments().get(5).operation()).isInstanceOf(ArrayElement.class);
+        assertThat(plan.outputs()).containsExactly(new Reference(result, Stream.VALUES), new Reference(structField, Stream.VALUES), new Reference(mapValue, Stream.VALUES), new Reference(mapContains, Stream.VALUES), new Reference(arrayElement, Stream.VALUES));
     }
 
     @Test

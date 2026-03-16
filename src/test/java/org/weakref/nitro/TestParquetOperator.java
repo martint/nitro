@@ -48,6 +48,7 @@ import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.ArrayElement;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -559,6 +560,43 @@ public class TestParquetOperator
             assertThat(arrays.length(3)).isEqualTo(1);
             assertThat(elements.values()).startsWith(10L, 0L, 20L, 0L, 30L);
             assertThat(elementNulls.values()).startsWith(false, true, false, true, false);
+        }
+    }
+
+    @Test
+    void testArrayElementProjectsValuesAndNulls()
+            throws IOException
+    {
+        java.nio.file.Path file = writeNullableArrayLookupParquetFile("array-element.parquet", List.of(
+                new NullableArrayLookupParquetRow(Arrays.asList(10L, null, 20L), 0L),
+                new NullableArrayLookupParquetRow(List.of(), 0L),
+                new NullableArrayLookupParquetRow(Arrays.asList((Long) null), 0L),
+                new NullableArrayLookupParquetRow(List.of(30L, 5L), 5L),
+                new NullableArrayLookupParquetRow(List.of(40L), null),
+                new NullableArrayLookupParquetRow(List.of(50L, 60L), 1L)));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable element = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        element,
+                        new ArrayElement(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(element, Stream.VALUES),
+                        new Reference(element, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items", "index")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(10L, 0L, 0L, 0L, 0L, 60L);
+            assertThat(nulls.values()).startsWith(false, true, true, true, true, false);
         }
     }
 
@@ -1175,6 +1213,38 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeNullableArrayLookupParquetFile(String name, List<NullableArrayLookupParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .repeatedGroup()
+                    .optional(INT64).named("element")
+                .named("items")
+                .optional(INT64).named("index")
+                .named("nitro_nullable_array_lookup_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .build()) {
+            for (NullableArrayLookupParquetRow row : rows) {
+                Group group = groups.newGroup();
+                for (Long item : row.items()) {
+                    Group elementGroup = group.addGroup("items");
+                    if (item != null) {
+                        elementGroup.append("element", item);
+                    }
+                }
+                if (row.index() != null) {
+                    group.append("index", row.index());
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private java.nio.file.Path writeStructParquetFile(String name, List<StructParquetRow> rows)
             throws IOException
     {
@@ -1411,6 +1481,8 @@ public class TestParquetOperator
     private record ArrayParquetRow(List<Long> items) {}
 
     private record NullableArrayParquetRow(List<Long> items) {}
+
+    private record NullableArrayLookupParquetRow(List<Long> items, Long index) {}
 
     private record StructParquetRow(long id, String name, Boolean active) {}
 

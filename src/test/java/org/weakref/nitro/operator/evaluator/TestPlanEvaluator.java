@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -29,6 +30,7 @@ import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
+import org.weakref.nitro.operator.evaluator.ir.ArrayElement;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -308,6 +310,64 @@ public class TestPlanEvaluator
         assertThat(values.values()).containsExactly(true, false, false, true);
         assertThat(nulls.values()).containsExactly(false, true, true, false);
         assertThat(errors.values()).containsExactly(false, false, false, true);
+    }
+
+    @Test
+    void testArrayElementCombinesParentIndexAndElementSemantics()
+    {
+        Variable element = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        element,
+                        new ArrayElement(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(element, Stream.VALUES),
+                        new Reference(element, Stream.NULLS),
+                        new Reference(element, Stream.ERRORS)));
+
+        ArrayVector arrays = new ArrayVector(6);
+        arrays.offsets()[0] = 0;
+        arrays.offsets()[1] = 3;
+        arrays.offsets()[2] = 3;
+        arrays.offsets()[3] = 4;
+        arrays.offsets()[4] = 6;
+        arrays.offsets()[5] = 7;
+        arrays.offsets()[6] = 8;
+
+        I64Vector elementValues = new I64Vector(new long[] {10, 0, 30, 40, 50, 60, 0, 70});
+        BooleanVector elementNulls = new BooleanVector(new boolean[] {false, true, false, false, false, false, false, false});
+        BooleanVector elementErrors = new BooleanVector(new boolean[] {false, false, false, false, false, true, false, false});
+        arrays.setElements(Streams.ofValues(elementValues)
+                .with(Stream.NULLS, elementNulls)
+                .with(Stream.ERRORS, elementErrors));
+
+        I64Vector indices = new I64Vector(new long[] {0, 0, 0, 5, 1, 0});
+        BooleanVector arrayNulls = new BooleanVector(new boolean[] {false, false, true, false, false, false});
+        BooleanVector indexNulls = new BooleanVector(new boolean[] {false, false, false, false, true, false});
+        BooleanVector arrayErrors = new BooleanVector(new boolean[] {false, false, false, false, false, true});
+        BooleanVector indexErrors = new BooleanVector(new boolean[] {false, false, false, false, false, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), arrays,
+                        new Reference(new Input(0), Stream.NULLS), arrayNulls,
+                        new Reference(new Input(0), Stream.ERRORS), arrayErrors,
+                        new Reference(new Input(1), Stream.VALUES), indices,
+                        new Reference(new Input(1), Stream.NULLS), indexNulls,
+                        new Reference(new Input(1), Stream.ERRORS), indexErrors)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(element, Stream.VALUES), Mask.all(6));
+        I64Vector values = (I64Vector) result.get(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+        BooleanVector errors = (BooleanVector) result.get(Stream.ERRORS);
+
+        assertThat(values.values()).containsExactly(10L, 0L, 0L, 0L, 0L, 70L);
+        assertThat(nulls.values()).containsExactly(false, true, true, true, true, false);
+        assertThat(errors.values()).containsExactly(false, false, false, false, false, true);
     }
 
     @Test
