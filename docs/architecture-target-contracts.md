@@ -119,6 +119,13 @@ currently exercised by repeated `INT64` Parquet input and simple primitives
 such as `cardinality`. That should be treated as the beginning of a broader
 nested design space rather than a final layout for arrays, maps, or structs.
 
+Nested vectors may themselves own child stream bundles. For example, an
+`ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
+elements even when the parent array positions are all non-null. That child
+stream model should compose with the same explicit-stream contracts used for
+top-level values instead of inventing a separate nullability mechanism for
+nested data.
+
 Vectors may also carry trait metadata that is narrower than their physical
 family. For example, a `BinaryVector` may be known to represent UTF-8 strings,
 and some string vectors may be known to contain only ASCII characters. Those

@@ -183,32 +183,54 @@ public final class ParquetScanOperator
     {
         checkArgument(schema.containsField(name), "Unknown Parquet column: %s", name);
         Type type = schema.getType(name);
-        checkArgument(type.isPrimitive(), "Only primitive top-level Parquet columns are supported: %s", name);
-        PrimitiveType primitiveType = type.asPrimitiveType();
+        if (type.isPrimitive()) {
+            PrimitiveType primitiveType = type.asPrimitiveType();
+            return new ColumnSpec(
+                    name,
+                    switch (primitiveType.getRepetition()) {
+                        case REPEATED -> switch (primitiveType.getPrimitiveTypeName()) {
+                            case INT64 -> ColumnKind.ARRAY_I64;
+                            default -> throw new IllegalArgumentException("Unsupported repeated Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
+                        };
+                        case OPTIONAL, REQUIRED -> switch (primitiveType.getPrimitiveTypeName()) {
+                            case INT64 -> ColumnKind.I64;
+                            case BOOLEAN -> ColumnKind.BOOLEAN;
+                            case BINARY -> ColumnKind.BINARY;
+                            default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
+                        };
+                    },
+                    primitiveType.getRepetition() != REQUIRED && primitiveType.getRepetition() != Type.Repetition.REPEATED,
+                    schema.getColumnDescription(new String[] {name}),
+                    binaryTraits(primitiveType),
+                    type,
+                    null,
+                    false);
+        }
+
+        GroupType groupType = type.asGroupType();
+        checkArgument(groupType.getRepetition() == Type.Repetition.REPEATED, "Unsupported Parquet group column: %s", name);
+        checkArgument(groupType.getFieldCount() == 1, "Repeated Parquet groups must have one field: %s", name);
+        Type elementType = groupType.getType(0);
+        checkArgument(elementType.isPrimitive(), "Repeated Parquet group elements must be primitive: %s", name);
+        PrimitiveType primitiveElementType = elementType.asPrimitiveType();
+        checkArgument(primitiveElementType.getPrimitiveTypeName() == INT64, "Unsupported repeated Parquet group element type for column %s: %s", name, primitiveElementType.getPrimitiveTypeName());
 
         return new ColumnSpec(
-                switch (primitiveType.getRepetition()) {
-                    case REPEATED -> switch (primitiveType.getPrimitiveTypeName()) {
-                        case INT64 -> ColumnKind.ARRAY_I64;
-                        default -> throw new IllegalArgumentException("Unsupported repeated Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
-                    };
-                    case OPTIONAL, REQUIRED -> switch (primitiveType.getPrimitiveTypeName()) {
-                        case INT64 -> ColumnKind.I64;
-                        case BOOLEAN -> ColumnKind.BOOLEAN;
-                        case BINARY -> ColumnKind.BINARY;
-                        default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
-                    };
-                },
-                primitiveType.getRepetition() != REQUIRED && primitiveType.getRepetition() != Type.Repetition.REPEATED,
-                schema.getColumnDescription(new String[] {name}),
-                binaryTraits(primitiveType));
+                name,
+                ColumnKind.ARRAY_I64,
+                false,
+                schema.getColumnDescription(new String[] {name, elementType.getName()}),
+                Set.of(),
+                type,
+                elementType.getName(),
+                primitiveElementType.getRepetition() != REQUIRED);
     }
 
     private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount)
     {
         ArrayVector values = allocator.allocateArray(ALLOCATION_CONTEXT, rowCount);
-        String columnName = column.descriptor().getPath()[0];
-        MessageType projectedSchema = new MessageType(schema.getName(), schema.getType(columnName));
+        String columnName = column.name();
+        MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
         RecordReader<Group> recordReader = columnIo.getRecordReader(
                 new ReplayPageReadStore(rowCount, List.of(columnPages)),
@@ -224,6 +246,7 @@ public final class ParquetScanOperator
         }
 
         I64Vector elementValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, elementCount, I64Vector::new);
+        BooleanVector elementNulls = column.elementNullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, elementCount, BooleanVector::new) : null;
         recordReader = columnIo.getRecordReader(
                 new ReplayPageReadStore(rowCount, List.of(columnPages)),
                 new GroupRecordConverter(projectedSchema));
@@ -232,10 +255,22 @@ public final class ParquetScanOperator
             Group row = recordReader.read();
             int valueCount = row.getFieldRepetitionCount(columnName);
             for (int valueIndex = 0; valueIndex < valueCount; valueIndex++) {
-                elementValues.values()[elementIndex++] = row.getLong(columnName, valueIndex);
+                if (column.elementNullable()) {
+                    Group elementGroup = row.getGroup(columnName, valueIndex);
+                    if (elementGroup.getFieldRepetitionCount(column.elementName()) == 0) {
+                        elementNulls.values()[elementIndex++] = true;
+                    }
+                    else {
+                        elementValues.values()[elementIndex] = elementGroup.getLong(column.elementName(), 0);
+                        elementIndex++;
+                    }
+                }
+                else {
+                    elementValues.values()[elementIndex++] = row.getLong(columnName, valueIndex);
+                }
             }
         }
-        values.setElements(Streams.ofValues(elementValues));
+        values.setElements(elementNulls == null ? Streams.ofValues(elementValues) : Streams.ofValuesAndNulls(elementValues, elementNulls));
         return new ColumnBuffer(values, null);
     }
 
@@ -520,7 +555,7 @@ public final class ParquetScanOperator
         ARRAY_I64,
     }
 
-    private record ColumnSpec(ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits)
+    private record ColumnSpec(String name, ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits, Type projectedType, String elementName, boolean elementNullable)
     {
         private ColumnSpec
         {

@@ -62,6 +62,11 @@ public final class ArrayVector
         return elements.values();
     }
 
+    public BooleanVector elementNulls()
+    {
+        return (BooleanVector) elements.getOrNull(Stream.NULLS);
+    }
+
     public Vector elementStreamOrNull(Stream stream)
     {
         return elements.getOrNull(stream);

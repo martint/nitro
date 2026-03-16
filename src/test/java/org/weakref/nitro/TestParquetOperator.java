@@ -55,6 +55,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 
@@ -526,6 +527,105 @@ public class TestParquetOperator
                         Row.row(2L, 1L)));
     }
 
+    @Test
+    void testParquetScanReadsRepeatedNullableI64Elements()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedNullableI64ParquetFile("nullable-arrays.parquet", List.of(
+                new NullableArrayParquetRow(Arrays.asList(10L, null, 20L)),
+                new NullableArrayParquetRow(List.of()),
+                new NullableArrayParquetRow(Arrays.asList((Long) null)),
+                new NullableArrayParquetRow(List.of(30L))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+            Batch batch = operator.next();
+            ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
+            I64Vector elements = (I64Vector) arrays.elementValues();
+            BooleanVector elementNulls = arrays.elementNulls();
+
+            assertThat(arrays.length(0)).isEqualTo(3);
+            assertThat(arrays.length(1)).isEqualTo(0);
+            assertThat(arrays.length(2)).isEqualTo(1);
+            assertThat(arrays.length(3)).isEqualTo(1);
+            assertThat(elements.values()).startsWith(10L, 0L, 20L, 0L, 30L);
+            assertThat(elementNulls.values()).startsWith(false, true, false, true, false);
+        }
+    }
+
+    @Test
+    void testArraySumProjectsNullableElements()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedNullableI64ParquetFile("array-sum.parquet", List.of(
+                new NullableArrayParquetRow(Arrays.asList(10L, null, 20L)),
+                new NullableArrayParquetRow(List.of()),
+                new NullableArrayParquetRow(Arrays.asList((Long) null)),
+                new NullableArrayParquetRow(List.of(30L, 5L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable sum = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        sum,
+                        new Call("array_sum_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(sum, Stream.VALUES)));
+
+        assertThat(operator(
+                new ProjectOperator(
+                        new Allocator(),
+                        projectionPlan,
+                        primitiveRegistry,
+                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))
+                .matchesExactly(List.of(
+                        Row.row(30L),
+                        Row.row(0L),
+                        Row.row(0L),
+                        Row.row(35L)));
+    }
+
+    @Test
+    void testArraySumFeedsGrouping()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedNullableI64ParquetFile("array-sum-grouping.parquet", List.of(
+                new NullableArrayParquetRow(Arrays.asList(10L, null, 20L)),
+                new NullableArrayParquetRow(List.of()),
+                new NullableArrayParquetRow(Arrays.asList((Long) null)),
+                new NullableArrayParquetRow(List.of(30L)),
+                new NullableArrayParquetRow(List.of(5L, 25L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable sum = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        sum,
+                        new Call("array_sum_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(sum, Stream.VALUES),
+                        new Reference(sum, Stream.VALUES)));
+
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        new Allocator(),
+                        0,
+                        List.of(
+                                new First(1),
+                                new CountAll()),
+                        new GroupOperator(
+                                new Allocator(),
+                                0,
+                                new ProjectOperator(
+                                        new Allocator(),
+                                        projectionPlan,
+                                        primitiveRegistry,
+                                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))))
+                .matchesExactly(List.of(
+                        Row.row(30L, 3L),
+                        Row.row(0L, 2L)));
+    }
+
     private java.nio.file.Path writeParquetFile(String name, boolean dictionaryEnabled, List<ParquetRow> rows)
             throws IOException
     {
@@ -629,6 +729,34 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeRepeatedNullableI64ParquetFile(String name, List<NullableArrayParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .repeatedGroup()
+                    .optional(INT64).named("element")
+                .named("items")
+                .named("nitro_nullable_array_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .build()) {
+            for (NullableArrayParquetRow row : rows) {
+                Group group = groups.newGroup();
+                for (Long item : row.items()) {
+                    Group elementGroup = group.addGroup("items");
+                    if (item != null) {
+                        elementGroup.append("element", item);
+                    }
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private static byte[] bytes(int... values)
     {
         byte[] bytes = new byte[values.length];
@@ -686,4 +814,6 @@ public class TestParquetOperator
     private record Utf8PairRow(String left, String right) {}
 
     private record ArrayParquetRow(List<Long> items) {}
+
+    private record NullableArrayParquetRow(List<Long> items) {}
 }
