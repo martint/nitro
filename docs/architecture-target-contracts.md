@@ -148,12 +148,15 @@ by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
 
 Struct field extraction remains the clearest case for a dedicated structural
-IR node because it exposes an existing child stream bundle directly. Other
-nested access patterns such as map lookup, map membership checks, and array
-element access currently live in the primitive-function layer instead. That
-keeps the executable IR small while still allowing those operations to carry
-explicit `VALUES`, `NULLS`, and `ERRORS` streams through ordinary function
-calls.
+IR node because it exposes an existing child stream bundle directly rather
+than computing a derived value. It is also the one nested access form that the
+current `Call` shape does not express naturally: field selection needs a
+symbolic field name, while `Call` arguments today are stream references only.
+Other nested access patterns such as map lookup, map membership checks, and
+array element access currently live in the primitive-function layer instead.
+That keeps the executable IR small while still allowing those operations to
+carry explicit `VALUES`, `NULLS`, and `ERRORS` streams through ordinary
+function calls.
 
 Computational nested operations such as reductions, membership checks, or
 other derived predicates should also stay comfortably in the function layer
@@ -643,7 +646,8 @@ Their intended roles are:
 - `Merge`: represent semantic overlay of partial results under explicit masks
 - `StructField`: expose existing struct child streams directly when the
   evaluator should retain visibility into structural nullability and stream
-  behavior
+  behavior, and when a symbolic field selector would be awkward to model as an
+  ordinary function call
 
 Everything else should be lowered into combinations of these operations plus
 explicit mask expressions and stream references.
