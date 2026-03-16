@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.operator.Streams;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -71,6 +73,11 @@ public class Allocator
         }
         state.trackVector(vector, reused);
         return vector;
+    }
+
+    public ArrayVector allocateArray(Context context, int positionCount)
+    {
+        return allocate(context, ArrayVector.class, positionCount, ArrayVector::new);
     }
 
     public <T extends Vector> T allocateOrGrow(Context context, T vector, Class<T> vectorType, int size, IntFunction<T> vectorAllocator)
@@ -589,10 +596,18 @@ public class Allocator
             case BooleanVector values -> values.values().length;
             case F64Vector values -> (long) values.values().length * Double.BYTES;
             case BinaryVector values -> (long) values.offsets().length * Integer.BYTES + values.data().length;
+            case ArrayVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.elements());
             case DictionaryVector values -> (long) values.ids().length * Integer.BYTES;
             case RleVector values -> (long) values.counts().length * Integer.BYTES;
             default -> throw new IllegalArgumentException("Unsupported vector type for sizing: " + vector.getClass().getSimpleName());
         };
+    }
+
+    private static long streamsBytes(Streams streams)
+    {
+        return streams.asMap().values().stream()
+                .mapToLong(Allocator::vectorBytes)
+                .sum();
     }
 
     private static void clearVector(Vector vector)
@@ -605,6 +620,10 @@ public class Allocator
                 values.clearTraits();
                 Arrays.fill(values.offsets(), 0);
                 Arrays.fill(values.data(), (byte) 0);
+            }
+            case ArrayVector values -> {
+                Arrays.fill(values.offsets(), 0);
+                values.clearElements();
             }
             case DictionaryVector _ -> throw new IllegalArgumentException("Allocator pooling does not support dictionary vectors");
             case RleVector _ -> throw new IllegalArgumentException("Allocator pooling does not support RLE vectors");

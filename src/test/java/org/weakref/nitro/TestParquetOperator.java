@@ -27,6 +27,7 @@ import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -167,6 +168,29 @@ public class TestParquetOperator
             assertThat(payloadNulls.values()[2]).isFalse();
             assertThat(payloads.copyBytes(0)).containsExactly((byte) 1, (byte) 2, (byte) 3);
             assertThat(payloads.copyBytes(2)).containsExactly((byte) 4, (byte) 5);
+        }
+    }
+
+    @Test
+    void testParquetScanReadsRepeatedI64Columns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedI64ParquetFile("arrays.parquet", List.of(
+                new ArrayParquetRow(List.of(10L, 20L)),
+                new ArrayParquetRow(List.of()),
+                new ArrayParquetRow(List.of(30L)),
+                new ArrayParquetRow(List.of(40L, 50L, 60L))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+            Batch batch = operator.next();
+            ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
+            I64Vector elements = (I64Vector) arrays.elementValues();
+
+            assertThat(arrays.length(0)).isEqualTo(2);
+            assertThat(arrays.length(1)).isEqualTo(0);
+            assertThat(arrays.length(2)).isEqualTo(1);
+            assertThat(arrays.length(3)).isEqualTo(3);
+            assertThat(elements.values()).startsWith(10L, 20L, 30L, 40L, 50L, 60L);
         }
     }
 
@@ -427,6 +451,81 @@ public class TestParquetOperator
                         Row.row(expectedUtf8Hash("gamma"), 1L)));
     }
 
+    @Test
+    void testCardinalityProjectsRepeatedI64Columns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedI64ParquetFile("array-cardinality.parquet", List.of(
+                new ArrayParquetRow(List.of(10L, 20L)),
+                new ArrayParquetRow(List.of()),
+                new ArrayParquetRow(List.of(30L)),
+                new ArrayParquetRow(List.of(40L, 50L, 60L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable cardinality = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        cardinality,
+                        new Call("cardinality", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(cardinality, Stream.VALUES)));
+
+        assertThat(operator(
+                new ProjectOperator(
+                        new Allocator(),
+                        projectionPlan,
+                        primitiveRegistry,
+                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))
+                .matchesExactly(List.of(
+                        Row.row(2L),
+                        Row.row(0L),
+                        Row.row(1L),
+                        Row.row(3L)));
+    }
+
+    @Test
+    void testCardinalityFeedsGrouping()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedI64ParquetFile("array-grouping.parquet", List.of(
+                new ArrayParquetRow(List.of(10L)),
+                new ArrayParquetRow(List.of()),
+                new ArrayParquetRow(List.of(20L, 30L)),
+                new ArrayParquetRow(List.of(40L)),
+                new ArrayParquetRow(List.of())));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable cardinality = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        cardinality,
+                        new Call("cardinality", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(cardinality, Stream.VALUES),
+                        new Reference(cardinality, Stream.VALUES)));
+
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        new Allocator(),
+                        0,
+                        List.of(
+                                new First(1),
+                                new CountAll()),
+                        new GroupOperator(
+                                new Allocator(),
+                                0,
+                                new ProjectOperator(
+                                        new Allocator(),
+                                        projectionPlan,
+                                        primitiveRegistry,
+                                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))))
+                .matchesExactly(List.of(
+                        Row.row(1L, 2L),
+                        Row.row(0L, 2L),
+                        Row.row(2L, 1L)));
+    }
+
     private java.nio.file.Path writeParquetFile(String name, boolean dictionaryEnabled, List<ParquetRow> rows)
             throws IOException
     {
@@ -507,6 +606,29 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeRepeatedI64ParquetFile(String name, List<ArrayParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .repeated(INT64).named("items")
+                .named("nitro_array_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .build()) {
+            for (ArrayParquetRow row : rows) {
+                Group group = groups.newGroup();
+                for (long item : row.items()) {
+                    group.append("items", item);
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private static byte[] bytes(int... values)
     {
         byte[] bytes = new byte[values.length];
@@ -562,4 +684,6 @@ public class TestParquetOperator
     private record BinaryParquetRow(String name, byte[] payload) {}
 
     private record Utf8PairRow(String left, String right) {}
+
+    private record ArrayParquetRow(List<Long> items) {}
 }

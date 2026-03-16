@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
@@ -40,6 +41,7 @@ public final class TestPrimitiveFunctions
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         for (Class<?> functionClass : List.of(
                 AddI64.class,
+                Cardinality.class,
                 EqualUtf8.class,
                 HashUtf8.class,
                 LessThanI64.class,

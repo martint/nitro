@@ -21,8 +21,13 @@ import org.apache.parquet.column.page.DataPage;
 import org.apache.parquet.column.page.DictionaryPage;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.column.page.PageReader;
+import org.apache.parquet.example.data.Group;
+import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
 import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.io.ColumnIOFactory;
 import org.apache.parquet.io.LocalInputFile;
+import org.apache.parquet.io.MessageColumnIO;
+import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.io.api.Converter;
 import org.apache.parquet.io.api.GroupConverter;
 import org.apache.parquet.io.api.PrimitiveConverter;
@@ -31,6 +36,7 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -128,6 +134,7 @@ public final class ParquetScanOperator
                 case I64 -> readI64Column(column, columnPages[columnIndex], rowCount, columnReadStore.getColumnReader(column.descriptor()));
                 case BOOLEAN -> readBooleanColumn(column, rowCount, columnReadStore.getColumnReader(column.descriptor()));
                 case BINARY -> readBinaryColumn(column, columnPages[columnIndex], rowCount);
+                case ARRAY_I64 -> readArrayI64Column(column, columnPages[columnIndex], rowCount);
             };
         }
 
@@ -178,18 +185,58 @@ public final class ParquetScanOperator
         Type type = schema.getType(name);
         checkArgument(type.isPrimitive(), "Only primitive top-level Parquet columns are supported: %s", name);
         PrimitiveType primitiveType = type.asPrimitiveType();
-        checkArgument(primitiveType.getRepetition() != Type.Repetition.REPEATED, "Repeated Parquet columns are not supported: %s", name);
 
         return new ColumnSpec(
-                switch (primitiveType.getPrimitiveTypeName()) {
-                    case INT64 -> ColumnKind.I64;
-                    case BOOLEAN -> ColumnKind.BOOLEAN;
-                    case BINARY -> ColumnKind.BINARY;
-                    default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
+                switch (primitiveType.getRepetition()) {
+                    case REPEATED -> switch (primitiveType.getPrimitiveTypeName()) {
+                        case INT64 -> ColumnKind.ARRAY_I64;
+                        default -> throw new IllegalArgumentException("Unsupported repeated Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
+                    };
+                    case OPTIONAL, REQUIRED -> switch (primitiveType.getPrimitiveTypeName()) {
+                        case INT64 -> ColumnKind.I64;
+                        case BOOLEAN -> ColumnKind.BOOLEAN;
+                        case BINARY -> ColumnKind.BINARY;
+                        default -> throw new IllegalArgumentException("Unsupported Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
+                    };
                 },
-                primitiveType.getRepetition() != REQUIRED,
+                primitiveType.getRepetition() != REQUIRED && primitiveType.getRepetition() != Type.Repetition.REPEATED,
                 schema.getColumnDescription(new String[] {name}),
                 binaryTraits(primitiveType));
+    }
+
+    private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount)
+    {
+        ArrayVector values = allocator.allocateArray(ALLOCATION_CONTEXT, rowCount);
+        String columnName = column.descriptor().getPath()[0];
+        MessageType projectedSchema = new MessageType(schema.getName(), schema.getType(columnName));
+        MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
+        RecordReader<Group> recordReader = columnIo.getRecordReader(
+                new ReplayPageReadStore(rowCount, List.of(columnPages)),
+                new GroupRecordConverter(projectedSchema));
+        int[] offsets = values.offsets();
+
+        int elementCount = 0;
+        for (int position = 0; position < rowCount; position++) {
+            Group row = recordReader.read();
+            int valueCount = row.getFieldRepetitionCount(columnName);
+            elementCount += valueCount;
+            offsets[position + 1] = elementCount;
+        }
+
+        I64Vector elementValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, elementCount, I64Vector::new);
+        recordReader = columnIo.getRecordReader(
+                new ReplayPageReadStore(rowCount, List.of(columnPages)),
+                new GroupRecordConverter(projectedSchema));
+        int elementIndex = 0;
+        for (int position = 0; position < rowCount; position++) {
+            Group row = recordReader.read();
+            int valueCount = row.getFieldRepetitionCount(columnName);
+            for (int valueIndex = 0; valueIndex < valueCount; valueIndex++) {
+                elementValues.values()[elementIndex++] = row.getLong(columnName, valueIndex);
+            }
+        }
+        values.setElements(Streams.ofValues(elementValues));
+        return new ColumnBuffer(values, null);
     }
 
     private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader)
@@ -470,6 +517,7 @@ public final class ParquetScanOperator
         I64,
         BOOLEAN,
         BINARY,
+        ARRAY_I64,
     }
 
     private record ColumnSpec(ColumnKind kind, boolean nullable, ColumnDescriptor descriptor, Set<BinaryVector.Trait> binaryTraits)

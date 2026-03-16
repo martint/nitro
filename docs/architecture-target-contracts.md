@@ -95,6 +95,7 @@ Examples:
 
 - flat vectors for primitive types
 - flat variable-width vectors such as `BinaryVector`
+- flat nested vectors such as `ArrayVector`
 - `ConstantVector`
 - `RleVector`
 - future `DictionaryVector`
@@ -112,6 +113,11 @@ schemes appropriate for variable-width values.
 The current runtime already has a first builtin variable-width family for
 binary/string payloads. That should be treated as the beginning of a broader
 variable-width design space rather than a closed final layout.
+
+The runtime now also has an initial nested-value family in `ArrayVector`,
+currently exercised by repeated `INT64` Parquet input and simple primitives
+such as `cardinality`. That should be treated as the beginning of a broader
+nested design space rather than a final layout for arrays, maps, or structs.
 
 Vectors may also carry trait metadata that is narrower than their physical
 family. For example, a `BinaryVector` may be known to represent UTF-8 strings,
@@ -1549,9 +1555,10 @@ architecture:
   primitive and binary/string families, along with the vector/storage
   conventions needed to keep those types compatible with the stream-first
   execution model.
-- Support for nested data types such as arrays, maps, and structs, including
-  the vector/layout conventions and stream semantics needed to evaluate nested
-  values without collapsing them back into row-oriented execution.
+- Broader nested data-type support beyond the current `ArrayVector` and
+  repeated-`INT64` Parquet path, including maps, structs, richer element
+  streams, and the execution rules needed to handle nested values without
+  collapsing them back into row-oriented execution.
 - Broader trait-based dispatch beyond the current UTF-8 and ASCII string
   example, so specialized execution can target additional vector-family traits
   without hardcoding those assumptions into the core type system.
