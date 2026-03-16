@@ -34,9 +34,13 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
+import org.weakref.nitro.operator.GroupOperator;
+import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -342,6 +346,87 @@ public class TestParquetOperator
         }
     }
 
+    @Test
+    void testHashUtf8ProjectsValuesAndNulls()
+            throws IOException
+    {
+        java.nio.file.Path file = writeUtf8PairParquetFile("unicode-hash.parquet", true, List.of(
+                new Utf8PairRow("ignored", "alpha"),
+                new Utf8PairRow("ignored", null),
+                new Utf8PairRow("ignored", "élan")));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable hash = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        hash,
+                        new Call("hash_utf8", List.of(new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(hash, Stream.VALUES),
+                        new Reference(hash, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()[0]).isEqualTo(expectedUtf8Hash("alpha"));
+            assertThat(values.values()[1]).isEqualTo(0);
+            assertThat(values.values()[2]).isEqualTo(expectedUtf8Hash("élan"));
+            assertThat(nulls.values()[0]).isFalse();
+            assertThat(nulls.values()[1]).isTrue();
+            assertThat(nulls.values()[2]).isFalse();
+        }
+    }
+
+    @Test
+    void testHashUtf8FeedsGrouping()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("grouped-hash.parquet", true, List.of(
+                new BinaryParquetRow("alpha", bytes(1)),
+                new BinaryParquetRow("beta", bytes(2)),
+                new BinaryParquetRow("alpha", bytes(3)),
+                new BinaryParquetRow("gamma", bytes(4)),
+                new BinaryParquetRow("beta", bytes(5))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable hash = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        hash,
+                        new Call("hash_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(hash, Stream.VALUES),
+                        new Reference(hash, Stream.VALUES)));
+
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        new Allocator(),
+                        0,
+                        List.of(
+                                new First(1),
+                                new CountAll()),
+                        new GroupOperator(
+                                new Allocator(),
+                                0,
+                                new ProjectOperator(
+                                        new Allocator(),
+                                        projectionPlan,
+                                        primitiveRegistry,
+                                        new ParquetScanOperator(new Allocator(), file, List.of("name")))))))
+                .matchesExactly(List.of(
+                        Row.row(expectedUtf8Hash("alpha"), 2L),
+                        Row.row(expectedUtf8Hash("beta"), 2L),
+                        Row.row(expectedUtf8Hash("gamma"), 1L)));
+    }
+
     private java.nio.file.Path writeParquetFile(String name, boolean dictionaryEnabled, List<ParquetRow> rows)
             throws IOException
     {
@@ -447,6 +532,11 @@ public class TestParquetOperator
     private static PrimitiveFunction eqUtf8()
     {
         return TestPrimitiveFunctions.primitiveRegistry().get("eq_utf8");
+    }
+
+    private static long expectedUtf8Hash(String value)
+    {
+        return value.hashCode();
     }
 
     private static String utf8Value(org.weakref.nitro.data.Vector values, int position)

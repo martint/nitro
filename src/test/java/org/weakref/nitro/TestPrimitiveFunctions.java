@@ -18,6 +18,7 @@ import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
+import org.weakref.nitro.function.scalar.builtin.HashUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
@@ -40,6 +41,7 @@ public final class TestPrimitiveFunctions
         for (Class<?> functionClass : List.of(
                 AddI64.class,
                 EqualUtf8.class,
+                HashUtf8.class,
                 LessThanI64.class,
                 LessThanUtf8.class,
                 AddExactI64.class,
