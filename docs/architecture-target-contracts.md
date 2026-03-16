@@ -118,9 +118,10 @@ The runtime now also has an initial nested-value family in `ArrayVector`,
 `StructVector`, and `MapVector`, currently exercised by repeated `INT64`
 Parquet input, top-level struct Parquet input, top-level map Parquet input
 with `i64` and UTF-8 string values, field extraction, and simple primitives
-such as `cardinality`, `map_contains_key_utf8`, `element_at_i64_utf8`, and
-`element_at_utf8_utf8`. That should be treated as the beginning of a broader
-nested design space rather than a final layout for arrays, maps, or structs.
+such as `cardinality`, `map_contains_key_utf8`, `element_at_i64_utf8`,
+`element_at_utf8_utf8`, `array_sum_i64`, and `array_min_i64`. That should be
+treated as the beginning of a broader nested design space rather than a final
+layout for arrays, maps, or structs.
 
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
@@ -155,7 +156,8 @@ That does not mean every array operation should become a dedicated IR node.
 Computational nested operations such as reductions, membership checks, or
 other derived predicates may still live comfortably as ordinary scalar
 functions when the evaluator does not benefit from seeing through them as
-structure.
+structure. The current array reductions follow that rule: `array_sum_i64` and
+`array_min_i64` remain ordinary functions instead of structural IR nodes.
 
 Map value access should surface absence and nullability through streams rather
 than sentinel values. For example, a missing map, a null lookup key, a missing

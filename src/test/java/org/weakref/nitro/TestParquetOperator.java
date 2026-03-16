@@ -1157,6 +1157,42 @@ public class TestParquetOperator
     }
 
     @Test
+    void testArrayMinProjectsValuesAndNulls()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedNullableI64ParquetFile("array-min.parquet", List.of(
+                new NullableArrayParquetRow(Arrays.asList(10L, null, 20L)),
+                new NullableArrayParquetRow(List.of()),
+                new NullableArrayParquetRow(Arrays.asList((Long) null)),
+                new NullableArrayParquetRow(List.of(30L, 5L)),
+                new NullableArrayParquetRow(Arrays.asList(7L, -3L, 12L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable minimum = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        minimum,
+                        new Call("array_min_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(minimum, Stream.VALUES),
+                        new Reference(minimum, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(10L, 0L, 0L, 5L, -3L);
+            assertThat(nulls.values()).startsWith(false, true, true, false, false);
+        }
+    }
+
+    @Test
     void testArraySumFeedsGrouping()
             throws IOException
     {
