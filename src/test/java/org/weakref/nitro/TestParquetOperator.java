@@ -1011,6 +1011,89 @@ public class TestParquetOperator
     }
 
     @Test
+    void testMapValuesProjectsNestedValueArrays()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("map-values.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable valuesArray = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        valuesArray,
+                        new Call("map_values", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(valuesArray, Stream.VALUES),
+                        new Reference(valuesArray, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+            I64Vector values = (I64Vector) arrays.elementValues();
+            BooleanVector elementNulls = arrays.elementNulls();
+
+            assertThat(arrays.length(0)).isEqualTo(2);
+            assertThat(arrays.length(1)).isEqualTo(0);
+            assertThat(arrays.length(2)).isEqualTo(0);
+            assertThat(arrays.length(3)).isEqualTo(1);
+            assertThat(values.values()).startsWith(10L, 0L, 30L);
+            assertThat(elementNulls.values()).startsWith(false, true, false);
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
+    void testCardinalityConsumesMapValues()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("map-values-cardinality.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable valuesArray = new Variable(0);
+        Variable cardinality = new Variable(1);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(
+                                valuesArray,
+                                new Call("map_values", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(
+                                cardinality,
+                                new Call("cardinality", List.of(new Reference(valuesArray, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(
+                        new Reference(cardinality, Stream.VALUES),
+                        new Reference(cardinality, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(2L, 0L, 0L, 1L);
+            assertThat(nulls.values()).startsWith(false, true, false, false);
+        }
+    }
+
+    @Test
     void testCardinalityFeedsGroupingForRequiredMaps()
             throws IOException
     {

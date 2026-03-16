@@ -119,9 +119,9 @@ The runtime now also has an initial nested-value family in `ArrayVector`,
 Parquet input, top-level struct Parquet input, top-level map Parquet input
 with `i64` and UTF-8 string values, field extraction, and simple primitives
 such as `cardinality`, `map_contains_key_utf8`, `element_at_i64_utf8`,
-`element_at_utf8_utf8`, `map_keys`, `array_sum_i64`, and `array_min_i64`.
-That should be treated as the beginning of a broader nested design space
-rather than a final layout for arrays, maps, or structs.
+`element_at_utf8_utf8`, `map_keys`, `map_values`, `array_sum_i64`, and
+`array_min_i64`. That should be treated as the beginning of a broader nested
+design space rather than a final layout for arrays, maps, or structs.
 
 Nested vectors may themselves own child stream bundles. For example, an
 `ArrayVector` may carry child `VALUES` plus child `NULLS` for nullable array
@@ -158,8 +158,9 @@ other derived predicates may still live comfortably as ordinary scalar
 functions when the evaluator does not benefit from seeing through them as
 structure. The current array reductions follow that rule: `array_sum_i64` and
 `array_min_i64` remain ordinary functions instead of structural IR nodes.
-The same applies to nested-to-nested helpers such as `map_keys`, which expose
-derived nested values without requiring a dedicated IR form.
+The same applies to nested-to-nested helpers such as `map_keys` and
+`map_values`, which expose derived nested values without requiring a dedicated
+IR form.
 
 Map value access should surface absence and nullability through streams rather
 than sentinel values. For example, a missing map, a null lookup key, a missing
