@@ -40,6 +40,7 @@ public final class NormalizedIrValidator
     {
         return switch (operation) {
             case Merge merge -> isNormalizedMask(merge.condition());
+            case StructField _ -> true;
             default -> true;
         };
     }

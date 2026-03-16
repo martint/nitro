@@ -13,7 +13,14 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Operation
-        permits Call, Copy, Literal, Merge, StructField
+import static java.util.Objects.requireNonNull;
+
+public record StructField(Reference source, String fieldName)
+        implements Operation
 {
+    public StructField
+    {
+        source = requireNonNull(source, "source is null");
+        fieldName = requireNonNull(fieldName, "fieldName is null");
+    }
 }

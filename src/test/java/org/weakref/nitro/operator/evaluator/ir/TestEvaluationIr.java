@@ -38,6 +38,7 @@ public class TestEvaluationIr
     {
         Variable condition = new Variable(0);
         Variable result = new Variable(3);
+        Variable structField = new Variable(4);
         Reference conditionValues = new Reference(condition, Stream.VALUES);
         Reference thenValues = new Reference(new Input(0), Stream.VALUES);
         Reference elseValues = new Reference(new Input(1), Stream.VALUES);
@@ -45,12 +46,14 @@ public class TestEvaluationIr
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(
                         new Assignment(condition, new Call("lt_zero", List.of(new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(result, new Merge(new ReferenceMask(conditionValues), thenValues, elseValues), AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES)));
+                        new Assignment(result, new Merge(new ReferenceMask(conditionValues), thenValues, elseValues), AllMask.ALL),
+                        new Assignment(structField, new StructField(new Reference(new Input(3), Stream.VALUES), "name"), AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES), new Reference(structField, Stream.VALUES)));
 
-        assertThat(plan.assignments()).hasSize(2);
-        assertThat(plan.assignments().getLast().operation()).isInstanceOf(Merge.class);
-        assertThat(plan.outputs()).containsExactly(new Reference(result, Stream.VALUES));
+        assertThat(plan.assignments()).hasSize(3);
+        assertThat(plan.assignments().get(1).operation()).isInstanceOf(Merge.class);
+        assertThat(plan.assignments().get(2).operation()).isInstanceOf(StructField.class);
+        assertThat(plan.outputs()).containsExactly(new Reference(result, Stream.VALUES), new Reference(structField, Stream.VALUES));
     }
 
     @Test

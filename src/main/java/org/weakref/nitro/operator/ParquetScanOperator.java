@@ -231,7 +231,7 @@ public final class ParquetScanOperator
                     List.of());
         }
 
-        checkArgument(groupType.getRepetition() == REQUIRED, "Unsupported Parquet group column: %s", name);
+        checkArgument(groupType.getRepetition() != Type.Repetition.REPEATED, "Unsupported repeated Parquet group column: %s", name);
         List<StructFieldSpec> structFields = groupType.getFields().stream()
                 .map(field -> {
                     checkArgument(field.isPrimitive(), "Struct field must be primitive: %s.%s", name, field.getName());
@@ -253,7 +253,7 @@ public final class ParquetScanOperator
         return new ColumnSpec(
                 name,
                 ColumnKind.STRUCT,
-                false,
+                groupType.getRepetition() != REQUIRED,
                 null,
                 Set.of(),
                 type,
@@ -314,6 +314,7 @@ public final class ParquetScanOperator
     private ColumnBuffer readStructColumn(ColumnSpec column, PageReadStore rowGroup, int rowCount)
     {
         StructVector values = allocator.allocate(ALLOCATION_CONTEXT, StructVector.class, rowCount, StructVector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
         List<ColumnPages> fieldPages = captureStructColumnPages(rowGroup, column);
@@ -323,6 +324,9 @@ public final class ParquetScanOperator
         RecordReader<Group> recordReader = columnIo.getRecordReader(replayPageStore, new GroupRecordConverter(projectedSchema));
         for (int position = 0; position < rowCount; position++) {
             Group row = recordReader.read();
+            if (column.nullable() && row.getFieldRepetitionCount(column.name()) == 0) {
+                continue;
+            }
             Group struct = row.getGroup(column.name(), 0);
             for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
                 StructFieldSpec field = column.structFields().get(fieldIndex);
@@ -348,13 +352,22 @@ public final class ParquetScanOperator
         recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, fieldPages), new GroupRecordConverter(projectedSchema));
         for (int position = 0; position < rowCount; position++) {
             Group row = recordReader.read();
+            if (column.nullable() && row.getFieldRepetitionCount(column.name()) == 0) {
+                nulls.values()[position] = true;
+                for (Vector fieldValue : fieldValues) {
+                    if (fieldValue instanceof BinaryVector binaryValues) {
+                        binaryValues.setNull(position);
+                    }
+                }
+                continue;
+            }
             Group struct = row.getGroup(column.name(), 0);
             for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
                 StructFieldSpec field = column.structFields().get(fieldIndex);
-                BooleanVector nulls = fieldNulls[fieldIndex];
+                BooleanVector fieldNullVector = fieldNulls[fieldIndex];
                 if (struct.getFieldRepetitionCount(field.name()) == 0) {
-                    if (nulls != null) {
-                        nulls.values()[position] = true;
+                    if (fieldNullVector != null) {
+                        fieldNullVector.values()[position] = true;
                     }
                     if (fieldValues[fieldIndex] instanceof BinaryVector binaryValues) {
                         binaryValues.setNull(position);
@@ -382,7 +395,7 @@ public final class ParquetScanOperator
             }
             values.setField(field.name(), fieldStreams);
         }
-        return new ColumnBuffer(values, null);
+        return new ColumnBuffer(values, nulls);
     }
 
     private static List<ColumnPages> captureStructColumnPages(PageReadStore rowGroup, ColumnSpec column)

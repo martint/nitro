@@ -51,8 +51,11 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.io.IOException;
@@ -588,6 +591,152 @@ public class TestParquetOperator
     }
 
     @Test
+    void testParquetScanReadsOptionalStructColumns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalStructParquetFile("optional-structs.parquet", List.of(
+                new OptionalStructParquetRow(new StructParquetRow(21, "alpha", true)),
+                new OptionalStructParquetRow(null),
+                new OptionalStructParquetRow(new StructParquetRow(22, null, false))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("person"))) {
+            Batch batch = operator.next();
+            StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector structNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+
+            assertThat(struct.length()).isEqualTo(3);
+            assertThat(structNulls.values()).startsWith(false, true, false);
+
+            I64Vector ids = (I64Vector) struct.fieldValues("id");
+            BinaryVector names = (BinaryVector) struct.fieldValues("name");
+            BooleanVector nameNulls = (BooleanVector) struct.fieldStreamOrNull("name", Stream.NULLS);
+
+            assertThat(ids.values()).startsWith(21L, 0L, 22L);
+            assertThat(names.utf8Value(0)).isEqualTo("alpha");
+            assertThat(nameNulls.values()).startsWith(false, false, true);
+        }
+    }
+
+    @Test
+    void testProjectExtractsOptionalStructField()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalStructParquetFile("project-structs.parquet", List.of(
+                new OptionalStructParquetRow(new StructParquetRow(31, "alice", true)),
+                new OptionalStructParquetRow(null),
+                new OptionalStructParquetRow(new StructParquetRow(32, null, false)),
+                new OptionalStructParquetRow(new StructParquetRow(33, "carol", null))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable name = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        name,
+                        new StructField(new Reference(new Input(0), Stream.VALUES), "name"),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(name, Stream.VALUES),
+                        new Reference(name, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("person")))) {
+            Batch batch = operator.next();
+            BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(names.utf8Value(0)).isEqualTo("alice");
+            assertThat(names.utf8Value(3)).isEqualTo("carol");
+            assertThat(nulls.values()).startsWith(false, true, true, false);
+        }
+    }
+
+    @Test
+    void testFilterUsesStructBooleanField()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalStructParquetFile("filter-structs.parquet", List.of(
+                new OptionalStructParquetRow(new StructParquetRow(41, "alpha", true)),
+                new OptionalStructParquetRow(null),
+                new OptionalStructParquetRow(new StructParquetRow(42, "beta", false)),
+                new OptionalStructParquetRow(new StructParquetRow(43, "gamma", true)),
+                new OptionalStructParquetRow(new StructParquetRow(44, "delta", null))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable active = new Variable(0);
+        EvaluationPlan filterPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        active,
+                        new StructField(new Reference(new Input(0), Stream.VALUES), "active"),
+                        AllMask.ALL)),
+                List.of());
+
+        try (FilterOperator operator = new FilterOperator(
+                new ParquetScanOperator(new Allocator(), file, List.of("person")),
+                filterPlan,
+                primitiveRegistry,
+                new Reference(active, Stream.VALUES),
+                new Allocator())) {
+            Batch batch = operator.next();
+            assertThat(batch.borrowMask()).containsExactly(0, 3);
+
+            StructVector people = (StructVector) batch.output(0).borrow(Stream.VALUES);
+            I64Vector ids = (I64Vector) people.fieldValues("id");
+            assertThat(ids.values()[0]).isEqualTo(41L);
+            assertThat(ids.values()[3]).isEqualTo(43L);
+        }
+    }
+
+    @Test
+    void testStructFieldFeedsGrouping()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalStructParquetFile("group-structs.parquet", List.of(
+                new OptionalStructParquetRow(new StructParquetRow(51, "a", true)),
+                new OptionalStructParquetRow(new StructParquetRow(52, "b", false)),
+                new OptionalStructParquetRow(new StructParquetRow(51, "c", true)),
+                new OptionalStructParquetRow(null),
+                new OptionalStructParquetRow(new StructParquetRow(52, "d", false))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable id = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        id,
+                        new StructField(new Reference(new Input(0), Stream.VALUES), "id"),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(id, Stream.VALUES),
+                        new Reference(id, Stream.VALUES)));
+
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        new Allocator(),
+                        0,
+                        List.of(
+                                new First(1),
+                                new CountAll()),
+                        new GroupOperator(
+                                new Allocator(),
+                                0,
+                                new ProjectOperator(
+                                        new Allocator(),
+                                        projectionPlan,
+                                        primitiveRegistry,
+                                        new FilterOperator(
+                                                new ParquetScanOperator(new Allocator(), file, List.of("person")),
+                                                new EvaluationPlan(List.of(), List.of()),
+                                                primitiveRegistry,
+                                                new NotMask(new ReferenceMask(new Reference(new Input(0), Stream.NULLS))),
+                                                new Allocator()))))))
+                .matchesExactly(List.of(
+                        Row.row(51L, 2L),
+                        Row.row(52L, 2L)));
+    }
+
+    @Test
     void testArraySumProjectsNullableElements()
             throws IOException
     {
@@ -825,6 +974,41 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeOptionalStructParquetFile(String name, List<OptionalStructParquetRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .optionalGroup()
+                    .required(INT64).named("id")
+                    .optional(BINARY).as(stringType()).named("name")
+                    .optional(BOOLEAN).named("active")
+                .named("person")
+                .named("nitro_optional_struct_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (OptionalStructParquetRow row : rows) {
+                Group group = groups.newGroup();
+                if (row.person() != null) {
+                    Group person = group.addGroup("person")
+                            .append("id", row.person().id());
+                    if (row.person().name() != null) {
+                        person.append("name", row.person().name());
+                    }
+                    if (row.person().active() != null) {
+                        person.append("active", row.person().active());
+                    }
+                }
+                writer.write(group);
+            }
+        }
+        return file;
+    }
+
     private static byte[] bytes(int... values)
     {
         byte[] bytes = new byte[values.length];
@@ -886,4 +1070,6 @@ public class TestParquetOperator
     private record NullableArrayParquetRow(List<Long> items) {}
 
     private record StructParquetRow(long id, String name, Boolean active) {}
+
+    private record OptionalStructParquetRow(StructParquetRow person) {}
 }

@@ -15,11 +15,13 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
@@ -39,6 +41,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
+import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
@@ -94,6 +97,46 @@ public class TestPlanEvaluator
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
+    }
+
+    @Test
+    void testStructFieldCombinesParentAndChildNulls()
+    {
+        Variable name = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        name,
+                        new StructField(new Reference(new Input(0), Stream.VALUES), "name"),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(name, Stream.VALUES),
+                        new Reference(name, Stream.NULLS)));
+
+        StructVector person = new StructVector(4);
+        BinaryVector names = new BinaryVector(4, 16);
+        names.setBytes(0, "alice".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        names.setNull(1);
+        names.setNull(2);
+        names.setBytes(3, "carol".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        BooleanVector childNulls = new BooleanVector(new boolean[] {false, true, false, false});
+        BooleanVector parentNulls = new BooleanVector(new boolean[] {false, false, true, false});
+        person.setField("name", Streams.ofValues(names).with(Stream.NULLS, childNulls));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), person,
+                        new Reference(new Input(0), Stream.NULLS), parentNulls)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(name, Stream.VALUES), Mask.all(4));
+        BinaryVector values = (BinaryVector) result.get(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+
+        assertThat(values.utf8Value(0)).isEqualTo("alice");
+        assertThat(values.utf8Value(3)).isEqualTo("carol");
+        assertThat(nulls.values()).containsExactly(false, true, true, false);
     }
 
     @Test

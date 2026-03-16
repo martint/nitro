@@ -19,6 +19,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -39,6 +40,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
+import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.ArrayList;
@@ -162,6 +164,7 @@ public final class PlanEvaluator
             case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
             case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
+            case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
         };
     }
 
@@ -259,6 +262,30 @@ public final class PlanEvaluator
         return completeRequestedStreams(requestedStreams, result, mask);
     }
 
+    private Streams evaluateStructField(Set<Stream> requestedStreams, StructField field, Mask mask, Streams output)
+    {
+        Streams sourceStreams = evaluateArgument(field.source(), mask);
+        StructVector sourceValues = (StructVector) sourceStreams.values();
+        Streams fieldStreams = sourceValues.field(field.fieldName());
+
+        Streams result = Streams.empty();
+        if (requestedStreams.contains(Stream.VALUES) && fieldStreams.has(Stream.VALUES)) {
+            result = result.with(Stream.VALUES, fieldStreams.get(Stream.VALUES));
+        }
+
+        for (Stream stream : requestedStreams) {
+            if (stream == Stream.VALUES) {
+                continue;
+            }
+            Vector existing = output != null && output.has(stream) ? output.get(stream) : null;
+            Vector merged = mergeOptionalBooleanStreams(sourceStreams.getOrNull(stream), fieldStreams.getOrNull(stream), existing, mask);
+            if (merged != null) {
+                result = result.with(stream, merged);
+            }
+        }
+        return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
     private Vector evaluateMergeStream(Stream stream, Merge merge, Mask mask, Mask trueMask, Mask falseMask, Streams output)
     {
         Reference trueReference = remapReference(merge.whenTrue(), stream);
@@ -294,6 +321,31 @@ public final class PlanEvaluator
             return sourceVector;
         }
         return copyVector(sourceVector, target, branchMask);
+    }
+
+    private Vector mergeOptionalBooleanStreams(Vector parentStream, Vector childStream, Vector existing, Mask mask)
+    {
+        if (parentStream == null) {
+            return childStream;
+        }
+        if (childStream == null) {
+            return parentStream;
+        }
+
+        BooleanVector merged = allocator.allocateOrGrow(ALLOCATION_CONTEXT, (BooleanVector) existing, BooleanVector.class, mask.maxPosition() + 1, BooleanVector::new);
+        BooleanVector parentValues = (BooleanVector) parentStream;
+        BooleanVector childValues = (BooleanVector) childStream;
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                merged.values()[position] = parentValues.values()[position] || childValues.values()[position];
+            }
+            return merged;
+        }
+
+        for (int position : mask) {
+            merged.values()[position] = parentValues.values()[position] || childValues.values()[position];
+        }
+        return merged;
     }
 
     private BooleanVector fillFalseBoolean(Vector existing, Mask mask, int length)

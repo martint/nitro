@@ -99,7 +99,7 @@ public class GroupOperator
     {
         if (!filled && !mask.none()) {
             filled = true;
-            result = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, I64Vector.class, mask.count(), I64Vector::new);
+            result = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
 
             // TODO: support arbitrary types
             long[] values = values(currentBatch.output(groupByColumn).borrow(Stream.VALUES));
