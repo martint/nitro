@@ -52,6 +52,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.MapLookup;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
@@ -946,9 +947,9 @@ public class TestParquetOperator
         EvaluationPlan projectionPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         element,
-                        new Call("element_at_i64_utf8", List.of(
+                        new MapLookup(
                                 new Reference(new Input(0), Stream.VALUES),
-                                new Reference(new Input(1), Stream.VALUES))),
+                                new Reference(new Input(1), Stream.VALUES)),
                         AllMask.ALL)),
                 List.of(
                         new Reference(element, Stream.VALUES),

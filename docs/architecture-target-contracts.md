@@ -140,6 +140,11 @@ key lookups over UTF-8 string keys may use the same UTF-8 and ASCII traits used
 by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
 
+Nested map access should also be representable as a first-class IR operation,
+not only as an opaque scalar call. A structural `MapLookup` node can then
+preserve evaluator visibility into sibling `NULLS` and `ERRORS` behavior in
+the same way that `StructField` preserves visibility into struct-field access.
+
 Map value access should surface absence and nullability through streams rather
 than sentinel values. For example, a missing map, a null lookup key, a missing
 entry, and a present entry with a null value may all produce an all-false or
@@ -605,6 +610,7 @@ The evaluator should only need to execute a handful of operation kinds:
 - `Call`
 - `Copy`
 - `Merge`
+- structural nested access such as `StructField` and `MapLookup`
 
 Their intended roles are:
 
@@ -613,6 +619,9 @@ Their intended roles are:
   and an explicit mask
 - `Copy`: perform a masked identity write from one stream into an output
 - `Merge`: represent semantic overlay of partial results under explicit masks
+- `StructField` / `MapLookup`: expose nested child data through first-class IR
+  operations when the evaluator should retain visibility into structural
+  nullability and stream behavior
 
 Everything else should be lowered into combinations of these operations plus
 explicit mask expressions and stream references.

@@ -19,6 +19,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.StructVector;
@@ -33,6 +34,7 @@ import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
+import org.weakref.nitro.operator.evaluator.ir.MapLookup;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -137,6 +139,109 @@ public class TestPlanEvaluator
         assertThat(values.utf8Value(0)).isEqualTo("alice");
         assertThat(values.utf8Value(3)).isEqualTo("carol");
         assertThat(nulls.values()).containsExactly(false, true, true, false);
+    }
+
+    @Test
+    void testMapLookupCombinesMapKeyAndEntryNulls()
+    {
+        Variable lookup = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        lookup,
+                        new MapLookup(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(lookup, Stream.VALUES),
+                        new Reference(lookup, Stream.NULLS)));
+
+        MapVector maps = new MapVector(4);
+        maps.offsets()[0] = 0;
+        maps.offsets()[1] = 2;
+        maps.offsets()[2] = 2;
+        maps.offsets()[3] = 3;
+        maps.offsets()[4] = 4;
+
+        BinaryVector mapKeys = new BinaryVector(4, 18);
+        mapKeys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        mapKeys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        mapKeys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        mapKeys.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        mapKeys.setBytes(2, "gamma".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        mapKeys.setBytes(3, "zeta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        I64Vector mapValues = new I64Vector(new long[] {10, 0, 30, 0});
+        BooleanVector mapValueNulls = new BooleanVector(new boolean[] {false, true, false, true});
+        maps.setEntries(Streams.ofValues(mapKeys), Streams.ofValues(mapValues).with(Stream.NULLS, mapValueNulls));
+
+        BinaryVector lookupKeys = new BinaryVector(4, 20);
+        lookupKeys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        lookupKeys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        lookupKeys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        lookupKeys.setBytes(1, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        lookupKeys.setBytes(2, "missing".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        lookupKeys.setNull(3);
+
+        BooleanVector mapNulls = new BooleanVector(new boolean[] {false, true, false, false});
+        BooleanVector lookupNulls = new BooleanVector(new boolean[] {false, false, false, true});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), maps,
+                        new Reference(new Input(0), Stream.NULLS), mapNulls,
+                        new Reference(new Input(1), Stream.VALUES), lookupKeys,
+                        new Reference(new Input(1), Stream.NULLS), lookupNulls)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(lookup, Stream.VALUES), Mask.all(4));
+        I64Vector values = (I64Vector) result.get(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+
+        assertThat(values.values()).containsExactly(10L, 0L, 0L, 0L);
+        assertThat(nulls.values()).containsExactly(false, true, true, true);
+    }
+
+    @Test
+    void testMapLookupPropagatesInputErrors()
+    {
+        Variable lookup = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        lookup,
+                        new MapLookup(new Reference(new Input(0), Stream.VALUES), new Reference(new Input(1), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(lookup, Stream.ERRORS)));
+
+        MapVector maps = new MapVector(3);
+        BinaryVector mapKeys = new BinaryVector(0, 0);
+        mapKeys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        mapKeys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        maps.setEntries(Streams.ofValues(mapKeys), Streams.ofValues(new I64Vector(new long[0])));
+
+        BinaryVector lookupKeys = new BinaryVector(3, 3);
+        lookupKeys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        lookupKeys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        lookupKeys.setBytes(0, "a".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        lookupKeys.setBytes(1, "b".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        lookupKeys.setBytes(2, "c".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        BooleanVector mapErrors = new BooleanVector(new boolean[] {false, true, false});
+        BooleanVector lookupErrors = new BooleanVector(new boolean[] {true, false, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), maps,
+                        new Reference(new Input(0), Stream.ERRORS), mapErrors,
+                        new Reference(new Input(1), Stream.VALUES), lookupKeys,
+                        new Reference(new Input(1), Stream.ERRORS), lookupErrors)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(lookup, Stream.ERRORS), Mask.all(3));
+        BooleanVector errors = (BooleanVector) result.get(Stream.ERRORS);
+        assertThat(errors.values()).containsExactly(true, true, false);
     }
 
     @Test
