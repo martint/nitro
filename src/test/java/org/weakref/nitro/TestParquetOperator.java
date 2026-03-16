@@ -929,6 +929,46 @@ public class TestParquetOperator
     }
 
     @Test
+    void testElementAtI64Utf8ProjectsValuesAndNulls()
+            throws IOException
+    {
+        java.nio.file.Path file = writeMapLookupParquetFile("map-element-at.parquet", List.of(
+                new MapLookupParquetRow(orderedMap("alpha", 10L, "beta", null), "alpha"),
+                new MapLookupParquetRow(null, "alpha"),
+                new MapLookupParquetRow(Map.of(), "missing"),
+                new MapLookupParquetRow(orderedMap("gamma", 30L), null),
+                new MapLookupParquetRow(orderedMap("delta", 40L), "missing"),
+                new MapLookupParquetRow(orderedMap("epsilon", 50L), "epsilon"),
+                new MapLookupParquetRow(orderedMap("zeta", null), "zeta")));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable element = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        element,
+                        new Call("element_at_i64_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(element, Stream.VALUES),
+                        new Reference(element, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                new Allocator(),
+                projectionPlan,
+                primitiveRegistry,
+                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+            Batch batch = operator.next();
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()).startsWith(10L, 0L, 0L, 0L, 0L, 50L, 0L);
+            assertThat(nulls.values()).startsWith(false, true, true, true, true, false, true);
+        }
+    }
+
+    @Test
     void testArraySumProjectsNullableElements()
             throws IOException
     {
