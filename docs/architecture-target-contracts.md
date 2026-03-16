@@ -1522,6 +1522,9 @@ architecture:
 - Support for additional physical data types, especially variable-width types
   such as strings and binary values, and the vector/storage conventions needed
   to keep those types compatible with the stream-first execution model.
+- Support for nested data types such as arrays, maps, and structs, including
+  the vector/layout conventions and stream semantics needed to evaluate nested
+  values without collapsing them back into row-oriented execution.
 - Trait-based dispatch beyond physical encoding alone, so specialized execution
   can target properties such as ASCII-only strings or other vector-family
   traits without hardcoding those assumptions into the core type system.
