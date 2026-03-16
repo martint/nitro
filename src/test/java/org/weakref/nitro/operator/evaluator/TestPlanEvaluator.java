@@ -371,6 +371,92 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testMapKeysDoesNotReuseNestedOutputForSparseMasks()
+    {
+        PrimitiveFunction mapKeys = primitiveRegistry().get("map_keys");
+        MapVector maps = createUtf8I64MapVector();
+        BooleanVector inputNulls = new BooleanVector(new boolean[] {false, true, false, false});
+
+        ArrayVector reusableValues = new ArrayVector(4);
+        reusableValues.offsets()[0] = 99;
+        reusableValues.offsets()[1] = 99;
+        reusableValues.offsets()[2] = 99;
+        reusableValues.offsets()[3] = 99;
+        reusableValues.offsets()[4] = 99;
+        reusableValues.setElements(Streams.ofValues(new BinaryVector(1, 8)));
+        BooleanVector reusableNulls = new BooleanVector(new boolean[] {true, true, true, true});
+
+        Streams output = Streams.of(Stream.VALUES, reusableValues)
+                .with(Stream.NULLS, reusableNulls);
+
+        Streams result = mapKeys.apply(
+                List.of(Streams.ofValuesAndNulls(maps, inputNulls)),
+                Mask.sparse(new int[] {1, 3}, maps.length()),
+                Set.of(Stream.VALUES, Stream.NULLS),
+                output,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(result.values()).isNotSameAs(reusableValues);
+        assertThat(result.get(Stream.NULLS)).isNotSameAs(reusableNulls);
+        assertThat(reusableValues.offsets()).containsExactly(99, 99, 99, 99, 99);
+        assertThat(reusableNulls.values()).containsExactly(true, true, true, true);
+
+        ArrayVector arrays = (ArrayVector) result.values();
+        BinaryVector keys = (BinaryVector) arrays.elementValues();
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+
+        assertThat(arrays.offsets()).containsExactly(0, 2, 3, 3, 5);
+        assertThat(keys.utf8Value(0)).isEqualTo("alpha");
+        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(keys.utf8Value(2)).isEqualTo("gamma");
+        assertThat(keys.utf8Value(3)).isEqualTo("delta");
+        assertThat(keys.utf8Value(4)).isEqualTo("epsilon");
+        assertThat(nulls.values()).containsExactly(false, true, false, false);
+    }
+
+    @Test
+    void testMapValuesDoesNotReuseNestedOutputForSparseMasks()
+    {
+        PrimitiveFunction mapValues = primitiveRegistry().get("map_values");
+        MapVector maps = createUtf8I64MapVector();
+        BooleanVector inputNulls = new BooleanVector(new boolean[] {false, true, false, false});
+
+        ArrayVector reusableValues = new ArrayVector(4);
+        reusableValues.offsets()[0] = 77;
+        reusableValues.offsets()[1] = 77;
+        reusableValues.offsets()[2] = 77;
+        reusableValues.offsets()[3] = 77;
+        reusableValues.offsets()[4] = 77;
+        reusableValues.setElements(Streams.ofValues(new I64Vector(new long[] {999})));
+        BooleanVector reusableNulls = new BooleanVector(new boolean[] {true, true, true, true});
+
+        Streams output = Streams.of(Stream.VALUES, reusableValues)
+                .with(Stream.NULLS, reusableNulls);
+
+        Streams result = mapValues.apply(
+                List.of(Streams.ofValuesAndNulls(maps, inputNulls)),
+                Mask.sparse(new int[] {0, 2}, maps.length()),
+                Set.of(Stream.VALUES, Stream.NULLS),
+                output,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(result.values()).isNotSameAs(reusableValues);
+        assertThat(result.get(Stream.NULLS)).isNotSameAs(reusableNulls);
+        assertThat(reusableValues.offsets()).containsExactly(77, 77, 77, 77, 77);
+        assertThat(reusableNulls.values()).containsExactly(true, true, true, true);
+
+        ArrayVector arrays = (ArrayVector) result.values();
+        I64Vector values = (I64Vector) arrays.elementValues();
+        BooleanVector elementNulls = arrays.elementNulls();
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+
+        assertThat(arrays.offsets()).containsExactly(0, 2, 3, 3, 5);
+        assertThat(values.values()).containsExactly(10L, 20L, 30L, 40L, 50L);
+        assertThat(elementNulls.values()).containsExactly(false, false, true, false, false);
+        assertThat(nulls.values()).containsExactly(false, true, false, false);
+    }
+
+    @Test
     void testAddFunctionPreservesRleAcrossFullBatch()
     {
         PrimitiveFunction add = builtinPrimitiveRegistry().get("add");
@@ -1242,5 +1328,29 @@ public class TestPlanEvaluator
         primitiveRegistry.register(scalarRegistry.register(AddI64.class));
         primitiveRegistry.register(scalarRegistry.register(LessThanI64.class));
         return primitiveRegistry;
+    }
+
+    private static MapVector createUtf8I64MapVector()
+    {
+        MapVector maps = new MapVector(4);
+        maps.offsets()[0] = 0;
+        maps.offsets()[1] = 2;
+        maps.offsets()[2] = 3;
+        maps.offsets()[3] = 3;
+        maps.offsets()[4] = 5;
+
+        BinaryVector keys = new BinaryVector(5, 26);
+        keys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        keys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        keys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        keys.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        keys.setBytes(2, "gamma".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        keys.setBytes(3, "delta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        keys.setBytes(4, "epsilon".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        I64Vector values = new I64Vector(new long[] {10, 20, 30, 40, 50});
+        BooleanVector valueNulls = new BooleanVector(new boolean[] {false, false, true, false, false});
+        maps.setEntries(Streams.ofValues(keys), Streams.ofValues(values).with(Stream.NULLS, valueNulls));
+        return maps;
     }
 }

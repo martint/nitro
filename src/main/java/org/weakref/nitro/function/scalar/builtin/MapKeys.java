@@ -48,50 +48,84 @@ public final class MapKeys
         Vector input = inputs.getFirst().values();
         BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
         Streams result = Streams.empty();
+        int requiredLength = input.length();
+        boolean reuseOutput = mask.all();
+        Mask evaluationMask = reuseOutput ? mask : Mask.all(input.length());
+        Streams evaluationOutput = reuseOutput ? output : null;
 
         if (requestedStreams.contains(Stream.VALUES)) {
-            result = result.with(Stream.VALUES, mapKeys(input, output, context));
+            result = result.with(Stream.VALUES, mapKeys(input, evaluationOutput, context, evaluationMask, requiredLength));
         }
         if (requestedStreams.contains(Stream.NULLS) && inputNulls != null) {
-            result = result.with(Stream.NULLS, copyNulls(inputNulls, output, context));
+            result = result.with(Stream.NULLS, copyNulls(inputNulls, evaluationOutput, context, evaluationMask, requiredLength));
         }
         return result;
     }
 
-    private static Vector mapKeys(Vector input, Streams output, PrimitiveExecutionContext context)
+    private static Vector mapKeys(Vector input, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
         if (input instanceof MapVector maps) {
-            return arrayKeys(maps, output, context);
+            return arrayKeys(maps, output, context, mask, requiredLength);
         }
         if (input instanceof DictionaryVector dictionary) {
             checkArgument(dictionary.values() instanceof MapVector, "map_keys requires MapVector dictionary values");
-            return context.allocator().allocateDictionary(ALLOCATION_CONTEXT, dictionary.ids(), arrayKeys((MapVector) dictionary.values(), null, context));
+            return dictionaryKeys(dictionary, (MapVector) dictionary.values(), output, context, mask, requiredLength);
         }
         throw new IllegalArgumentException("map_keys requires MapVector input");
     }
 
-    private static ArrayVector arrayKeys(MapVector maps, Streams output, PrimitiveExecutionContext context)
+    private static DictionaryVector dictionaryKeys(DictionaryVector dictionary, MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
+    {
+        DictionaryVector existing = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector vector ? vector : null;
+        int[] ids = existing != null ? existing.ids() : new int[requiredLength];
+        if (mask.all()) {
+            System.arraycopy(dictionary.ids(), 0, ids, 0, dictionary.length());
+        }
+        else {
+            for (int position : mask) {
+                ids[position] = dictionary.ids()[position];
+            }
+        }
+        return context.allocator().allocateDictionary(ALLOCATION_CONTEXT, ids, arrayKeys(maps, null, context, Mask.all(maps.length()), maps.length()));
+    }
+
+    private static ArrayVector arrayKeys(MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
         ArrayVector arrays = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 output != null && output.has(Stream.VALUES) && output.values() instanceof ArrayVector vector ? vector : null,
                 ArrayVector.class,
-                maps.length(),
+                requiredLength,
                 ArrayVector::new);
-        System.arraycopy(maps.offsets(), 0, arrays.offsets(), 0, maps.length() + 1);
+        if (mask.all()) {
+            System.arraycopy(maps.offsets(), 0, arrays.offsets(), 0, maps.length() + 1);
+        }
+        else {
+            for (int position : mask) {
+                arrays.offsets()[position] = maps.offsets()[position];
+                arrays.offsets()[position + 1] = maps.offsets()[position + 1];
+            }
+        }
         arrays.setElements(context.allocator().copyStreams(ALLOCATION_CONTEXT, maps.keys()));
         return arrays;
     }
 
-    private static BooleanVector copyNulls(BooleanVector inputNulls, Streams output, PrimitiveExecutionContext context)
+    private static BooleanVector copyNulls(BooleanVector inputNulls, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
         BooleanVector outputNulls = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
-                inputNulls.length(),
+                requiredLength,
                 BooleanVector::new);
-        System.arraycopy(inputNulls.values(), 0, outputNulls.values(), 0, inputNulls.length());
+        if (mask.all()) {
+            System.arraycopy(inputNulls.values(), 0, outputNulls.values(), 0, inputNulls.length());
+        }
+        else {
+            for (int position : mask) {
+                outputNulls.values()[position] = inputNulls.values()[position];
+            }
+        }
         return outputNulls;
     }
 }
