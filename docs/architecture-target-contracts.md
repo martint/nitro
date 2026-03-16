@@ -437,6 +437,10 @@ of allocating fresh mask objects for every refinement step.
 - An operator may keep and reuse its owned masks internally across batches.
 - Ownership transfer of a mask should be explicit if downstream is expected to
   retain or mutate it.
+- Ownership transfer of a nested vector should be transitive. Taking an
+  `ArrayVector`, `MapVector`, `StructVector`, or wrapper such as
+  `DictionaryVector` must also detach the reachable child stream buffers from
+  allocator-managed scratch reuse.
 - A derived mask may be evaluator-owned or operator-owned while it is still
   scratch state, but once a batch publishes that mask through `next()`, the
   mask becomes batch-owned and must no longer be eligible for upstream scratch

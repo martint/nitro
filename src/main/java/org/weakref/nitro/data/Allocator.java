@@ -75,6 +75,20 @@ public class Allocator
         return vector;
     }
 
+    public DictionaryVector allocateDictionary(Context context, int[] ids, Vector values)
+    {
+        DictionaryVector vector = new DictionaryVector(ids, values);
+        state(context).trackVector(vector, false);
+        return vector;
+    }
+
+    public RleVector allocateRle(Context context, int[] counts, Vector values)
+    {
+        RleVector vector = new RleVector(Arrays.copyOf(counts, counts.length), values);
+        state(context).trackVector(vector, false);
+        return vector;
+    }
+
     public BinaryVector allocateOrGrowBinary(Context context, BinaryVector vector, int positionCount, int byteCapacity)
     {
         if (vector == null) {
@@ -531,6 +545,66 @@ public class Allocator
         return vector;
     }
 
+    public Streams copyStreams(Context context, Streams streams)
+    {
+        Streams copied = Streams.empty();
+        for (Map.Entry<org.weakref.nitro.operator.evaluator.ir.Stream, Vector> entry : streams.asMap().entrySet()) {
+            copied = copied.with(entry.getKey(), copyVector(context, entry.getValue()));
+        }
+        return copied;
+    }
+
+    public Vector copyVector(Context context, Vector vector)
+    {
+        return switch (vector) {
+            case I64Vector values -> {
+                I64Vector copy = allocate(context, I64Vector.class, values.length(), I64Vector::new);
+                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
+                yield copy;
+            }
+            case BooleanVector values -> {
+                BooleanVector copy = allocate(context, BooleanVector.class, values.length(), BooleanVector::new);
+                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
+                yield copy;
+            }
+            case F64Vector values -> {
+                F64Vector copy = allocate(context, F64Vector.class, values.length(), F64Vector::new);
+                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
+                yield copy;
+            }
+            case BinaryVector values -> {
+                int byteLength = values.offsets()[values.length()];
+                BinaryVector copy = allocateBinary(context, values.length(), byteLength);
+                System.arraycopy(values.offsets(), 0, copy.offsets(), 0, values.offsets().length);
+                System.arraycopy(values.data(), 0, copy.data(), 0, byteLength);
+                copy.addTraits(values.traits());
+                yield copy;
+            }
+            case ArrayVector values -> {
+                ArrayVector copy = allocateArray(context, values.length());
+                System.arraycopy(values.offsets(), 0, copy.offsets(), 0, values.offsets().length);
+                copy.setElements(copyStreams(context, values.elements()));
+                yield copy;
+            }
+            case MapVector values -> {
+                MapVector copy = allocateMap(context, values.length());
+                System.arraycopy(values.offsets(), 0, copy.offsets(), 0, values.offsets().length);
+                copy.setEntries(copyStreams(context, values.keys()), copyStreams(context, values.values()));
+                yield copy;
+            }
+            case StructVector values -> {
+                StructVector copy = allocate(context, StructVector.class, values.length(), StructVector::new);
+                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
+                    copy.setField(entry.getKey(), copyStreams(context, entry.getValue()));
+                }
+                yield copy;
+            }
+            case DictionaryVector values -> allocateDictionary(context, values.ids(), copyVector(context, values.values()));
+            case RleVector values -> allocateRle(context, values.counts(), copyVector(context, values.values()));
+            default -> throw new IllegalArgumentException("Unsupported vector type for copying: " + vector.getClass().getSimpleName());
+        };
+    }
+
     private void transferMask(Mask mask, Context preferredContext)
     {
         ContextState preferredState = states.get(preferredContext);
@@ -549,6 +623,18 @@ public class Allocator
 
     private void transferVector(Vector vector, Context preferredContext)
     {
+        switch (vector) {
+            case ArrayVector values -> transferStreams(values.elements(), preferredContext);
+            case MapVector values -> {
+                transferStreams(values.keys(), preferredContext);
+                transferStreams(values.values(), preferredContext);
+            }
+            case StructVector values -> values.fields().values().forEach(streams -> transferStreams(streams, preferredContext));
+            case DictionaryVector values -> transferVector(values.values(), preferredContext);
+            case RleVector values -> transferVector(values.values(), preferredContext);
+            default -> {}
+        }
+
         ContextState preferredState = states.get(preferredContext);
         if (preferredState != null && preferredState.transferVector(vector)) {
             return;
@@ -560,6 +646,13 @@ public class Allocator
             if (entry.getValue().transferVector(vector)) {
                 return;
             }
+        }
+    }
+
+    private void transferStreams(Streams streams, Context preferredContext)
+    {
+        for (Vector child : streams.asMap().values()) {
+            transferVector(child, preferredContext);
         }
     }
 
@@ -732,6 +825,9 @@ public class Allocator
             }
 
             stats.releaseBytes(vectorBytes(vector));
+            if (vector instanceof DictionaryVector || vector instanceof RleVector) {
+                return;
+            }
             if (vector instanceof BinaryVector binaryVector) {
                 binaryVectorPool.add(binaryVector);
                 return;
@@ -783,6 +879,9 @@ public class Allocator
         public void release()
         {
             for (Vector vector : inUseVectors) {
+                if (vector instanceof DictionaryVector || vector instanceof RleVector) {
+                    continue;
+                }
                 if (vector instanceof BinaryVector binaryVector) {
                     binaryVectorPool.add(binaryVector);
                 }

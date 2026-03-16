@@ -39,7 +39,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -603,7 +602,7 @@ public final class ParquetScanOperator
                     columnReader.consume();
                 }
             }
-            return new ColumnBuffer(new DictionaryVector(ids, dictionaryValues), nulls);
+            return new ColumnBuffer(allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues), nulls);
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);
@@ -712,7 +711,7 @@ public final class ParquetScanOperator
                     columnReader.consume();
                 }
             }
-            return new ColumnBuffer(new DictionaryVector(ids, dictionaryValues), nulls);
+            return new ColumnBuffer(allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues), nulls);
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);

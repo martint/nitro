@@ -15,6 +15,7 @@ package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
@@ -30,6 +31,7 @@ import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -245,6 +247,36 @@ public class TestBatchRuntime
         I64Vector allocated = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
 
         assertThat(allocated).isNotSameAs(vector);
+    }
+
+    @Test
+    void testTransferDetachesNestedChildVectorsFromTheirOwningContext()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("Nested");
+
+        ArrayVector array = allocator.allocateArray(context, 2);
+        array.offsets()[1] = 2;
+        array.offsets()[2] = 3;
+
+        I64Vector childValues = allocator.allocate(context, I64Vector.class, 3, I64Vector::new);
+        childValues.values()[0] = 10;
+        childValues.values()[1] = 20;
+        childValues.values()[2] = 30;
+
+        BooleanVector childNulls = allocator.allocate(context, BooleanVector.class, 3, BooleanVector::new);
+        childNulls.values()[1] = true;
+        array.setElements(Streams.ofValues(childValues).with(Stream.NULLS, childNulls));
+
+        Output output = new Output(Set.of(Stream.VALUES), stream -> array, (stream, vector) -> allocator.transfer(context, vector));
+        ArrayVector taken = (ArrayVector) output.take(Stream.VALUES);
+        allocator.release(context);
+
+        I64Vector allocatedValues = allocator.allocate(context, I64Vector.class, 3, I64Vector::new);
+        BooleanVector allocatedNulls = allocator.allocate(context, BooleanVector.class, 3, BooleanVector::new);
+
+        assertThat(allocatedValues).isNotSameAs(taken.elementValues());
+        assertThat(allocatedNulls).isNotSameAs(taken.elementNulls());
     }
 
     @Test

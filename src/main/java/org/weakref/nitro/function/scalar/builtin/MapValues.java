@@ -53,7 +53,7 @@ public final class MapValues
             result = result.with(Stream.VALUES, mapValues(input, output, context));
         }
         if (requestedStreams.contains(Stream.NULLS) && inputNulls != null) {
-            result = result.with(Stream.NULLS, inputNulls);
+            result = result.with(Stream.NULLS, copyNulls(inputNulls, output, context));
         }
         return result;
     }
@@ -65,7 +65,7 @@ public final class MapValues
         }
         if (input instanceof DictionaryVector dictionary) {
             checkArgument(dictionary.values() instanceof MapVector, "map_values requires MapVector dictionary values");
-            return new DictionaryVector(dictionary.ids(), arrayValues((MapVector) dictionary.values(), null, context));
+            return context.allocator().allocateDictionary(ALLOCATION_CONTEXT, dictionary.ids(), arrayValues((MapVector) dictionary.values(), null, context));
         }
         throw new IllegalArgumentException("map_values requires MapVector input");
     }
@@ -79,7 +79,19 @@ public final class MapValues
                 maps.length(),
                 ArrayVector::new);
         System.arraycopy(maps.offsets(), 0, arrays.offsets(), 0, maps.length() + 1);
-        arrays.setElements(maps.values());
+        arrays.setElements(context.allocator().copyStreams(ALLOCATION_CONTEXT, maps.values()));
         return arrays;
+    }
+
+    private static BooleanVector copyNulls(BooleanVector inputNulls, Streams output, PrimitiveExecutionContext context)
+    {
+        BooleanVector outputNulls = context.allocator().allocateOrGrow(
+                ALLOCATION_CONTEXT,
+                output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
+                BooleanVector.class,
+                inputNulls.length(),
+                BooleanVector::new);
+        System.arraycopy(inputNulls.values(), 0, outputNulls.values(), 0, inputNulls.length());
+        return outputNulls;
     }
 }
