@@ -31,8 +31,7 @@ public class NestedLoopJoinOperator
     private final Allocator allocator;
     private final Operator outer;
     private final Operator inner;
-    private final Integer outerJoinColumn;
-    private final Integer innerJoinColumn;
+    private final JoinMatcher matcher;
     private final JoinBufferSupport buffers;
 
     private boolean innerLoaded;
@@ -59,21 +58,20 @@ public class NestedLoopJoinOperator
 
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner)
     {
-        this(allocator, outer, null, inner, null);
+        this(allocator, outer, inner, new CrossJoinMatcher());
     }
 
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
-        this(allocator, outer, Integer.valueOf(outerJoinColumn), inner, Integer.valueOf(innerJoinColumn));
+        this(allocator, outer, inner, new EquiJoinMatcher(outerJoinColumn, innerJoinColumn));
     }
 
-    private NestedLoopJoinOperator(Allocator allocator, Operator outer, Integer outerJoinColumn, Operator inner, Integer innerJoinColumn)
+    private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
     {
         this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
-        this.outerJoinColumn = outerJoinColumn;
-        this.innerJoinColumn = innerJoinColumn;
+        this.matcher = matcher;
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         result = new Streams[outer.outputCount() + inner.outputCount()];
         outerBuffer = new Streams[outer.outputCount()];
@@ -96,7 +94,7 @@ public class NestedLoopJoinOperator
 
     private Mask produceBatch()
     {
-        if (outerJoinColumn != null) {
+        if (!matcher.isCrossJoin()) {
             return produceEquiJoinBatch();
         }
 
@@ -191,7 +189,7 @@ public class NestedLoopJoinOperator
             while (currentInnerBatch < innerBatches.size() && outputPosition < BATCH_SIZE) {
                 InnerBatch innerBatch = innerBatches.get(currentInnerBatch);
                 while (currentInnerPosition < innerBatch.length() && outputPosition < BATCH_SIZE) {
-                    if (joinMatches(currentOuterPosition, innerBatch, currentInnerPosition)) {
+                    if (matcher.matches(currentOuterBatch, currentOuterPosition, innerBatch.columns(), currentInnerPosition)) {
                         appendJoinMatch(outputPosition, innerBatch, currentInnerPosition);
                         outputPosition++;
                     }
@@ -232,19 +230,6 @@ public class NestedLoopJoinOperator
             }
         }
         return false;
-    }
-
-    private boolean joinMatches(int outerPosition, InnerBatch innerBatch, int innerPosition)
-    {
-        Output outerOutput = currentOuterBatch.output(outerJoinColumn);
-        Streams innerStreams = innerBatch.columns()[innerJoinColumn];
-        return OperatorEqualitySemantics.equal(
-                outerOutput.borrow(Stream.VALUES),
-                (org.weakref.nitro.data.BooleanVector) outerOutput.borrowOrNull(Stream.NULLS),
-                outerPosition,
-                innerStreams.values(),
-                (org.weakref.nitro.data.BooleanVector) innerStreams.getOrNull(Stream.NULLS),
-                innerPosition);
     }
 
     private void appendJoinMatch(int outputPosition, InnerBatch innerBatch, int innerPosition)
