@@ -95,8 +95,13 @@ public class Allocator
             return allocateBinary(context, positionCount, byteCapacity);
         }
         if (vector.length() < positionCount || vector.byteCapacity() < byteCapacity) {
+            BinaryVector grown = allocateBinary(context, positionCount, byteCapacity);
+            System.arraycopy(vector.offsets(), 0, grown.offsets(), 0, vector.length() + 1);
+            int bytesUsed = Arrays.stream(vector.offsets()).max().orElse(0);
+            System.arraycopy(vector.data(), 0, grown.data(), 0, bytesUsed);
+            grown.addTraits(vector.traits());
             releaseVector(context, vector);
-            return allocateBinary(context, positionCount, byteCapacity);
+            return grown;
         }
         return vector;
     }

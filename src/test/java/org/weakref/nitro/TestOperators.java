@@ -1080,6 +1080,35 @@ public class TestOperators
     }
 
     @Test
+    void testNestedLoopEquiJoin()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(2L, 20L),
+                                        row(null, 30L),
+                                        row(3L, 40L))),
+                        0,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(2L, 200L),
+                                        row(null, 300L),
+                                        row(3L, 400L),
+                                        row(4L, 500L))),
+                        0)))
+                .matchesExactly(List.of(
+                        row(2L, 20L, 2L, 200L),
+                        row(3L, 40L, 3L, 400L)));
+    }
+
+    @Test
     void testProject()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

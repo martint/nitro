@@ -340,6 +340,60 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testNestedLoopJoinOperatorSupportsI64EquiJoin()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new NestedLoopJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(2L, 20L),
+                        row(3L, 30L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2L, 200L),
+                        row(3L, 300L),
+                        row(4L, 400L))),
+                0);
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 3L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(20L, 30L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 3L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(3).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(200L, 300L);
+    }
+
+    @Test
+    void testNestedLoopJoinOperatorSupportsUtf8EquiJoin()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new NestedLoopJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("alpha", 10L),
+                        row("beta", 20L),
+                        row((Object) null, 30L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("beta", 200L),
+                        row("alpha", 100L),
+                        row((Object) null, 300L))),
+                0);
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        I64Vector leftPayload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector rightPayload = (I64Vector) batch.output(3).borrow(Stream.VALUES);
+
+        assertThat(keys.utf8Value(0)).isEqualTo("alpha");
+        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
+        assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
+    }
+
+    @Test
     void testTableOperatorProducesBatch()
     {
         Operator operator = new TableOperator(
