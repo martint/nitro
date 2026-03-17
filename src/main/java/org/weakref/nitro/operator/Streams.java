@@ -17,6 +17,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
 
@@ -25,10 +26,17 @@ import static java.util.Objects.requireNonNull;
 public final class Streams
 {
     private final EnumMap<Stream, Vector> vectors;
+    private final Map<Stream, Vector> view;
 
     private Streams(EnumMap<Stream, Vector> vectors)
     {
-        this.vectors = new EnumMap<>(vectors);
+        this(vectors, true);
+    }
+
+    private Streams(EnumMap<Stream, Vector> vectors, boolean copy)
+    {
+        this.vectors = copy ? new EnumMap<>(vectors) : vectors;
+        this.view = Collections.unmodifiableMap(this.vectors);
     }
 
     public static Streams empty()
@@ -58,7 +66,7 @@ public final class Streams
 
         EnumMap<Stream, Vector> updated = new EnumMap<>(vectors);
         updated.put(stream, vector);
-        return new Streams(updated);
+        return new Streams(updated, false);
     }
 
     public boolean has(Stream stream)
@@ -89,6 +97,6 @@ public final class Streams
 
     public Map<Stream, Vector> asMap()
     {
-        return Map.copyOf(vectors);
+        return view;
     }
 }

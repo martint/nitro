@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Set;
@@ -27,6 +28,7 @@ import static java.util.Objects.requireNonNull;
 public final class Output
 {
     private final EnumSet<Stream> exposedStreams;
+    private final Set<Stream> exposedStreamsView;
     private final Function<Stream, Vector> resolver;
     private final BiFunction<Stream, Vector, Vector> takeResolver;
     private final EnumMap<Stream, Vector> resolvedStreams = new EnumMap<>(Stream.class);
@@ -48,6 +50,7 @@ public final class Output
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedStreams = exposedStreams.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(exposedStreams);
+        this.exposedStreamsView = Collections.unmodifiableSet(this.exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
         this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
     }
@@ -82,6 +85,6 @@ public final class Output
 
     public Set<Stream> streams()
     {
-        return Set.copyOf(exposedStreams);
+        return exposedStreamsView;
     }
 }
