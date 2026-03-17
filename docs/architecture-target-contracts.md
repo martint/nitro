@@ -45,6 +45,14 @@ Operators are responsible for:
 Operators are not responsible for implementing their own scalar expression
 evaluation engines.
 
+Join algorithms should likewise stay separate from join-key semantics. A
+dedicated equi-join operator such as `HashJoinOperator` may own the build/probe
+algorithm for keyed joins, while fallback operators such as
+`NestedLoopJoinOperator` may remain useful for cross joins or simple fallback
+paths. In both cases, join-key equality and key construction should come from
+shared operator semantics helpers rather than ad hoc type dispatch in the
+operator body.
+
 ### The evaluator owns scalar semantics
 
 The evaluator is responsible for:

@@ -32,6 +32,7 @@ import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
+import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
@@ -1113,6 +1114,66 @@ public class TestOperators
     {
         assertThat(operator(
                 new NestedLoopJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                3,
+                                List.of(
+                                        row(1L, "alpha", 10L),
+                                        row(1L, "beta", 20L),
+                                        row(2L, "alpha", 30L),
+                                        row(2L, null, 40L),
+                                        row(null, "alpha", 50L))),
+                        new int[] {0, 1},
+                        new ConstantTableOperator(
+                                allocator,
+                                3,
+                                List.of(
+                                        row(1L, "alpha", 100L),
+                                        row(1L, "beta", 200L),
+                                        row(2L, "beta", 300L),
+                                        row(2L, null, 400L),
+                                        row(null, "alpha", 500L))),
+                        new int[] {0, 1})))
+                .matchesExactly(List.of(
+                        row(1L, "alpha", 10L, 1L, "alpha", 100L),
+                        row(1L, "beta", 20L, 1L, "beta", 200L)));
+    }
+
+    @Test
+    void testHashJoin()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(2L, 20L),
+                                        row(null, 30L),
+                                        row(3L, 40L))),
+                        0,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(2L, 200L),
+                                        row(null, 300L),
+                                        row(3L, 400L),
+                                        row(4L, 500L))),
+                        0)))
+                .matchesExactly(List.of(
+                        row(2L, 20L, 2L, 200L),
+                        row(3L, 40L, 3L, 400L)));
+    }
+
+    @Test
+    void testHashJoinMultiKey()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
                         allocator,
                         new ConstantTableOperator(
                                 allocator,
