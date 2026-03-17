@@ -21,7 +21,6 @@ import java.util.EnumSet;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -38,20 +37,6 @@ public final class Output
         var streamsByKind = streams.asMap();
         EnumSet<Stream> exposedStreams = streamsByKind.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(streamsByKind.keySet());
         return new Output(exposedStreams, streams::get);
-    }
-
-    public static Output values(Vector values)
-    {
-        return of(Streams.ofValues(values));
-    }
-
-    public static Output lazyValues(Supplier<? extends Vector> supplier)
-    {
-        requireNonNull(supplier, "supplier is null");
-        return new Output(EnumSet.of(Stream.VALUES), stream -> switch (stream) {
-            case VALUES -> supplier.get();
-            case NULLS, ERRORS -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
-        });
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)

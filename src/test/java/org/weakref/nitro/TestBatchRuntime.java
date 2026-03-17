@@ -72,7 +72,7 @@ public class TestBatchRuntime
     void testSimpleBatchInvalidatesMaskAfterTake()
     {
         Mask mask = Mask.range(5, 3);
-        Batch batch = new Batch(mask, Output.values(new I64Vector(8)));
+        Batch batch = new Batch(mask, Output.of(Streams.ofValues(new I64Vector(8))));
 
         assertThat(batch.borrowMask()).isSameAs(mask);
         assertThat(batch.takeMask()).isSameAs(mask);

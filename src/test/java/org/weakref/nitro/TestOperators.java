@@ -214,7 +214,7 @@ public class TestOperators
             public Batch next()
             {
                 hasNext = false;
-                return new Batch(Mask.all(4), Output.values(dictionary));
+                return new Batch(Mask.all(4), Output.of(Streams.ofValues(dictionary)));
             }
 
             @Override
