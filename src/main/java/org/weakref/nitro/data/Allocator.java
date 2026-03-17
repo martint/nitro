@@ -559,6 +559,15 @@ public class Allocator
         return copied;
     }
 
+    public Streams copyStreams(Context context, Streams streams, int[] positions)
+    {
+        Streams copied = Streams.empty();
+        for (Map.Entry<org.weakref.nitro.operator.evaluator.ir.Stream, Vector> entry : streams.asMap().entrySet()) {
+            copied = copied.with(entry.getKey(), copyVector(context, entry.getValue(), positions));
+        }
+        return copied;
+    }
+
     public Vector copyVector(Context context, Vector vector)
     {
         return switch (vector) {
@@ -608,6 +617,117 @@ public class Allocator
             case RleVector values -> allocateRle(context, values.counts(), copyVector(context, values.values()));
             default -> throw new IllegalArgumentException("Unsupported vector type for copying: " + vector.getClass().getSimpleName());
         };
+    }
+
+    public Vector copyVector(Context context, Vector vector, int[] positions)
+    {
+        return switch (vector) {
+            case I64Vector values -> {
+                I64Vector copy = allocate(context, I64Vector.class, positions.length, I64Vector::new);
+                for (int index = 0; index < positions.length; index++) {
+                    copy.values()[index] = values.values()[positions[index]];
+                }
+                yield copy;
+            }
+            case BooleanVector values -> {
+                BooleanVector copy = allocate(context, BooleanVector.class, positions.length, BooleanVector::new);
+                for (int index = 0; index < positions.length; index++) {
+                    copy.values()[index] = values.values()[positions[index]];
+                }
+                yield copy;
+            }
+            case F64Vector values -> {
+                F64Vector copy = allocate(context, F64Vector.class, positions.length, F64Vector::new);
+                for (int index = 0; index < positions.length; index++) {
+                    copy.values()[index] = values.values()[positions[index]];
+                }
+                yield copy;
+            }
+            case BinaryVector values -> {
+                int totalBytes = 0;
+                for (int position : positions) {
+                    totalBytes += values.length(position);
+                }
+                BinaryVector copy = allocateBinary(context, positions.length, totalBytes);
+                copy.addTraits(values.traits());
+                for (int index = 0; index < positions.length; index++) {
+                    int position = positions[index];
+                    int length = values.length(position);
+                    if (length == 0) {
+                        copy.setNull(index);
+                    }
+                    else {
+                        copy.setBytes(index, values.data(), values.startOffset(position), length);
+                    }
+                }
+                yield copy;
+            }
+            case ArrayVector values -> {
+                ArrayVector copy = allocateArray(context, positions.length);
+                int totalElements = 0;
+                for (int index = 0; index < positions.length; index++) {
+                    copy.offsets()[index] = totalElements;
+                    totalElements += values.length(positions[index]);
+                }
+                copy.offsets()[positions.length] = totalElements;
+                copy.setElements(copyStreams(context, values.elements(), nestedPositions(values.offsets(), positions, totalElements)));
+                yield copy;
+            }
+            case MapVector values -> {
+                MapVector copy = allocateMap(context, positions.length);
+                int totalEntries = 0;
+                for (int index = 0; index < positions.length; index++) {
+                    copy.offsets()[index] = totalEntries;
+                    totalEntries += values.length(positions[index]);
+                }
+                copy.offsets()[positions.length] = totalEntries;
+                int[] entryPositions = nestedPositions(values.offsets(), positions, totalEntries);
+                copy.setEntries(
+                        copyStreams(context, values.keys(), entryPositions),
+                        copyStreams(context, values.values(), entryPositions));
+                yield copy;
+            }
+            case StructVector values -> {
+                StructVector copy = allocate(context, StructVector.class, positions.length, StructVector::new);
+                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
+                    copy.setField(entry.getKey(), copyStreams(context, entry.getValue(), positions));
+                }
+                yield copy;
+            }
+            case DictionaryVector values -> copyVector(context, values.values(), dictionaryPositions(values.ids(), positions));
+            case RleVector values -> copyVector(context, values.values(), rlePositions(values, positions));
+            default -> throw new IllegalArgumentException("Unsupported vector type for copying: " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static int[] dictionaryPositions(int[] ids, int[] positions)
+    {
+        int[] result = new int[positions.length];
+        for (int index = 0; index < positions.length; index++) {
+            result[index] = ids[positions[index]];
+        }
+        return result;
+    }
+
+    private static int[] rlePositions(RleVector values, int[] positions)
+    {
+        int[] result = new int[positions.length];
+        for (int index = 0; index < positions.length; index++) {
+            result[index] = values.runIndex(positions[index]);
+        }
+        return result;
+    }
+
+    private static int[] nestedPositions(int[] offsets, int[] positions, int totalElements)
+    {
+        int[] result = new int[totalElements];
+        int next = 0;
+        for (int position : positions) {
+            for (int element = offsets[position]; element < offsets[position + 1]; element++) {
+                result[next++] = element;
+            }
+        }
+        return result;
     }
 
     private void transferMask(Mask mask, Context preferredContext)

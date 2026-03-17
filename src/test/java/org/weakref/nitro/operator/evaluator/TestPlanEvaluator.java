@@ -410,12 +410,10 @@ public class TestPlanEvaluator
         BinaryVector keys = (BinaryVector) arrays.elementValues();
         BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
 
-        assertThat(arrays.offsets()).containsExactly(0, 2, 3, 3, 5);
-        assertThat(keys.utf8Value(0)).isEqualTo("alpha");
-        assertThat(keys.utf8Value(1)).isEqualTo("beta");
-        assertThat(keys.utf8Value(2)).isEqualTo("gamma");
-        assertThat(keys.utf8Value(3)).isEqualTo("delta");
-        assertThat(keys.utf8Value(4)).isEqualTo("epsilon");
+        assertThat(arrays.offsets()).containsExactly(0, 0, 1, 1, 3);
+        assertThat(keys.utf8Value(0)).isEqualTo("gamma");
+        assertThat(keys.utf8Value(1)).isEqualTo("delta");
+        assertThat(keys.utf8Value(2)).isEqualTo("epsilon");
         assertThat(nulls.values()).containsExactly(false, true, false, false);
     }
 
@@ -455,10 +453,10 @@ public class TestPlanEvaluator
         BooleanVector elementNulls = arrays.elementNulls();
         BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
 
-        assertThat(arrays.offsets()).containsExactly(0, 2, 3, 3, 5);
-        assertThat(values.values()).containsExactly(10L, 20L, 30L, 40L, 50L);
-        assertThat(elementNulls.values()).containsExactly(false, false, true, false, false);
-        assertThat(nulls.values()).containsExactly(false, true, false, false);
+        assertThat(arrays.offsets()).containsExactly(0, 2, 2, 2, 2);
+        assertThat(values.values()).containsExactly(10L, 20L);
+        assertThat(elementNulls.values()).containsExactly(false, false);
+        assertThat(nulls.values()).containsExactly(false, false, false, false);
     }
 
     @Test

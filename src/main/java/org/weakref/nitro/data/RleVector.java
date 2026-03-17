@@ -23,6 +23,7 @@ public final class RleVector
     private final int length;
     private final int[] counts;
     private final Vector values;
+    private int[] runEnds;
 
     public RleVector(int[] counts, Vector values)
     {
@@ -78,10 +79,37 @@ public final class RleVector
         return values;
     }
 
+    public int runIndex(int position)
+    {
+        if (position < 0 || position >= length) {
+            throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + length);
+        }
+
+        int[] ends = runEnds;
+        if (ends == null) {
+            ends = computeRunEnds();
+            runEnds = ends;
+        }
+
+        int index = Arrays.binarySearch(ends, position + 1);
+        return index >= 0 ? index : -index - 1;
+    }
+
     @Override
     public int length()
     {
         return length;
+    }
+
+    private int[] computeRunEnds()
+    {
+        int[] ends = new int[counts.length];
+        int current = 0;
+        for (int index = 0; index < counts.length; index++) {
+            current += counts[index];
+            ends[index] = current;
+        }
+        return ends;
     }
 
     @Override

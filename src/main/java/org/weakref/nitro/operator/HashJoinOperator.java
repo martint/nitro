@@ -39,6 +39,10 @@ public class HashJoinOperator
     private final JoinBufferSupport buffers;
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
+    private final OperatorKeySemantics.Key[] outerProbeKeys;
+    private final OperatorKeySemantics.Key[] innerProbeKeys;
+    private final OperatorKeySemantics.CompositeProbeKey outerCompositeProbeKey;
+    private final OperatorKeySemantics.CompositeProbeKey innerCompositeProbeKey;
 
     private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
 
@@ -75,6 +79,10 @@ public class HashJoinOperator
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, outer.outputCount(), inner.outputCount());
+        this.outerProbeKeys = new OperatorKeySemantics.Key[outerJoinColumns.length];
+        this.innerProbeKeys = new OperatorKeySemantics.Key[innerJoinColumns.length];
+        this.outerCompositeProbeKey = outerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length) : null;
+        this.innerCompositeProbeKey = innerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(innerJoinColumns.length) : null;
     }
 
     @Override
@@ -184,7 +192,6 @@ public class HashJoinOperator
 
     private OperatorKeySemantics.Key keyForOuterPosition()
     {
-        OperatorKeySemantics.Key[] keys = new OperatorKeySemantics.Key[outerJoinColumns.length];
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
             OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
@@ -194,9 +201,9 @@ public class HashJoinOperator
             if (key == null) {
                 return null;
             }
-            keys[keyIndex] = key;
+            outerProbeKeys[keyIndex] = key;
         }
-        return OperatorKeySemantics.probeCompositeKey(keys);
+        return OperatorKeySemantics.probeCompositeKey(outerProbeKeys, outerCompositeProbeKey);
     }
 
     private void loadInnerIfNecessary()
@@ -212,7 +219,6 @@ public class HashJoinOperator
     private void indexInnerRows(Streams[] columns, int startPosition, int length, int batchIndex)
     {
         for (int position = startPosition; position < startPosition + length; position++) {
-            OperatorKeySemantics.Key[] keys = new OperatorKeySemantics.Key[innerJoinColumns.length];
             boolean hasNull = false;
             for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
                 Streams streams = columns[innerJoinColumns[keyIndex]];
@@ -224,12 +230,12 @@ public class HashJoinOperator
                     hasNull = true;
                     break;
                 }
-                keys[keyIndex] = key;
+                innerProbeKeys[keyIndex] = key;
             }
             if (hasNull) {
                 continue;
             }
-            OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(keys);
+            OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(innerProbeKeys, innerCompositeProbeKey);
             LongArrayList rows = innerIndex.get(compositeKey);
             if (rows == null) {
                 OperatorKeySemantics.Key ownedKey = OperatorKeySemantics.ownedKey(compositeKey);

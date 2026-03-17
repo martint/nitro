@@ -158,14 +158,7 @@ final class OperatorVectorSupport
 
     public static int runIndex(RleVector values, int position)
     {
-        int offset = 0;
-        for (int index = 0; index < values.counts().length; index++) {
-            offset += values.counts()[index];
-            if (position < offset) {
-                return index;
-            }
-        }
-        throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + values.length());
+        return values.runIndex(position);
     }
 
     private static int binaryHash(byte[] bytes, int offset, int length)

@@ -55,6 +55,20 @@ final class OperatorKeySemantics
         return keys.length == 1 ? keys[0] : new CompositeProbeKey(keys);
     }
 
+    public static CompositeProbeKey reusableCompositeProbeKey(int keyCount)
+    {
+        return new CompositeProbeKey(new Key[keyCount], false);
+    }
+
+    public static Key probeCompositeKey(Key[] keys, CompositeProbeKey reusable)
+    {
+        if (keys.length == 1) {
+            return keys[0];
+        }
+        reusable.setKeys(keys);
+        return reusable;
+    }
+
     public static Key ownedKey(Key key)
     {
         return switch (key) {
@@ -163,9 +177,33 @@ final class OperatorKeySemantics
         }
     }
 
-    public record CompositeProbeKey(Key[] keys)
+    public static final class CompositeProbeKey
             implements Key
     {
+        private Key[] keys;
+        private final boolean copyKeys;
+
+        public CompositeProbeKey(Key[] keys)
+        {
+            this(keys, true);
+        }
+
+        private CompositeProbeKey(Key[] keys, boolean copyKeys)
+        {
+            this.copyKeys = copyKeys;
+            this.keys = copyKeys ? keys.clone() : keys;
+        }
+
+        public void setKeys(Key[] keys)
+        {
+            this.keys = copyKeys ? keys.clone() : keys;
+        }
+
+        public Key[] keys()
+        {
+            return keys;
+        }
+
         @Override
         public boolean equals(Object object)
         {

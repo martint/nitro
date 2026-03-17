@@ -50,42 +50,25 @@ public final class MapKeys
         Streams result = Streams.empty();
         int requiredLength = input.length();
         boolean reuseOutput = mask.all();
-        Mask evaluationMask = reuseOutput ? mask : Mask.all(input.length());
         Streams evaluationOutput = reuseOutput ? output : null;
 
         if (requestedStreams.contains(Stream.VALUES)) {
-            result = result.with(Stream.VALUES, mapKeys(input, evaluationOutput, context, evaluationMask, requiredLength));
+            result = result.with(Stream.VALUES, mapKeys(input, evaluationOutput, context, mask, requiredLength));
         }
         if (requestedStreams.contains(Stream.NULLS) && inputNulls != null) {
-            result = result.with(Stream.NULLS, copyNulls(inputNulls, evaluationOutput, context, evaluationMask, requiredLength));
+            result = result.with(Stream.NULLS, copyNulls(inputNulls, evaluationOutput, context, mask, requiredLength));
         }
         return result;
     }
 
-    private static Vector mapKeys(Vector input, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
-    {
-        if (input instanceof MapVector maps) {
-            return arrayKeys(maps, output, context, mask, requiredLength);
-        }
-        if (input instanceof DictionaryVector dictionary) {
-            checkArgument(dictionary.values() instanceof MapVector, "map_keys requires MapVector dictionary values");
-            return dictionaryKeys(dictionary, (MapVector) dictionary.values(), output, context, mask, requiredLength);
-        }
-        throw new IllegalArgumentException("map_keys requires MapVector input");
-    }
-
     private static DictionaryVector dictionaryKeys(DictionaryVector dictionary, MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
+        if (!mask.all()) {
+            return null;
+        }
         DictionaryVector existing = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector vector ? vector : null;
         int[] ids = existing != null ? existing.ids() : new int[requiredLength];
-        if (mask.all()) {
-            System.arraycopy(dictionary.ids(), 0, ids, 0, dictionary.length());
-        }
-        else {
-            for (int position : mask) {
-                ids[position] = dictionary.ids()[position];
-            }
-        }
+        System.arraycopy(dictionary.ids(), 0, ids, 0, dictionary.length());
         return context.allocator().allocateDictionary(ALLOCATION_CONTEXT, ids, arrayKeys(maps, null, context, Mask.all(maps.length()), maps.length()));
     }
 
@@ -97,17 +80,79 @@ public final class MapKeys
                 ArrayVector.class,
                 requiredLength,
                 ArrayVector::new);
-        if (mask.all()) {
-            System.arraycopy(maps.offsets(), 0, arrays.offsets(), 0, maps.length() + 1);
-        }
-        else {
-            for (int position : mask) {
-                arrays.offsets()[position] = maps.offsets()[position];
-                arrays.offsets()[position + 1] = maps.offsets()[position + 1];
-            }
-        }
+        System.arraycopy(maps.offsets(), 0, arrays.offsets(), 0, maps.length() + 1);
         arrays.setElements(context.allocator().copyStreams(ALLOCATION_CONTEXT, maps.keys()));
         return arrays;
+    }
+
+    private static Vector mapKeys(Vector input, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
+    {
+        if (input instanceof MapVector maps) {
+            if (!mask.all()) {
+                return selectedArray(maps, context, mask, requiredLength, selectedPositions(mask), maps.keys());
+            }
+            return arrayKeys(maps, output, context, mask, requiredLength);
+        }
+        if (input instanceof DictionaryVector dictionary) {
+            checkArgument(dictionary.values() instanceof MapVector, "map_keys requires MapVector dictionary values");
+            if (mask.all()) {
+                return dictionaryKeys(dictionary, (MapVector) dictionary.values(), output, context, mask, requiredLength);
+            }
+            return selectedArray(
+                    (MapVector) dictionary.values(),
+                    context,
+                    mask,
+                    requiredLength,
+                    selectedDictionaryPositions(dictionary, mask),
+                    ((MapVector) dictionary.values()).keys());
+        }
+        throw new IllegalArgumentException("map_keys requires MapVector input");
+    }
+
+    private static ArrayVector selectedArray(MapVector maps, PrimitiveExecutionContext context, Mask mask, int requiredLength, int[] mapPositions, Streams elements)
+    {
+        ArrayVector arrays = context.allocator().allocateArray(ALLOCATION_CONTEXT, requiredLength);
+        int currentOffset = 0;
+        int selectedIndex = 0;
+        for (int position = 0; position < requiredLength; position++) {
+            if (selectedIndex < mask.selectedCount() && mask.position(selectedIndex) == position) {
+                currentOffset += maps.length(mapPositions[selectedIndex]);
+                selectedIndex++;
+            }
+            arrays.offsets()[position + 1] = currentOffset;
+        }
+        arrays.setElements(context.allocator().copyStreams(ALLOCATION_CONTEXT, elements, nestedPositions(maps.offsets(), mapPositions, currentOffset)));
+        return arrays;
+    }
+
+    private static int[] selectedPositions(Mask mask)
+    {
+        int[] positions = new int[mask.selectedCount()];
+        for (int index = 0; index < positions.length; index++) {
+            positions[index] = mask.position(index);
+        }
+        return positions;
+    }
+
+    private static int[] selectedDictionaryPositions(DictionaryVector dictionary, Mask mask)
+    {
+        int[] positions = new int[mask.selectedCount()];
+        for (int index = 0; index < positions.length; index++) {
+            positions[index] = dictionary.ids()[mask.position(index)];
+        }
+        return positions;
+    }
+
+    private static int[] nestedPositions(int[] offsets, int[] positions, int totalEntries)
+    {
+        int[] entryPositions = new int[totalEntries];
+        int next = 0;
+        for (int position : positions) {
+            for (int entry = offsets[position]; entry < offsets[position + 1]; entry++) {
+                entryPositions[next++] = entry;
+            }
+        }
+        return entryPositions;
     }
 
     private static BooleanVector copyNulls(BooleanVector inputNulls, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
