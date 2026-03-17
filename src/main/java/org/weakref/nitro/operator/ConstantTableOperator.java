@@ -14,11 +14,14 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class ConstantTableOperator
@@ -27,33 +30,16 @@ public class ConstantTableOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ConstantTableOperator");
     private final Allocator allocator;
 
-    private final I64Vector[] columns;
-    private final BooleanVector[] nulls;
+    private final Streams[] columns;
     private final int count;
     private boolean done;
 
     public ConstantTableOperator(Allocator allocator, int columnCount, List<Row> rows)
     {
         this.allocator = allocator;
-        columns = new I64Vector[columnCount];
-        nulls = new BooleanVector[columnCount];
-        for (int i = 0; i < columns.length; i++) {
-            columns[i] = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rows.size(), I64Vector::new);
-            nulls[i] = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
-        }
-
-        for (int position = 0; position < rows.size(); position++) {
-            Row row = rows.get(position);
-            Long[] values = row.values();
-            for (int column = 0; column < values.length; column++) {
-                if (values[column] == null) {
-                    nulls[column].values()[position] = true;
-                }
-                else {
-                    nulls[column].values()[position] = false;
-                    columns[column].values()[position] = values[column];
-                }
-            }
+        columns = new Streams[columnCount];
+        for (int column = 0; column < columns.length; column++) {
+            columns[column] = buildColumn(rows, column);
         }
 
         this.count = rows.size();
@@ -77,7 +63,7 @@ public class ConstantTableOperator
         done = true;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            Streams streams = Streams.ofValuesAndNulls(columns[outputIndex], nulls[outputIndex]);
+            Streams streams = columns[outputIndex];
             outputs[outputIndex] = new Output(streams.asMap().keySet(), streams::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
         return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, count), takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
@@ -92,5 +78,169 @@ public class ConstantTableOperator
     public void close()
     {
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private Streams buildColumn(List<Row> rows, int column)
+    {
+        ColumnKind kind = inferColumnKind(rows, column);
+        return switch (kind) {
+            case I64 -> buildI64Column(rows, column);
+            case BOOLEAN -> buildBooleanColumn(rows, column);
+            case F64 -> buildDoubleColumn(rows, column);
+            case UTF8 -> buildUtf8Column(rows, column);
+            case BINARY -> buildBinaryColumn(rows, column);
+        };
+    }
+
+    private Streams buildI64Column(List<Row> rows, int column)
+    {
+        I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rows.size(), I64Vector::new);
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                nulls.values()[position] = true;
+                continue;
+            }
+            values.values()[position] = ((Number) value).longValue();
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
+    private Streams buildBooleanColumn(List<Row> rows, int column)
+    {
+        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                nulls.values()[position] = true;
+                continue;
+            }
+            values.values()[position] = (Boolean) value;
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
+    private Streams buildDoubleColumn(List<Row> rows, int column)
+    {
+        F64Vector values = allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, rows.size(), F64Vector::new);
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                nulls.values()[position] = true;
+                continue;
+            }
+            values.values()[position] = ((Number) value).doubleValue();
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
+    private Streams buildUtf8Column(List<Row> rows, int column)
+    {
+        int byteCapacity = 0;
+        boolean asciiOnly = true;
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                continue;
+            }
+            byte[] bytes = ((String) value).getBytes(StandardCharsets.UTF_8);
+            byteCapacity += bytes.length;
+            asciiOnly &= bytes.length == ((String) value).length();
+        }
+
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rows.size(), byteCapacity);
+        values.addTrait(BinaryVector.Trait.UTF8_STRING);
+        if (asciiOnly) {
+            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        }
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                nulls.values()[position] = true;
+                values.setNull(position);
+                continue;
+            }
+            values.setBytes(position, ((String) value).getBytes(StandardCharsets.UTF_8));
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
+    private Streams buildBinaryColumn(List<Row> rows, int column)
+    {
+        int byteCapacity = 0;
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value != null) {
+                byteCapacity += ((byte[]) value).length;
+            }
+        }
+
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rows.size(), byteCapacity);
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                nulls.values()[position] = true;
+                values.setNull(position);
+                continue;
+            }
+            values.setBytes(position, (byte[]) value);
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
+    private static ColumnKind inferColumnKind(List<Row> rows, int column)
+    {
+        ColumnKind kind = null;
+        for (Row row : rows) {
+            Object value = value(row, column);
+            if (value == null) {
+                continue;
+            }
+
+            ColumnKind candidate = columnKind(value);
+            if (kind == null) {
+                kind = candidate;
+                continue;
+            }
+            if (kind != candidate) {
+                throw new IllegalArgumentException("Mixed column types are not supported in ConstantTableOperator");
+            }
+        }
+        return kind == null ? ColumnKind.I64 : kind;
+    }
+
+    private static ColumnKind columnKind(Object value)
+    {
+        return switch (value) {
+            case Long _, Integer _, Short _, Byte _ -> ColumnKind.I64;
+            case Boolean _ -> ColumnKind.BOOLEAN;
+            case Double _, Float _ -> ColumnKind.F64;
+            case String _ -> ColumnKind.UTF8;
+            case byte[] _ -> ColumnKind.BINARY;
+            default -> throw new IllegalArgumentException("Unsupported ConstantTableOperator value type: " + value.getClass().getSimpleName());
+        };
+    }
+
+    private static Object value(Row row, int column)
+    {
+        Object[] values = row.values();
+        if (column >= values.length) {
+            throw new IllegalArgumentException("Row has fewer columns than expected");
+        }
+        return values[column];
+    }
+
+    private enum ColumnKind
+    {
+        I64,
+        BOOLEAN,
+        F64,
+        UTF8,
+        BINARY,
     }
 }

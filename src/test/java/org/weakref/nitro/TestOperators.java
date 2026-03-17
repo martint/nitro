@@ -19,6 +19,8 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
@@ -36,6 +38,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
@@ -62,6 +65,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -226,6 +230,54 @@ public class TestOperators
 
         assertThat(operator(new ProjectOperator(allocator, evaluationPlan, primitiveRegistry, source)))
                 .matchesExactly(List.of(row(30L), row(10L), row(20L), row(30L)));
+    }
+
+    @Test
+    void testConstantTableOperatorSupportsTypedScalarColumns()
+    {
+        assertThat(operator(new ConstantTableOperator(
+                allocator,
+                3,
+                List.of(
+                        row("alice", 1.5, true),
+                        row(null, 2.5, false)))))
+                .matchesExactly(List.of(
+                        row("alice", 1.5, 1L),
+                        row(null, 2.5, 0L)));
+    }
+
+    @Test
+    void testOperatorAssertionsDecodeNestedArrays()
+    {
+        ArrayVector arrays = new ArrayVector(1);
+        arrays.offsets()[0] = 0;
+        arrays.offsets()[1] = 2;
+        arrays.setElements(Streams.ofValues(new I64Vector(new long[] {10L, 20L})));
+
+        LinkedHashMap<String, Object> expected = new LinkedHashMap<>();
+        expected.put("name", "alpha");
+        expected.put("score", 7L);
+
+        BinaryVector names = new BinaryVector(1, 5);
+        names.addTrait(BinaryVector.Trait.UTF8_STRING);
+        names.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        names.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        org.weakref.nitro.data.StructVector struct = new org.weakref.nitro.data.StructVector(1);
+        struct.setField("name", Streams.ofValues(names));
+        struct.setField("score", Streams.ofValues(new I64Vector(new long[] {7L})));
+
+        assertThat(operator(new TableOperator(
+                2,
+                List.of(new TableOperator.Page(
+                        1,
+                        new Streams[] {
+                                Streams.ofValues(arrays),
+                                Streams.ofValues(struct),
+                        },
+                        Mask.all(1))))))
+                .matchesExactly(List.of(
+                        row(List.of(10L, 20L), expected)));
     }
 
     @Test

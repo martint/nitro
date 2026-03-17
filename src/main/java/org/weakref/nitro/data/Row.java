@@ -17,9 +17,9 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-public record Row(Long... values)
+public record Row(Object... values)
 {
-    public static Row row(Long... values)
+    public static Row row(Object... values)
     {
         return new Row(values);
     }
@@ -27,7 +27,7 @@ public record Row(Long... values)
     @Override
     public boolean equals(Object o)
     {
-        if (o instanceof Row(Long[] values)) {
+        if (o instanceof Row(Object[] values)) {
             return Objects.deepEquals(this.values, values);
         }
 
@@ -44,7 +44,21 @@ public record Row(Long... values)
     public String toString()
     {
         return "(" + Arrays.stream(values)
-                .map(v -> v == null ? "null" : v.toString())
+                .map(Row::valueString)
                 .collect(Collectors.joining(",")) + ")";
+    }
+
+    private static String valueString(Object value)
+    {
+        if (value == null) {
+            return "null";
+        }
+        if (value instanceof byte[] bytes) {
+            return Arrays.toString(bytes);
+        }
+        if (value instanceof Object[] values) {
+            return Arrays.deepToString(values);
+        }
+        return value.toString();
     }
 }
