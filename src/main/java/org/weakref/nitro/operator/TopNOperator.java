@@ -17,7 +17,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.PriorityQueue;
 
@@ -40,7 +39,7 @@ public class TopNOperator
         this.n = n;
         this.column = column;
         this.source = source;
-        state = new TopNState(allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
+        state = new TopNState(column, allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
     }
 
     @Override
@@ -58,7 +57,7 @@ public class TopNOperator
     private Mask computeTopN()
     {
         // TODO: flat memory priority queue
-        PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
+        PriorityQueue<Entry> queue = new PriorityQueue<>(n, (left, right) -> state.compareSlots(left.position(), right.position()));
 
         while (source.hasNext()) {
             Batch batch = source.next();
@@ -66,19 +65,17 @@ public class TopNOperator
             Mask mask = batch.borrowMask();
 
             for (int position : mask) {
-                long value = state.orderingValue(batch.output(column), position);
-
                 if (queue.size() < n) {
                     int slot = queue.size();
-                    queue.add(new Entry(value, slot));
                     state.copyRow(batch, position, slot);
+                    queue.add(new Entry(slot));
                 }
                 else {
                     Entry head = queue.peek();
-                    if (value > head.value) {
+                    if (state.compareOrderingValue(batch.output(column), position, head.position()) > 0) {
                         queue.poll();
-                        queue.add(new Entry(value, head.position));
-                        state.copyRow(batch, position, head.position);
+                        state.copyRow(batch, position, head.position());
+                        queue.add(new Entry(head.position()));
                     }
                 }
             }
@@ -106,10 +103,10 @@ public class TopNOperator
         return new Batch(batchMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
-    private static List<Integer> orderedSlots(PriorityQueue<Entry> queue)
+    private List<Integer> orderedSlots(PriorityQueue<Entry> queue)
     {
         List<Entry> entries = new ArrayList<>(queue);
-        entries.sort(Comparator.comparingLong(Entry::value).reversed());
+        entries.sort((left, right) -> state.compareSlots(right.position(), left.position()));
         return entries.stream()
                 .map(Entry::position)
                 .toList();
@@ -128,5 +125,5 @@ public class TopNOperator
         allocator.release(ALLOCATION_CONTEXT);
     }
 
-    record Entry(long value, int position) {}
+    record Entry(int position) {}
 }

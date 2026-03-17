@@ -28,14 +28,16 @@ import java.util.List;
 
 final class TopNState
 {
+    private final int orderingColumn;
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
     private final Streams[][] rowSlots;
     private final Streams[] schema;
     private Streams[] materialized;
 
-    TopNState(Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
+    TopNState(int orderingColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
     {
+        this.orderingColumn = orderingColumn;
         this.allocator = allocator;
         this.allocationContext = allocationContext;
         this.rowSlots = new Streams[capacity][outputCount];
@@ -57,9 +59,29 @@ final class TopNState
         }
     }
 
-    public long orderingValue(Output output, int position)
+    public int compareOrderingValue(Output output, int position, int slot)
     {
-        return OperatorVectorSupport.longValue(output.borrow(Stream.VALUES), position);
+        Streams slotOrdering = rowSlots[slot][orderingColumn];
+        return OperatorOrderingSemantics.compare(
+                output.borrow(Stream.VALUES),
+                (BooleanVector) output.borrowOrNull(Stream.NULLS),
+                position,
+                slotOrdering.values(),
+                (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
+                0);
+    }
+
+    public int compareSlots(int leftSlot, int rightSlot)
+    {
+        Streams leftOrdering = rowSlots[leftSlot][orderingColumn];
+        Streams rightOrdering = rowSlots[rightSlot][orderingColumn];
+        return OperatorOrderingSemantics.compare(
+                leftOrdering.values(),
+                (BooleanVector) leftOrdering.getOrNull(Stream.NULLS),
+                0,
+                rightOrdering.values(),
+                (BooleanVector) rightOrdering.getOrNull(Stream.NULLS),
+                0);
     }
 
     public void copyRow(Batch batch, int position, int slot)

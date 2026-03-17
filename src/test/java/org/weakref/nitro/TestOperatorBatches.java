@@ -242,6 +242,53 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOperatorOrdersUtf8Keys()
+    {
+        Operator operator = new TopNOperator(
+                new Allocator(),
+                2,
+                0,
+                new ConstantTableOperator(
+                        new Allocator(),
+                        2,
+                        List.of(
+                                row("apple", 1L),
+                                row("pear", 2L),
+                                row("banana", 3L))));
+
+        Batch batch = operator.next();
+        BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        I64Vector payload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(keys.utf8Value(0)).isEqualTo("pear");
+        assertThat(keys.utf8Value(1)).isEqualTo("banana");
+        assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(2L, 3L);
+    }
+
+    @Test
+    void testTopNOperatorOrdersDoubles()
+    {
+        Operator operator = new TopNOperator(
+                new Allocator(),
+                2,
+                0,
+                new ConstantTableOperator(
+                        new Allocator(),
+                        2,
+                        List.of(
+                                row(1.5, 10L),
+                                row(3.25, 20L),
+                                row(2.5, 30L))));
+
+        Batch batch = operator.next();
+        org.weakref.nitro.data.F64Vector values = (org.weakref.nitro.data.F64Vector) batch.output(0).borrow(Stream.VALUES);
+        I64Vector payload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(values.values(), batch.borrowMask().count())).containsExactly(3.25, 2.5);
+        assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(20L, 30L);
+    }
+
+    @Test
     void testNestedLoopJoinOperatorProducesJoinBatch()
     {
         Allocator allocator = new Allocator();
