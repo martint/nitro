@@ -18,13 +18,25 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 final class EquiJoinMatcher
         implements JoinMatcher
 {
-    private final int outerJoinColumn;
-    private final int innerJoinColumn;
+    private final int[] outerJoinColumns;
+    private final int[] innerJoinColumns;
 
     EquiJoinMatcher(int outerJoinColumn, int innerJoinColumn)
     {
-        this.outerJoinColumn = outerJoinColumn;
-        this.innerJoinColumn = innerJoinColumn;
+        this(new int[] {outerJoinColumn}, new int[] {innerJoinColumn});
+    }
+
+    EquiJoinMatcher(int[] outerJoinColumns, int[] innerJoinColumns)
+    {
+        if (outerJoinColumns.length != innerJoinColumns.length) {
+            throw new IllegalArgumentException("Join key counts must match");
+        }
+        if (outerJoinColumns.length == 0) {
+            throw new IllegalArgumentException("Equi-join requires at least one join key");
+        }
+
+        this.outerJoinColumns = outerJoinColumns.clone();
+        this.innerJoinColumns = innerJoinColumns.clone();
     }
 
     @Override
@@ -36,14 +48,19 @@ final class EquiJoinMatcher
     @Override
     public boolean matches(Batch outerBatch, int outerPosition, Streams[] innerColumns, int innerPosition)
     {
-        Output outerOutput = outerBatch.output(outerJoinColumn);
-        Streams innerStreams = innerColumns[innerJoinColumn];
-        return OperatorEqualitySemantics.equal(
-                outerOutput.borrow(Stream.VALUES),
-                (org.weakref.nitro.data.BooleanVector) outerOutput.borrowOrNull(Stream.NULLS),
-                outerPosition,
-                innerStreams.values(),
-                (org.weakref.nitro.data.BooleanVector) innerStreams.getOrNull(Stream.NULLS),
-                innerPosition);
+        for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
+            Output outerOutput = outerBatch.output(outerJoinColumns[keyIndex]);
+            Streams innerStreams = innerColumns[innerJoinColumns[keyIndex]];
+            if (!OperatorEqualitySemantics.equal(
+                    outerOutput.borrow(Stream.VALUES),
+                    (org.weakref.nitro.data.BooleanVector) outerOutput.borrowOrNull(Stream.NULLS),
+                    outerPosition,
+                    innerStreams.values(),
+                    (org.weakref.nitro.data.BooleanVector) innerStreams.getOrNull(Stream.NULLS),
+                    innerPosition)) {
+                return false;
+            }
+        }
+        return true;
     }
 }

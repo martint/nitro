@@ -66,6 +66,11 @@ public class NestedLoopJoinOperator
         this(allocator, outer, inner, new EquiJoinMatcher(outerJoinColumn, innerJoinColumn));
     }
 
+    public NestedLoopJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
+    {
+        this(allocator, outer, inner, new EquiJoinMatcher(outerJoinColumns, innerJoinColumns));
+    }
+
     private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
     {
         this.allocator = allocator;

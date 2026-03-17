@@ -394,6 +394,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testNestedLoopJoinOperatorSupportsMultiKeyEquiJoin()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new NestedLoopJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(1L, "alpha", 10L),
+                        row(1L, "beta", 20L),
+                        row(2L, "alpha", 30L))),
+                new int[] {0, 1},
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(1L, "beta", 200L),
+                        row(1L, "alpha", 100L),
+                        row(2L, "beta", 300L))),
+                new int[] {0, 1});
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        I64Vector leftIds = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector leftNames = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector leftPayload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+        I64Vector rightPayload = (I64Vector) batch.output(5).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(leftIds.values(), rowCount)).containsExactly(1L, 1L);
+        assertThat(leftNames.utf8Value(0)).isEqualTo("alpha");
+        assertThat(leftNames.utf8Value(1)).isEqualTo("beta");
+        assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
+        assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
+    }
+
+    @Test
     void testTableOperatorProducesBatch()
     {
         Operator operator = new TableOperator(
