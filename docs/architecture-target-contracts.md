@@ -52,6 +52,11 @@ algorithm for keyed joins, while fallback operators such as
 paths. In both cases, join-key equality and key construction should come from
 shared operator semantics helpers rather than ad hoc type dispatch in the
 operator body.
+Shared key helpers should also distinguish between probe keys and stored keys.
+Hot lookup paths may use non-owning views over the current vector storage,
+while insertion into long-lived grouping or join indexes must materialize
+owned key objects. That keeps steady-state probes allocation-light without
+letting borrowed batch storage leak into retained operator state.
 
 ### The evaluator owns scalar semantics
 

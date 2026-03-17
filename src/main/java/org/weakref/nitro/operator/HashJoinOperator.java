@@ -179,7 +179,7 @@ public class HashJoinOperator
         OperatorKeySemantics.Key[] keys = new OperatorKeySemantics.Key[outerJoinColumns.length];
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
-            OperatorKeySemantics.Key key = OperatorKeySemantics.key(
+            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
                     output.borrow(Stream.VALUES),
                     (BooleanVector) output.borrowOrNull(Stream.NULLS),
                     currentOuterPosition);
@@ -188,7 +188,7 @@ public class HashJoinOperator
             }
             keys[keyIndex] = key;
         }
-        return OperatorKeySemantics.compositeKey(keys);
+        return OperatorKeySemantics.probeCompositeKey(keys);
     }
 
     private void loadInnerIfNecessary()
@@ -208,7 +208,7 @@ public class HashJoinOperator
             boolean hasNull = false;
             for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
                 Streams streams = columns[innerJoinColumns[keyIndex]];
-                OperatorKeySemantics.Key key = OperatorKeySemantics.key(
+                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
                         streams.values(),
                         (BooleanVector) streams.getOrNull(Stream.NULLS),
                         position);
@@ -221,9 +221,14 @@ public class HashJoinOperator
             if (hasNull) {
                 continue;
             }
-            OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.compositeKey(keys);
-            innerIndex.computeIfAbsent(compositeKey, ignored -> new ArrayList<>())
-                    .add(new InnerRowReference(batchIndex, position));
+            OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(keys);
+            List<InnerRowReference> rows = innerIndex.get(compositeKey);
+            if (rows == null) {
+                OperatorKeySemantics.Key ownedKey = OperatorKeySemantics.ownedKey(compositeKey);
+                rows = new ArrayList<>();
+                innerIndex.put(ownedKey, rows);
+            }
+            rows.add(new InnerRowReference(batchIndex, position));
         }
     }
 

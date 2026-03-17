@@ -35,18 +35,21 @@ final class GroupingState
     {
         BooleanVector nullVector = (BooleanVector) nulls;
         for (int position : mask) {
-            OperatorKeySemantics.Key key = OperatorKeySemantics.key(values, nullVector, position);
+            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nullVector, position);
             result.values()[position] = key == null ? nullGroup() : groupForKey(key);
         }
     }
 
     private long groupForKey(OperatorKeySemantics.Key key)
     {
-        long group = groups.putIfAbsent(key, nextGroupId);
-        if (group == -1) {
-            group = nextGroupId++;
+        long group = groups.getLong(key);
+        if (group != -1) {
+            return group;
         }
-        return group;
+
+        OperatorKeySemantics.Key ownedKey = OperatorKeySemantics.ownedKey(key);
+        groups.put(ownedKey, nextGroupId);
+        return nextGroupId++;
     }
 
     private long nullGroup()

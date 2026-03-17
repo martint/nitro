@@ -27,6 +27,16 @@ final class OperatorKeySemantics
 
     public static Key key(Vector values, BooleanVector nulls, int position)
     {
+        return ownedKey(probeKey(values, nulls, position));
+    }
+
+    public static Key compositeKey(Key[] keys)
+    {
+        return keys.length == 1 ? keys[0] : new CompositeKey(keys);
+    }
+
+    public static Key probeKey(Vector values, BooleanVector nulls, int position)
+    {
         if (OperatorVectorSupport.isNull(nulls, position)) {
             return null;
         }
@@ -35,14 +45,30 @@ final class OperatorKeySemantics
             case I64Vector _ -> new LongKey(OperatorVectorSupport.longValue(values, position));
             case BooleanVector _ -> new BooleanKey(OperatorVectorSupport.booleanValue(values, position));
             case F64Vector _ -> new DoubleKey(Double.doubleToLongBits(OperatorVectorSupport.doubleValue(values, position)));
-            case BinaryVector _ -> new BinaryKey(OperatorVectorSupport.binaryBytes(values, position));
+            case BinaryVector _ -> new BinaryProbeKey(values, position);
             default -> throw new IllegalArgumentException("Unsupported key vector: " + values.getClass().getSimpleName());
         };
     }
 
-    public static Key compositeKey(Key[] keys)
+    public static Key probeCompositeKey(Key[] keys)
     {
-        return keys.length == 1 ? keys[0] : new CompositeKey(keys);
+        return keys.length == 1 ? keys[0] : new CompositeProbeKey(keys);
+    }
+
+    public static Key ownedKey(Key key)
+    {
+        return switch (key) {
+            case null -> null;
+            case LongKey _, BooleanKey _, DoubleKey _, BinaryKey _, CompositeKey _ -> key;
+            case BinaryProbeKey probe -> new BinaryKey(OperatorVectorSupport.binaryBytes(probe.values(), probe.position()));
+            case CompositeProbeKey probe -> {
+                Key[] owned = new Key[probe.keys().length];
+                for (int index = 0; index < owned.length; index++) {
+                    owned[index] = ownedKey(probe.keys()[index]);
+                }
+                yield new CompositeKey(owned);
+            }
+        };
     }
 
     public static BinaryKey binaryKey(byte[] bytes)
@@ -51,7 +77,7 @@ final class OperatorKeySemantics
     }
 
     sealed interface Key
-            permits LongKey, BooleanKey, DoubleKey, BinaryKey, CompositeKey
+            permits LongKey, BooleanKey, DoubleKey, BinaryKey, BinaryProbeKey, CompositeKey, CompositeProbeKey
     {
     }
 
@@ -76,13 +102,37 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
-            return object instanceof BinaryKey other && Arrays.equals(bytes, other.bytes);
+            return switch (object) {
+                case BinaryKey other -> Arrays.equals(bytes, other.bytes);
+                case BinaryProbeKey other -> OperatorVectorSupport.binaryEquals(other.values(), other.position(), bytes);
+                default -> false;
+            };
         }
 
         @Override
         public int hashCode()
         {
             return Arrays.hashCode(bytes);
+        }
+    }
+
+    public record BinaryProbeKey(Vector values, int position)
+            implements Key
+    {
+        @Override
+        public boolean equals(Object object)
+        {
+            return switch (object) {
+                case BinaryKey other -> OperatorVectorSupport.binaryEquals(values, position, other.bytes());
+                case BinaryProbeKey other -> OperatorVectorSupport.binaryEquals(values, position, other.values(), other.position());
+                default -> false;
+            };
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return OperatorVectorSupport.binaryHash(values, position);
         }
     }
 
@@ -99,7 +149,31 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
-            return object instanceof CompositeKey other && Arrays.equals(keys, other.keys);
+            return switch (object) {
+                case CompositeKey other -> Arrays.equals(keys, other.keys);
+                case CompositeProbeKey other -> Arrays.equals(keys, other.keys());
+                default -> false;
+            };
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Arrays.hashCode(keys);
+        }
+    }
+
+    public record CompositeProbeKey(Key[] keys)
+            implements Key
+    {
+        @Override
+        public boolean equals(Object object)
+        {
+            return switch (object) {
+                case CompositeKey other -> Arrays.equals(keys, other.keys);
+                case CompositeProbeKey other -> Arrays.equals(keys, other.keys);
+                default -> false;
+            };
         }
 
         @Override

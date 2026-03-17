@@ -21,6 +21,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
 import java.util.Set;
 
 final class OperatorVectorSupport
@@ -91,6 +92,62 @@ final class OperatorVectorSupport
         };
     }
 
+    public static int binaryHash(Vector vector, int position)
+    {
+        return switch (vector) {
+            case BinaryVector values -> binaryHash(values.data(), values.startOffset(position), values.length(position));
+            case DictionaryVector values -> binaryHash(values.values(), values.ids()[position]);
+            case RleVector values -> binaryHash(values.values(), runIndex(values, position));
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    public static int binaryHash(byte[] bytes)
+    {
+        return Arrays.hashCode(bytes);
+    }
+
+    public static boolean binaryEquals(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        if (binaryLength(left, leftPosition) != binaryLength(right, rightPosition)) {
+            return false;
+        }
+
+        return switch (left) {
+            case BinaryVector leftValues -> switch (right) {
+                case BinaryVector rightValues -> binaryEquals(
+                        leftValues.data(),
+                        leftValues.startOffset(leftPosition),
+                        rightValues.data(),
+                        rightValues.startOffset(rightPosition),
+                        leftValues.length(leftPosition));
+                default -> binaryEquals(right, rightPosition, leftValues.data(), leftValues.startOffset(leftPosition), leftValues.length(leftPosition));
+            };
+            case DictionaryVector leftValues -> binaryEquals(leftValues.values(), leftValues.ids()[leftPosition], right, rightPosition);
+            case RleVector leftValues -> binaryEquals(leftValues.values(), runIndex(leftValues, leftPosition), right, rightPosition);
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
+        };
+    }
+
+    public static boolean binaryEquals(Vector left, int leftPosition, byte[] right)
+    {
+        return binaryEquals(left, leftPosition, right, 0, right.length);
+    }
+
+    public static boolean binaryEquals(Vector left, int leftPosition, byte[] right, int rightOffset, int rightLength)
+    {
+        if (binaryLength(left, leftPosition) != rightLength) {
+            return false;
+        }
+
+        return switch (left) {
+            case BinaryVector values -> binaryEquals(values.data(), values.startOffset(leftPosition), right, rightOffset, rightLength);
+            case DictionaryVector values -> binaryEquals(values.values(), values.ids()[leftPosition], right, rightOffset, rightLength);
+            case RleVector values -> binaryEquals(values.values(), runIndex(values, leftPosition), right, rightOffset, rightLength);
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
+        };
+    }
+
     public static Set<BinaryVector.Trait> binaryTraits(Vector vector)
     {
         return switch (flatten(vector)) {
@@ -109,5 +166,24 @@ final class OperatorVectorSupport
             }
         }
         throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + values.length());
+    }
+
+    private static int binaryHash(byte[] bytes, int offset, int length)
+    {
+        int result = 1;
+        for (int index = 0; index < length; index++) {
+            result = 31 * result + bytes[offset + index];
+        }
+        return result;
+    }
+
+    private static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
+    {
+        for (int index = 0; index < length; index++) {
+            if (left[leftOffset + index] != right[rightOffset + index]) {
+                return false;
+            }
+        }
+        return true;
     }
 }
