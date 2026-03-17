@@ -72,22 +72,20 @@ final class JoinOutputBuffer
     public void appendMatchAt(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition, int outputPosition, int batchSize)
     {
         for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = buffers.replicate(
+            outerBuffer[i] = buffers.copySinglePosition(
+                    outerBatch.output(i),
                     outerBuffer[i],
-                    buffers.borrowStreams(outerBatch.output(i)),
                     batchSize,
                     outputPosition,
-                    1,
                     outerPosition);
             result[i] = outerBuffer[i];
         }
         for (int i = 0; i < innerColumnCount; i++) {
-            innerBuffer[i] = buffers.replicate(
+            innerBuffer[i] = buffers.copySinglePosition(
                     innerBuffer[i],
                     innerBatch.columns()[i],
                     batchSize,
                     outputPosition,
-                    1,
                     innerPosition);
             result[outerColumnCount + i] = innerBuffer[i];
         }

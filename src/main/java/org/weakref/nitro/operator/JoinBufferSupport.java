@@ -52,6 +52,9 @@ final class JoinBufferSupport
 
     public Streams replicate(Streams existing, Streams input, int size, int start, int length, int position)
     {
+        if (length == 1) {
+            return copySinglePosition(existing, input, size, start, position);
+        }
         return copyStreamsPositions(existing, input, repeatedPositions(position, length), start, size);
     }
 
@@ -68,11 +71,25 @@ final class JoinBufferSupport
 
     public Streams copyPosition(Output input, Streams existing, int position)
     {
+        return copySinglePosition(input, existing, 1, 0, position);
+    }
+
+    public Streams copySinglePosition(Output input, Streams existing, int size, int outputPosition, int sourcePosition)
+    {
         Streams result = Streams.empty();
-        int[] positions = new int[] {position};
         for (Stream stream : input.streams()) {
             Vector existingVector = existing != null ? existing.getOrNull(stream) : null;
-            result = result.with(stream, copyVectorPositions(existingVector, input.borrow(stream), positions, 0, 1));
+            result = result.with(stream, copyVectorSinglePosition(existingVector, input.borrow(stream), sourcePosition, outputPosition, size));
+        }
+        return result;
+    }
+
+    public Streams copySinglePosition(Streams existing, Streams input, int size, int outputPosition, int sourcePosition)
+    {
+        Streams result = Streams.empty();
+        for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
+            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
+            result = result.with(entry.getKey(), copyVectorSinglePosition(existingVector, entry.getValue(), sourcePosition, outputPosition, size));
         }
         return result;
     }
@@ -131,12 +148,35 @@ final class JoinBufferSupport
         };
     }
 
+    private Vector copyVectorSinglePosition(Vector existing, Vector source, int sourcePosition, int outputPosition, int size)
+    {
+        return switch (source) {
+            case I64Vector values -> copyLongSinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case BooleanVector values -> copyBooleanSinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case F64Vector values -> copyDoubleSinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case BinaryVector values -> copyBinarySinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case ArrayVector values -> copyArraySinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case MapVector values -> copyMapSinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case StructVector values -> copyStructSinglePosition(values, existing, sourcePosition, outputPosition, size);
+            case DictionaryVector values -> copyVectorSinglePosition(existing, values.values(), values.ids()[sourcePosition], outputPosition, size);
+            case RleVector values -> copyVectorSinglePosition(existing, values.values(), rlePosition(values, sourcePosition), outputPosition, size);
+            default -> throw new IllegalArgumentException("Unsupported join vector type: " + source.getClass().getSimpleName());
+        };
+    }
+
     private I64Vector copyLongPositions(I64Vector source, Vector existing, int[] sourcePositions, int outputStart, int size)
     {
         I64Vector output = ensureLongCapacity(existing instanceof I64Vector vector ? vector : null, size);
         for (int index = 0; index < sourcePositions.length; index++) {
             output.values()[outputStart + index] = source.values()[sourcePositions[index]];
         }
+        return output;
+    }
+
+    private I64Vector copyLongSinglePosition(I64Vector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        I64Vector output = ensureLongCapacity(existing instanceof I64Vector vector ? vector : null, size);
+        output.values()[outputPosition] = source.values()[sourcePosition];
         return output;
     }
 
@@ -149,12 +189,26 @@ final class JoinBufferSupport
         return output;
     }
 
+    private BooleanVector copyBooleanSinglePosition(BooleanVector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        BooleanVector output = ensureBooleanCapacity(existing instanceof BooleanVector vector ? vector : null, size);
+        output.values()[outputPosition] = source.values()[sourcePosition];
+        return output;
+    }
+
     private F64Vector copyDoublePositions(F64Vector source, Vector existing, int[] sourcePositions, int outputStart, int size)
     {
         F64Vector output = ensureDoubleCapacity(existing instanceof F64Vector vector ? vector : null, size);
         for (int index = 0; index < sourcePositions.length; index++) {
             output.values()[outputStart + index] = source.values()[sourcePositions[index]];
         }
+        return output;
+    }
+
+    private F64Vector copyDoubleSinglePosition(F64Vector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        F64Vector output = ensureDoubleCapacity(existing instanceof F64Vector vector ? vector : null, size);
+        output.values()[outputPosition] = source.values()[sourcePosition];
         return output;
     }
 
@@ -191,6 +245,31 @@ final class JoinBufferSupport
         return output;
     }
 
+    private BinaryVector copyBinarySinglePosition(BinaryVector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        int requiredCapacity = binaryCapacity(existing, outputPosition) + source.length(sourcePosition);
+        BinaryVector output = allocator.allocateOrGrowBinary(allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requiredCapacity);
+        if (outputPosition == 0) {
+            Arrays.fill(output.offsets(), 0);
+            output.clearTraits();
+            output.addTraits(source.traits());
+        }
+        else {
+            output.addTraits(source.traits());
+        }
+
+        int currentOffset = output.offsets()[outputPosition];
+        output.offsets()[outputPosition] = currentOffset;
+        int length = source.length(sourcePosition);
+        if (length == 0) {
+            output.setNull(outputPosition);
+            return output;
+        }
+
+        output.setBytes(outputPosition, source.data(), source.startOffset(sourcePosition), length);
+        return output;
+    }
+
     private ArrayVector copyArrayPositions(ArrayVector source, Vector existing, int[] sourcePositions, int outputStart, int size)
     {
         ArrayVector output = ensureArrayCapacity(existing instanceof ArrayVector vector ? vector : null, size);
@@ -215,6 +294,26 @@ final class JoinBufferSupport
                 nestedPositions(source.offsets(), sourcePositions, totalElements),
                 childOutputStart,
                 currentOffset));
+        return output;
+    }
+
+    private ArrayVector copyArraySinglePosition(ArrayVector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        ArrayVector output = ensureArrayCapacity(existing instanceof ArrayVector vector ? vector : null, size);
+        if (outputPosition == 0) {
+            output.offsets()[0] = 0;
+        }
+
+        int childOutputStart = output.offsets()[outputPosition];
+        int length = source.length(sourcePosition);
+        output.offsets()[outputPosition] = childOutputStart;
+        output.offsets()[outputPosition + 1] = childOutputStart + length;
+        output.setElements(copyStreamsPositions(
+                existing instanceof ArrayVector vector ? vector.elements() : null,
+                source.elements(),
+                nestedPositions(source.offsets(), new int[] {sourcePosition}, length),
+                childOutputStart,
+                childOutputStart + length));
         return output;
     }
 
@@ -254,6 +353,35 @@ final class JoinBufferSupport
         return output;
     }
 
+    private MapVector copyMapSinglePosition(MapVector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        MapVector output = ensureMapCapacity(existing instanceof MapVector vector ? vector : null, size);
+        if (outputPosition == 0) {
+            output.offsets()[0] = 0;
+        }
+
+        int childOutputStart = output.offsets()[outputPosition];
+        int length = source.length(sourcePosition);
+        output.offsets()[outputPosition] = childOutputStart;
+        output.offsets()[outputPosition + 1] = childOutputStart + length;
+
+        int[] entryPositions = nestedPositions(source.offsets(), new int[] {sourcePosition}, length);
+        output.setEntries(
+                copyStreamsPositions(
+                        existing instanceof MapVector vector ? vector.keys() : null,
+                        source.keys(),
+                        entryPositions,
+                        childOutputStart,
+                        childOutputStart + length),
+                copyStreamsPositions(
+                        existing instanceof MapVector vector ? vector.values() : null,
+                        source.values(),
+                        entryPositions,
+                        childOutputStart,
+                        childOutputStart + length));
+        return output;
+    }
+
     private StructVector copyStructPositions(StructVector source, Vector existing, int[] sourcePositions, int outputStart, int size)
     {
         StructVector output = ensureStructCapacity(existing instanceof StructVector vector ? vector : null, size);
@@ -263,6 +391,19 @@ final class JoinBufferSupport
         Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         for (Map.Entry<String, Streams> entry : source.fields().entrySet()) {
             output.setField(entry.getKey(), copyStreamsPositions(existingFields.get(entry.getKey()), entry.getValue(), sourcePositions, outputStart, size));
+        }
+        return output;
+    }
+
+    private StructVector copyStructSinglePosition(StructVector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        StructVector output = ensureStructCapacity(existing instanceof StructVector vector ? vector : null, size);
+        if (outputPosition == 0) {
+            output.clearFields();
+        }
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        for (Map.Entry<String, Streams> entry : source.fields().entrySet()) {
+            output.setField(entry.getKey(), copySinglePosition(existingFields.get(entry.getKey()), entry.getValue(), size, outputPosition, sourcePosition));
         }
         return output;
     }
@@ -489,9 +630,14 @@ final class JoinBufferSupport
     {
         int[] positions = new int[sourcePositions.length];
         for (int index = 0; index < sourcePositions.length; index++) {
-            positions[index] = OperatorVectorSupport.runIndex(values, sourcePositions[index]);
+            positions[index] = rlePosition(values, sourcePositions[index]);
         }
         return positions;
+    }
+
+    private static int rlePosition(RleVector values, int sourcePosition)
+    {
+        return OperatorVectorSupport.runIndex(values, sourcePosition);
     }
 
     private static int totalLength(Vector[] rows)
