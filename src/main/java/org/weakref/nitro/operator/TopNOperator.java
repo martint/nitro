@@ -14,12 +14,11 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.PriorityQueue;
 
 public class TopNOperator
@@ -31,10 +30,9 @@ public class TopNOperator
     private final int n;
     private final int column;
     private final Operator source;
+    private final TopNState state;
 
-    private final Vector[] result;
     private boolean done;
-    private Batch currentBatch;
 
     public TopNOperator(Allocator allocator, int n, int column, Operator source)
     {
@@ -42,7 +40,7 @@ public class TopNOperator
         this.n = n;
         this.column = column;
         this.source = source;
-        result = new I64Vector[source.outputCount()];
+        state = new TopNState(allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
     }
 
     @Override
@@ -62,35 +60,32 @@ public class TopNOperator
         // TODO: flat memory priority queue
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, Comparator.comparingLong(e -> e.value));
 
-        for (int i = 0; i < result.length; i++) {
-            result[i] = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, n, I64Vector::new);
-        }
-
         while (source.hasNext()) {
-            currentBatch = source.next();
-            Mask mask = currentBatch.borrowMask();
+            Batch batch = source.next();
+            state.captureSchema(batch);
+            Mask mask = batch.borrowMask();
 
             for (int position : mask) {
-                long value = values(currentBatch.output(column).borrow(Stream.VALUES))[position];
+                long value = state.orderingValue(batch.output(column), position);
 
                 if (queue.size() < n) {
                     int slot = queue.size();
                     queue.add(new Entry(value, slot));
-                    copyToBuffer(position, slot);
+                    state.copyRow(batch, position, slot);
                 }
                 else {
                     Entry head = queue.peek();
                     if (value > head.value) {
                         queue.poll();
                         queue.add(new Entry(value, head.position));
-                        copyToBuffer(position, head.position);
+                        state.copyRow(batch, position, head.position);
                     }
                 }
             }
         }
 
         int count = queue.size();
-        reorderBuffer(queue);
+        state.materialize(orderedSlots(queue));
 
         done = true;
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, count);
@@ -104,49 +99,20 @@ public class TopNOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
             outputs[outputIndex] = new Output(
-                    java.util.Set.of(Stream.VALUES),
-                    stream -> result[output],
+                    state.output(output).asMap().keySet(),
+                    stream -> state.output(output).get(stream),
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
         return new Batch(batchMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
-    private void reorderBuffer(PriorityQueue<Entry> queue)
+    private static List<Integer> orderedSlots(PriorityQueue<Entry> queue)
     {
-        long[] temp = new long[outputCount()];
-
-        int[] remap = new int[queue.size()];
-        for (int i = 0; i < remap.length; i++) {
-            remap[i] = i;
-        }
-
-        int current = queue.size() - 1;
-        while (!queue.isEmpty()) {
-            Entry entry = queue.poll();
-            for (int i = 0; i < result.length; i++) {
-                long[] vals = ((I64Vector) result[i]).values();
-
-                temp[i] = vals[current];
-                vals[current] = vals[remap[entry.position]];
-                vals[remap[entry.position]] = temp[i];
-
-                remap[current] = remap[entry.position];
-            }
-
-            current--;
-        }
-    }
-
-    private void copyToBuffer(int from, int to)
-    {
-        for (int i = 0; i < result.length; i++) {
-            ((I64Vector) result[i]).values()[to] = values(currentBatch.output(i).borrow(Stream.VALUES))[from];
-        }
-    }
-
-    private static long[] values(Vector v)
-    {
-        return ((I64Vector) v).values();
+        List<Entry> entries = new ArrayList<>(queue);
+        entries.sort(Comparator.comparingLong(Entry::value).reversed());
+        return entries.stream()
+                .map(Entry::position)
+                .toList();
     }
 
     @Override

@@ -15,7 +15,9 @@ package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -46,6 +48,7 @@ import org.weakref.nitro.operator.generator.SequenceGenerator;
 import java.util.Arrays;
 import java.util.List;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.data.Row.row;
 
@@ -198,6 +201,42 @@ public class TestOperatorBatches
 
         Batch batch = operator.next();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(5L, 3L);
+    }
+
+    @Test
+    void testTopNOperatorPreservesBinaryOutputColumn()
+    {
+        BinaryVector names = new BinaryVector(4, 19);
+        names.addTrait(BinaryVector.Trait.UTF8_STRING);
+        names.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        names.setBytes(0, "alpha".getBytes(UTF_8));
+        names.setBytes(1, "beta".getBytes(UTF_8));
+        names.setBytes(2, "gamma".getBytes(UTF_8));
+        names.setBytes(3, "delta".getBytes(UTF_8));
+
+        Operator operator = new TopNOperator(
+                new Allocator(),
+                2,
+                0,
+                new TableOperator(
+                        2,
+                        List.of(new TableOperator.Page(
+                                4,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1L, 5L, 3L, 4L}),
+                                        names,
+                                },
+                                org.weakref.nitro.data.Mask.all(4)))));
+
+        Batch batch = operator.next();
+        I64Vector ranks = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector resultNames = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(ranks.values(), batch.borrowMask().count())).containsExactly(5L, 4L);
+        assertThat(resultNames.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+        assertThat(resultNames.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+        assertThat(resultNames.utf8Value(0)).isEqualTo("beta");
+        assertThat(resultNames.utf8Value(1)).isEqualTo("delta");
     }
 
     @Test
