@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -37,9 +36,9 @@ public class HashJoinOperator
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
     private final JoinBufferSupport buffers;
+    private final BufferedJoinInput bufferedInner;
+    private final JoinOutputBuffer outputBuffer;
 
-    private boolean innerLoaded;
-    private final List<InnerBatch> innerBatches = new ArrayList<>();
     private final Map<OperatorKeySemantics.Key, List<InnerRowReference>> innerIndex = new HashMap<>();
 
     private Mask currentOuterMask;
@@ -50,12 +49,6 @@ public class HashJoinOperator
     private boolean currentOuterPositionReady;
     private List<InnerRowReference> currentMatches = List.of();
     private int currentMatchIndex;
-
-    private final Streams[] result;
-    private final Streams[] outerBuffer;
-    private final Streams[] innerBuffer;
-    private final Streams[] outerSchema;
-    private final Streams[] innerSchema;
 
     private boolean done;
 
@@ -79,11 +72,8 @@ public class HashJoinOperator
         this.outerJoinColumns = outerJoinColumns.clone();
         this.innerJoinColumns = innerJoinColumns.clone();
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
-        this.result = new Streams[outer.outputCount() + inner.outputCount()];
-        this.outerBuffer = new Streams[outer.outputCount()];
-        this.innerBuffer = new Streams[inner.outputCount()];
-        this.outerSchema = new Streams[outer.outputCount()];
-        this.innerSchema = new Streams[inner.outputCount()];
+        this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
+        this.outputBuffer = new JoinOutputBuffer(buffers, outer.outputCount(), inner.outputCount());
     }
 
     @Override
@@ -104,7 +94,7 @@ public class HashJoinOperator
         Mask batchMask = produceBatch();
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = resultOutput(outputIndex);
+            outputs[outputIndex] = outputBuffer.resultOutputForHashJoin(outputIndex, allocator, ALLOCATION_CONTEXT);
         }
         return new Batch(
                 batchMask,
@@ -117,7 +107,7 @@ public class HashJoinOperator
         loadInnerIfNecessary();
         if (innerIndex.isEmpty()) {
             done = true;
-            clearResults();
+            outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
 
@@ -141,7 +131,7 @@ public class HashJoinOperator
 
             while (currentMatchIndex < currentMatches.size() && outputPosition < BATCH_SIZE) {
                 InnerRowReference match = currentMatches.get(currentMatchIndex++);
-                appendJoinMatch(outputPosition, innerBatches.get(match.batchIndex()), match.position());
+                outputBuffer.appendMatchAt(currentOuterBatch, currentOuterPosition, bufferedInner.batches().get(match.batchIndex()), match.position(), outputPosition, BATCH_SIZE);
                 outputPosition++;
             }
 
@@ -153,7 +143,7 @@ public class HashJoinOperator
         }
 
         if (outputPosition == 0) {
-            clearResults();
+            outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
@@ -163,7 +153,7 @@ public class HashJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
-            captureSchema(currentOuterBatch, outerSchema);
+            outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 outerPositionIterator = currentOuterMask.iterator();
@@ -201,101 +191,13 @@ public class HashJoinOperator
         return OperatorKeySemantics.compositeKey(keys);
     }
 
-    private void appendJoinMatch(int outputPosition, InnerBatch innerBatch, int innerPosition)
-    {
-        int outerColumnCount = outer.outputCount();
-        for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = buffers.replicate(
-                    outerBuffer[i],
-                    buffers.borrowStreams(currentOuterBatch.output(i)),
-                    BATCH_SIZE,
-                    outputPosition,
-                    1,
-                    currentOuterPosition);
-            result[i] = outerBuffer[i];
-        }
-        for (int i = 0; i < inner.outputCount(); i++) {
-            innerBuffer[i] = buffers.replicate(
-                    innerBuffer[i],
-                    innerBatch.columns()[i],
-                    BATCH_SIZE,
-                    outputPosition,
-                    1,
-                    innerPosition);
-            result[outerColumnCount + i] = innerBuffer[i];
-        }
-    }
-
-    private Output resultOutput(int outputIndex)
-    {
-        Streams streams = result[outputIndex];
-        if (streams == null) {
-            Streams schema = outputIndex < outer.outputCount() ? outerSchema[outputIndex] : innerSchema[outputIndex - outer.outputCount()];
-            if (schema != null) {
-                Streams empty = buffers.emptyLike(schema);
-                return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
-            }
-            I64Vector empty = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 0, I64Vector::new);
-            return new Output(java.util.Set.of(Stream.VALUES), stream -> empty, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
-        }
-
-        int outerColumnCount = outer.outputCount();
-        if (outputIndex < outerColumnCount) {
-            return new Output(
-                    streams.asMap().keySet(),
-                    streams::get,
-                    (stream, vector) -> {
-                        result[outputIndex] = null;
-                        outerBuffer[outputIndex] = null;
-                        return allocator.transfer(ALLOCATION_CONTEXT, vector);
-                    });
-        }
-
-        int innerIndex = outputIndex - outerColumnCount;
-        return new Output(
-                streams.asMap().keySet(),
-                streams::get,
-                (stream, vector) -> {
-                    result[outputIndex] = null;
-                    innerBuffer[innerIndex] = null;
-                    return allocator.transfer(ALLOCATION_CONTEXT, vector);
-                });
-    }
-
     private void loadInnerIfNecessary()
     {
-        if (innerLoaded) {
-            return;
-        }
-        innerLoaded = true;
-
-        Streams[] columns = new Streams[inner.outputCount()];
-        int outputPosition = 0;
-
-        while (inner.hasNext()) {
-            Batch batch = inner.next();
-            captureSchema(batch, innerSchema);
-            Mask mask = batch.borrowMask();
-            int maskOffset = 0;
-            while (maskOffset < mask.count()) {
-                int copied = Math.min(mask.count() - maskOffset, BATCH_SIZE - outputPosition);
-                for (int columnIndex = 0; columnIndex < columns.length; columnIndex++) {
-                    columns[columnIndex] = buffers.copyAndCompact(batch.output(columnIndex), mask, maskOffset, columns[columnIndex], outputPosition, copied, BATCH_SIZE);
-                }
-                indexInnerRows(columns, outputPosition, copied, innerBatches.size());
-                outputPosition += copied;
-                maskOffset += copied;
-
-                if (outputPosition == BATCH_SIZE) {
-                    innerBatches.add(new InnerBatch(columns, BATCH_SIZE));
-                    columns = new Streams[inner.outputCount()];
-                    outputPosition = 0;
-                }
-            }
-        }
-
-        if (outputPosition > 0) {
-            innerBatches.add(new InnerBatch(columns, outputPosition));
+        int batchCountBefore = bufferedInner.batches().size();
+        bufferedInner.loadAll(inner, BATCH_SIZE);
+        for (int batchIndex = batchCountBefore; batchIndex < bufferedInner.batches().size(); batchIndex++) {
+            BufferedJoinInput.InnerBatch batch = bufferedInner.batches().get(batchIndex);
+            indexInnerRows(batch.columns(), 0, batch.length(), batchIndex);
         }
     }
 
@@ -325,11 +227,6 @@ public class HashJoinOperator
         }
     }
 
-    private void clearResults()
-    {
-        java.util.Arrays.fill(result, null);
-    }
-
     @Override
     public void constrain(Mask mask)
     {
@@ -342,23 +239,6 @@ public class HashJoinOperator
         inner.close();
         allocator.release(ALLOCATION_CONTEXT);
     }
-
-    private static void captureSchema(Batch batch, Streams[] schema)
-    {
-        for (int outputIndex = 0; outputIndex < schema.length; outputIndex++) {
-            if (schema[outputIndex] != null) {
-                continue;
-            }
-            Output output = batch.output(outputIndex);
-            Streams streams = Streams.empty();
-            for (Stream stream : output.streams()) {
-                streams = streams.with(stream, output.borrow(stream));
-            }
-            schema[outputIndex] = streams;
-        }
-    }
-
-    private record InnerBatch(Streams[] columns, int length) {}
 
     private record InnerRowReference(int batchIndex, int position) {}
 }

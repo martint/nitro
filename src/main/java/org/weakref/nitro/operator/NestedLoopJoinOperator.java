@@ -14,13 +14,9 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.List;
 
 public class NestedLoopJoinOperator
         implements Operator
@@ -33,10 +29,8 @@ public class NestedLoopJoinOperator
     private final Operator inner;
     private final JoinMatcher matcher;
     private final JoinBufferSupport buffers;
-
-    private boolean innerLoaded;
-    private final List<InnerBatch> innerBatches = new ArrayList<>();
-    private long innerRowCount;
+    private final BufferedJoinInput bufferedInner;
+    private final JoinOutputBuffer outputBuffer;
 
     private int currentInnerBatch;
     private int currentInnerPosition;
@@ -47,12 +41,6 @@ public class NestedLoopJoinOperator
     private Iterator<Integer> outerPositionIterator;
     private int currentOuterPosition;
     private boolean currentOuterPositionReady;
-
-    private final Streams[] result;
-    private final Streams[] outerBuffer; // buffer to hold output from outer columns when replicating the same outer row for multiple inner rows
-    private final Streams[] innerBuffer; // buffer to hold output from inner columns when replicating the same inner row for multiple outer rows
-    private final Streams[] outerSchema;
-    private final Streams[] innerSchema;
 
     private boolean done;
 
@@ -78,11 +66,8 @@ public class NestedLoopJoinOperator
         this.inner = inner;
         this.matcher = matcher;
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
-        result = new Streams[outer.outputCount() + inner.outputCount()];
-        outerBuffer = new Streams[outer.outputCount()];
-        innerBuffer = new Streams[inner.outputCount()];
-        outerSchema = new Streams[outer.outputCount()];
-        innerSchema = new Streams[inner.outputCount()];
+        this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
+        this.outputBuffer = new JoinOutputBuffer(buffers, outer.outputCount(), inner.outputCount());
     }
 
     @Override
@@ -104,7 +89,7 @@ public class NestedLoopJoinOperator
         }
 
         loadInnerIfNecessary();
-        if (innerRowCount == 0) {
+        if (bufferedInner.rowCount() == 0) {
             done = true;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
@@ -120,7 +105,7 @@ public class NestedLoopJoinOperator
             currentOuterPosition = outerPositionIterator.next();
         }
 
-        int innerRemaining = innerBatches.get(currentInnerBatch).length() - currentInnerPosition;
+        int innerRemaining = bufferedInner.batches().get(currentInnerBatch).length() - currentInnerPosition;
 
         int innerProcessed;
         int outerProcessed;
@@ -147,12 +132,12 @@ public class NestedLoopJoinOperator
         }
 
         currentInnerPosition += innerProcessed;
-        if (currentInnerPosition == innerBatches.get(currentInnerBatch).length()) {
+        if (currentInnerPosition == bufferedInner.batches().get(currentInnerBatch).length()) {
             currentInnerBatch++;
             currentInnerPosition = 0;
         }
 
-        if (currentInnerBatch == innerBatches.size()) {
+        if (currentInnerBatch == bufferedInner.batches().size()) {
             currentInnerBatch = 0;
             outerRemaining -= outerProcessed;
         }
@@ -167,9 +152,9 @@ public class NestedLoopJoinOperator
     private Mask produceEquiJoinBatch()
     {
         loadInnerIfNecessary();
-        if (innerRowCount == 0) {
+        if (bufferedInner.rowCount() == 0) {
             done = true;
-            clearResults();
+            outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
 
@@ -191,11 +176,11 @@ public class NestedLoopJoinOperator
                 currentInnerPosition = 0;
             }
 
-            while (currentInnerBatch < innerBatches.size() && outputPosition < BATCH_SIZE) {
-                InnerBatch innerBatch = innerBatches.get(currentInnerBatch);
+            while (currentInnerBatch < bufferedInner.batches().size() && outputPosition < BATCH_SIZE) {
+                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(currentInnerBatch);
                 while (currentInnerPosition < innerBatch.length() && outputPosition < BATCH_SIZE) {
                     if (matcher.matches(currentOuterBatch, currentOuterPosition, innerBatch.columns(), currentInnerPosition)) {
-                        appendJoinMatch(outputPosition, innerBatch, currentInnerPosition);
+                        outputBuffer.appendMatchAt(currentOuterBatch, currentOuterPosition, innerBatch, currentInnerPosition, outputPosition, BATCH_SIZE);
                         outputPosition++;
                     }
                     currentInnerPosition++;
@@ -206,7 +191,7 @@ public class NestedLoopJoinOperator
                 }
             }
 
-            if (currentInnerBatch == innerBatches.size()) {
+            if (currentInnerBatch == bufferedInner.batches().size()) {
                 currentInnerBatch = 0;
                 currentInnerPosition = 0;
                 outerRemaining--;
@@ -215,7 +200,7 @@ public class NestedLoopJoinOperator
         }
 
         if (outputPosition == 0) {
-            clearResults();
+            outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
@@ -225,7 +210,7 @@ public class NestedLoopJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
-            captureSchema(currentOuterBatch, outerSchema);
+            outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 outerPositionIterator = currentOuterMask.iterator();
@@ -237,38 +222,13 @@ public class NestedLoopJoinOperator
         return false;
     }
 
-    private void appendJoinMatch(int outputPosition, InnerBatch innerBatch, int innerPosition)
-    {
-        int outerColumnCount = outer.outputCount();
-        for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = buffers.replicate(
-                    outerBuffer[i],
-                    buffers.borrowStreams(currentOuterBatch.output(i)),
-                    BATCH_SIZE,
-                    outputPosition,
-                    1,
-                    currentOuterPosition);
-            result[i] = outerBuffer[i];
-        }
-        for (int i = 0; i < inner.outputCount(); i++) {
-            innerBuffer[i] = buffers.replicate(
-                    innerBuffer[i],
-                    innerBatch.columns()[i],
-                    BATCH_SIZE,
-                    outputPosition,
-                    1,
-                    innerPosition);
-            result[outerColumnCount + i] = innerBuffer[i];
-        }
-    }
-
     @Override
     public Batch next()
     {
         Mask batchMask = produceBatch();
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = resultOutput(outputIndex);
+            outputs[outputIndex] = outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, ALLOCATION_CONTEXT);
         }
         return new Batch(
                 batchMask,
@@ -276,139 +236,19 @@ public class NestedLoopJoinOperator
                 outputs);
     }
 
-    private Output resultOutput(int outputIndex)
-    {
-        Streams streams = result[outputIndex];
-        if (streams == null) {
-            Streams schema = outputIndex < outer.outputCount() ? outerSchema[outputIndex] : innerSchema[outputIndex - outer.outputCount()];
-            if (schema != null) {
-                Streams empty = buffers.emptyLike(schema);
-                return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
-            }
-            I64Vector empty = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 0, I64Vector::new);
-            return new Output(java.util.Set.of(Stream.VALUES), stream -> empty, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
-        }
-
-        int outerColumnCount = outer.outputCount();
-        if (outputIndex < outerColumnCount) {
-            if (streams == outerBuffer[outputIndex]) {
-                return new Output(
-                        streams.asMap().keySet(),
-                        streams::get,
-                        (stream, vector) -> {
-                            result[outputIndex] = null;
-                            outerBuffer[outputIndex] = null;
-                            return allocator.transfer(ALLOCATION_CONTEXT, vector);
-                        });
-            }
-
-            Output sourceOutput = currentOuterBatch.output(outputIndex);
-            return new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
-        }
-
-        int innerIndex = outputIndex - outerColumnCount;
-        if (streams == innerBuffer[innerIndex]) {
-            return new Output(
-                    streams.asMap().keySet(),
-                    streams::get,
-                    (stream, vector) -> {
-                        result[outputIndex] = null;
-                        innerBuffer[innerIndex] = null;
-                        return allocator.transfer(ALLOCATION_CONTEXT, vector);
-                    });
-        }
-
-        return new Output(
-                streams.asMap().keySet(),
-                streams::get,
-                (stream, vector) -> buffers.copyStreamVector(streams, stream));
-    }
-
     private void joinWithInnerRow()
     {
-        int outerColumnCount = outer.outputCount();
-        for (int i = 0; i < outerColumnCount; i++) {
-            result[i] = buffers.borrowStreams(currentOuterBatch.output(i));
-        }
-        for (int i = 0; i < inner.outputCount(); i++) {
-            innerBuffer[i] = buffers.replicate(
-                    innerBuffer[i],
-                    innerBatches.get(currentInnerBatch).columns()[i],
-                    currentOuterMask.maxPosition() + 1,
-                    0,
-                    currentOuterMask.maxPosition() + 1,
-                    currentInnerPosition);
-
-            result[i + outerColumnCount] = innerBuffer[i];
-        }
+        outputBuffer.joinWithInnerRow(currentOuterBatch, currentOuterMask, bufferedInner.batches().get(currentInnerBatch), currentInnerPosition);
     }
 
     private int joinWithOuterRow()
     {
-        int batchSize = innerBatches.get(currentInnerBatch).length();
-
-        int outerColumnCount = outer.outputCount();
-        for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = buffers.replicate(
-                    outerBuffer[i],
-                    buffers.borrowStreams(currentOuterBatch.output(i)),
-                    batchSize,
-                    0,
-                    batchSize,
-                    currentOuterPosition);
-
-            result[i] = outerBuffer[i];
-        }
-        System.arraycopy(innerBatches.get(currentInnerBatch).columns(), 0, result, outerColumnCount, inner.outputCount());
-        return batchSize;
+        return outputBuffer.joinWithOuterRow(currentOuterBatch, currentOuterPosition, bufferedInner.batches().get(currentInnerBatch));
     }
 
     private void loadInnerIfNecessary()
     {
-        if (!innerLoaded) {
-            innerLoaded = true;
-
-            Streams[] columns = allocateNewBatch(inner.outputCount());
-            int outputPosition = 0;
-            innerRowCount = 0;
-
-            while (inner.hasNext()) {
-                Batch batch = inner.next();
-                captureSchema(batch, innerSchema);
-                Mask mask = batch.borrowMask();
-                int maskOffset = 0;
-                while (maskOffset < mask.count()) {
-                    int copied = Math.min(mask.count() - maskOffset, BATCH_SIZE - outputPosition);
-                    for (int i = 0; i < columns.length; i++) {
-                        // TODO: allow transferring ownership from underlying operator in case we don't need to copy+compact
-                        columns[i] = buffers.copyAndCompact(batch.output(i), mask, maskOffset, columns[i], outputPosition, copied, BATCH_SIZE);
-                    }
-                    outputPosition += copied;
-                    maskOffset += copied;
-                    innerRowCount += copied;
-
-                    if (outputPosition == BATCH_SIZE) {
-                        outputPosition = 0;
-                        innerBatches.add(new InnerBatch(columns, BATCH_SIZE));
-                        columns = allocateNewBatch(inner.outputCount());
-                    }
-                }
-            }
-
-            if (outputPosition > 0) {
-                innerBatches.add(new InnerBatch(columns, outputPosition));
-            }
-        }
-    }
-
-    private void clearResults()
-    {
-        java.util.Arrays.fill(result, null);
-    }
-
-    private Streams[] allocateNewBatch(int columnCount)
-    {
-        return new Streams[columnCount];
+        bufferedInner.loadAll(inner, BATCH_SIZE);
     }
 
     @Override
@@ -423,21 +263,4 @@ public class NestedLoopJoinOperator
         inner.close();
         allocator.release(ALLOCATION_CONTEXT);
     }
-
-    private static void captureSchema(Batch batch, Streams[] schema)
-    {
-        for (int outputIndex = 0; outputIndex < schema.length; outputIndex++) {
-            if (schema[outputIndex] != null) {
-                continue;
-            }
-            Output output = batch.output(outputIndex);
-            Streams streams = Streams.empty();
-            for (Stream stream : output.streams()) {
-                streams = streams.with(stream, output.borrow(stream));
-            }
-            schema[outputIndex] = streams;
-        }
-    }
-
-    record InnerBatch(Streams[] columns, int length) {}
 }
