@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -29,6 +30,7 @@ import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -220,7 +222,7 @@ public class TestOperatorBatches
                 0,
                 new TableOperator(
                         2,
-                        List.of(new TableOperator.Page(
+                        List.of(TableOperator.Page.values(
                                 4,
                                 new Vector[] {
                                         new I64Vector(new long[] {1L, 5L, 3L, 4L}),
@@ -267,13 +269,13 @@ public class TestOperatorBatches
                 new Allocator(),
                 new TableOperator(
                         1,
-                        List.of(new TableOperator.Page(
+                        List.of(TableOperator.Page.values(
                                 2,
                                 new Vector[] {new I64Vector(new long[] {1L, 2L})},
                                 org.weakref.nitro.data.Mask.all(2)))),
                 new TableOperator(
                         1,
-                        List.of(new TableOperator.Page(
+                        List.of(TableOperator.Page.values(
                                 2,
                                 new Vector[] {names},
                                 org.weakref.nitro.data.Mask.all(2)))));
@@ -295,12 +297,29 @@ public class TestOperatorBatches
     {
         Operator operator = new TableOperator(
                 1,
-                List.of(new TableOperator.Page(
+                List.of(TableOperator.Page.values(
                         2,
                         new org.weakref.nitro.data.Vector[] {new I64Vector(new long[] {7L, 8L})},
                         org.weakref.nitro.data.Mask.all(2))));
 
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(7L, 8L);
+    }
+
+    @Test
+    void testTableOperatorProducesExplicitStreams()
+    {
+        Operator operator = new TableOperator(
+                1,
+                List.of(new TableOperator.Page(
+                        2,
+                        new Streams[] {Streams.ofValuesAndNulls(
+                                new I64Vector(new long[] {7L, 8L}),
+                                new BooleanVector(new boolean[] {false, true}))},
+                        org.weakref.nitro.data.Mask.all(2))));
+
+        Batch batch = operator.next();
+        assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(7L, 8L);
+        assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, true);
     }
 }

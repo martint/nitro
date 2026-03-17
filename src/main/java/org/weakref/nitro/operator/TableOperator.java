@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
 import java.util.List;
 
 public class TableOperator
@@ -51,7 +52,7 @@ public class TableOperator
         Page page = pages.get(currentPage);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = Output.values(page.columns()[outputIndex]);
+            outputs[outputIndex] = Output.of(page.columns()[outputIndex]);
         }
         return new Batch(page.mask(), outputs);
     }
@@ -66,5 +67,20 @@ public class TableOperator
     {
     }
 
-    public record Page(int rows, Vector[] columns, Mask mask) {}
+    public record Page(int rows, Streams[] columns, Mask mask)
+    {
+        public Page
+        {
+            columns = Arrays.copyOf(columns, columns.length);
+        }
+
+        public static Page values(int rows, Vector[] columns, Mask mask)
+        {
+            Streams[] streams = new Streams[columns.length];
+            for (int index = 0; index < columns.length; index++) {
+                streams[index] = Streams.ofValues(columns[index]);
+            }
+            return new Page(rows, streams, mask);
+        }
+    }
 }
