@@ -99,7 +99,7 @@ final class OperatorVectorSupport
         };
     }
 
-    private static int runIndex(RleVector values, int position)
+    public static int runIndex(RleVector values, int position)
     {
         int offset = 0;
         for (int index = 0; index < values.counts().length; index++) {

@@ -271,6 +271,46 @@ public class TestOperators
     }
 
     @Test
+    void testGroupOperatorGroupsBooleans()
+    {
+        assertThat(operator(new GroupOperator(
+                allocator,
+                0,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row(true),
+                                row(false),
+                                row(true),
+                                row((Object) null))))))
+                .matchesExactly(List.of(
+                        row(0L, 1L),
+                        row(1L, 0L),
+                        row(0L, 1L),
+                        row(2L, null)));
+    }
+
+    @Test
+    void testGroupOperatorGroupsDoubles()
+    {
+        assertThat(operator(new GroupOperator(
+                allocator,
+                0,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row(1.5),
+                                row(2.5),
+                                row(1.5))))))
+                .matchesExactly(List.of(
+                        row(0L, 1.5),
+                        row(1L, 2.5),
+                        row(0L, 1.5)));
+    }
+
+    @Test
     void testOperatorAssertionsDecodeNestedArrays()
     {
         ArrayVector arrays = new ArrayVector(1);

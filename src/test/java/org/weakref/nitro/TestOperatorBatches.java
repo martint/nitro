@@ -15,6 +15,7 @@ package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
@@ -243,6 +244,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOperatorPreservesArrayPayloadColumn()
+    {
+        ArrayVector payload = new ArrayVector(4);
+        payload.offsets()[0] = 0;
+        payload.offsets()[1] = 2;
+        payload.offsets()[2] = 2;
+        payload.offsets()[3] = 3;
+        payload.offsets()[4] = 6;
+        payload.setElements(Streams.ofValues(new I64Vector(new long[] {10L, 11L, 20L, 30L, 31L, 32L})));
+
+        Operator operator = new TopNOperator(
+                new Allocator(),
+                2,
+                0,
+                new TableOperator(
+                        2,
+                        List.of(TableOperator.Page.values(
+                                4,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1L, 5L, 3L, 4L}),
+                                        payload,
+                                },
+                                org.weakref.nitro.data.Mask.all(4)))));
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                .containsExactly(
+                        row(5L, List.of()),
+                        row(4L, List.of(30L, 31L, 32L)));
+    }
+
+    @Test
     void testTopNOperatorOrdersUtf8Keys()
     {
         Operator operator = new TopNOperator(
@@ -454,6 +486,42 @@ public class TestOperatorBatches
         assertThat(leftNames.utf8Value(1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
         assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
+    }
+
+    @Test
+    void testHashJoinOperatorPreservesArrayPayloadColumn()
+    {
+        ArrayVector payload = new ArrayVector(3);
+        payload.offsets()[0] = 0;
+        payload.offsets()[1] = 2;
+        payload.offsets()[2] = 3;
+        payload.offsets()[3] = 3;
+        payload.setElements(Streams.ofValues(new I64Vector(new long[] {100L, 101L, 200L})));
+
+        Operator operator = new HashJoinOperator(
+                new Allocator(),
+                new TableOperator(
+                        1,
+                        List.of(TableOperator.Page.values(
+                                2,
+                                new Vector[] {new I64Vector(new long[] {1L, 2L})},
+                                org.weakref.nitro.data.Mask.all(2)))),
+                0,
+                new TableOperator(
+                        2,
+                        List.of(TableOperator.Page.values(
+                                3,
+                                new Vector[] {
+                                        new I64Vector(new long[] {2L, 1L, 3L}),
+                                        payload,
+                                },
+                                org.weakref.nitro.data.Mask.all(3)))),
+                0);
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                .containsExactly(
+                        row(1L, 1L, List.of(200L)),
+                        row(2L, 2L, List.of(100L, 101L)));
     }
 
     @Test
