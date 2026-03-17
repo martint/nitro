@@ -21,7 +21,6 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
-import java.util.Arrays;
 import java.util.Set;
 
 final class OperatorVectorSupport
@@ -104,7 +103,30 @@ final class OperatorVectorSupport
 
     public static int binaryHash(byte[] bytes)
     {
-        return Arrays.hashCode(bytes);
+        int result = 1;
+        for (byte value : bytes) {
+            result = 31 * result + value;
+        }
+        return result;
+    }
+
+    public static int binaryCompare(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        return switch (left) {
+            case BinaryVector leftValues -> switch (right) {
+                case BinaryVector rightValues -> binaryCompare(
+                        leftValues.data(),
+                        leftValues.startOffset(leftPosition),
+                        leftValues.length(leftPosition),
+                        rightValues.data(),
+                        rightValues.startOffset(rightPosition),
+                        rightValues.length(rightPosition));
+                default -> binaryCompare(right, rightPosition, leftValues.data(), leftValues.startOffset(leftPosition), leftValues.length(leftPosition)) * -1;
+            };
+            case DictionaryVector leftValues -> binaryCompare(leftValues.values(), leftValues.ids()[leftPosition], right, rightPosition);
+            case RleVector leftValues -> binaryCompare(leftValues.values(), runIndex(leftValues, leftPosition), right, rightPosition);
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
+        };
     }
 
     public static boolean binaryEquals(Vector left, int leftPosition, Vector right, int rightPosition)
@@ -132,6 +154,16 @@ final class OperatorVectorSupport
     public static boolean binaryEquals(Vector left, int leftPosition, byte[] right)
     {
         return binaryEquals(left, leftPosition, right, 0, right.length);
+    }
+
+    public static int binaryCompare(Vector left, int leftPosition, byte[] right, int rightOffset, int rightLength)
+    {
+        return switch (left) {
+            case BinaryVector values -> binaryCompare(values.data(), values.startOffset(leftPosition), values.length(leftPosition), right, rightOffset, rightLength);
+            case DictionaryVector values -> binaryCompare(values.values(), values.ids()[leftPosition], right, rightOffset, rightLength);
+            case RleVector values -> binaryCompare(values.values(), runIndex(values, leftPosition), right, rightOffset, rightLength);
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
+        };
     }
 
     public static boolean binaryEquals(Vector left, int leftPosition, byte[] right, int rightOffset, int rightLength)
@@ -178,5 +210,17 @@ final class OperatorVectorSupport
             }
         }
         return true;
+    }
+
+    private static int binaryCompare(byte[] left, int leftOffset, int leftLength, byte[] right, int rightOffset, int rightLength)
+    {
+        int minLength = Math.min(leftLength, rightLength);
+        for (int index = 0; index < minLength; index++) {
+            int comparison = Byte.toUnsignedInt(left[leftOffset + index]) - Byte.toUnsignedInt(right[rightOffset + index]);
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return Integer.compare(leftLength, rightLength);
     }
 }
