@@ -24,12 +24,10 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
-import java.util.Arrays;
-
 final class GroupingState
 {
     private final Long2LongMap longGroups = new Long2LongOpenHashMap();
-    private final Object2LongMap<BinaryGroupKey> binaryGroups = new Object2LongOpenHashMap<>();
+    private final Object2LongMap<OperatorKeySemantics.BinaryKey> binaryGroups = new Object2LongOpenHashMap<>();
     private long nextGroupId;
     private long nullGroup = -1;
 
@@ -54,7 +52,7 @@ final class GroupingState
     private void groupI64(long[] values, BooleanVector nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            result.values()[position] = isNull(nulls, position)
+            result.values()[position] = OperatorVectorSupport.isNull(nulls, position)
                     ? nullGroup()
                     : groupForLong(values[position]);
         }
@@ -63,7 +61,7 @@ final class GroupingState
     private void groupDictionaryI64(int[] ids, long[] values, BooleanVector nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            result.values()[position] = isNull(nulls, position)
+            result.values()[position] = OperatorVectorSupport.isNull(nulls, position)
                     ? nullGroup()
                     : groupForLong(values[ids[position]]);
         }
@@ -72,7 +70,7 @@ final class GroupingState
     private void groupBinary(BinaryVector values, BooleanVector nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            result.values()[position] = isNull(nulls, position)
+            result.values()[position] = OperatorVectorSupport.isNull(nulls, position)
                     ? nullGroup()
                     : groupForBinary(values, position);
         }
@@ -81,10 +79,10 @@ final class GroupingState
     private void groupDictionaryBinary(int[] ids, BinaryVector values, BooleanVector nulls, Mask mask, I64Vector result)
     {
         long[] groupsById = new long[values.length()];
-        Arrays.fill(groupsById, -1);
+        java.util.Arrays.fill(groupsById, -1);
 
         for (int position : mask) {
-            if (isNull(nulls, position)) {
+            if (OperatorVectorSupport.isNull(nulls, position)) {
                 result.values()[position] = nullGroup();
                 continue;
             }
@@ -110,7 +108,7 @@ final class GroupingState
 
     private long groupForBinary(BinaryVector values, int position)
     {
-        BinaryGroupKey key = new BinaryGroupKey(values.copyBytes(position));
+        OperatorKeySemantics.BinaryKey key = OperatorKeySemantics.binaryKey(values.copyBytes(position));
         long group = binaryGroups.putIfAbsent(key, nextGroupId);
         if (group == -1) {
             group = nextGroupId++;
@@ -124,25 +122,5 @@ final class GroupingState
             nullGroup = nextGroupId++;
         }
         return nullGroup;
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
-    }
-
-    private record BinaryGroupKey(byte[] bytes)
-    {
-        @Override
-        public boolean equals(Object object)
-        {
-            return object instanceof BinaryGroupKey other && Arrays.equals(bytes, other.bytes);
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return Arrays.hashCode(bytes);
-        }
     }
 }

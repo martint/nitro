@@ -59,7 +59,7 @@ final class TopNState
 
     public long orderingValue(Output output, int position)
     {
-        return longValue(output.borrow(Stream.VALUES), position);
+        return OperatorVectorSupport.longValue(output.borrow(Stream.VALUES), position);
     }
 
     public void copyRow(Batch batch, int position, int slot)
@@ -126,7 +126,7 @@ final class TopNState
 
     private Vector materializeStream(Vector sample, Vector[] rows)
     {
-        Vector flattenedSample = flatten(sample);
+        Vector flattenedSample = OperatorVectorSupport.flatten(sample);
         return switch (flattenedSample) {
             case I64Vector _ -> materializeLongs(rows);
             case BooleanVector _ -> materializeBooleans(rows);
@@ -177,7 +177,7 @@ final class TopNState
     {
         I64Vector result = allocator.allocate(allocationContext, I64Vector.class, rows.length, I64Vector::new);
         for (int row = 0; row < rows.length; row++) {
-            result.values()[row] = longValue(rows[row], 0);
+            result.values()[row] = OperatorVectorSupport.longValue(rows[row], 0);
         }
         return result;
     }
@@ -186,7 +186,7 @@ final class TopNState
     {
         BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, rows.length, BooleanVector::new);
         for (int row = 0; row < rows.length; row++) {
-            result.values()[row] = booleanValue(rows[row], 0);
+            result.values()[row] = OperatorVectorSupport.booleanValue(rows[row], 0);
         }
         return result;
     }
@@ -195,7 +195,7 @@ final class TopNState
     {
         F64Vector result = allocator.allocate(allocationContext, F64Vector.class, rows.length, F64Vector::new);
         for (int row = 0; row < rows.length; row++) {
-            result.values()[row] = doubleValue(rows[row], 0);
+            result.values()[row] = OperatorVectorSupport.doubleValue(rows[row], 0);
         }
         return result;
     }
@@ -204,30 +204,21 @@ final class TopNState
     {
         int totalBytes = 0;
         for (Vector row : rows) {
-            totalBytes += binaryLength(row, 0);
+            totalBytes += OperatorVectorSupport.binaryLength(row, 0);
         }
 
         BinaryVector result = allocator.allocateBinary(allocationContext, rows.length, totalBytes);
         result.addTraits(sample.traits());
         for (int row = 0; row < rows.length; row++) {
-            int length = binaryLength(rows[row], 0);
+            int length = OperatorVectorSupport.binaryLength(rows[row], 0);
             if (length == 0) {
                 result.setNull(row);
                 continue;
             }
-            byte[] bytes = binaryBytes(rows[row], 0);
+            byte[] bytes = OperatorVectorSupport.binaryBytes(rows[row], 0);
             result.setBytes(row, bytes);
         }
         return result;
-    }
-
-    private static Vector flatten(Vector vector)
-    {
-        return switch (vector) {
-            case DictionaryVector values -> flatten(values.values());
-            case RleVector values -> flatten(values.values());
-            default -> vector;
-        };
     }
 
     private static int runIndex(RleVector values, int position)
@@ -240,55 +231,5 @@ final class TopNState
             }
         }
         throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + values.length());
-    }
-
-    private static long longValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I64Vector values -> values.values()[position];
-            case DictionaryVector values -> longValue(values.values(), values.ids()[position]);
-            case RleVector values -> longValue(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected I64 vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean booleanValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> booleanValue(values.values(), values.ids()[position]);
-            case RleVector values -> booleanValue(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected boolean vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static double doubleValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case F64Vector values -> values.values()[position];
-            case DictionaryVector values -> doubleValue(values.values(), values.ids()[position]);
-            case RleVector values -> doubleValue(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected F64 vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static int binaryLength(Vector vector, int position)
-    {
-        return switch (vector) {
-            case BinaryVector values -> values.length(position);
-            case DictionaryVector values -> binaryLength(values.values(), values.ids()[position]);
-            case RleVector values -> binaryLength(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static byte[] binaryBytes(Vector vector, int position)
-    {
-        return switch (vector) {
-            case BinaryVector values -> values.copyBytes(position);
-            case DictionaryVector values -> binaryBytes(values.values(), values.ids()[position]);
-            case RleVector values -> binaryBytes(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
-        };
     }
 }

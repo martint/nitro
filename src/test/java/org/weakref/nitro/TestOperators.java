@@ -247,6 +247,29 @@ public class TestOperators
     }
 
     @Test
+    void testGroupOperatorGroupsUtf8Values()
+    {
+        assertThat(operator(new GroupOperator(
+                allocator,
+                0,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row("alpha"),
+                                row("beta"),
+                                row("alpha"),
+                                row((Object) null),
+                                row("beta"))))))
+                .matchesExactly(List.of(
+                        row(0L, "alpha"),
+                        row(1L, "beta"),
+                        row(0L, "alpha"),
+                        row(2L, null),
+                        row(1L, "beta")));
+    }
+
+    @Test
     void testOperatorAssertionsDecodeNestedArrays()
     {
         ArrayVector arrays = new ArrayVector(1);
