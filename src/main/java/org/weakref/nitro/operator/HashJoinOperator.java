@@ -13,15 +13,16 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongList;
+import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 
 public class HashJoinOperator
@@ -39,7 +40,7 @@ public class HashJoinOperator
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
 
-    private final Map<OperatorKeySemantics.Key, List<InnerRowReference>> innerIndex = new HashMap<>();
+    private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
 
     private Mask currentOuterMask;
     private Batch currentOuterBatch;
@@ -47,7 +48,7 @@ public class HashJoinOperator
     private int outerRemaining;
     private int currentOuterPosition;
     private boolean currentOuterPositionReady;
-    private List<InnerRowReference> currentMatches = List.of();
+    private LongList currentMatches = LongLists.emptyList();
     private int currentMatchIndex;
 
     private boolean done;
@@ -130,15 +131,21 @@ public class HashJoinOperator
             }
 
             while (currentMatchIndex < currentMatches.size() && outputPosition < BATCH_SIZE) {
-                InnerRowReference match = currentMatches.get(currentMatchIndex++);
-                outputBuffer.appendMatchAt(currentOuterBatch, currentOuterPosition, bufferedInner.batches().get(match.batchIndex()), match.position(), outputPosition, BATCH_SIZE);
+                long match = currentMatches.getLong(currentMatchIndex++);
+                outputBuffer.appendMatchAt(
+                        currentOuterBatch,
+                        currentOuterPosition,
+                        bufferedInner.batches().get(batchIndex(match)),
+                        rowPosition(match),
+                        outputPosition,
+                        BATCH_SIZE);
                 outputPosition++;
             }
 
             if (currentMatchIndex == currentMatches.size()) {
                 outerRemaining--;
                 currentOuterPositionReady = false;
-                currentMatches = List.of();
+                currentMatches = LongLists.emptyList();
             }
         }
 
@@ -165,13 +172,14 @@ public class HashJoinOperator
         return false;
     }
 
-    private List<InnerRowReference> matchesForOuterPosition()
+    private LongList matchesForOuterPosition()
     {
         OperatorKeySemantics.Key key = keyForOuterPosition();
         if (key == null) {
-            return List.of();
+            return LongLists.emptyList();
         }
-        return innerIndex.getOrDefault(key, List.of());
+        LongArrayList matches = innerIndex.get(key);
+        return matches == null ? LongLists.emptyList() : matches;
     }
 
     private OperatorKeySemantics.Key keyForOuterPosition()
@@ -222,13 +230,13 @@ public class HashJoinOperator
                 continue;
             }
             OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(keys);
-            List<InnerRowReference> rows = innerIndex.get(compositeKey);
+            LongArrayList rows = innerIndex.get(compositeKey);
             if (rows == null) {
                 OperatorKeySemantics.Key ownedKey = OperatorKeySemantics.ownedKey(compositeKey);
-                rows = new ArrayList<>();
+                rows = new LongArrayList();
                 innerIndex.put(ownedKey, rows);
             }
-            rows.add(new InnerRowReference(batchIndex, position));
+            rows.add(packRowReference(batchIndex, position));
         }
     }
 
@@ -245,5 +253,18 @@ public class HashJoinOperator
         allocator.release(ALLOCATION_CONTEXT);
     }
 
-    private record InnerRowReference(int batchIndex, int position) {}
+    private static long packRowReference(int batchIndex, int position)
+    {
+        return ((long) batchIndex << Integer.SIZE) | (position & 0xFFFF_FFFFL);
+    }
+
+    private static int batchIndex(long rowReference)
+    {
+        return (int) (rowReference >>> Integer.SIZE);
+    }
+
+    private static int rowPosition(long rowReference)
+    {
+        return (int) rowReference;
+    }
 }
