@@ -14,13 +14,11 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -33,6 +31,7 @@ public class NestedLoopJoinOperator
     private final Allocator allocator;
     private final Operator outer;
     private final Operator inner;
+    private final JoinBufferSupport buffers;
 
     private boolean innerLoaded;
     private final List<InnerBatch> innerBatches = new ArrayList<>();
@@ -50,6 +49,8 @@ public class NestedLoopJoinOperator
     private final Streams[] result;
     private final Streams[] outerBuffer; // buffer to hold output from outer columns when replicating the same outer row for multiple inner rows
     private final Streams[] innerBuffer; // buffer to hold output from inner columns when replicating the same inner row for multiple outer rows
+    private final Streams[] outerSchema;
+    private final Streams[] innerSchema;
 
     private boolean done;
 
@@ -58,9 +59,12 @@ public class NestedLoopJoinOperator
         this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
+        this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         result = new Streams[outer.outputCount() + inner.outputCount()];
         outerBuffer = new Streams[outer.outputCount()];
         innerBuffer = new Streams[inner.outputCount()];
+        outerSchema = new Streams[outer.outputCount()];
+        innerSchema = new Streams[inner.outputCount()];
     }
 
     @Override
@@ -86,6 +90,7 @@ public class NestedLoopJoinOperator
         if (outerRemaining == 0) {
             while (outer.hasNext()) {
                 currentOuterBatch = outer.next();
+                captureSchema(currentOuterBatch, outerSchema);
                 currentOuterMask = currentOuterBatch.borrowMask();
                 if (!currentOuterMask.none()) {
                     break;
@@ -166,6 +171,11 @@ public class NestedLoopJoinOperator
     {
         Streams streams = result[outputIndex];
         if (streams == null) {
+            Streams schema = outputIndex < outer.outputCount() ? outerSchema[outputIndex] : innerSchema[outputIndex - outer.outputCount()];
+            if (schema != null) {
+                Streams empty = buffers.emptyLike(schema);
+                return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+            }
             I64Vector empty = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 0, I64Vector::new);
             return new Output(java.util.Set.of(Stream.VALUES), stream -> empty, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
@@ -202,22 +212,22 @@ public class NestedLoopJoinOperator
         return new Output(
                 streams.asMap().keySet(),
                 streams::get,
-                (stream, vector) -> copyStreamVector(streams, stream));
+                (stream, vector) -> buffers.copyStreamVector(streams, stream));
     }
 
     private void joinWithInnerRow()
     {
         int outerColumnCount = outer.outputCount();
         for (int i = 0; i < outerColumnCount; i++) {
-            result[i] = toStreams(currentOuterBatch.output(i));
+            result[i] = buffers.borrowStreams(currentOuterBatch.output(i));
         }
         for (int i = 0; i < inner.outputCount(); i++) {
-            innerBuffer[i] = allocateNullableI64Buffer(innerBuffer[i], currentOuterMask.maxPosition() + 1);
-            replicate(
+            innerBuffer[i] = buffers.replicate(
                     innerBuffer[i],
+                    innerBatches.get(currentInnerBatch).columns()[i],
+                    currentOuterMask.maxPosition() + 1,
                     0,
                     currentOuterMask.maxPosition() + 1,
-                    innerBatches.get(currentInnerBatch).columns()[i],
                     currentInnerPosition);
 
             result[i + outerColumnCount] = innerBuffer[i];
@@ -230,31 +240,18 @@ public class NestedLoopJoinOperator
 
         int outerColumnCount = outer.outputCount();
         for (int i = 0; i < outerColumnCount; i++) {
-            outerBuffer[i] = allocateNullableI64Buffer(outerBuffer[i], batchSize);
-            replicate(
+            outerBuffer[i] = buffers.replicate(
                     outerBuffer[i],
+                    buffers.borrowStreams(currentOuterBatch.output(i)),
+                    batchSize,
                     0,
                     batchSize,
-                    toStreams(currentOuterBatch.output(i)),
                     currentOuterPosition);
 
             result[i] = outerBuffer[i];
         }
         System.arraycopy(innerBatches.get(currentInnerBatch).columns(), 0, result, outerColumnCount, inner.outputCount());
         return batchSize;
-    }
-
-    private void replicate(Streams output, int start, int length, Streams input, int position)
-    {
-        I64Vector outputValues = (I64Vector) output.values();
-        BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
-        I64Vector inputValues = (I64Vector) input.values();
-        BooleanVector inputNulls = (BooleanVector) input.getOrNull(Stream.NULLS);
-        long value = inputValues.values()[position];
-        boolean isNull = inputNulls != null && inputNulls.values()[position];
-
-        Arrays.fill(outputValues.values(), start, start + length, value);
-        Arrays.fill(outputNulls.values(), start, start + length, isNull);
     }
 
     private void loadInnerIfNecessary()
@@ -268,13 +265,14 @@ public class NestedLoopJoinOperator
 
             while (inner.hasNext()) {
                 Batch batch = inner.next();
+                captureSchema(batch, innerSchema);
                 Mask mask = batch.borrowMask();
                 int maskOffset = 0;
                 while (maskOffset < mask.count()) {
-                    int copied = 0;
+                    int copied = Math.min(mask.count() - maskOffset, BATCH_SIZE - outputPosition);
                     for (int i = 0; i < columns.length; i++) {
                         // TODO: allow transferring ownership from underlying operator in case we don't need to copy+compact
-                        copied = copyAndCompact(batch.output(i), mask, maskOffset, columns[i], outputPosition);
+                        columns[i] = buffers.copyAndCompact(batch.output(i), mask, maskOffset, columns[i], outputPosition, copied, BATCH_SIZE);
                     }
                     outputPosition += copied;
                     maskOffset += copied;
@@ -296,49 +294,7 @@ public class NestedLoopJoinOperator
 
     private Streams[] allocateNewBatch(int columnCount)
     {
-        Streams[] columns = new Streams[columnCount];
-        for (int i = 0; i < columnCount; i++) {
-            columns[i] = allocateNullableI64Buffer(null, BATCH_SIZE);
-        }
-        return columns;
-    }
-
-    /**
-     * @return the number of elements copied
-     */
-    private int copyAndCompact(Output input, Mask mask, int maskStart, Streams output, int outputStart)
-    {
-        long[] inputValues = ((I64Vector) input.borrow(Stream.VALUES)).values();
-        BooleanVector inputNullsVector = (BooleanVector) input.borrowOrNull(Stream.NULLS);
-        boolean[] inputNulls = inputNullsVector != null ? inputNullsVector.values() : null;
-        I64Vector outputValues = (I64Vector) output.values();
-        BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
-
-        int outputPosition = outputStart;
-        int maskIndex = maskStart;
-
-        if (mask.all()) {
-            int length = Math.min(mask.count() - maskStart, outputValues.length() - outputPosition);
-            if (inputNulls != null) {
-                System.arraycopy(inputNulls, maskStart, outputNulls.values(), outputPosition, length);
-            }
-            else {
-                Arrays.fill(outputNulls.values(), outputPosition, outputPosition + length, false);
-            }
-            System.arraycopy(inputValues, maskStart, outputValues.values(), outputPosition, length);
-            outputPosition += length;
-        }
-        else {
-            while (outputPosition < outputValues.length() && maskIndex < mask.count()) {
-                int inputPosition = mask.position(maskIndex);
-                outputNulls.values()[outputPosition] = inputNulls != null && inputNulls[inputPosition];
-                outputValues.values()[outputPosition] = inputValues[inputPosition];
-                outputPosition++;
-                maskIndex++;
-            }
-        }
-
-        return outputPosition - outputStart;
+        return new Streams[columnCount];
     }
 
     @Override
@@ -354,55 +310,19 @@ public class NestedLoopJoinOperator
         allocator.release(ALLOCATION_CONTEXT);
     }
 
-    // TODO: could geeneralize (call it Chunk?) this to have a Mask instead. Not needed for NLJ, but might be useful
-    //       for other operators
-    private Streams allocateNullableI64Buffer(Streams existing, int size)
+    private static void captureSchema(Batch batch, Streams[] schema)
     {
-        I64Vector values = allocator.reallocateIfNecessary(
-                ALLOCATION_CONTEXT,
-                existing != null && existing.has(Stream.VALUES) ? (I64Vector) existing.values() : null,
-                I64Vector.class,
-                size,
-                I64Vector::new);
-        BooleanVector nulls = allocator.reallocateIfNecessary(
-                ALLOCATION_CONTEXT,
-                existing != null && existing.has(Stream.NULLS) ? (BooleanVector) existing.get(Stream.NULLS) : null,
-                BooleanVector.class,
-                size,
-                BooleanVector::new);
-        return Streams.ofValuesAndNulls(values, nulls);
-    }
-
-    private static Streams toStreams(Output output)
-    {
-        I64Vector values = (I64Vector) output.borrow(Stream.VALUES);
-        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
-        if (nulls != null) {
-            return Streams.ofValuesAndNulls(values, nulls);
+        for (int outputIndex = 0; outputIndex < schema.length; outputIndex++) {
+            if (schema[outputIndex] != null) {
+                continue;
+            }
+            Output output = batch.output(outputIndex);
+            Streams streams = Streams.empty();
+            for (Stream stream : output.streams()) {
+                streams = streams.with(stream, output.borrow(stream));
+            }
+            schema[outputIndex] = streams;
         }
-        return Streams.ofValues(values);
-    }
-
-    private org.weakref.nitro.data.Vector copyStreamVector(Streams streams, Stream stream)
-    {
-        return switch (stream) {
-            case VALUES -> copyI64((I64Vector) streams.get(Stream.VALUES));
-            case NULLS, ERRORS -> copyBoolean((BooleanVector) streams.get(stream));
-        };
-    }
-
-    private I64Vector copyI64(I64Vector source)
-    {
-        I64Vector copy = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, source.length(), I64Vector::new);
-        System.arraycopy(source.values(), 0, copy.values(), 0, source.length());
-        return copy;
-    }
-
-    private BooleanVector copyBoolean(BooleanVector source)
-    {
-        BooleanVector copy = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, source.length(), BooleanVector::new);
-        System.arraycopy(source.values(), 0, copy.values(), 0, source.length());
-        return copy;
     }
 
     record InnerBatch(Streams[] columns, int length) {}

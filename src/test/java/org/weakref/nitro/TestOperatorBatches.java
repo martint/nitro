@@ -255,6 +255,42 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testNestedLoopJoinOperatorPreservesBinaryPayloadColumn()
+    {
+        BinaryVector names = new BinaryVector(2, 9);
+        names.addTrait(BinaryVector.Trait.UTF8_STRING);
+        names.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        names.setBytes(0, "red".getBytes(UTF_8));
+        names.setBytes(1, "blue".getBytes(UTF_8));
+
+        Operator operator = new NestedLoopJoinOperator(
+                new Allocator(),
+                new TableOperator(
+                        1,
+                        List.of(new TableOperator.Page(
+                                2,
+                                new Vector[] {new I64Vector(new long[] {1L, 2L})},
+                                org.weakref.nitro.data.Mask.all(2)))),
+                new TableOperator(
+                        1,
+                        List.of(new TableOperator.Page(
+                                2,
+                                new Vector[] {names},
+                                org.weakref.nitro.data.Mask.all(2)))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        I64Vector ids = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector payload = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(ids.values(), rowCount)).containsExactly(1L, 2L);
+        assertThat(payload.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+        assertThat(payload.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+        assertThat(payload.utf8Value(0)).isEqualTo("red");
+        assertThat(payload.utf8Value(1)).isEqualTo("red");
+    }
+
+    @Test
     void testTableOperatorProducesBatch()
     {
         Operator operator = new TableOperator(
