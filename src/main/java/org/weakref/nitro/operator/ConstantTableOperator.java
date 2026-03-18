@@ -75,6 +75,12 @@ public class ConstantTableOperator
     }
 
     @Override
+    public boolean supportsRetainedBatches()
+    {
+        return true;
+    }
+
+    @Override
     public void close()
     {
         allocator.release(ALLOCATION_CONTEXT);

@@ -22,6 +22,7 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,22 +34,20 @@ public class ProjectOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
 
-    private final PlanEvaluator planEvaluator;
+    private final EvaluationPlan evaluationPlan;
+    private final PrimitiveRegistry primitiveRegistry;
     private final List<Reference> outputReferences;
-    private final Map<Producer, Streams> evaluatedOutputBundles = new HashMap<>();
+    private final List<PlanEvaluator> evaluators = new ArrayList<>();
 
     private final Operator source;
-    private Batch currentBatch;
-    private Mask mask;
+    private BatchState currentBatchState;
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         this.allocator = allocator;
         this.source = source;
-        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (reference, currentMask) -> switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatch.output(index).borrowOrNull(reference.stream());
-            default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
-        }, allocator);
+        this.evaluationPlan = evaluationPlan;
+        this.primitiveRegistry = primitiveRegistry;
         this.outputReferences = evaluationPlan.outputs();
     }
 
@@ -67,35 +66,43 @@ public class ProjectOperator
     @Override
     public Batch next()
     {
-        currentBatch = source.next();
-        mask = currentBatch.borrowMask();
-        planEvaluator.reset();
-        evaluatedOutputBundles.clear();
+        Batch sourceBatch = source.next();
+        BatchState batchState = new BatchState(sourceBatch);
+        currentBatchState = batchState;
+        evaluators.add(batchState.planEvaluator());
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Reference outputReference = outputReferences.get(outputIndex);
             outputs[outputIndex] = new Output(
                     Set.of(outputReference.stream()),
-                    stream -> evaluateOutput(outputReference, stream),
+                    stream -> evaluateOutput(batchState, outputReference, stream),
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(mask, ignored -> currentBatch.takeMask(), outputs);
+        return new Batch(batchState.mask(), batchState::constrain, ignored -> sourceBatch.takeMask(), outputs);
     }
 
     @Override
     public void constrain(Mask mask)
     {
         source.constrain(mask);
-        this.mask = mask;
+        if (currentBatchState != null) {
+            currentBatchState.constrain(mask);
+        }
     }
 
-    private org.weakref.nitro.data.Vector evaluateOutput(Reference outputReference, Stream stream)
+    @Override
+    public boolean supportsRetainedBatches()
+    {
+        return source.supportsRetainedBatches();
+    }
+
+    private org.weakref.nitro.data.Vector evaluateOutput(BatchState batchState, Reference outputReference, Stream stream)
     {
         if (stream != outputReference.stream()) {
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
         }
-        Streams bundle = evaluatedOutputBundles.computeIfAbsent(outputReference.producer(), _ -> planEvaluator.evaluate(outputReference, mask));
+        Streams bundle = batchState.evaluatedOutputBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.mask()));
         return bundle.get(stream);
     }
 
@@ -103,7 +110,50 @@ public class ProjectOperator
     public void close()
     {
         source.close();
-        planEvaluator.reset();
+        evaluators.forEach(PlanEvaluator::reset);
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private final class BatchState
+    {
+        private final Batch sourceBatch;
+        private final PlanEvaluator planEvaluator;
+        private final Map<Producer, Streams> evaluatedOutputBundles = new HashMap<>();
+        private Mask mask;
+
+        private BatchState(Batch sourceBatch)
+        {
+            this.sourceBatch = sourceBatch;
+            this.mask = sourceBatch.borrowMask();
+            this.planEvaluator = new PlanEvaluator(
+                    evaluationPlan,
+                    primitiveRegistry,
+                    (reference, currentMask) -> switch (reference.producer()) {
+                        case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> sourceBatch.output(index).borrowOrNull(reference.stream());
+                        default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
+                    },
+                    allocator);
+        }
+
+        private Mask mask()
+        {
+            return mask;
+        }
+
+        private PlanEvaluator planEvaluator()
+        {
+            return planEvaluator;
+        }
+
+        private Map<Producer, Streams> evaluatedOutputBundles()
+        {
+            return evaluatedOutputBundles;
+        }
+
+        private void constrain(Mask mask)
+        {
+            this.mask = mask;
+            sourceBatch.constrain(mask);
+        }
     }
 }

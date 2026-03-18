@@ -63,6 +63,12 @@ public class TableOperator
     }
 
     @Override
+    public boolean supportsRetainedBatches()
+    {
+        return true;
+    }
+
+    @Override
     public void close()
     {
     }

@@ -80,11 +80,7 @@ public final class ParquetScanOperator
     private final List<ColumnSpec> columns;
 
     private PageReadStore nextRowGroup;
-    private PageReadStore currentRowGroup;
-    private int currentRowCount;
-    private Mask currentMask;
-    private ColumnPages[] currentColumnPages;
-    private ColumnBuffer[] currentBuffers;
+    private RowGroupBatchState currentBatchState;
 
     public ParquetScanOperator(Allocator allocator, java.nio.file.Path file, List<String> columns)
     {
@@ -126,13 +122,14 @@ public final class ParquetScanOperator
             throw new IllegalStateException("No more Parquet row groups");
         }
 
-        currentRowGroup = nextRowGroup;
+        PageReadStore currentRowGroup = nextRowGroup;
         loadNextRowGroup();
 
-        currentRowCount = toIntExact(currentRowGroup.getRowCount());
-        currentMask = allocator.allocateAllMask(ALLOCATION_CONTEXT, currentRowCount);
-        currentColumnPages = new ColumnPages[columns.size()];
-        currentBuffers = new ColumnBuffer[columns.size()];
+        RowGroupBatchState batchState = new RowGroupBatchState(
+                currentRowGroup,
+                toIntExact(currentRowGroup.getRowCount()),
+                allocator.allocateAllMask(ALLOCATION_CONTEXT, toIntExact(currentRowGroup.getRowCount())));
+        currentBatchState = batchState;
 
         Output[] outputs = new Output[columns.size()];
         for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
@@ -141,7 +138,7 @@ public final class ParquetScanOperator
             outputs[columnIndex] = new Output(
                     column.nullable() ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES),
                     stream -> {
-                        ColumnBuffer buffer = resolveColumn(outputIndex);
+                        ColumnBuffer buffer = resolveColumn(outputIndex, batchState);
                         return switch (stream) {
                             case VALUES -> buffer.values();
                             case NULLS -> requireNonNull(buffer.nulls(), "NULLS stream is absent");
@@ -150,13 +147,21 @@ public final class ParquetScanOperator
                     },
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(currentMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchState.mask(), batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
     public void constrain(Mask mask)
     {
-        currentMask = mask;
+        if (currentBatchState != null) {
+            currentBatchState.constrain(mask);
+        }
+    }
+
+    @Override
+    public boolean supportsRetainedBatches()
+    {
+        return true;
     }
 
     @Override
@@ -183,9 +188,9 @@ public final class ParquetScanOperator
         }
     }
 
-    private ColumnBuffer resolveColumn(int columnIndex)
+    private ColumnBuffer resolveColumn(int columnIndex, RowGroupBatchState batchState)
     {
-        ColumnBuffer buffer = currentBuffers[columnIndex];
+        ColumnBuffer buffer = batchState.buffers()[columnIndex];
         if (buffer != null) {
             return buffer;
         }
@@ -193,33 +198,81 @@ public final class ParquetScanOperator
         ColumnSpec column = columns.get(columnIndex);
         buffer = switch (column.kind()) {
             case I64 -> {
-                ColumnPages columnPages = columnPages(columnIndex);
-                yield readI64Column(column, columnPages, currentRowCount, createColumnReader(columnPages), currentMask);
+                ColumnPages columnPages = columnPages(columnIndex, batchState);
+                yield readI64Column(column, columnPages, batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
             }
             case BOOLEAN -> {
-                ColumnPages columnPages = columnPages(columnIndex);
-                yield readBooleanColumn(column, currentRowCount, createColumnReader(columnPages), currentMask);
+                ColumnPages columnPages = columnPages(columnIndex, batchState);
+                yield readBooleanColumn(column, batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
             }
             case BINARY -> {
-                ColumnPages columnPages = columnPages(columnIndex);
-                yield readBinaryColumn(column, columnPages, currentRowCount, currentMask);
+                ColumnPages columnPages = columnPages(columnIndex, batchState);
+                yield readBinaryColumn(column, columnPages, batchState.rowCount(), batchState.mask());
             }
-            case ARRAY_I64 -> readArrayI64Column(column, columnPages(columnIndex), currentRowCount, currentMask);
-            case MAP -> readMapColumn(column, currentRowGroup, currentRowCount, currentMask);
-            case STRUCT -> readStructColumn(column, currentRowGroup, currentRowCount, currentMask);
+            case ARRAY_I64 -> readArrayI64Column(column, columnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
+            case MAP -> readMapColumn(column, batchState.rowGroup(), batchState.rowCount(), batchState.mask());
+            case STRUCT -> readStructColumn(column, batchState.rowGroup(), batchState.rowCount(), batchState.mask());
         };
-        currentBuffers[columnIndex] = buffer;
+        batchState.buffers()[columnIndex] = buffer;
         return buffer;
     }
 
-    private ColumnPages columnPages(int columnIndex)
+    private ColumnPages columnPages(int columnIndex, RowGroupBatchState batchState)
     {
-        ColumnPages columnPages = currentColumnPages[columnIndex];
+        ColumnPages columnPages = batchState.columnPages()[columnIndex];
         if (columnPages == null) {
-            columnPages = captureColumnPages(currentRowGroup, columns.get(columnIndex).descriptor());
-            currentColumnPages[columnIndex] = columnPages;
+            columnPages = captureColumnPages(batchState.rowGroup(), columns.get(columnIndex).descriptor());
+            batchState.columnPages()[columnIndex] = columnPages;
         }
         return columnPages;
+    }
+
+    private final class RowGroupBatchState
+    {
+        private final PageReadStore rowGroup;
+        private final int rowCount;
+        private final Mask[] maskHolder;
+        private final ColumnPages[] columnPages;
+        private final ColumnBuffer[] buffers;
+
+        private RowGroupBatchState(PageReadStore rowGroup, int rowCount, Mask mask)
+        {
+            this.rowGroup = rowGroup;
+            this.rowCount = rowCount;
+            this.maskHolder = new Mask[] {mask};
+            this.columnPages = new ColumnPages[columns.size()];
+            this.buffers = new ColumnBuffer[columns.size()];
+        }
+
+        private PageReadStore rowGroup()
+        {
+            return rowGroup;
+        }
+
+        private int rowCount()
+        {
+            return rowCount;
+        }
+
+        private Mask mask()
+        {
+            return maskHolder[0];
+        }
+
+        private ColumnPages[] columnPages()
+        {
+            return columnPages;
+        }
+
+        private ColumnBuffer[] buffers()
+        {
+            return buffers;
+        }
+
+        private void constrain(Mask mask)
+        {
+            maskHolder[0] = mask;
+        }
     }
 
     private ColumnSpec resolveColumn(String name)

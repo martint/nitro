@@ -22,6 +22,8 @@ import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 
+import java.util.function.Function;
+
 public class FilterOperator
         implements Operator
 {
@@ -32,8 +34,7 @@ public class FilterOperator
     private final PlanEvaluator planEvaluator;
     private final MaskExpression predicateMask;
 
-    private Batch currentBatch;
-    private Mask mask;
+    private BatchState currentBatchState;
 
     public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
     {
@@ -45,7 +46,7 @@ public class FilterOperator
         this.source = source;
         this.allocator = allocator;
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (reference, currentMask) -> switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatch.output(index).borrow(reference.stream());
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatchState.sourceBatch().output(index).borrow(reference.stream());
             default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
         }, allocator);
         this.predicateMask = predicateMask;
@@ -66,26 +67,36 @@ public class FilterOperator
     @Override
     public Batch next()
     {
-        currentBatch = source.next();
-        mask = currentBatch.borrowMask();
-        mask = planEvaluator.evaluate(predicateMask, mask);
-        Mask batchMask = allocator.transfer(ALLOCATION_CONTEXT, mask);
+        Batch sourceBatch = source.next();
+        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
+        currentBatchState = batchState;
+        Mask batchMask = allocator.transfer(ALLOCATION_CONTEXT, planEvaluator.evaluate(predicateMask, sourceBatch.borrowMask()));
         source.constrain(batchMask);
+        sourceBatch.constrain(batchMask);
         planEvaluator.reset();
+        batchState.constrain(batchMask);
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            Output sourceOutput = currentBatch.output(outputIndex);
+            Output sourceOutput = sourceBatch.output(outputIndex);
             outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
         }
-        return new Batch(batchMask, outputs);
+        return new Batch(batchMask, batchState::constrain, Function.identity(), outputs);
     }
 
     @Override
     public void constrain(Mask mask)
     {
-        this.mask = mask;
         source.constrain(mask);
+        if (currentBatchState != null) {
+            currentBatchState.constrain(mask);
+        }
+    }
+
+    @Override
+    public boolean supportsRetainedBatches()
+    {
+        return source.supportsRetainedBatches();
     }
 
     @Override
@@ -94,5 +105,19 @@ public class FilterOperator
         source.close();
         planEvaluator.reset();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private record BatchState(Batch sourceBatch, Mask[] maskHolder)
+    {
+        private BatchState(Batch sourceBatch, Mask mask)
+        {
+            this(sourceBatch, new Mask[] {mask});
+        }
+
+        private void constrain(Mask mask)
+        {
+            maskHolder[0] = mask;
+            sourceBatch.constrain(mask);
+        }
     }
 }

@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Mask;
 
 import java.util.Arrays;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static java.util.Objects.checkIndex;
@@ -23,19 +24,26 @@ import static java.util.Objects.requireNonNull;
 
 public final class Batch
 {
-    private final Mask mask;
+    private Mask mask;
     private final Output[] outputs;
     private final Function<Mask, Mask> maskTakeResolver;
+    private final Consumer<Mask> constrainer;
     private boolean maskTaken;
 
     public Batch(Mask mask, Output... outputs)
     {
-        this(mask, Function.identity(), outputs);
+        this(mask, _ -> {}, Function.identity(), outputs);
     }
 
     public Batch(Mask mask, Function<Mask, Mask> maskTakeResolver, Output... outputs)
     {
+        this(mask, _ -> {}, maskTakeResolver, outputs);
+    }
+
+    public Batch(Mask mask, Consumer<Mask> constrainer, Function<Mask, Mask> maskTakeResolver, Output... outputs)
+    {
         this.mask = requireNonNull(mask, "mask is null");
+        this.constrainer = requireNonNull(constrainer, "constrainer is null");
         this.maskTakeResolver = requireNonNull(maskTakeResolver, "maskTakeResolver is null");
         this.outputs = Arrays.copyOf(outputs, outputs.length);
     }
@@ -53,6 +61,15 @@ public final class Batch
         Mask borrowedMask = borrowMask();
         maskTaken = true;
         return requireNonNull(maskTakeResolver.apply(borrowedMask), "maskTakeResolver returned null");
+    }
+
+    public void constrain(Mask mask)
+    {
+        if (maskTaken) {
+            throw new IllegalStateException("Mask already taken");
+        }
+        this.mask = requireNonNull(mask, "mask is null");
+        constrainer.accept(mask);
     }
 
     public Output output(int outputIndex)

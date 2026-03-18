@@ -26,5 +26,10 @@ public interface Operator
 
     void constrain(Mask mask);
 
+    default boolean supportsRetainedBatches()
+    {
+        return false;
+    }
+
     void close();
 }
