@@ -47,20 +47,30 @@ public class LimitOperator
     @Override
     public Batch next()
     {
-        currentBatch = source.next();
-        Mask sourceMask = currentBatch.borrowMask();
+        Batch sourceBatch = source.next();
+        currentBatch = sourceBatch;
+        Mask sourceMask = sourceBatch.borrowMask();
 
         int remaining = toIntExact(Math.min(limit - count, sourceMask.count()));
         currentMask = allocator.firstMask(ALLOCATION_CONTEXT, sourceMask, remaining);
         source.constrain(currentMask);
+        sourceBatch.constrain(currentMask);
         count += remaining;
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            Output sourceOutput = currentBatch.output(outputIndex);
+            Output sourceOutput = sourceBatch.output(outputIndex);
             outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
         }
-        return new Batch(currentMask, takenMask -> takenMask == sourceMask ? currentBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(
+                currentMask,
+                mask -> {
+                    currentMask = mask;
+                    source.constrain(mask);
+                    sourceBatch.constrain(mask);
+                },
+                takenMask -> takenMask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                outputs);
     }
 
     @Override
@@ -73,6 +83,10 @@ public class LimitOperator
     public void constrain(Mask mask)
     {
         source.constrain(mask);
+        if (currentBatch != null) {
+            currentMask = mask;
+            currentBatch.constrain(mask);
+        }
     }
 
     @Override

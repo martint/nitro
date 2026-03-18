@@ -596,6 +596,81 @@ public class TestOperators
     }
 
     @Test
+    void testLimitOperatorDefersPayloadBorrowsAndHonorsBatchConstraint()
+    {
+        AtomicInteger payloadBorrows = new AtomicInteger();
+        AtomicReference<Mask> constrainedMask = new AtomicReference<>();
+
+        Operator source = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                I64Vector keys = new I64Vector(new long[] {10L, 20L, 30L, 40L});
+                I64Vector payload = new I64Vector(new long[] {1L, 2L, 3L, 4L});
+                return new Batch(
+                        Mask.all(4),
+                        constrainedMask::set,
+                        Function.identity(),
+                        Output.of(Streams.ofValues(keys)),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            payloadBorrows.incrementAndGet();
+                            return payload;
+                        }));
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                constrainedMask.set(mask);
+            }
+
+            @Override
+            public void close()
+            {
+            }
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return true;
+            }
+        };
+
+        try (Operator operator = new LimitOperator(allocator, 3, source)) {
+            Batch batch = operator.next();
+            assertThat(batch.borrowMask()).containsExactly(0, 1, 2);
+            assertThat(constrainedMask.get()).containsExactly(0, 1, 2);
+            assertThat(payloadBorrows).hasValue(0);
+
+            batch.constrain(Mask.sparse(new int[] {0, 2}, 4));
+            assertThat(batch.borrowMask()).containsExactly(0, 2);
+            assertThat(constrainedMask.get()).containsExactly(0, 2);
+            assertThat(payloadBorrows).hasValue(0);
+
+            I64Vector payload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(payload.values()[0]).isEqualTo(1L);
+            assertThat(payload.values()[2]).isEqualTo(3L);
+            assertThat(payloadBorrows).hasValue(1);
+        }
+    }
+
+    @Test
     void testOperatorAssertionsDecodeNestedArrays()
     {
         ArrayVector arrays = new ArrayVector(1);
