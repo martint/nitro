@@ -859,6 +859,11 @@ not use `null` output placeholders.
   after the operator advances. In that case, narrowing must be batch-local:
   later `constrain(mask)` calls must target the retained batch instance that
   owns the lazy outputs, not just the operator's current global state.
+- The inverse is not automatic: an operator may still honor batch-local
+  `constrain(mask)` for its current batch without promising retained-batch
+  support after `next()`. Operators backed by reusable operator-owned buffers
+  may support current-batch laziness while still invalidating earlier batches
+  once execution advances.
 - `constrain(mask)` is the primary operator-level hook for lazy evaluation, not
   merely an optional micro-optimization.
 - If an operator can separate decisive work from payload work, it should prefer
