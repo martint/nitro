@@ -77,6 +77,15 @@ final class JoinBufferSupport
 
     public Streams copySinglePosition(Output input, Streams existing, int size, int outputPosition, int sourcePosition)
     {
+        if (isValuesOnly(input)) {
+            Vector existingValues = existing != null ? existing.values() : null;
+            Vector copied = copyVectorSinglePosition(existingValues, input.borrow(Stream.VALUES), sourcePosition, outputPosition, size);
+            if (existing != null && copied == existingValues) {
+                return existing;
+            }
+            return Streams.ofValues(copied);
+        }
+
         if (existing != null) {
             Streams updated = existing;
             boolean changed = false;
@@ -100,6 +109,15 @@ final class JoinBufferSupport
 
     public Streams copySinglePosition(Streams existing, Streams input, int size, int outputPosition, int sourcePosition)
     {
+        if (isValuesOnly(input)) {
+            Vector existingValues = existing != null ? existing.values() : null;
+            Vector copied = copyVectorSinglePosition(existingValues, input.values(), sourcePosition, outputPosition, size);
+            if (existing != null && copied == existingValues) {
+                return existing;
+            }
+            return Streams.ofValues(copied);
+        }
+
         if (existing != null) {
             Streams updated = existing;
             boolean changed = false;
@@ -856,5 +874,15 @@ final class JoinBufferSupport
             return values.offsets()[positionCount];
         }
         return 0;
+    }
+
+    private static boolean isValuesOnly(Output output)
+    {
+        return output.streams().size() == 1 && output.streams().contains(Stream.VALUES);
+    }
+
+    private static boolean isValuesOnly(Streams streams)
+    {
+        return streams.asMap().size() == 1 && streams.has(Stream.VALUES);
     }
 }

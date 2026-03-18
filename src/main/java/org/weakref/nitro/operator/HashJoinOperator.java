@@ -22,7 +22,6 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 
 public class HashJoinOperator
@@ -48,7 +47,7 @@ public class HashJoinOperator
 
     private Mask currentOuterMask;
     private Batch currentOuterBatch;
-    private Iterator<Integer> outerPositionIterator;
+    private int currentOuterMaskIndex;
     private int outerRemaining;
     private int currentOuterPosition;
     private boolean currentOuterPositionReady;
@@ -128,11 +127,11 @@ public class HashJoinOperator
             }
 
             if (!currentOuterPositionReady) {
-                if (!outerPositionIterator.hasNext()) {
+                if (currentOuterMaskIndex >= currentOuterMask.count()) {
                     outerRemaining = 0;
                     continue;
                 }
-                currentOuterPosition = outerPositionIterator.next();
+                currentOuterPosition = currentOuterMask.position(currentOuterMaskIndex++);
                 currentOuterPositionReady = true;
                 currentMatches = matchesForOuterPosition();
                 currentMatchIndex = 0;
@@ -171,7 +170,7 @@ public class HashJoinOperator
             outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
-                outerPositionIterator = currentOuterMask.iterator();
+                currentOuterMaskIndex = 0;
                 outerRemaining = currentOuterMask.count();
                 currentOuterPositionReady = false;
                 return true;
