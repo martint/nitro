@@ -19,6 +19,7 @@ import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.HashMap;
@@ -42,6 +43,8 @@ public class HashJoinOperator
     private final OperatorKeySemantics.Key[] innerProbeKeys;
     private final OperatorKeySemantics.CompositeProbeKey outerCompositeProbeKey;
     private final OperatorKeySemantics.CompositeProbeKey innerCompositeProbeKey;
+    private final Vector[] currentOuterJoinValues;
+    private final BooleanVector[] currentOuterJoinNulls;
 
     private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
 
@@ -82,6 +85,8 @@ public class HashJoinOperator
         this.innerProbeKeys = new OperatorKeySemantics.Key[innerJoinColumns.length];
         this.outerCompositeProbeKey = outerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length) : null;
         this.innerCompositeProbeKey = innerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(innerJoinColumns.length) : null;
+        this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
+        this.currentOuterJoinNulls = new BooleanVector[outerJoinColumns.length];
     }
 
     @Override
@@ -170,6 +175,7 @@ public class HashJoinOperator
             outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
+                cacheOuterJoinInputs();
                 currentOuterMaskIndex = 0;
                 outerRemaining = currentOuterMask.count();
                 currentOuterPositionReady = false;
@@ -192,13 +198,12 @@ public class HashJoinOperator
     private OperatorKeySemantics.Key keyForOuterPosition()
     {
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
-            Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
             if (outerProbeKeys[keyIndex] == null) {
-                outerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(output.borrow(Stream.VALUES));
+                outerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(currentOuterJoinValues[keyIndex]);
             }
             OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
-                    output.borrow(Stream.VALUES),
-                    (BooleanVector) output.borrowOrNull(Stream.NULLS),
+                    currentOuterJoinValues[keyIndex],
+                    currentOuterJoinNulls[keyIndex],
                     currentOuterPosition,
                     outerProbeKeys[keyIndex]);
             if (key == null) {
@@ -221,16 +226,23 @@ public class HashJoinOperator
 
     private void indexInnerRows(Streams[] columns, int startPosition, int length, int batchIndex)
     {
+        Vector[] joinValues = new Vector[innerJoinColumns.length];
+        BooleanVector[] joinNulls = new BooleanVector[innerJoinColumns.length];
+        for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
+            Streams streams = columns[innerJoinColumns[keyIndex]];
+            joinValues[keyIndex] = streams.values();
+            joinNulls[keyIndex] = (BooleanVector) streams.getOrNull(Stream.NULLS);
+            if (innerProbeKeys[keyIndex] == null) {
+                innerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(joinValues[keyIndex]);
+            }
+        }
+
         for (int position = startPosition; position < startPosition + length; position++) {
             boolean hasNull = false;
             for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
-                Streams streams = columns[innerJoinColumns[keyIndex]];
-                if (innerProbeKeys[keyIndex] == null) {
-                    innerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(streams.values());
-                }
                 OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
-                        streams.values(),
-                        (BooleanVector) streams.getOrNull(Stream.NULLS),
+                        joinValues[keyIndex],
+                        joinNulls[keyIndex],
                         position,
                         innerProbeKeys[keyIndex]);
                 if (key == null) {
@@ -250,6 +262,15 @@ public class HashJoinOperator
                 innerIndex.put(ownedKey, rows);
             }
             rows.add(packRowReference(batchIndex, position));
+        }
+    }
+
+    private void cacheOuterJoinInputs()
+    {
+        for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
+            Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
+            currentOuterJoinValues[keyIndex] = output.borrow(Stream.VALUES);
+            currentOuterJoinNulls[keyIndex] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
         }
     }
 
