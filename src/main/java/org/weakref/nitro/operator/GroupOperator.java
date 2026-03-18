@@ -28,10 +28,8 @@ public class GroupOperator
     private final int groupByColumn;
     private final Operator source;
     private final GroupingState groupingState = new GroupingState();
-    private boolean filled;
-    private Batch currentBatch;
-    private Mask mask;
-    private I64Vector result;
+    private BatchState currentBatchState;
+    private I64Vector reusableResult;
 
     public GroupOperator(Allocator allocator, int groupByColumn, Operator source)
     {
@@ -49,27 +47,30 @@ public class GroupOperator
     @Override
     public Batch next()
     {
-        filled = false;
-        currentBatch = source.next();
-        mask = currentBatch.borrowMask();
+        Batch sourceBatch = source.next();
+        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
+        currentBatchState = batchState;
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             if (outputIndex == 0) {
                 outputs[outputIndex] = new Output(
                         java.util.Set.of(Stream.VALUES),
-                        stream -> groupIds(),
+                        stream -> groupIds(batchState),
                         (stream, vector) -> {
-                            result = null;
+                            if (vector == reusableResult) {
+                                reusableResult = null;
+                            }
+                            batchState.result = null;
                             return allocator.transfer(ALLOCATION_CONTEXT, vector);
                         });
             }
             else {
-                Output sourceOutput = currentBatch.output(outputIndex - 1);
+                Output sourceOutput = sourceBatch.output(outputIndex - 1);
                 outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
             }
         }
-        return new Batch(mask, ignored -> currentBatch.takeMask(), outputs);
+        return new Batch(batchState.mask, batchState::constrain, ignored -> sourceBatch.takeMask(), outputs);
     }
 
     @Override
@@ -82,24 +83,28 @@ public class GroupOperator
     public void constrain(Mask mask)
     {
         source.constrain(mask);
+        if (currentBatchState != null) {
+            currentBatchState.constrain(mask);
+        }
     }
 
-    private Vector groupIds()
+    private Vector groupIds(BatchState batchState)
     {
-        doGroupingIfNeeded();
-        return result;
+        doGroupingIfNeeded(batchState);
+        return batchState.result;
     }
 
-    private void doGroupingIfNeeded()
+    private void doGroupingIfNeeded(BatchState batchState)
     {
-        if (!filled && !mask.none()) {
-            filled = true;
-            result = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, result, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
+        if (!batchState.filled && !batchState.mask.none()) {
+            batchState.filled = true;
+            reusableResult = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, reusableResult, I64Vector.class, batchState.mask.maxPosition() + 1, I64Vector::new);
+            batchState.result = reusableResult;
             groupingState.assignGroups(
-                    currentBatch.output(groupByColumn).borrow(Stream.VALUES),
-                    currentBatch.output(groupByColumn).borrowOrNull(Stream.NULLS),
-                    mask,
-                    result);
+                    batchState.sourceBatch.output(groupByColumn).borrow(Stream.VALUES),
+                    batchState.sourceBatch.output(groupByColumn).borrowOrNull(Stream.NULLS),
+                    batchState.mask,
+                    batchState.result);
         }
     }
 
@@ -108,5 +113,25 @@ public class GroupOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private static final class BatchState
+    {
+        private final Batch sourceBatch;
+        private Mask mask;
+        private boolean filled;
+        private I64Vector result;
+
+        private BatchState(Batch sourceBatch, Mask mask)
+        {
+            this.sourceBatch = sourceBatch;
+            this.mask = mask;
+        }
+
+        private void constrain(Mask mask)
+        {
+            this.mask = mask;
+            sourceBatch.constrain(mask);
+        }
     }
 }
