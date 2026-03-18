@@ -92,6 +92,7 @@ public class FilterOperator
     public void close()
     {
         source.close();
+        planEvaluator.reset();
         allocator.release(ALLOCATION_CONTEXT);
     }
 }

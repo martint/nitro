@@ -38,6 +38,12 @@ public final class MapKeys
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MapKeys");
 
     @Override
+    public Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of(ALLOCATION_CONTEXT);
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 1, "Unexpected argument count for map_keys");

@@ -1256,6 +1256,36 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testResetReleasesPrimitiveScratchContexts()
+    {
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call(
+                                "add",
+                                List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        Allocator allocator = new Allocator();
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {4, 5, 6}))), allocator);
+
+        evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(3));
+        assertThat(allocator.currentBytes(new Allocator.Context("AddI64"))).isPositive();
+
+        evaluator.reset();
+
+        assertThat(allocator.currentBytes(new Allocator.Context("AddI64"))).isZero();
+        assertThat(allocator.currentBytes(new Allocator.Context("PlanEvaluator"))).isZero();
+    }
+
+    @Test
     void testAndMaskKeepsNullAndErrorRowsOutOfFinalTrueResult()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();

@@ -538,6 +538,14 @@ public class Allocator
         state(context).release();
     }
 
+    public void releaseIfPresent(Context context)
+    {
+        ContextState state = states.get(context);
+        if (state != null) {
+            state.release();
+        }
+    }
+
     public Mask transfer(Context context, Mask mask)
     {
         transferMask(mask, context);
@@ -552,20 +560,20 @@ public class Allocator
 
     public Streams copyStreams(Context context, Streams streams)
     {
-        Streams copied = Streams.empty();
+        Streams.Builder copied = Streams.builder();
         for (Map.Entry<org.weakref.nitro.operator.evaluator.ir.Stream, Vector> entry : streams.asMap().entrySet()) {
-            copied = copied.with(entry.getKey(), copyVector(context, entry.getValue()));
+            copied.put(entry.getKey(), copyVector(context, entry.getValue()));
         }
-        return copied;
+        return copied.build();
     }
 
     public Streams copyStreams(Context context, Streams streams, int[] positions)
     {
-        Streams copied = Streams.empty();
+        Streams.Builder copied = Streams.builder();
         for (Map.Entry<org.weakref.nitro.operator.evaluator.ir.Stream, Vector> entry : streams.asMap().entrySet()) {
-            copied = copied.with(entry.getKey(), copyVector(context, entry.getValue(), positions));
+            copied.put(entry.getKey(), copyVector(context, entry.getValue(), positions));
         }
-        return copied;
+        return copied.build();
     }
 
     public Vector copyVector(Context context, Vector vector)

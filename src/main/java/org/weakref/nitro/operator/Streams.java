@@ -44,9 +44,16 @@ public final class Streams
         return new Streams(new EnumMap<>(Stream.class));
     }
 
+    public static Builder builder()
+    {
+        return new Builder();
+    }
+
     public static Streams of(Stream stream, Vector vector)
     {
-        return empty().with(stream, vector);
+        return builder()
+                .put(stream, vector)
+                .build();
     }
 
     public static Streams ofValues(Vector values)
@@ -56,7 +63,10 @@ public final class Streams
 
     public static Streams ofValuesAndNulls(Vector values, BooleanVector nulls)
     {
-        return of(Stream.VALUES, values).with(Stream.NULLS, nulls);
+        return builder()
+                .put(Stream.VALUES, values)
+                .put(Stream.NULLS, nulls)
+                .build();
     }
 
     public Streams with(Stream stream, Vector vector)
@@ -98,5 +108,34 @@ public final class Streams
     public Map<Stream, Vector> asMap()
     {
         return view;
+    }
+
+    public static final class Builder
+    {
+        private final EnumMap<Stream, Vector> vectors = new EnumMap<>(Stream.class);
+
+        private Builder() {}
+
+        public Builder put(Stream stream, Vector vector)
+        {
+            requireNonNull(stream, "stream is null");
+            requireNonNull(vector, "vector is null");
+            vectors.put(stream, vector);
+            return this;
+        }
+
+        public Builder putAll(Streams streams)
+        {
+            vectors.putAll(streams.vectors);
+            return this;
+        }
+
+        public Streams build()
+        {
+            if (vectors.isEmpty()) {
+                return Streams.empty();
+            }
+            return new Streams(vectors);
+        }
     }
 }

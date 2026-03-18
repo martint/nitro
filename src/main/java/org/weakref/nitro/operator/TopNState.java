@@ -42,11 +42,11 @@ final class TopNState
                 continue;
             }
             Output output = batch.output(outputIndex);
-            Streams streams = Streams.empty();
+            Streams.Builder streams = Streams.builder();
             for (Stream stream : output.streams()) {
-                streams = streams.with(stream, output.borrow(stream));
+                streams.put(stream, output.borrow(stream));
             }
-            schema[outputIndex] = streams;
+            schema[outputIndex] = streams.build();
         }
     }
 

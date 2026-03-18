@@ -31,6 +31,12 @@ public final class LessThanUtf8
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanUtf8");
 
     @Override
+    public Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of(ALLOCATION_CONTEXT);
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return Utf8BinaryDispatch.applyLessThan("lt_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);

@@ -33,6 +33,12 @@ public final class EqualUtf8
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualUtf8");
 
     @Override
+    public Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of(ALLOCATION_CONTEXT);
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");

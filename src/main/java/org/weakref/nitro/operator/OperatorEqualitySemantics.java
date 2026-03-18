@@ -19,8 +19,6 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 
-import java.util.Arrays;
-
 final class OperatorEqualitySemantics
 {
     private OperatorEqualitySemantics() {}
@@ -45,9 +43,7 @@ final class OperatorEqualitySemantics
                     OperatorVectorSupport.doubleValue(rightValues, rightPosition)) == 0;
         }
         if (left instanceof BinaryVector && right instanceof BinaryVector) {
-            return Arrays.equals(
-                    OperatorVectorSupport.binaryBytes(leftValues, leftPosition),
-                    OperatorVectorSupport.binaryBytes(rightValues, rightPosition));
+            return OperatorVectorSupport.binaryEquals(leftValues, leftPosition, rightValues, rightPosition);
         }
         throw new IllegalArgumentException("Unsupported equality comparison between %s and %s".formatted(
                 left.getClass().getSimpleName(),

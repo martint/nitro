@@ -38,6 +38,12 @@ public final class SubtractExactI64
     private static final Allocator.Context ERRORS_CONTEXT = new Allocator.Context("SubtractExactI64.errors");
 
     @Override
+    public Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of(ALLOCATION_CONTEXT, ERRORS_CONTEXT);
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for subtract_exact");

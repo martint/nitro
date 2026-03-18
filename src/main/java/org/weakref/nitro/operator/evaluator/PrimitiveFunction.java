@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -30,4 +31,9 @@ import java.util.Set;
 public interface PrimitiveFunction
 {
     Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context);
+
+    default Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of();
+    }
 }

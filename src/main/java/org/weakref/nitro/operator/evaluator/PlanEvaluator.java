@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -64,6 +65,7 @@ public final class PlanEvaluator
     private final Allocator allocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
+    private final Set<Allocator.Context> primitiveAllocationContexts;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
     private final Map<Producer, Set<Stream>> projectedStreamsByProducer;
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
@@ -84,6 +86,7 @@ public final class PlanEvaluator
         this.allocator = allocator;
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
+        this.primitiveAllocationContexts = primitiveAllocationContexts(plan, primitiveRegistry);
         this.memoizedProducers = plan.streamPlans().entrySet().stream()
                 .filter(entry -> entry.getValue().memoizationPolicy() == MemoizationPolicy.MEMOIZE)
                 .map(entry -> entry.getKey().producer())
@@ -130,7 +133,10 @@ public final class PlanEvaluator
     {
         memoizedMasks.clear();
         memoizedStreams.clear();
-        allocator.release(ALLOCATION_CONTEXT);
+        for (Allocator.Context context : primitiveAllocationContexts) {
+            allocator.releaseIfPresent(context);
+        }
+        allocator.releaseIfPresent(ALLOCATION_CONTEXT);
     }
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)
@@ -201,13 +207,17 @@ public final class PlanEvaluator
             return bundle;
         }
 
+        Streams.Builder builder = null;
         for (Stream siblingStream : List.of(Stream.NULLS, Stream.ERRORS)) {
             Streams siblingBundle = evaluate(new Reference(argument.producer(), siblingStream), mask);
             if (siblingBundle.has(siblingStream)) {
-                bundle = bundle.with(siblingStream, siblingBundle.get(siblingStream));
+                if (builder == null) {
+                    builder = Streams.builder().putAll(bundle);
+                }
+                builder.put(siblingStream, siblingBundle.get(siblingStream));
             }
         }
-        return bundle;
+        return builder == null ? bundle : builder.build();
     }
 
     private Set<Stream> requestedStreamsFor(Reference reference)
@@ -229,7 +239,7 @@ public final class PlanEvaluator
 
     private Streams copy(Set<Stream> requestedStreams, Reference source, Mask mask, Streams output)
     {
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         for (Stream stream : requestedStreams) {
             Reference sourceReference = remapReference(source, stream);
             if (sourceReference == null) {
@@ -243,9 +253,9 @@ public final class PlanEvaluator
             Vector sourceVector = sourceStreams.get(sourceReference.stream());
             Vector existing = output != null && output.has(stream) ? output.get(stream) : null;
             Vector target = existing == null ? sourceVector : copyVector(sourceVector, existing, mask);
-            result = result.with(stream, target);
+            result.put(stream, target);
         }
-        return completeRequestedStreams(requestedStreams, result, mask);
+        return completeRequestedStreams(requestedStreams, result.build(), mask);
     }
 
     private Streams evaluateMerge(Set<Stream> requestedStreams, Merge merge, Mask mask, Streams output)
@@ -253,14 +263,14 @@ public final class PlanEvaluator
         Mask trueMask = evaluateMaskOutcome(merge.condition(), mask).trueMask();
         Mask falseMask = allocator.differenceMask(ALLOCATION_CONTEXT, mask, trueMask);
 
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         for (Stream stream : requestedStreams) {
             Vector merged = evaluateMergeStream(stream, merge, mask, trueMask, falseMask, output);
             if (merged != null) {
-                result = result.with(stream, merged);
+                result.put(stream, merged);
             }
         }
-        return completeRequestedStreams(requestedStreams, result, mask);
+        return completeRequestedStreams(requestedStreams, result.build(), mask);
     }
 
     private Streams evaluateStructField(Set<Stream> requestedStreams, StructField field, Mask mask, Streams output)
@@ -269,9 +279,9 @@ public final class PlanEvaluator
         StructVector sourceValues = (StructVector) sourceStreams.values();
         Streams fieldStreams = sourceValues.field(field.fieldName());
 
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         if (requestedStreams.contains(Stream.VALUES) && fieldStreams.has(Stream.VALUES)) {
-            result = result.with(Stream.VALUES, fieldStreams.get(Stream.VALUES));
+            result.put(Stream.VALUES, fieldStreams.get(Stream.VALUES));
         }
 
         for (Stream stream : requestedStreams) {
@@ -281,10 +291,10 @@ public final class PlanEvaluator
             Vector existing = output != null && output.has(stream) ? output.get(stream) : null;
             Vector merged = mergeOptionalBooleanStreams(sourceStreams.getOrNull(stream), fieldStreams.getOrNull(stream), existing, mask);
             if (merged != null) {
-                result = result.with(stream, merged);
+                result.put(stream, merged);
             }
         }
-        return completeRequestedStreams(requestedStreams, result, mask);
+        return completeRequestedStreams(requestedStreams, result.build(), mask);
     }
 
     private Vector evaluateMergeStream(Stream stream, Merge merge, Mask mask, Mask trueMask, Mask falseMask, Streams output)
@@ -504,6 +514,22 @@ public final class PlanEvaluator
             indexedAssignments.put(assignment.output(), assignment);
         }
         return indexedAssignments;
+    }
+
+    private static Set<Allocator.Context> primitiveAllocationContexts(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
+    {
+        Set<Allocator.Context> contexts = new HashSet<>();
+        for (Assignment assignment : plan.assignments()) {
+            if (assignment.operation() instanceof Call call) {
+                try {
+                    contexts.addAll(primitiveRegistry.get(call.name()).allocationContexts());
+                }
+                catch (IllegalArgumentException _) {
+                    // Some tests and partial plans use calls that are not backed by the active primitive registry.
+                }
+            }
+        }
+        return Set.copyOf(contexts);
     }
 
     private static Map<Producer, Set<Stream>> projectedStreamsByProducer(List<Reference> outputs)

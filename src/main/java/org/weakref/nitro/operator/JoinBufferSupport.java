@@ -46,11 +46,11 @@ final class JoinBufferSupport
 
     public Streams borrowStreams(Output output)
     {
-        Streams streams = Streams.empty();
+        Streams.Builder streams = Streams.builder();
         for (Stream stream : output.streams()) {
-            streams = streams.with(stream, output.borrow(stream));
+            streams.put(stream, output.borrow(stream));
         }
-        return streams;
+        return streams.build();
     }
 
     public Streams replicate(Streams existing, Streams input, int size, int start, int length, int position)
@@ -63,13 +63,13 @@ final class JoinBufferSupport
 
     public Streams copyAndCompact(Output input, Mask mask, int maskStart, Streams existing, int outputStart, int copied, int size)
     {
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         int[] positions = positions(mask, maskStart, copied);
         for (Stream stream : input.streams()) {
             Vector existingVector = existing != null ? existing.getOrNull(stream) : null;
-            result = result.with(stream, copyVectorPositions(existingVector, input.borrow(stream), positions, outputStart, size));
+            result.put(stream, copyVectorPositions(existingVector, input.borrow(stream), positions, outputStart, size));
         }
-        return result;
+        return result.build();
     }
 
     public Streams copyPosition(Output input, Streams existing, int position)
@@ -89,24 +89,27 @@ final class JoinBufferSupport
         }
 
         if (existing != null) {
-            Streams updated = existing;
+            Streams.Builder updated = null;
             boolean changed = false;
             for (Stream stream : input.streams()) {
-                Vector existingVector = updated.getOrNull(stream);
+                Vector existingVector = existing.getOrNull(stream);
                 Vector copied = copyVectorSinglePosition(existingVector, input.borrow(stream), sourcePosition, outputPosition, size);
                 if (copied != existingVector) {
-                    updated = updated.with(stream, copied);
+                    if (updated == null) {
+                        updated = Streams.builder().putAll(existing);
+                    }
+                    updated.put(stream, copied);
                     changed = true;
                 }
             }
-            return changed ? updated : existing;
+            return changed ? updated.build() : existing;
         }
 
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         for (Stream stream : input.streams()) {
-            result = result.with(stream, copyVectorSinglePosition(null, input.borrow(stream), sourcePosition, outputPosition, size));
+            result.put(stream, copyVectorSinglePosition(null, input.borrow(stream), sourcePosition, outputPosition, size));
         }
-        return result;
+        return result.build();
     }
 
     public Streams copySinglePosition(Streams existing, Streams input, int size, int outputPosition, int sourcePosition)
@@ -171,7 +174,7 @@ final class JoinBufferSupport
 
     public Streams materializeColumn(Streams columnSchema, Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex)
     {
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         for (Stream stream : columnSchema.asMap().keySet()) {
             Vector sample = columnSchema.get(stream);
             Vector materialized = switch (OperatorVectorSupport.flatten(sample)) {
@@ -187,19 +190,19 @@ final class JoinBufferSupport
                     yield materializeStream(sample, rows);
                 }
             };
-            result = result.with(stream, materialized);
+            result.put(stream, materialized);
         }
-        return result;
+        return result.build();
     }
 
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
     {
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
             Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
-            result = result.with(entry.getKey(), copyVectorPositions(existingVector, entry.getValue(), sourcePositions, outputStart, size));
+            result.put(entry.getKey(), copyVectorPositions(existingVector, entry.getValue(), sourcePositions, outputStart, size));
         }
-        return result;
+        return result.build();
     }
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int outputStart, int size)
