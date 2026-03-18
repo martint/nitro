@@ -232,6 +232,31 @@ public class TestParquetOperator
     }
 
     @Test
+    void testParquetScanHonorsConstrainBeforeBorrowingArrayColumn()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedI64ParquetFile("arrays-constrained.parquet", List.of(
+                new ArrayParquetRow(List.of(10L, 20L)),
+                new ArrayParquetRow(List.of()),
+                new ArrayParquetRow(List.of(30L)),
+                new ArrayParquetRow(List.of(40L, 50L, 60L))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+            Batch batch = operator.next();
+            operator.constrain(Mask.sparse(new int[] {3}, 4));
+
+            ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
+            I64Vector elements = (I64Vector) arrays.elementValues();
+
+            assertThat(arrays.length(0)).isEqualTo(0);
+            assertThat(arrays.length(1)).isEqualTo(0);
+            assertThat(arrays.length(2)).isEqualTo(0);
+            assertThat(arrays.length(3)).isEqualTo(3);
+            assertThat(elements.values()).startsWith(40L, 50L, 60L);
+        }
+    }
+
+    @Test
     void testParquetScanPreservesDictionaryEncodingForStrings()
             throws IOException
     {
@@ -817,6 +842,36 @@ public class TestParquetOperator
     }
 
     @Test
+    void testParquetScanHonorsConstrainBeforeBorrowingStructColumn()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalStructParquetFile("optional-structs-constrained.parquet", List.of(
+                new OptionalStructParquetRow(new StructParquetRow(21, "alpha", true)),
+                new OptionalStructParquetRow(null),
+                new OptionalStructParquetRow(new StructParquetRow(22, null, false))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("person"))) {
+            Batch batch = operator.next();
+            operator.constrain(Mask.sparse(new int[] {2}, 3));
+
+            StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector structNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            I64Vector ids = (I64Vector) struct.fieldValues("id");
+            BinaryVector names = (BinaryVector) struct.fieldValues("name");
+            BooleanVector nameNulls = (BooleanVector) struct.fieldStreamOrNull("name", Stream.NULLS);
+            BooleanVector active = (BooleanVector) struct.fieldValues("active");
+
+            assertThat(ids.values()[0]).isEqualTo(0L);
+            assertThat(ids.values()[1]).isEqualTo(0L);
+            assertThat(ids.values()[2]).isEqualTo(22L);
+            assertThat(names.length(2)).isEqualTo(0);
+            assertThat(nameNulls.values()[2]).isTrue();
+            assertThat(active.values()[2]).isFalse();
+            assertThat(structNulls.values()[2]).isFalse();
+        }
+    }
+
+    @Test
     void testParquetScanReadsOptionalMapColumns()
             throws IOException
     {
@@ -848,6 +903,35 @@ public class TestParquetOperator
 
             assertThat(values.values()).startsWith(10L, 0L, 30L);
             assertThat(valueNulls.values()).startsWith(false, true, false);
+        }
+    }
+
+    @Test
+    void testParquetScanHonorsConstrainBeforeBorrowingMapColumn()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("optional-maps-constrained.parquet", List.of(
+                new MapParquetRow(orderedMap("alpha", 10L, "beta", null)),
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("gamma", 30L))));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+            Batch batch = operator.next();
+            operator.constrain(Mask.sparse(new int[] {3}, 4));
+
+            MapVector maps = (MapVector) batch.output(0).borrow(Stream.VALUES);
+            BinaryVector keys = (BinaryVector) maps.keyValues();
+            I64Vector values = (I64Vector) maps.valueValues();
+            BooleanVector mapNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+
+            assertThat(maps.length(0)).isEqualTo(0);
+            assertThat(maps.length(1)).isEqualTo(0);
+            assertThat(maps.length(2)).isEqualTo(0);
+            assertThat(maps.length(3)).isEqualTo(1);
+            assertThat(keys.utf8Value(0)).isEqualTo("gamma");
+            assertThat(values.values()[0]).isEqualTo(30L);
+            assertThat(mapNulls.values()[3]).isFalse();
         }
     }
 
