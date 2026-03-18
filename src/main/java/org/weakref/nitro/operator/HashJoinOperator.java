@@ -45,6 +45,8 @@ public class HashJoinOperator
     private final OperatorKeySemantics.CompositeProbeKey innerCompositeProbeKey;
     private final Vector[] currentOuterJoinValues;
     private final BooleanVector[] currentOuterJoinNulls;
+    private final int[] outputOuterPositions = new int[BATCH_SIZE];
+    private final long[] outputInnerRows = new long[BATCH_SIZE];
 
     private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
 
@@ -125,10 +127,17 @@ public class HashJoinOperator
         }
 
         int outputPosition = 0;
+        Batch outputOuterBatch = currentOuterBatch;
         while (outputPosition < BATCH_SIZE) {
-            if (outerRemaining == 0 && !loadNextOuterBatch()) {
-                done = true;
-                break;
+            if (outerRemaining == 0) {
+                if (outputPosition > 0) {
+                    break;
+                }
+                if (!loadNextOuterBatch()) {
+                    done = true;
+                    break;
+                }
+                outputOuterBatch = currentOuterBatch;
             }
 
             if (!currentOuterPositionReady) {
@@ -143,14 +152,8 @@ public class HashJoinOperator
             }
 
             while (currentMatchIndex < currentMatches.size() && outputPosition < BATCH_SIZE) {
-                long match = currentMatches.getLong(currentMatchIndex++);
-                outputBuffer.appendMatchAt(
-                        currentOuterBatch,
-                        currentOuterPosition,
-                        bufferedInner.batches().get(batchIndex(match)),
-                        rowPosition(match),
-                        outputPosition,
-                        BATCH_SIZE);
+                outputOuterPositions[outputPosition] = currentOuterPosition;
+                outputInnerRows[outputPosition] = currentMatches.getLong(currentMatchIndex++);
                 outputPosition++;
             }
 
@@ -165,6 +168,7 @@ public class HashJoinOperator
             outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
+        outputBuffer.materializeHashJoinMatches(outputOuterBatch, bufferedInner, outputOuterPositions, outputInnerRows, outputPosition);
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
     }
 

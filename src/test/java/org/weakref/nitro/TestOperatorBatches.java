@@ -525,6 +525,55 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorSupportsMultipleOuterPages()
+    {
+        BinaryVector firstPageKeys = new BinaryVector(2, 4);
+        firstPageKeys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        firstPageKeys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        firstPageKeys.setBytes(0, "aa".getBytes(UTF_8));
+        firstPageKeys.setBytes(1, "bb".getBytes(UTF_8));
+
+        BinaryVector secondPageKeys = new BinaryVector(2, 4);
+        secondPageKeys.addTrait(BinaryVector.Trait.UTF8_STRING);
+        secondPageKeys.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        secondPageKeys.setBytes(0, "aa".getBytes(UTF_8));
+        secondPageKeys.setBytes(1, "bb".getBytes(UTF_8));
+
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new TableOperator(
+                        2,
+                        List.of(
+                                TableOperator.Page.values(
+                                        2,
+                                        new Vector[] {
+                                                firstPageKeys,
+                                                new I64Vector(new long[] {10L, 20L}),
+                                        },
+                                        org.weakref.nitro.data.Mask.all(2)),
+                                TableOperator.Page.values(
+                                        2,
+                                        new Vector[] {
+                                                secondPageKeys,
+                                                new I64Vector(new long[] {30L, 40L}),
+                                        },
+                                        org.weakref.nitro.data.Mask.all(2)))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("aa", 100L),
+                        row("bb", 200L))),
+                0);
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                .containsExactly(
+                        row("aa", 10L, "aa", 100L),
+                        row("bb", 20L, "bb", 200L),
+                        row("aa", 30L, "aa", 100L),
+                        row("bb", 40L, "bb", 200L));
+    }
+
+    @Test
     void testTableOperatorProducesBatch()
     {
         Operator operator = new TableOperator(

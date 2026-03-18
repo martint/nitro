@@ -31,6 +31,7 @@ final class JoinOutputBuffer
     private final Streams[] innerBuffer;
     private final Streams[] outerSchema;
     private final Streams[] innerSchema;
+    private final int[] innerPositionsScratch;
 
     JoinOutputBuffer(JoinBufferSupport buffers, int outerColumnCount, int innerColumnCount)
     {
@@ -42,6 +43,7 @@ final class JoinOutputBuffer
         this.innerBuffer = new Streams[innerColumnCount];
         this.outerSchema = new Streams[outerColumnCount];
         this.innerSchema = new Streams[innerColumnCount];
+        this.innerPositionsScratch = new int[1024];
     }
 
     public int outputCount()
@@ -88,6 +90,46 @@ final class JoinOutputBuffer
                     outputPosition,
                     innerPosition);
             result[outerColumnCount + i] = innerBuffer[i];
+        }
+    }
+
+    public void materializeHashJoinMatches(Batch outerBatch, BufferedJoinInput bufferedInner, int[] outerPositions, long[] innerRows, int matchCount)
+    {
+        for (int i = 0; i < outerColumnCount; i++) {
+            outerBuffer[i] = buffers.copyPositions(
+                    outerBatch.output(i),
+                    outerBuffer[i],
+                    outerPositions,
+                    matchCount,
+                    0,
+                    matchCount);
+            result[i] = outerBuffer[i];
+        }
+
+        for (int i = 0; i < innerColumnCount; i++) {
+            Streams existing = innerBuffer[i];
+            int outputStart = 0;
+            int next = 0;
+            while (next < matchCount) {
+                int batchIndex = batchIndex(innerRows[next]);
+                int runLength = 0;
+                while (next + runLength < matchCount && batchIndex(innerRows[next + runLength]) == batchIndex) {
+                    innerPositionsScratch[runLength] = rowPosition(innerRows[next + runLength]);
+                    runLength++;
+                }
+
+                existing = buffers.copyPositions(
+                        existing,
+                        bufferedInner.batches().get(batchIndex).columns()[i],
+                        innerPositionsScratch,
+                        runLength,
+                        outputStart,
+                        matchCount);
+                outputStart += runLength;
+                next += runLength;
+            }
+            innerBuffer[i] = existing;
+            result[outerColumnCount + i] = existing;
         }
     }
 
@@ -203,5 +245,15 @@ final class JoinOutputBuffer
         }
         I64Vector empty = allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
         return new Output(Set.of(Stream.VALUES), stream -> empty, (stream, vector) -> allocator.transfer(allocationContext, vector));
+    }
+
+    private static int batchIndex(long rowReference)
+    {
+        return (int) (rowReference >>> Integer.SIZE);
+    }
+
+    private static int rowPosition(long rowReference)
+    {
+        return (int) rowReference;
     }
 }
