@@ -33,6 +33,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.operator.Batch;
@@ -147,6 +148,33 @@ public class TestParquetOperator
             assertThat(nulls.values()[0]).isFalse();
             assertThat(nulls.values()[2]).isTrue();
             assertThat(nulls.values()[3]).isFalse();
+        }
+    }
+
+    @Test
+    void testParquetScanHonorsConstrainBeforeBorrowingPlainColumn()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("plain-constrained.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, 102L),
+                new ParquetRow(13, true, 103L)));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("x", "maybe"))) {
+            Batch batch = operator.next();
+            Mask constrainedMask = Mask.sparse(new int[] {2}, 3);
+
+            operator.constrain(constrainedMask);
+
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()[0]).isEqualTo(0L);
+            assertThat(values.values()[1]).isEqualTo(0L);
+            assertThat(values.values()[2]).isEqualTo(13L);
+            assertThat(nulls.values()[0]).isFalse();
+            assertThat(nulls.values()[1]).isFalse();
+            assertThat(nulls.values()[2]).isFalse();
         }
     }
 

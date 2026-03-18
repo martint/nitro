@@ -80,6 +80,11 @@ public final class ParquetScanOperator
     private final List<ColumnSpec> columns;
 
     private PageReadStore nextRowGroup;
+    private PageReadStore currentRowGroup;
+    private int currentRowCount;
+    private Mask currentMask;
+    private ColumnPages[] currentColumnPages;
+    private ColumnBuffer[] currentBuffers;
 
     public ParquetScanOperator(Allocator allocator, java.nio.file.Path file, List<String> columns)
     {
@@ -121,44 +126,37 @@ public final class ParquetScanOperator
             throw new IllegalStateException("No more Parquet row groups");
         }
 
-        PageReadStore rowGroup = nextRowGroup;
+        currentRowGroup = nextRowGroup;
         loadNextRowGroup();
 
-        int rowCount = toIntExact(rowGroup.getRowCount());
-        ColumnPages[] columnPages = columns.stream()
-                .map(column -> switch (column.kind()) {
-                    case STRUCT, MAP -> null;
-                    default -> captureColumnPages(rowGroup, column.descriptor());
-                })
-                .toArray(ColumnPages[]::new);
-        ColumnBuffer[] buffers = new ColumnBuffer[columns.size()];
-        for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
-            ColumnSpec column = columns.get(columnIndex);
-            buffers[columnIndex] = switch (column.kind()) {
-                case I64 -> readI64Column(column, columnPages[columnIndex], rowCount, createColumnReader(columnPages[columnIndex]));
-                case BOOLEAN -> readBooleanColumn(column, rowCount, createColumnReader(columnPages[columnIndex]));
-                case BINARY -> readBinaryColumn(column, columnPages[columnIndex], rowCount);
-                case ARRAY_I64 -> readArrayI64Column(column, columnPages[columnIndex], rowCount);
-                case MAP -> readMapColumn(column, rowGroup, rowCount);
-                case STRUCT -> readStructColumn(column, rowGroup, rowCount);
-            };
-        }
+        currentRowCount = toIntExact(currentRowGroup.getRowCount());
+        currentMask = allocator.allocateAllMask(ALLOCATION_CONTEXT, currentRowCount);
+        currentColumnPages = new ColumnPages[columns.size()];
+        currentBuffers = new ColumnBuffer[columns.size()];
 
         Output[] outputs = new Output[columns.size()];
         for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
-            ColumnBuffer buffer = buffers[columnIndex];
-            Streams streams = Streams.of(Stream.VALUES, buffer.values());
-            if (buffer.nulls() != null) {
-                streams = streams.with(Stream.NULLS, buffer.nulls());
-            }
-            outputs[columnIndex] = new Output(streams.asMap().keySet(), streams::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+            int outputIndex = columnIndex;
+            ColumnSpec column = columns.get(columnIndex);
+            outputs[columnIndex] = new Output(
+                    column.nullable() ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES),
+                    stream -> {
+                        ColumnBuffer buffer = resolveColumn(outputIndex);
+                        return switch (stream) {
+                            case VALUES -> buffer.values();
+                            case NULLS -> requireNonNull(buffer.nulls(), "NULLS stream is absent");
+                            default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
+                        };
+                    },
+                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(allocator.allocateAllMask(ALLOCATION_CONTEXT, rowCount), takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(currentMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
     public void constrain(Mask mask)
     {
+        currentMask = mask;
     }
 
     @Override
@@ -183,6 +181,45 @@ public final class ParquetScanOperator
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to read next Parquet row group", exception);
         }
+    }
+
+    private ColumnBuffer resolveColumn(int columnIndex)
+    {
+        ColumnBuffer buffer = currentBuffers[columnIndex];
+        if (buffer != null) {
+            return buffer;
+        }
+
+        ColumnSpec column = columns.get(columnIndex);
+        buffer = switch (column.kind()) {
+            case I64 -> {
+                ColumnPages columnPages = columnPages(columnIndex);
+                yield readI64Column(column, columnPages, currentRowCount, createColumnReader(columnPages), currentMask);
+            }
+            case BOOLEAN -> {
+                ColumnPages columnPages = columnPages(columnIndex);
+                yield readBooleanColumn(column, currentRowCount, createColumnReader(columnPages), currentMask);
+            }
+            case BINARY -> {
+                ColumnPages columnPages = columnPages(columnIndex);
+                yield readBinaryColumn(column, columnPages, currentRowCount, currentMask);
+            }
+            case ARRAY_I64 -> readArrayI64Column(column, columnPages(columnIndex), currentRowCount);
+            case MAP -> readMapColumn(column, currentRowGroup, currentRowCount);
+            case STRUCT -> readStructColumn(column, currentRowGroup, currentRowCount);
+        };
+        currentBuffers[columnIndex] = buffer;
+        return buffer;
+    }
+
+    private ColumnPages columnPages(int columnIndex)
+    {
+        ColumnPages columnPages = currentColumnPages[columnIndex];
+        if (columnPages == null) {
+            columnPages = captureColumnPages(currentRowGroup, columns.get(columnIndex).descriptor());
+            currentColumnPages[columnIndex] = columnPages;
+        }
+        return columnPages;
     }
 
     private ColumnSpec resolveColumn(String name)
@@ -559,18 +596,18 @@ public final class ParquetScanOperator
                 .toList();
     }
 
-    private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader)
+    private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader, Mask mask)
     {
         if (columnPages.dictionaryEncoded()) {
-            return readDictionaryI64Column(column, columnPages, rowCount, columnReader);
+            return readDictionaryI64Column(column, columnPages, rowCount, columnReader, mask);
         }
-        return readFlatI64Column(column, rowCount, columnReader);
+        return readFlatI64Column(column, rowCount, columnReader, mask);
     }
 
-    private ColumnBuffer readDictionaryI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader)
+    private ColumnBuffer readDictionaryI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader, Mask mask)
     {
         if (columnPages.dictionaryPage() == null || columnPages.dictionaryPage().getDictionarySize() == 0) {
-            return readFlatI64Column(column, rowCount, columnReader);
+            return readFlatI64Column(column, rowCount, columnReader, mask);
         }
 
         try {
@@ -585,19 +622,57 @@ public final class ParquetScanOperator
             BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] outputNulls = nulls == null ? null : nulls.values();
             int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
-            if (nulls == null) {
+            if (mask.all()) {
+                if (nulls == null) {
+                    for (int position = 0; position < rowCount; position++) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                        columnReader.consume();
+                    }
+                }
+                else {
+                    for (int position = 0; position < rowCount; position++) {
+                        if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                            ids[position] = columnReader.getCurrentValueDictionaryID();
+                        }
+                        else {
+                            outputNulls[position] = true;
+                        }
+                        columnReader.consume();
+                    }
+                }
+            }
+            else if (nulls == null) {
+                int maskIndex = 0;
+                int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
                 for (int position = 0; position < rowCount; position++) {
-                    ids[position] = columnReader.getCurrentValueDictionaryID();
+                    if (position == nextMaskPosition) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                        maskIndex++;
+                        nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                    }
+                    else {
+                        columnReader.getCurrentValueDictionaryID();
+                    }
                     columnReader.consume();
                 }
             }
             else {
+                int maskIndex = 0;
+                int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
                 for (int position = 0; position < rowCount; position++) {
-                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
-                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                    boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                    if (position == nextMaskPosition) {
+                        if (present) {
+                            ids[position] = columnReader.getCurrentValueDictionaryID();
+                        }
+                        else {
+                            outputNulls[position] = true;
+                        }
+                        maskIndex++;
+                        nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
                     }
-                    else {
-                        outputNulls[position] = true;
+                    else if (present) {
+                        columnReader.getCurrentValueDictionaryID();
                     }
                     columnReader.consume();
                 }
@@ -609,26 +684,64 @@ public final class ParquetScanOperator
         }
     }
 
-    private ColumnBuffer readFlatI64Column(ColumnSpec column, int rowCount, ColumnReader columnReader)
+    private ColumnBuffer readFlatI64Column(ColumnSpec column, int rowCount, ColumnReader columnReader, Mask mask)
     {
         I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         long[] outputValues = values.values();
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
-        if (nulls == null) {
+        if (mask.all()) {
+            if (nulls == null) {
+                for (int position = 0; position < rowCount; position++) {
+                    outputValues[position] = columnReader.getLong();
+                    columnReader.consume();
+                }
+            }
+            else {
+                for (int position = 0; position < rowCount; position++) {
+                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                        outputValues[position] = columnReader.getLong();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    columnReader.consume();
+                }
+            }
+        }
+        else if (nulls == null) {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
             for (int position = 0; position < rowCount; position++) {
-                outputValues[position] = columnReader.getLong();
+                if (position == nextMaskPosition) {
+                    outputValues[position] = columnReader.getLong();
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                }
+                else {
+                    columnReader.getLong();
+                }
                 columnReader.consume();
             }
         }
         else {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
             for (int position = 0; position < rowCount; position++) {
-                if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
-                    outputValues[position] = columnReader.getLong();
+                boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                if (position == nextMaskPosition) {
+                    if (present) {
+                        outputValues[position] = columnReader.getLong();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
                 }
-                else {
-                    outputNulls[position] = true;
+                else if (present) {
+                    columnReader.getLong();
                 }
                 columnReader.consume();
             }
@@ -636,26 +749,64 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
-    private ColumnBuffer readBooleanColumn(ColumnSpec column, int rowCount, ColumnReader columnReader)
+    private ColumnBuffer readBooleanColumn(ColumnSpec column, int rowCount, ColumnReader columnReader, Mask mask)
     {
         BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         boolean[] outputValues = values.values();
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
-        if (nulls == null) {
+        if (mask.all()) {
+            if (nulls == null) {
+                for (int position = 0; position < rowCount; position++) {
+                    outputValues[position] = columnReader.getBoolean();
+                    columnReader.consume();
+                }
+            }
+            else {
+                for (int position = 0; position < rowCount; position++) {
+                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                        outputValues[position] = columnReader.getBoolean();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    columnReader.consume();
+                }
+            }
+        }
+        else if (nulls == null) {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
             for (int position = 0; position < rowCount; position++) {
-                outputValues[position] = columnReader.getBoolean();
+                if (position == nextMaskPosition) {
+                    outputValues[position] = columnReader.getBoolean();
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                }
+                else {
+                    columnReader.getBoolean();
+                }
                 columnReader.consume();
             }
         }
         else {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
             for (int position = 0; position < rowCount; position++) {
-                if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
-                    outputValues[position] = columnReader.getBoolean();
+                boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                if (position == nextMaskPosition) {
+                    if (present) {
+                        outputValues[position] = columnReader.getBoolean();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
                 }
-                else {
-                    outputNulls[position] = true;
+                else if (present) {
+                    columnReader.getBoolean();
                 }
                 columnReader.consume();
             }
@@ -663,18 +814,18 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
-    private ColumnBuffer readBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount)
+    private ColumnBuffer readBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount, Mask mask)
     {
         if (columnPages.dictionaryEncoded()) {
-            return readDictionaryBinaryColumn(column, columnPages, rowCount);
+            return readDictionaryBinaryColumn(column, columnPages, rowCount, mask);
         }
-        return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages), createColumnReader(columnPages));
+        return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages, mask), createColumnReader(columnPages), mask);
     }
 
-    private ColumnBuffer readDictionaryBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount)
+    private ColumnBuffer readDictionaryBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount, Mask mask)
     {
         if (columnPages.dictionaryPage() == null || columnPages.dictionaryPage().getDictionarySize() == 0) {
-            return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages), createColumnReader(columnPages));
+            return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages, mask), createColumnReader(columnPages), mask);
         }
 
         try {
@@ -694,19 +845,57 @@ public final class ParquetScanOperator
             BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] outputNulls = nulls == null ? null : nulls.values();
             int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
-            if (nulls == null) {
+            if (mask.all()) {
+                if (nulls == null) {
+                    for (int position = 0; position < rowCount; position++) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                        columnReader.consume();
+                    }
+                }
+                else {
+                    for (int position = 0; position < rowCount; position++) {
+                        if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                            ids[position] = columnReader.getCurrentValueDictionaryID();
+                        }
+                        else {
+                            outputNulls[position] = true;
+                        }
+                        columnReader.consume();
+                    }
+                }
+            }
+            else if (nulls == null) {
+                int maskIndex = 0;
+                int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
                 for (int position = 0; position < rowCount; position++) {
-                    ids[position] = columnReader.getCurrentValueDictionaryID();
+                    if (position == nextMaskPosition) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                        maskIndex++;
+                        nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                    }
+                    else {
+                        columnReader.getCurrentValueDictionaryID();
+                    }
                     columnReader.consume();
                 }
             }
             else {
+                int maskIndex = 0;
+                int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
                 for (int position = 0; position < rowCount; position++) {
-                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
-                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                    boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                    if (position == nextMaskPosition) {
+                        if (present) {
+                            ids[position] = columnReader.getCurrentValueDictionaryID();
+                        }
+                        else {
+                            outputNulls[position] = true;
+                        }
+                        maskIndex++;
+                        nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
                     }
-                    else {
-                        outputNulls[position] = true;
+                    else if (present) {
+                        columnReader.getCurrentValueDictionaryID();
                     }
                     columnReader.consume();
                 }
@@ -718,26 +907,69 @@ public final class ParquetScanOperator
         }
     }
 
-    private ColumnBuffer readFlatBinaryColumn(ColumnSpec column, int rowCount, int byteCapacity, ColumnReader columnReader)
+    private ColumnBuffer readFlatBinaryColumn(ColumnSpec column, int rowCount, int byteCapacity, ColumnReader columnReader, Mask mask)
     {
         BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, byteCapacity);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
-        if (nulls == null) {
+        if (mask.all()) {
+            if (nulls == null) {
+                for (int position = 0; position < rowCount; position++) {
+                    values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                    columnReader.consume();
+                }
+            }
+            else {
+                for (int position = 0; position < rowCount; position++) {
+                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                        values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                    }
+                    else {
+                        values.setNull(position);
+                        outputNulls[position] = true;
+                    }
+                    columnReader.consume();
+                }
+            }
+        }
+        else if (nulls == null) {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
             for (int position = 0; position < rowCount; position++) {
-                values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                if (position == nextMaskPosition) {
+                    values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                }
+                else {
+                    columnReader.getBinary();
+                    values.setNull(position);
+                }
                 columnReader.consume();
             }
         }
         else {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
             for (int position = 0; position < rowCount; position++) {
-                if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
-                    values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                if (position == nextMaskPosition) {
+                    if (present) {
+                        values.setBytes(position, columnReader.getBinary().getBytesUnsafe());
+                    }
+                    else {
+                        values.setNull(position);
+                        outputNulls[position] = true;
+                    }
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
                 }
                 else {
+                    if (present) {
+                        columnReader.getBinary();
+                    }
                     values.setNull(position);
-                    outputNulls[position] = true;
                 }
                 columnReader.consume();
             }
@@ -778,14 +1010,32 @@ public final class ParquetScanOperator
         return true;
     }
 
-    private int requiredBinaryByteCapacity(ColumnSpec column, int rowCount, ColumnPages columnPages)
+    private int requiredBinaryByteCapacity(ColumnSpec column, int rowCount, ColumnPages columnPages, Mask mask)
     {
         ColumnReader columnReader = createColumnReader(columnPages);
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
         int byteCapacity = 0;
+        if (mask.all()) {
+            for (int position = 0; position < rowCount; position++) {
+                if (!column.nullable() || columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                    byteCapacity += columnReader.getBinary().length();
+                }
+                columnReader.consume();
+            }
+            return byteCapacity;
+        }
+        int maskIndex = 0;
+        int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
         for (int position = 0; position < rowCount; position++) {
-            if (!column.nullable() || columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
-                byteCapacity += columnReader.getBinary().length();
+            if (position == nextMaskPosition) {
+                if (!column.nullable() || columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                    byteCapacity += columnReader.getBinary().length();
+                }
+                maskIndex++;
+                nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+            }
+            else if (!column.nullable() || columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                columnReader.getBinary();
             }
             columnReader.consume();
         }

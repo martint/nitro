@@ -1241,6 +1241,101 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinLateMaterializesProjectedOuterPayloads()
+    {
+        AtomicInteger payloadBorrows = new AtomicInteger();
+        AtomicReference<Mask> constrainedMask = new AtomicReference<>();
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
+        Operator baseSource = new Operator()
+        {
+            private boolean hasNext = true;
+            private final I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
+            private final BooleanVector flags = new BooleanVector(new boolean[] {true, false, true});
+            private final I64Vector payload = new I64Vector(new long[] {10L, 20L, 30L});
+
+            @Override
+            public int outputCount()
+            {
+                return 3;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(
+                        Mask.all(3),
+                        new Output(Set.of(Stream.VALUES), ignored -> keys),
+                        new Output(Set.of(Stream.VALUES), ignored -> flags),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            payloadBorrows.incrementAndGet();
+                            return payload;
+                        }));
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                constrainedMask.set(mask);
+            }
+
+            @Override
+            public void close()
+            {
+            }
+        };
+
+        Variable projectedPayload = new Variable(0);
+        EvaluationPlan projectPlan = plan(
+                List.of(call(projectedPayload, "multiply", values(new Input(2)), values(new Input(2)))),
+                values(new Input(0)),
+                values(projectedPayload));
+
+        Operator outer = new ProjectOperator(
+                allocator,
+                projectPlan,
+                primitiveRegistry,
+                new FilterOperator(
+                        baseSource,
+                        new EvaluationPlan(List.of(), List.of()),
+                        primitiveRegistry,
+                        new Reference(new Input(1), Stream.VALUES),
+                        allocator));
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                outer,
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row(3L))),
+                0)) {
+            Batch batch = join.next();
+
+            assertThat(batch.borrowMask()).containsExactly(0);
+            assertThat(payloadBorrows).hasValue(0);
+            assertThat(constrainedMask.get()).isNotNull();
+            assertThat(constrainedMask.get()).containsExactly(0, 2);
+
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(payloadBorrows).hasValue(0);
+
+            assertThat(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(payloadBorrows).hasValue(0);
+
+            I64Vector projectedPayloads = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(projectedPayloads.values()[0]).isEqualTo(900L);
+            assertThat(payloadBorrows).hasValue(1);
+            assertThat(constrainedMask.get()).containsExactly(2);
+        }
+    }
+
+    @Test
     void testProject()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

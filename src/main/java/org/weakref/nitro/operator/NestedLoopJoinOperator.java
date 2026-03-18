@@ -15,8 +15,10 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Iterator;
+import java.util.Set;
 
 public class NestedLoopJoinOperator
         implements Operator
@@ -31,6 +33,10 @@ public class NestedLoopJoinOperator
     private final JoinBufferSupport buffers;
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
+    private final int[] outputOuterPositions = new int[BATCH_SIZE];
+    private final long[] outputInnerRows = new long[BATCH_SIZE];
+    private final int[] innerPositionsScratch = new int[BATCH_SIZE];
+    private final Streams[] currentOutputs;
 
     private int currentInnerBatch;
     private int currentInnerPosition;
@@ -41,6 +47,9 @@ public class NestedLoopJoinOperator
     private Iterator<Integer> outerPositionIterator;
     private int currentOuterPosition;
     private boolean currentOuterPositionReady;
+    private int currentOutputCount;
+    private Mask currentOutputMask;
+    private boolean outerConstrained;
 
     private boolean done;
 
@@ -68,6 +77,7 @@ public class NestedLoopJoinOperator
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
+        this.currentOutputs = new Streams[outputCount()];
     }
 
     @Override
@@ -92,6 +102,7 @@ public class NestedLoopJoinOperator
         if (bufferedInner.rowCount() == 0) {
             captureOuterSchemaIfAvailable();
             done = true;
+            currentOutputCount = 0;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
 
@@ -156,7 +167,7 @@ public class NestedLoopJoinOperator
         if (bufferedInner.rowCount() == 0) {
             captureOuterSchemaIfAvailable();
             done = true;
-            outputBuffer.clearResults();
+            currentOutputCount = 0;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
 
@@ -182,7 +193,8 @@ public class NestedLoopJoinOperator
                 BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(currentInnerBatch);
                 while (currentInnerPosition < innerBatch.length() && outputPosition < BATCH_SIZE) {
                     if (matcher.matches(currentOuterBatch, currentOuterPosition, innerBatch.columns(), currentInnerPosition)) {
-                        outputBuffer.appendMatchAt(currentOuterBatch, currentOuterPosition, innerBatch, currentInnerPosition, outputPosition, BATCH_SIZE);
+                        outputOuterPositions[outputPosition] = currentOuterPosition;
+                        outputInnerRows[outputPosition] = packRowReference(currentInnerBatch, currentInnerPosition);
                         outputPosition++;
                     }
                     currentInnerPosition++;
@@ -202,9 +214,10 @@ public class NestedLoopJoinOperator
         }
 
         if (outputPosition == 0) {
-            outputBuffer.clearResults();
+            currentOutputCount = 0;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
+        currentOutputCount = outputPosition;
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
     }
 
@@ -212,7 +225,6 @@ public class NestedLoopJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
-            outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 outerPositionIterator = currentOuterMask.iterator();
@@ -228,9 +240,14 @@ public class NestedLoopJoinOperator
     public Batch next()
     {
         Mask batchMask = produceBatch();
+        currentOutputMask = batchMask;
+        outerConstrained = false;
+        java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, ALLOCATION_CONTEXT);
+            outputs[outputIndex] = matcher.isCrossJoin()
+                    ? outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, ALLOCATION_CONTEXT)
+                    : resultOutput(outputIndex);
         }
         return new Batch(
                 batchMask,
@@ -264,6 +281,9 @@ public class NestedLoopJoinOperator
     @Override
     public void constrain(Mask mask)
     {
+        if (!matcher.isCrossJoin()) {
+            currentOutputMask = mask;
+        }
     }
 
     @Override
@@ -272,5 +292,161 @@ public class NestedLoopJoinOperator
         outer.close();
         inner.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private Output resultOutput(int outputIndex)
+    {
+        if (currentOutputCount == 0) {
+            Streams schema = outputSchema(outputIndex);
+            if (schema == null) {
+                return new Output(Set.of(), stream -> {
+                    throw new IllegalArgumentException("Output does not expose stream: " + stream);
+                });
+            }
+            Streams empty = buffers.emptyLike(schema);
+            return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+        }
+
+        Set<Stream> streams = outputIndex < outer.outputCount()
+                ? currentOuterBatch.output(outputIndex).streams()
+                : outputBuffer.innerSchema()[outputIndex - outer.outputCount()].asMap().keySet();
+        return new Output(
+                streams,
+                stream -> materializeOutput(outputIndex).get(stream),
+                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+    }
+
+    private Streams outputSchema(int outputIndex)
+    {
+        if (outputIndex < outer.outputCount()) {
+            Streams schema = outputBuffer.outerSchema()[outputIndex];
+            if (schema != null) {
+                return schema;
+            }
+            if (currentOuterBatch != null) {
+                Streams.Builder streams = Streams.builder();
+                Output output = currentOuterBatch.output(outputIndex);
+                for (Stream stream : output.streams()) {
+                    streams.put(stream, output.borrow(stream));
+                }
+                return streams.build();
+            }
+            return null;
+        }
+        return outputBuffer.innerSchema()[outputIndex - outer.outputCount()];
+    }
+
+    private Streams materializeOutput(int outputIndex)
+    {
+        Streams existing = currentOutputs[outputIndex];
+        if (existing != null) {
+            return existing;
+        }
+
+        Streams materialized = outputIndex < outer.outputCount()
+                ? materializeOuterOutput(outputIndex)
+                : materializeInnerOutput(outputIndex - outer.outputCount());
+        currentOutputs[outputIndex] = materialized;
+        return materialized;
+    }
+
+    private Streams materializeOuterOutput(int outputIndex)
+    {
+        constrainOuterIfNecessary();
+        Output sourceOutput = currentOuterBatch.output(outputIndex);
+        if (currentOutputMask.all()) {
+            return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+        }
+
+        Streams result = null;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+        }
+        return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+    }
+
+    private Streams materializeInnerOutput(int innerOutputIndex)
+    {
+        if (currentOutputMask.all()) {
+            Streams result = null;
+            int outputStart = 0;
+            int next = 0;
+            while (next < currentOutputCount) {
+                int batchIndex = batchIndex(outputInnerRows[next]);
+                int runLength = 0;
+                while (next + runLength < currentOutputCount && batchIndex(outputInnerRows[next + runLength]) == batchIndex) {
+                    innerPositionsScratch[runLength] = rowPosition(outputInnerRows[next + runLength]);
+                    runLength++;
+                }
+                result = buffers.copyPositions(
+                        result,
+                        bufferedInner.batches().get(batchIndex).columns()[innerOutputIndex],
+                        innerPositionsScratch,
+                        runLength,
+                        outputStart,
+                        currentOutputCount);
+                outputStart += runLength;
+                next += runLength;
+            }
+            return result;
+        }
+
+        Streams result = null;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            long rowReference = outputInnerRows[outputPosition];
+            result = buffers.copySinglePosition(
+                    result,
+                    bufferedInner.batches().get(batchIndex(rowReference)).columns()[innerOutputIndex],
+                    currentOutputCount,
+                    outputPosition,
+                    rowPosition(rowReference));
+        }
+        return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
+    }
+
+    private void constrainOuterIfNecessary()
+    {
+        if (outerConstrained || currentOuterBatch == null) {
+            return;
+        }
+        outerConstrained = true;
+        outer.constrain(matchedOuterMask());
+    }
+
+    private Mask matchedOuterMask()
+    {
+        if (currentOutputMask.none()) {
+            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], currentOuterMask.size());
+        }
+
+        int[] positions = new int[Math.min(currentOutputMask.count(), currentOuterMask.count())];
+        int selectedCount = 0;
+        int previous = -1;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            int outerPosition = outputOuterPositions[outputPosition];
+            if (outerPosition != previous) {
+                positions[selectedCount++] = outerPosition;
+                previous = outerPosition;
+            }
+        }
+        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, java.util.Arrays.copyOf(positions, selectedCount), currentOuterMask.size());
+    }
+
+    private static long packRowReference(int batchIndex, int position)
+    {
+        return ((long) batchIndex << Integer.SIZE) | (position & 0xFFFF_FFFFL);
+    }
+
+    private static int batchIndex(long rowReference)
+    {
+        return (int) (rowReference >>> Integer.SIZE);
+    }
+
+    private static int rowPosition(long rowReference)
+    {
+        return (int) rowReference;
     }
 }

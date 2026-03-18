@@ -24,6 +24,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 public class HashJoinOperator
         implements Operator
@@ -47,6 +48,8 @@ public class HashJoinOperator
     private final BooleanVector[] currentOuterJoinNulls;
     private final int[] outputOuterPositions = new int[BATCH_SIZE];
     private final long[] outputInnerRows = new long[BATCH_SIZE];
+    private final int[] innerPositionsScratch = new int[BATCH_SIZE];
+    private final Streams[] currentOutputs;
 
     private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
 
@@ -58,6 +61,9 @@ public class HashJoinOperator
     private boolean currentOuterPositionReady;
     private LongList currentMatches = LongLists.emptyList();
     private int currentMatchIndex;
+    private int currentOutputCount;
+    private Mask currentOutputMask;
+    private boolean outerConstrained;
 
     private boolean done;
 
@@ -89,6 +95,7 @@ public class HashJoinOperator
         this.innerCompositeProbeKey = innerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(innerJoinColumns.length) : null;
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
         this.currentOuterJoinNulls = new BooleanVector[outerJoinColumns.length];
+        this.currentOutputs = new Streams[outputCount()];
     }
 
     @Override
@@ -107,9 +114,12 @@ public class HashJoinOperator
     public Batch next()
     {
         Mask batchMask = produceBatch();
+        currentOutputMask = batchMask;
+        outerConstrained = false;
+        java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = outputBuffer.resultOutputForHashJoin(outputIndex, allocator, ALLOCATION_CONTEXT);
+            outputs[outputIndex] = resultOutput(outputIndex);
         }
         return new Batch(
                 batchMask,
@@ -123,7 +133,7 @@ public class HashJoinOperator
         if (innerIndex.isEmpty()) {
             captureOuterSchemaIfAvailable();
             done = true;
-            outputBuffer.clearResults();
+            currentOutputCount = 0;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
 
@@ -166,10 +176,10 @@ public class HashJoinOperator
         }
 
         if (outputPosition == 0) {
-            outputBuffer.clearResults();
+            currentOutputCount = 0;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
-        outputBuffer.materializeHashJoinMatches(outputOuterBatch, bufferedInner, outputOuterPositions, outputInnerRows, outputPosition);
+        currentOutputCount = outputPosition;
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
     }
 
@@ -177,7 +187,6 @@ public class HashJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
-            outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 cacheOuterJoinInputs();
@@ -290,6 +299,7 @@ public class HashJoinOperator
     @Override
     public void constrain(Mask mask)
     {
+        currentOutputMask = mask;
     }
 
     @Override
@@ -298,6 +308,147 @@ public class HashJoinOperator
         outer.close();
         inner.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private Output resultOutput(int outputIndex)
+    {
+        if (currentOutputCount == 0) {
+            Streams schema = outputSchema(outputIndex);
+            if (schema == null) {
+                return new Output(Set.of(), stream -> {
+                    throw new IllegalArgumentException("Output does not expose stream: " + stream);
+                });
+            }
+            Streams empty = buffers.emptyLike(schema);
+            return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+        }
+
+        Set<Stream> streams = outputIndex < outer.outputCount()
+                ? currentOuterBatch.output(outputIndex).streams()
+                : outputBuffer.innerSchema()[outputIndex - outer.outputCount()].asMap().keySet();
+        return new Output(
+                streams,
+                stream -> materializeOutput(outputIndex).get(stream),
+                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+    }
+
+    private Streams outputSchema(int outputIndex)
+    {
+        if (outputIndex < outer.outputCount()) {
+            Streams schema = outputBuffer.outerSchema()[outputIndex];
+            if (schema != null) {
+                return schema;
+            }
+            if (currentOuterBatch != null) {
+                Streams.Builder streams = Streams.builder();
+                Output output = currentOuterBatch.output(outputIndex);
+                for (Stream stream : output.streams()) {
+                    streams.put(stream, output.borrow(stream));
+                }
+                return streams.build();
+            }
+            return null;
+        }
+        return outputBuffer.innerSchema()[outputIndex - outer.outputCount()];
+    }
+
+    private Streams materializeOutput(int outputIndex)
+    {
+        Streams existing = currentOutputs[outputIndex];
+        if (existing != null) {
+            return existing;
+        }
+
+        Streams materialized = outputIndex < outer.outputCount()
+                ? materializeOuterOutput(outputIndex)
+                : materializeInnerOutput(outputIndex - outer.outputCount());
+        currentOutputs[outputIndex] = materialized;
+        return materialized;
+    }
+
+    private Streams materializeOuterOutput(int outputIndex)
+    {
+        constrainOuterIfNecessary();
+        Output sourceOutput = currentOuterBatch.output(outputIndex);
+        if (currentOutputMask.all()) {
+            return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+        }
+
+        Streams result = null;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+        }
+        return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+    }
+
+    private Streams materializeInnerOutput(int innerOutputIndex)
+    {
+        if (currentOutputMask.all()) {
+            Streams result = null;
+            int outputStart = 0;
+            int next = 0;
+            while (next < currentOutputCount) {
+                int batchIndex = batchIndex(outputInnerRows[next]);
+                int runLength = 0;
+                while (next + runLength < currentOutputCount && batchIndex(outputInnerRows[next + runLength]) == batchIndex) {
+                    innerPositionsScratch[runLength] = rowPosition(outputInnerRows[next + runLength]);
+                    runLength++;
+                }
+                result = buffers.copyPositions(
+                        result,
+                        bufferedInner.batches().get(batchIndex).columns()[innerOutputIndex],
+                        innerPositionsScratch,
+                        runLength,
+                        outputStart,
+                        currentOutputCount);
+                outputStart += runLength;
+                next += runLength;
+            }
+            return result;
+        }
+
+        Streams result = null;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            long rowReference = outputInnerRows[outputPosition];
+            result = buffers.copySinglePosition(
+                    result,
+                    bufferedInner.batches().get(batchIndex(rowReference)).columns()[innerOutputIndex],
+                    currentOutputCount,
+                    outputPosition,
+                    rowPosition(rowReference));
+        }
+        return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
+    }
+
+    private void constrainOuterIfNecessary()
+    {
+        if (outerConstrained || currentOuterBatch == null) {
+            return;
+        }
+        outerConstrained = true;
+        outer.constrain(matchedOuterMask());
+    }
+
+    private Mask matchedOuterMask()
+    {
+        if (currentOutputMask.none()) {
+            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], currentOuterMask.size());
+        }
+
+        int[] positions = new int[Math.min(currentOutputMask.count(), currentOuterMask.count())];
+        int selectedCount = 0;
+        int previous = -1;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            int outerPosition = outputOuterPositions[outputPosition];
+            if (outerPosition != previous) {
+                positions[selectedCount++] = outerPosition;
+                previous = outerPosition;
+            }
+        }
+        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, java.util.Arrays.copyOf(positions, selectedCount), currentOuterMask.size());
     }
 
     private static long packRowReference(int batchIndex, int position)
