@@ -18,28 +18,44 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 final class TopNState
 {
     private final int orderingColumn;
     private final Streams[][] slotColumns;
     private final Streams[] schema;
+    private final Set<Stream>[] exposedStreams;
     private final JoinBufferSupport buffers;
+    private final Batch[] pendingBatches;
+    private final int[] pendingPositions;
+    private List<Integer> orderedSlots = List.of();
     private Streams[] materialized;
+    private Batch fallbackBatch;
 
+    @SuppressWarnings("unchecked")
     TopNState(int orderingColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
     {
         this.orderingColumn = orderingColumn;
         this.slotColumns = new Streams[outputCount][capacity];
         this.schema = new Streams[outputCount];
+        this.exposedStreams = (Set<Stream>[]) new Set<?>[outputCount];
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
+        this.pendingBatches = new Batch[capacity];
+        this.pendingPositions = new int[capacity];
     }
 
     public void captureSchema(Batch batch)
     {
-        BufferedJoinInput.captureSchema(batch, schema);
+        fallbackBatch = batch;
+        for (int outputIndex = 0; outputIndex < exposedStreams.length; outputIndex++) {
+            if (exposedStreams[outputIndex] == null) {
+                exposedStreams[outputIndex] = EnumSet.copyOf(batch.output(outputIndex).streams());
+            }
+        }
     }
 
     public int compareOrderingValue(Output output, int position, int slot)
@@ -69,26 +85,113 @@ final class TopNState
 
     public void copyRow(Batch batch, int position, int slot)
     {
+        slotColumns[orderingColumn][slot] = buffers.copyPosition(batch.output(orderingColumn), slotColumns[orderingColumn][slot], position);
         for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
-            slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], position);
+            if (outputIndex == orderingColumn) {
+                continue;
+            }
+            slotColumns[outputIndex][slot] = null;
+        }
+        pendingBatches[slot] = batch;
+        pendingPositions[slot] = position;
+    }
+
+    public void flushPendingBatch(Batch batch, List<Integer> retainedSlots)
+    {
+        for (int slot : retainedSlots) {
+            if (pendingBatches[slot] != batch) {
+                continue;
+            }
+            for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
+                if (outputIndex == orderingColumn) {
+                    continue;
+                }
+                slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
+                if (schema[outputIndex] == null) {
+                    schema[outputIndex] = slotColumns[outputIndex][slot];
+                }
+            }
+            pendingBatches[slot] = null;
         }
     }
 
-    public void materialize(List<Integer> orderedSlots)
+    public void setOrderedSlots(List<Integer> orderedSlots)
     {
-        materialized = new Streams[schema.length];
-        for (int outputIndex = 0; outputIndex < schema.length; outputIndex++) {
-            Streams columnSchema = schema[outputIndex];
-            if (columnSchema == null) {
-                throw new IllegalStateException("TopN did not observe source output schema");
-            }
-            materialized[outputIndex] = orderedSlots.isEmpty() ? buffers.emptyLike(columnSchema) : materializeColumn(columnSchema, outputIndex, orderedSlots);
-        }
+        this.orderedSlots = orderedSlots;
+        this.materialized = new Streams[schema.length];
     }
 
     public Streams output(int index)
     {
-        return materialized[index];
+        Streams output = materialized[index];
+        if (output != null) {
+            return output;
+        }
+
+        if (orderedSlots.isEmpty()) {
+            Streams columnSchema = ensureEmptySchema(index);
+            output = buffers.emptyLike(columnSchema);
+        }
+        else {
+            ensurePendingOutputMaterialized(index);
+            Streams columnSchema = ensureMaterializedSchema(index);
+            output = materializeColumn(columnSchema, index, orderedSlots);
+        }
+        materialized[index] = output;
+        return output;
+    }
+
+    public Set<Stream> outputStreams(int index)
+    {
+        Set<Stream> streams = exposedStreams[index];
+        if (streams == null) {
+            throw new IllegalStateException("TopN did not observe source output streams");
+        }
+        return streams;
+    }
+
+    private void ensurePendingOutputMaterialized(int outputIndex)
+    {
+        if (outputIndex == orderingColumn) {
+            return;
+        }
+        for (int slot : orderedSlots) {
+            Batch batch = pendingBatches[slot];
+            if (batch == null) {
+                continue;
+            }
+            slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
+            if (schema[outputIndex] == null) {
+                schema[outputIndex] = slotColumns[outputIndex][slot];
+            }
+        }
+    }
+
+    private Streams ensureEmptySchema(int outputIndex)
+    {
+        Streams columnSchema = schema[outputIndex];
+        if (columnSchema != null) {
+            return columnSchema;
+        }
+        if (fallbackBatch == null) {
+            throw new IllegalStateException("TopN did not observe source output schema");
+        }
+        schema[outputIndex] = buffers.borrowStreams(fallbackBatch.output(outputIndex));
+        return schema[outputIndex];
+    }
+
+    private Streams ensureMaterializedSchema(int outputIndex)
+    {
+        Streams columnSchema = schema[outputIndex];
+        if (columnSchema != null) {
+            return columnSchema;
+        }
+        columnSchema = slotColumns[outputIndex][orderedSlots.getFirst()];
+        if (columnSchema == null) {
+            throw new IllegalStateException("TopN output column was not materialized: " + outputIndex);
+        }
+        schema[outputIndex] = columnSchema;
+        return columnSchema;
     }
 
     private Streams materializeColumn(Streams columnSchema, int outputIndex, List<Integer> orderedSlots)

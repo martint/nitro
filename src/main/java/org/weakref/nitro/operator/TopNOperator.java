@@ -79,10 +79,16 @@ public class TopNOperator
                     }
                 }
             }
+
+            if (source.hasNext()) {
+                state.flushPendingBatch(batch, queue.stream()
+                        .map(Entry::position)
+                        .toList());
+            }
         }
 
         int count = queue.size();
-        state.materialize(orderedSlots(queue));
+        state.setOrderedSlots(orderedSlots(queue));
 
         done = true;
         return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, count);
@@ -96,7 +102,7 @@ public class TopNOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
             outputs[outputIndex] = new Output(
-                    state.output(output).asMap().keySet(),
+                    state.outputStreams(output),
                     stream -> state.output(output).get(stream),
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }

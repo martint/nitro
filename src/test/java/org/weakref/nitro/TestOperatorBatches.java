@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
@@ -51,6 +52,7 @@ import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Function;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -319,6 +321,31 @@ public class TestOperatorBatches
 
         assertThat(Arrays.copyOf(values.values(), batch.borrowMask().count())).containsExactly(3.25, 2.5);
         assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(20L, 30L);
+    }
+
+    @Test
+    void testTopNOperatorDefersPayloadBorrowUntilOutputIsRequested()
+    {
+        TrackingOperator source = new TrackingOperator(new TableOperator(
+                2,
+                List.of(TableOperator.Page.values(
+                        4,
+                        new Vector[] {
+                                new I64Vector(new long[] {1L, 5L, 3L, 4L}),
+                                new I64Vector(new long[] {10L, 20L, 30L, 40L}),
+                        },
+                        org.weakref.nitro.data.Mask.all(4)))));
+
+        Operator operator = new TopNOperator(new Allocator(), 2, 0, source);
+
+        Batch batch = operator.next();
+
+        assertThat(source.borrowCount(0)).isGreaterThan(0);
+        assertThat(source.borrowCount(1)).isZero();
+
+        I64Vector payload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+        assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(20L, 40L);
+        assertThat(source.borrowCount(1)).isGreaterThan(0);
     }
 
     @Test
@@ -640,5 +667,66 @@ public class TestOperatorBatches
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(7L, 8L);
         assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, true);
+    }
+
+    private static final class TrackingOperator
+            implements Operator
+    {
+        private final Operator delegate;
+        private final int[] borrowCounts;
+
+        private TrackingOperator(Operator delegate)
+        {
+            this.delegate = delegate;
+            this.borrowCounts = new int[delegate.outputCount()];
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return delegate.outputCount();
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return delegate.hasNext();
+        }
+
+        @Override
+        public Batch next()
+        {
+            Batch batch = delegate.next();
+            Output[] outputs = new Output[delegate.outputCount()];
+            for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+                int trackedOutput = outputIndex;
+                Output output = batch.output(outputIndex);
+                outputs[outputIndex] = new Output(
+                        output.streams(),
+                        stream -> {
+                            borrowCounts[trackedOutput]++;
+                            return output.borrow(stream);
+                        },
+                        (stream, vector) -> output.take(stream));
+            }
+            return new Batch(batch.borrowMask(), Function.identity(), outputs);
+        }
+
+        @Override
+        public void constrain(org.weakref.nitro.data.Mask mask)
+        {
+            delegate.constrain(mask);
+        }
+
+        @Override
+        public void close()
+        {
+            delegate.close();
+        }
+
+        private int borrowCount(int output)
+        {
+            return borrowCounts[output];
+        }
     }
 }
