@@ -49,6 +49,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -210,8 +211,8 @@ public final class ParquetScanOperator
                 yield readBinaryColumn(column, columnPages, batchState.rowCount(), batchState.mask());
             }
             case ARRAY_I64 -> readArrayI64Column(column, columnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
-            case MAP -> readMapColumn(column, batchState.rowGroup(), batchState.rowCount(), batchState.mask());
-            case STRUCT -> readStructColumn(column, batchState.rowGroup(), batchState.rowCount(), batchState.mask());
+            case MAP -> readMapColumn(column, nestedColumnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
+            case STRUCT -> readStructColumn(column, nestedColumnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
         };
         batchState.buffers()[columnIndex] = buffer;
         return buffer;
@@ -227,20 +228,38 @@ public final class ParquetScanOperator
         return columnPages;
     }
 
+    private List<ColumnPages> nestedColumnPages(int columnIndex, RowGroupBatchState batchState)
+    {
+        List<ColumnPages> nestedColumnPages = batchState.nestedColumnPages()[columnIndex];
+        if (nestedColumnPages == null) {
+            ColumnSpec column = columns.get(columnIndex);
+            nestedColumnPages = switch (column.kind()) {
+                case MAP -> captureMapColumnPages(batchState.rowGroup(), column);
+                case STRUCT -> captureStructColumnPages(batchState.rowGroup(), column);
+                default -> throw new IllegalArgumentException("Unsupported nested Parquet column kind: " + column.kind());
+            };
+            batchState.nestedColumnPages()[columnIndex] = nestedColumnPages;
+        }
+        return nestedColumnPages;
+    }
+
     private final class RowGroupBatchState
     {
         private final PageReadStore rowGroup;
         private final int rowCount;
         private final Mask[] maskHolder;
         private final ColumnPages[] columnPages;
+        private final List<ColumnPages>[] nestedColumnPages;
         private final ColumnBuffer[] buffers;
 
+        @SuppressWarnings("unchecked")
         private RowGroupBatchState(PageReadStore rowGroup, int rowCount, Mask mask)
         {
             this.rowGroup = rowGroup;
             this.rowCount = rowCount;
             this.maskHolder = new Mask[] {mask};
             this.columnPages = new ColumnPages[columns.size()];
+            this.nestedColumnPages = (List<ColumnPages>[]) new List<?>[columns.size()];
             this.buffers = new ColumnBuffer[columns.size()];
         }
 
@@ -269,9 +288,15 @@ public final class ParquetScanOperator
             return buffers;
         }
 
+        private List<ColumnPages>[] nestedColumnPages()
+        {
+            return nestedColumnPages;
+        }
+
         private void constrain(Mask mask)
         {
             maskHolder[0] = mask;
+            Arrays.fill(buffers, null);
         }
     }
 
@@ -467,7 +492,7 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, null);
     }
 
-    private ColumnBuffer readMapColumn(ColumnSpec column, PageReadStore rowGroup, int rowCount, Mask mask)
+    private ColumnBuffer readMapColumn(ColumnSpec column, List<ColumnPages> mapPages, int rowCount, Mask mask)
     {
         checkArgument(column.mapSpec() != null, "Map column is missing map metadata: %s", column.name());
 
@@ -475,7 +500,6 @@ public final class ParquetScanOperator
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
-        List<ColumnPages> mapPages = captureMapColumnPages(rowGroup, column);
 
         int entryCount = 0;
         int keyBinaryCapacity = 0;
@@ -592,13 +616,12 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
-    private ColumnBuffer readStructColumn(ColumnSpec column, PageReadStore rowGroup, int rowCount, Mask mask)
+    private ColumnBuffer readStructColumn(ColumnSpec column, List<ColumnPages> fieldPages, int rowCount, Mask mask)
     {
         StructVector values = allocator.allocate(ALLOCATION_CONTEXT, StructVector.class, rowCount, StructVector::new);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
-        List<ColumnPages> fieldPages = captureStructColumnPages(rowGroup, column);
         ReplayPageReadStore replayPageStore = new ReplayPageReadStore(rowCount, fieldPages);
 
         int[] binaryCapacities = new int[column.structFields().size()];

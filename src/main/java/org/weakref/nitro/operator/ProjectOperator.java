@@ -152,6 +152,8 @@ public class ProjectOperator
 
         private void constrain(Mask mask)
         {
+            planEvaluator.reset();
+            evaluatedOutputBundles.clear();
             this.mask = mask;
             sourceBatch.constrain(mask);
         }

@@ -72,6 +72,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -1272,6 +1273,8 @@ public class TestOperators
                 hasNext = false;
                 return new Batch(
                         Mask.all(3),
+                        constrainedMask::set,
+                        Function.identity(),
                         new Output(Set.of(Stream.VALUES), ignored -> keys),
                         new Output(Set.of(Stream.VALUES), ignored -> flags),
                         new Output(Set.of(Stream.VALUES), ignored -> {
@@ -1289,6 +1292,12 @@ public class TestOperators
             @Override
             public void close()
             {
+            }
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return true;
             }
         };
 
@@ -1329,6 +1338,108 @@ public class TestOperators
             assertThat(payloadBorrows).hasValue(0);
 
             I64Vector projectedPayloads = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(projectedPayloads.values()[0]).isEqualTo(900L);
+            assertThat(payloadBorrows).hasValue(1);
+            assertThat(constrainedMask.get()).containsExactly(2);
+        }
+    }
+
+    @Test
+    void testHashJoinLateMaterializesProjectedInnerPayloads()
+    {
+        AtomicInteger payloadBorrows = new AtomicInteger();
+        AtomicReference<Mask> constrainedMask = new AtomicReference<>();
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+
+        Operator baseSource = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 3;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                I64Vector keys = new I64Vector(new long[] {2L, 2L, 3L, 4L});
+                BooleanVector keep = new BooleanVector(new boolean[] {true, false, true, true});
+                I64Vector payload = new I64Vector(new long[] {10L, 20L, 30L, 40L});
+                Output[] outputs = new Output[] {
+                        new Output(Set.of(Stream.VALUES), stream -> keys),
+                        new Output(Set.of(Stream.VALUES), stream -> keep),
+                        new Output(Set.of(Stream.VALUES), stream -> {
+                            payloadBorrows.incrementAndGet();
+                            return payload;
+                        }),
+                };
+                return new Batch(Mask.all(4), constrainedMask::set, Function.identity(), outputs);
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                constrainedMask.set(mask);
+            }
+
+            @Override
+            public void close()
+            {
+            }
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return true;
+            }
+        };
+
+        Variable projectedPayload = new Variable(0);
+        EvaluationPlan projectPlan = plan(
+                List.of(call(projectedPayload, "multiply", values(new Input(2)), values(new Input(2)))),
+                values(new Input(0)),
+                values(projectedPayload));
+
+        Operator inner = new ProjectOperator(
+                allocator,
+                projectPlan,
+                primitiveRegistry,
+                new FilterOperator(
+                        baseSource,
+                        new EvaluationPlan(List.of(), List.of()),
+                        primitiveRegistry,
+                        new Reference(new Input(1), Stream.VALUES),
+                        allocator));
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(3L))),
+                0,
+                inner,
+                0)) {
+            Batch batch = join.next();
+
+            assertThat(batch.borrowMask()).containsExactly(0);
+            assertThat(payloadBorrows).hasValue(0);
+            assertThat(constrainedMask.get()).isNotNull();
+            assertThat(constrainedMask.get()).containsExactly(0, 2, 3);
+
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(payloadBorrows).hasValue(0);
+
+            assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(payloadBorrows).hasValue(0);
+
+            I64Vector projectedPayloads = (I64Vector) batch.output(2).borrow(Stream.VALUES);
             assertThat(projectedPayloads.values()[0]).isEqualTo(900L);
             assertThat(payloadBorrows).hasValue(1);
             assertThat(constrainedMask.get()).containsExactly(2);

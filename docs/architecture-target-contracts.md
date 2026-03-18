@@ -855,6 +855,10 @@ not use `null` output placeholders.
 - `constrain(mask)` narrows the rows of interest for the current batch only.
 - Operators may use `constrain(mask)` to avoid materializing streams that are no
   longer needed.
+- Some operators may also support retained batches whose outputs remain valid
+  after the operator advances. In that case, narrowing must be batch-local:
+  later `constrain(mask)` calls must target the retained batch instance that
+  owns the lazy outputs, not just the operator's current global state.
 - `constrain(mask)` is the primary operator-level hook for lazy evaluation, not
   merely an optional micro-optimization.
 - If an operator can separate decisive work from payload work, it should prefer
@@ -907,6 +911,9 @@ shape is therefore:
 
 - build or probe using only the streams needed to decide matches
 - retain matched row identities or positions
+- retain upstream batches when later payload borrows still need to push
+  narrower masks through intermediate operators such as projection, filter, or
+  scan
 - borrow or materialize payload streams later under the matched-row mask
 - assemble output columns from those matched positions in batched columnar
   copies rather than per-row append loops

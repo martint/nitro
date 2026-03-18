@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -49,6 +50,8 @@ public class HashJoinOperator
     private final int[] outputOuterPositions = new int[BATCH_SIZE];
     private final long[] outputInnerRows = new long[BATCH_SIZE];
     private final int[] innerPositionsScratch = new int[BATCH_SIZE];
+    private final int[] retainedInnerPositionsScratch = new int[BATCH_SIZE];
+    private final int[] retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
     private final Streams[] currentOutputs;
 
     private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
@@ -231,34 +234,42 @@ public class HashJoinOperator
     private void loadInnerIfNecessary()
     {
         int batchCountBefore = bufferedInner.batches().size();
-        bufferedInner.loadAll(inner, BATCH_SIZE);
+        bufferedInner.loadAll(inner, BATCH_SIZE, innerJoinColumns, inner.supportsRetainedBatches());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
         for (int batchIndex = batchCountBefore; batchIndex < bufferedInner.batches().size(); batchIndex++) {
             BufferedJoinInput.InnerBatch batch = bufferedInner.batches().get(batchIndex);
-            indexInnerRows(batch.columns(), 0, batch.length(), batchIndex);
+            indexInnerRows(batch, 0, batch.length(), batchIndex);
         }
     }
 
-    private void indexInnerRows(Streams[] columns, int startPosition, int length, int batchIndex)
+    private void indexInnerRows(BufferedJoinInput.InnerBatch batch, int startPosition, int length, int batchIndex)
     {
         Vector[] joinValues = new Vector[innerJoinColumns.length];
         BooleanVector[] joinNulls = new BooleanVector[innerJoinColumns.length];
         for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
-            Streams streams = columns[innerJoinColumns[keyIndex]];
-            joinValues[keyIndex] = streams.values();
-            joinNulls[keyIndex] = (BooleanVector) streams.getOrNull(Stream.NULLS);
+            if (batch.retained()) {
+                Output output = batch.retainedBatch().output(innerJoinColumns[keyIndex]);
+                joinValues[keyIndex] = output.borrow(Stream.VALUES);
+                joinNulls[keyIndex] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+            }
+            else {
+                Streams streams = batch.columns()[innerJoinColumns[keyIndex]];
+                joinValues[keyIndex] = streams.values();
+                joinNulls[keyIndex] = (BooleanVector) streams.getOrNull(Stream.NULLS);
+            }
             if (innerProbeKeys[keyIndex] == null) {
                 innerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(joinValues[keyIndex]);
             }
         }
 
         for (int position = startPosition; position < startPosition + length; position++) {
+            int sourcePosition = batch.sourcePosition(position);
             boolean hasNull = false;
             for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
                 OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
                         joinValues[keyIndex],
                         joinNulls[keyIndex],
-                        position,
+                        sourcePosition,
                         innerProbeKeys[keyIndex]);
                 if (key == null) {
                     hasNull = true;
@@ -325,7 +336,7 @@ public class HashJoinOperator
 
         Set<Stream> streams = outputIndex < outer.outputCount()
                 ? currentOuterBatch.output(outputIndex).streams()
-                : outputBuffer.innerSchema()[outputIndex - outer.outputCount()].asMap().keySet();
+                : bufferedInner.outputStreams(outputIndex - outer.outputCount());
         return new Output(
                 streams,
                 stream -> materializeOutput(outputIndex).get(stream),
@@ -349,7 +360,11 @@ public class HashJoinOperator
             }
             return null;
         }
-        return outputBuffer.innerSchema()[outputIndex - outer.outputCount()];
+        Streams schema = outputBuffer.innerSchema()[outputIndex - outer.outputCount()];
+        if (schema != null) {
+            return schema;
+        }
+        return bufferedInner.outputSchema(outputIndex - outer.outputCount());
     }
 
     private Streams materializeOutput(int outputIndex)
@@ -395,13 +410,8 @@ public class HashJoinOperator
                     innerPositionsScratch[runLength] = rowPosition(outputInnerRows[next + runLength]);
                     runLength++;
                 }
-                result = buffers.copyPositions(
-                        result,
-                        bufferedInner.batches().get(batchIndex).columns()[innerOutputIndex],
-                        innerPositionsScratch,
-                        runLength,
-                        outputStart,
-                        currentOutputCount);
+                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
+                result = copyInnerPositions(result, innerBatch, innerOutputIndex, innerPositionsScratch, runLength, outputStart, currentOutputCount);
                 outputStart += runLength;
                 next += runLength;
             }
@@ -412,14 +422,59 @@ public class HashJoinOperator
         for (int index = 0; index < currentOutputMask.count(); index++) {
             int outputPosition = currentOutputMask.position(index);
             long rowReference = outputInnerRows[outputPosition];
-            result = buffers.copySinglePosition(
-                    result,
-                    bufferedInner.batches().get(batchIndex(rowReference)).columns()[innerOutputIndex],
-                    currentOutputCount,
-                    outputPosition,
-                    rowPosition(rowReference));
+            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex(rowReference));
+            result = copyInnerSinglePosition(result, innerBatch, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference));
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
+    }
+
+    private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int[] positions, int positionCount, int outputStart, int size)
+    {
+        if (!innerBatch.retained()) {
+            return buffers.copyPositions(existing, innerBatch.columns()[innerOutputIndex], positions, positionCount, outputStart, size);
+        }
+
+        constrainRetainedInnerBatch(innerBatch, positions, positionCount);
+        Output output = innerBatch.retainedBatch().output(innerOutputIndex);
+        for (int index = 0; index < positionCount; index++) {
+            retainedInnerPositionsScratch[index] = innerBatch.sourcePosition(positions[index]);
+        }
+        return buffers.copyPositions(output, existing, retainedInnerPositionsScratch, positionCount, outputStart, size);
+    }
+
+    private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int size, int outputPosition, int logicalPosition)
+    {
+        if (!innerBatch.retained()) {
+            return buffers.copySinglePosition(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition);
+        }
+
+        int sourcePosition = innerBatch.sourcePosition(logicalPosition);
+        constrainRetainedInnerBatch(innerBatch, new int[] {logicalPosition}, 1);
+        return buffers.copySinglePosition(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition);
+    }
+
+    private void constrainRetainedInnerBatch(BufferedJoinInput.InnerBatch innerBatch, int[] logicalPositions, int positionCount)
+    {
+        if (!innerBatch.retained()) {
+            return;
+        }
+        for (int index = 0; index < positionCount; index++) {
+            retainedInnerMaskPositionsScratch[index] = innerBatch.sourcePosition(logicalPositions[index]);
+        }
+        Arrays.sort(retainedInnerMaskPositionsScratch, 0, positionCount);
+        int uniqueCount = 0;
+        int previous = -1;
+        for (int index = 0; index < positionCount; index++) {
+            int position = retainedInnerMaskPositionsScratch[index];
+            if (position != previous) {
+                retainedInnerMaskPositionsScratch[uniqueCount++] = position;
+                previous = position;
+            }
+        }
+        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+                ALLOCATION_CONTEXT,
+                Arrays.copyOf(retainedInnerMaskPositionsScratch, uniqueCount),
+                innerBatch.retainedBatch().borrowMask().size()));
     }
 
     private void constrainOuterIfNecessary()
