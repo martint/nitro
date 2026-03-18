@@ -27,6 +27,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -67,12 +68,21 @@ public class BenchmarkOperators
     private static final int UTF8_GROUP_ROWS = 100_000;
     private static final int UTF8_JOIN_OUTER_ROWS = 100_000;
     private static final int UTF8_JOIN_DISTINCT_KEYS = 1_024;
+    private static final int UTF8_JOIN_SECONDARY_DISTINCT_KEYS = 32;
+    private static final int UTF8_JOIN_NULL_EVERY = 7;
+    private static final int UTF8_JOIN_WIDE_PAYLOAD_LENGTH = 128;
 
     private final Allocator allocator = new Allocator();
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
     private TableOperator.Page groupUtf8Page;
     private TableOperator.Page outerJoinUtf8Page;
     private TableOperator.Page innerJoinUtf8Page;
+    private TableOperator.Page outerJoinUtf8NullablePage;
+    private TableOperator.Page innerJoinUtf8NullablePage;
+    private TableOperator.Page outerJoinUtf8MultiKeyPage;
+    private TableOperator.Page innerJoinUtf8MultiKeyPage;
+    private TableOperator.Page outerJoinUtf8PayloadPage;
+    private TableOperator.Page innerJoinUtf8PayloadPage;
 
     @Setup
     public void setup()
@@ -80,6 +90,12 @@ public class BenchmarkOperators
         groupUtf8Page = utf8Page(UTF8_GROUP_ROWS, UTF8_JOIN_DISTINCT_KEYS);
         outerJoinUtf8Page = utf8Page(UTF8_JOIN_OUTER_ROWS, UTF8_JOIN_DISTINCT_KEYS);
         innerJoinUtf8Page = utf8Page(UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_DISTINCT_KEYS);
+        outerJoinUtf8NullablePage = utf8NullablePage(UTF8_JOIN_OUTER_ROWS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_NULL_EVERY);
+        innerJoinUtf8NullablePage = utf8NullablePage(UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_NULL_EVERY + 2);
+        outerJoinUtf8MultiKeyPage = utf8MultiKeyPage(UTF8_JOIN_OUTER_ROWS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_SECONDARY_DISTINCT_KEYS);
+        innerJoinUtf8MultiKeyPage = utf8MultiKeyPage(UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_SECONDARY_DISTINCT_KEYS);
+        outerJoinUtf8PayloadPage = utf8PayloadPage(UTF8_JOIN_OUTER_ROWS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_WIDE_PAYLOAD_LENGTH);
+        innerJoinUtf8PayloadPage = utf8PayloadPage(UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_WIDE_PAYLOAD_LENGTH);
     }
 
     @Benchmark
@@ -249,31 +265,168 @@ public class BenchmarkOperators
         consume(operator);
     }
 
+    @Benchmark
+    @OperationsPerInvocation(UTF8_JOIN_OUTER_ROWS + UTF8_JOIN_DISTINCT_KEYS)
+    public void nestedLoopEquiJoinUtf8RepeatedKeys()
+    {
+        Operator operator = new NestedLoopJoinOperator(
+                allocator,
+                new TableOperator(1, List.of(outerJoinUtf8Page)),
+                0,
+                new TableOperator(1, List.of(innerJoinUtf8Page)),
+                0);
+
+        consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(UTF8_JOIN_OUTER_ROWS + UTF8_JOIN_DISTINCT_KEYS)
+    public void hashJoinUtf8NullableKeys()
+    {
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new TableOperator(1, List.of(outerJoinUtf8NullablePage)),
+                0,
+                new TableOperator(1, List.of(innerJoinUtf8NullablePage)),
+                0);
+
+        consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(UTF8_JOIN_OUTER_ROWS + UTF8_JOIN_DISTINCT_KEYS)
+    public void hashJoinUtf8MultiKey()
+    {
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new TableOperator(2, List.of(outerJoinUtf8MultiKeyPage)),
+                new int[] {0, 1},
+                new TableOperator(2, List.of(innerJoinUtf8MultiKeyPage)),
+                new int[] {0, 1});
+
+        consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(UTF8_JOIN_OUTER_ROWS + UTF8_JOIN_DISTINCT_KEYS)
+    public void hashJoinUtf8RepeatedKeysWithWidePayloads()
+    {
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new TableOperator(2, List.of(outerJoinUtf8PayloadPage)),
+                0,
+                new TableOperator(2, List.of(innerJoinUtf8PayloadPage)),
+                0);
+
+        consume(operator);
+    }
+
     private static TableOperator.Page utf8Page(int rowCount, int distinctKeys)
     {
         byte[][] keyBytes = utf8Keys(distinctKeys);
+        return new TableOperator.Page(rowCount, new Streams[] {utf8Streams(rowCount, position -> keyBytes[position % distinctKeys], ignored -> false)}, Mask.all(rowCount));
+    }
+
+    private static TableOperator.Page utf8NullablePage(int rowCount, int distinctKeys, int nullEvery)
+    {
+        byte[][] keyBytes = utf8Keys(distinctKeys);
+        return new TableOperator.Page(
+                rowCount,
+                new Streams[] {utf8Streams(rowCount, position -> keyBytes[position % distinctKeys], position -> position % nullEvery == 0)},
+                Mask.all(rowCount));
+    }
+
+    private static TableOperator.Page utf8MultiKeyPage(int rowCount, int primaryDistinctKeys, int secondaryDistinctKeys)
+    {
+        byte[][] primaryKeys = utf8Keys(primaryDistinctKeys);
+        byte[][] secondaryKeys = utf8Keys("sub-", secondaryDistinctKeys);
+        return new TableOperator.Page(
+                rowCount,
+                new Streams[] {
+                        utf8Streams(rowCount, position -> primaryKeys[position % primaryDistinctKeys], ignored -> false),
+                        utf8Streams(rowCount, position -> secondaryKeys[(position / primaryDistinctKeys) % secondaryDistinctKeys], ignored -> false),
+                },
+                Mask.all(rowCount));
+    }
+
+    private static TableOperator.Page utf8PayloadPage(int rowCount, int distinctKeys, int payloadLength)
+    {
+        byte[][] keyBytes = utf8Keys(distinctKeys);
+        byte[][] payloadBytes = utf8Keys("payload-", distinctKeys, payloadLength);
+        return new TableOperator.Page(
+                rowCount,
+                new Streams[] {
+                        utf8Streams(rowCount, position -> keyBytes[position % distinctKeys], ignored -> false),
+                        utf8Streams(rowCount, position -> payloadBytes[position % distinctKeys], ignored -> false),
+                },
+                Mask.all(rowCount));
+    }
+
+    private static byte[][] utf8Keys(int distinctKeys)
+    {
+        return utf8Keys("key-", distinctKeys);
+    }
+
+    private static byte[][] utf8Keys(String prefix, int distinctKeys)
+    {
+        byte[][] keyBytes = new byte[distinctKeys][];
+        for (int key = 0; key < distinctKeys; key++) {
+            keyBytes[key] = (prefix + key).getBytes(StandardCharsets.UTF_8);
+        }
+        return keyBytes;
+    }
+
+    private static byte[][] utf8Keys(String prefix, int distinctKeys, int minimumLength)
+    {
+        byte[][] keyBytes = new byte[distinctKeys][];
+        for (int key = 0; key < distinctKeys; key++) {
+            StringBuilder builder = new StringBuilder(prefix).append(key);
+            while (builder.length() < minimumLength) {
+                builder.append('-').append(key);
+            }
+            keyBytes[key] = builder.toString().getBytes(StandardCharsets.UTF_8);
+        }
+        return keyBytes;
+    }
+
+    private static Streams utf8Streams(int rowCount, IntToByteArray bytes, IntPredicate isNull)
+    {
         int byteCapacity = 0;
         for (int position = 0; position < rowCount; position++) {
-            byteCapacity += keyBytes[position % distinctKeys].length;
+            if (!isNull.test(position)) {
+                byteCapacity += bytes.apply(position).length;
+            }
         }
 
         BinaryVector values = new BinaryVector(rowCount, byteCapacity);
         values.addTrait(BinaryVector.Trait.UTF8_STRING);
         values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        BooleanVector nulls = null;
         for (int position = 0; position < rowCount; position++) {
-            values.setBytes(position, keyBytes[position % distinctKeys]);
+            if (isNull.test(position)) {
+                if (nulls == null) {
+                    nulls = new BooleanVector(rowCount);
+                }
+                nulls.values()[position] = true;
+                values.setNull(position);
+                continue;
+            }
+            values.setBytes(position, bytes.apply(position));
         }
 
-        return new TableOperator.Page(rowCount, new Streams[] {Streams.ofValues(values)}, Mask.all(rowCount));
+        return nulls == null ? Streams.ofValues(values) : Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static byte[][] utf8Keys(int distinctKeys)
+    @FunctionalInterface
+    private interface IntPredicate
     {
-        byte[][] keyBytes = new byte[distinctKeys][];
-        for (int key = 0; key < distinctKeys; key++) {
-            keyBytes[key] = ("key-" + key).getBytes(StandardCharsets.UTF_8);
-        }
-        return keyBytes;
+        boolean test(int value);
+    }
+
+    @FunctionalInterface
+    private interface IntToByteArray
+    {
+        byte[] apply(int value);
     }
 
     private static void consume(Operator operator)
