@@ -18,6 +18,9 @@ define the interfaces and responsibilities we want the codebase to converge on.
 - Allow downstream operators to request only the streams they actually need.
 - Preserve mask-driven, additive evaluation so partial work can be reused across
   columns and across stream requests within a batch.
+- Allow operators to defer non-decisive work until downstream masks prove which
+  rows survive, including column decode and payload materialization where the
+  source/operator path can support it.
 - Keep the operator/runtime boundary suitable for realistic columnar sources
   such as Parquet, not just synthetic generators and in-memory tables.
 
@@ -31,6 +34,12 @@ When the source format already exposes a compact column encoding such as a
 dictionary-backed page, scan operators should preserve that encoding into
 Nitro vectors when practical instead of eagerly flattening it away.
 
+Scan operators should also remain compatible with mask-mediated late
+materialization. If downstream operators need only a subset of columns to
+decide row survival, scans should be able to defer decoding unrelated columns
+and later honor narrower `constrain(mask)` requests for those columns where the
+source format and scan structure make that feasible.
+
 ## Architectural Principles
 
 ### Operators orchestrate batches
@@ -41,6 +50,14 @@ Operators are responsible for:
 - propagating masks downstream and upstream
 - exposing logical outputs for the current batch
 - deciding when work is blocking vs. streaming
+
+When feasible, operators should distinguish between work needed immediately to
+decide row survival and work that may be deferred until a narrower mask is
+known. That may mean separating key columns from payload columns, separating
+cheap filter terms from expensive ones, or separating structural row-selection
+work from later value materialization. That distinction is what lets the
+operator layer participate in lazy evaluation rather than forcing every
+selected column or expression to be materialized as soon as a batch is pulled.
 
 Operators are not responsible for implementing their own scalar expression
 evaluation engines.
@@ -838,9 +855,73 @@ not use `null` output placeholders.
 - `constrain(mask)` narrows the rows of interest for the current batch only.
 - Operators may use `constrain(mask)` to avoid materializing streams that are no
   longer needed.
+- `constrain(mask)` is the primary operator-level hook for lazy evaluation, not
+  merely an optional micro-optimization.
+- If an operator can separate decisive work from payload work, it should prefer
+  to push a narrower mask upstream before borrowing or materializing payload
+  streams.
+- If an operator can separate decisive predicate terms from later terms, it
+  should prefer to evaluate later terms only for rows that remain active after
+  the earlier terms.
+- This should apply generally where feasible, including pipelines such as join
+  over projection over filter over scan: rows rejected by the join should avoid
+  later payload projection, filtering, and source decode for columns not needed
+  to decide the join result.
+- The same rule applies inside filters and boolean expressions: for an `AND`
+  chain, later terms should see only rows that earlier terms did not already
+  reject; for an `OR` chain, later terms should see only rows that earlier
+  terms did not already accept.
+- Source operators should therefore avoid eagerly decoding every selected column
+  in `next()` when later `constrain(mask)` calls could still narrow the needed
+  row set for some of those columns.
 - `takeMask()` and `take(stream)` transfer ownership to the caller.
 - After ownership transfer, the batch no longer exposes the transferred buffer
   for that batch.
+
+Even when a batch has zero active rows or an operator finishes without
+producing any surviving rows, the result should preserve any output schema that
+was already determined for that operator. Empty outputs must remain
+well-formed stream bundles; they should not fabricate unrelated fallback stream
+types just because no rows survived.
+
+### Late materialization through operators
+
+The evaluator's masked, selective execution model should extend through the
+operator layer wherever the operator structure makes that practical. This is a
+general execution goal, not a join-specific optimization.
+
+In particular, operators should prefer this shape when possible:
+
+- read or evaluate only the columns needed to decide row survival first
+- evaluate only the predicate terms needed to decide row survival first
+- derive the surviving-row mask or matched position set
+- push that narrower row set upstream with `constrain(mask)` when upstream work
+  can still be avoided
+- borrow or materialize payload streams only after the surviving row set is
+  known
+
+Join operators are the clearest example. A join should be free to evaluate
+join keys and join predicates eagerly, but payload columns that do not affect
+match decisions should remain late-materializable. The preferred execution
+shape is therefore:
+
+- build or probe using only the streams needed to decide matches
+- retain matched row identities or positions
+- borrow or materialize payload streams later under the matched-row mask
+- assemble output columns from those matched positions in batched columnar
+  copies rather than per-row append loops
+
+This same principle should apply outside joins too. Filters, projections,
+source scans, and future operators should all treat masks as the common
+currency for "only do the work still needed" whenever their execution model can
+support that separation.
+
+Boolean filters are an important concrete case. A filter with multiple `AND`
+terms should evaluate later terms only on rows that earlier terms left active,
+and a filter with multiple `OR` terms should evaluate later terms only on rows
+that earlier terms did not already accept. That short-circuiting behavior
+should be preserved whether the laziness is expressed inside one operator or
+propagated across multiple operators through `constrain(mask)`.
 
 ### Ownership-aware extensions
 
@@ -1410,6 +1491,15 @@ The following execution choices should guide the runtime design:
 - `DictionaryVector` may be used as a physical representation of selected or
   repeated rows when that avoids copying, but planning and correctness should
   still be expressed in terms of masks.
+- Operator-side buffering should prefer retained positions plus columnar
+  materialization over copying singleton row bundles when the operator needs to
+  reorder, retain, or replay rows. Position-vector materialization lines up
+  better with columnar encodings, avoids per-row wrapper churn, and composes
+  more naturally with late payload borrowing.
+- Singleton retained rows may still be an acceptable fallback in narrow cases
+  where a particular variable-width or nested representation cannot safely
+  participate in an overwrite-oriented buffer layout, but that should be the
+  exception rather than the default buffering model.
 - Runtime adaptive reordering is allowed for deterministic boolean mask forms
   such as `AndMask` and `OrMask`, provided that short-circuit, null, and error
   semantics remain unchanged.
@@ -1635,6 +1725,11 @@ architecture:
 - Exact grouped-result chunking policy for aggregation output batches.
 - Whether planner- or runtime-visible encoding metadata becomes necessary later,
   beyond the current calling-convention and callback approach.
+- The eventual type-system contract for which logical families are orderable,
+  equatable, hashable, or otherwise legal as keys. The current runtime may
+  support some concrete physical families in specific operators, but the
+  architecture should not yet treat every physical family as universally
+  comparable.
 - Support for additional physical data types beyond the current builtin
   primitive and binary/string families, along with the vector/storage
   conventions needed to keep those types compatible with the stream-first
