@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
@@ -102,16 +101,6 @@ final class TopNState
         if (columnSchema == null) {
             throw new IllegalStateException("TopN did not observe source output schema");
         }
-
-        Streams result = Streams.empty();
-        for (Stream stream : columnSchema.asMap().keySet()) {
-            Vector sample = columnSchema.get(stream);
-            Vector[] rows = new Vector[orderedSlots.size()];
-            for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-                rows[rowIndex] = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-            }
-            result = result.with(stream, buffers.materializeStream(sample, rows));
-        }
-        return result;
+        return buffers.materializeColumn(columnSchema, rowSlots, orderedSlots, outputIndex);
     }
 }

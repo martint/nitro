@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 final class JoinBufferSupport
@@ -120,6 +121,29 @@ final class JoinBufferSupport
             case StructVector struct -> materializeStructs(struct, rows);
             default -> throw new IllegalArgumentException("Unsupported materialized vector type: " + sample.getClass().getSimpleName());
         };
+    }
+
+    public Streams materializeColumn(Streams columnSchema, Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex)
+    {
+        Streams result = Streams.empty();
+        for (Stream stream : columnSchema.asMap().keySet()) {
+            Vector sample = columnSchema.get(stream);
+            Vector materialized = switch (OperatorVectorSupport.flatten(sample)) {
+                case I64Vector _ -> materializeLongs(rowSlots, orderedSlots, outputIndex, stream);
+                case BooleanVector _ -> materializeBooleans(rowSlots, orderedSlots, outputIndex, stream);
+                case F64Vector _ -> materializeDoubles(rowSlots, orderedSlots, outputIndex, stream);
+                case BinaryVector binary -> materializeBinary(binary, rowSlots, orderedSlots, outputIndex, stream);
+                default -> {
+                    Vector[] rows = new Vector[orderedSlots.size()];
+                    for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+                        rows[rowIndex] = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
+                    }
+                    yield materializeStream(sample, rows);
+                }
+            };
+            result = result.with(stream, materialized);
+        }
+        return result;
     }
 
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
@@ -420,6 +444,16 @@ final class JoinBufferSupport
         return result;
     }
 
+    private I64Vector materializeLongs(Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
+    {
+        I64Vector result = allocator.allocate(allocationContext, I64Vector.class, orderedSlots.size(), I64Vector::new);
+        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
+            result.values()[rowIndex] = OperatorVectorSupport.longValue(row, 0);
+        }
+        return result;
+    }
+
     private BooleanVector materializeBooleans(Vector[] rows)
     {
         BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, totalLength(rows), BooleanVector::new);
@@ -432,6 +466,16 @@ final class JoinBufferSupport
         return result;
     }
 
+    private BooleanVector materializeBooleans(Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
+    {
+        BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, orderedSlots.size(), BooleanVector::new);
+        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
+            result.values()[rowIndex] = OperatorVectorSupport.booleanValue(row, 0);
+        }
+        return result;
+    }
+
     private F64Vector materializeDoubles(Vector[] rows)
     {
         F64Vector result = allocator.allocate(allocationContext, F64Vector.class, totalLength(rows), F64Vector::new);
@@ -440,6 +484,16 @@ final class JoinBufferSupport
             for (int position = 0; position < row.length(); position++) {
                 result.values()[outputPosition++] = OperatorVectorSupport.doubleValue(row, position);
             }
+        }
+        return result;
+    }
+
+    private F64Vector materializeDoubles(Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
+    {
+        F64Vector result = allocator.allocate(allocationContext, F64Vector.class, orderedSlots.size(), F64Vector::new);
+        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
+            result.values()[rowIndex] = OperatorVectorSupport.doubleValue(row, 0);
         }
         return result;
     }
@@ -460,13 +514,25 @@ final class JoinBufferSupport
         int outputPosition = 0;
         for (Vector row : rows) {
             for (int position = 0; position < row.length(); position++) {
-                int length = OperatorVectorSupport.binaryLength(row, position);
-                if (length == 0) {
-                    result.setNull(outputPosition++);
-                    continue;
-                }
-                result.setBytes(outputPosition++, OperatorVectorSupport.binaryBytes(row, position));
+                copyBinaryValue(result, outputPosition++, row, position);
             }
+        }
+        return result;
+    }
+
+    private BinaryVector materializeBinary(BinaryVector sample, Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
+    {
+        int totalBytes = 0;
+        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
+            totalBytes += OperatorVectorSupport.binaryLength(row, 0);
+        }
+
+        BinaryVector result = allocator.allocateBinary(allocationContext, orderedSlots.size(), totalBytes);
+        result.addTraits(sample.traits());
+        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
+            copyBinaryValue(result, rowIndex, row, 0);
         }
         return result;
     }
@@ -547,6 +613,24 @@ final class JoinBufferSupport
             result.setField(field.getKey(), streams);
         }
         return result;
+    }
+
+    private static void copyBinaryValue(BinaryVector target, int targetPosition, Vector source, int sourcePosition)
+    {
+        switch (source) {
+            case BinaryVector values -> {
+                int length = values.length(sourcePosition);
+                if (length == 0) {
+                    target.setNull(targetPosition);
+                }
+                else {
+                    target.setBytes(targetPosition, values.data(), values.startOffset(sourcePosition), length);
+                }
+            }
+            case DictionaryVector values -> copyBinaryValue(target, targetPosition, values.values(), values.ids()[sourcePosition]);
+            case RleVector values -> copyBinaryValue(target, targetPosition, values.values(), OperatorVectorSupport.runIndex(values, sourcePosition));
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + source.getClass().getSimpleName());
+        }
     }
 
     private Vector emptyVector(Vector source)
