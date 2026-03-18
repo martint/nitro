@@ -193,10 +193,14 @@ public class HashJoinOperator
     {
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
+            if (outerProbeKeys[keyIndex] == null) {
+                outerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(output.borrow(Stream.VALUES));
+            }
             OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
                     output.borrow(Stream.VALUES),
                     (BooleanVector) output.borrowOrNull(Stream.NULLS),
-                    currentOuterPosition);
+                    currentOuterPosition,
+                    outerProbeKeys[keyIndex]);
             if (key == null) {
                 return null;
             }
@@ -221,10 +225,14 @@ public class HashJoinOperator
             boolean hasNull = false;
             for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
                 Streams streams = columns[innerJoinColumns[keyIndex]];
+                if (innerProbeKeys[keyIndex] == null) {
+                    innerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(streams.values());
+                }
                 OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
                         streams.values(),
                         (BooleanVector) streams.getOrNull(Stream.NULLS),
-                        position);
+                        position,
+                        innerProbeKeys[keyIndex]);
                 if (key == null) {
                     hasNull = true;
                     break;
