@@ -92,10 +92,10 @@ public class Allocator
     public BinaryVector allocateOrGrowBinary(Context context, BinaryVector vector, int positionCount, int byteCapacity)
     {
         if (vector == null) {
-            return allocateBinary(context, positionCount, byteCapacity);
+            return allocateBinary(context, positionCount, growthCapacity(byteCapacity));
         }
         if (vector.length() < positionCount || vector.byteCapacity() < byteCapacity) {
-            BinaryVector grown = allocateBinary(context, positionCount, byteCapacity);
+            BinaryVector grown = allocateBinary(context, positionCount, growthCapacity(byteCapacity));
             System.arraycopy(vector.offsets(), 0, grown.offsets(), 0, vector.length() + 1);
             int bytesUsed = Arrays.stream(vector.offsets()).max().orElse(0);
             System.arraycopy(vector.data(), 0, grown.data(), 0, bytesUsed);
@@ -808,6 +808,14 @@ public class Allocator
             }
         }
         return true;
+    }
+
+    private static int growthCapacity(int desiredSize)
+    {
+        if (desiredSize <= 0) {
+            return 0;
+        }
+        return Math.max(desiredSize, computeCapacity(desiredSize));
     }
 
     private static void copyMask(Mask target, Mask source)
