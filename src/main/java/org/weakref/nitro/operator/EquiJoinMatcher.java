@@ -46,21 +46,38 @@ final class EquiJoinMatcher
     }
 
     @Override
-    public boolean matches(Batch outerBatch, int outerPosition, Streams[] innerColumns, int innerPosition)
+    public boolean matches(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition)
     {
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
             Output outerOutput = outerBatch.output(outerJoinColumns[keyIndex]);
-            Streams innerStreams = innerColumns[innerJoinColumns[keyIndex]];
+            VectorAndNulls innerStreams = innerStreams(innerBatch, innerJoinColumns[keyIndex]);
             if (!OperatorEqualitySemantics.equal(
                     outerOutput.borrow(Stream.VALUES),
                     (org.weakref.nitro.data.BooleanVector) outerOutput.borrowOrNull(Stream.NULLS),
                     outerPosition,
                     innerStreams.values(),
-                    (org.weakref.nitro.data.BooleanVector) innerStreams.getOrNull(Stream.NULLS),
-                    innerPosition)) {
+                    innerStreams.nulls(),
+                    innerBatch.sourcePosition(innerPosition))) {
                 return false;
             }
         }
         return true;
     }
+
+    private static VectorAndNulls innerStreams(BufferedJoinInput.InnerBatch innerBatch, int outputIndex)
+    {
+        if (innerBatch.retained()) {
+            Output output = innerBatch.retainedBatch().output(outputIndex);
+            return new VectorAndNulls(
+                    output.borrow(Stream.VALUES),
+                    (org.weakref.nitro.data.BooleanVector) output.borrowOrNull(Stream.NULLS));
+        }
+
+        Streams innerStreams = innerBatch.columns()[outputIndex];
+        return new VectorAndNulls(
+                innerStreams.values(),
+                (org.weakref.nitro.data.BooleanVector) innerStreams.getOrNull(Stream.NULLS));
+    }
+
+    private record VectorAndNulls(org.weakref.nitro.data.Vector values, org.weakref.nitro.data.BooleanVector nulls) {}
 }

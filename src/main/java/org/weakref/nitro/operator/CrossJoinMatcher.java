@@ -23,7 +23,7 @@ final class CrossJoinMatcher
     }
 
     @Override
-    public boolean matches(Batch outerBatch, int outerPosition, Streams[] innerColumns, int innerPosition)
+    public boolean matches(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition)
     {
         return true;
     }

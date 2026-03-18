@@ -17,5 +17,5 @@ interface JoinMatcher
 {
     boolean isCrossJoin();
 
-    boolean matches(Batch outerBatch, int outerPosition, Streams[] innerColumns, int innerPosition);
+    boolean matches(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition);
 }
