@@ -82,7 +82,7 @@ public class HashJoinOperator
         this.innerJoinColumns = innerJoinColumns.clone();
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
-        this.outputBuffer = new JoinOutputBuffer(buffers, outer.outputCount(), inner.outputCount());
+        this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
         this.outerProbeKeys = new OperatorKeySemantics.Key[outerJoinColumns.length];
         this.innerProbeKeys = new OperatorKeySemantics.Key[innerJoinColumns.length];
         this.outerCompositeProbeKey = outerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length) : null;
@@ -121,6 +121,7 @@ public class HashJoinOperator
     {
         loadInnerIfNecessary();
         if (innerIndex.isEmpty()) {
+            captureOuterSchemaIfAvailable();
             done = true;
             outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
@@ -222,6 +223,7 @@ public class HashJoinOperator
     {
         int batchCountBefore = bufferedInner.batches().size();
         bufferedInner.loadAll(inner, BATCH_SIZE);
+        outputBuffer.captureInnerSchema(bufferedInner.schema());
         for (int batchIndex = batchCountBefore; batchIndex < bufferedInner.batches().size(); batchIndex++) {
             BufferedJoinInput.InnerBatch batch = bufferedInner.batches().get(batchIndex);
             indexInnerRows(batch.columns(), 0, batch.length(), batchIndex);
@@ -275,6 +277,13 @@ public class HashJoinOperator
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
             currentOuterJoinValues[keyIndex] = output.borrow(Stream.VALUES);
             currentOuterJoinNulls[keyIndex] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        }
+    }
+
+    private void captureOuterSchemaIfAvailable()
+    {
+        while (outer.hasNext()) {
+            outputBuffer.captureOuterSchema(outer.next());
         }
     }
 

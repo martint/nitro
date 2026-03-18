@@ -14,15 +14,14 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Set;
 
 final class JoinOutputBuffer
 {
     private final JoinBufferSupport buffers;
+    private final int batchSize;
     private final int outerColumnCount;
     private final int innerColumnCount;
 
@@ -33,9 +32,10 @@ final class JoinOutputBuffer
     private final Streams[] innerSchema;
     private final int[] innerPositionsScratch;
 
-    JoinOutputBuffer(JoinBufferSupport buffers, int outerColumnCount, int innerColumnCount)
+    JoinOutputBuffer(JoinBufferSupport buffers, int batchSize, int outerColumnCount, int innerColumnCount)
     {
         this.buffers = buffers;
+        this.batchSize = batchSize;
         this.outerColumnCount = outerColumnCount;
         this.innerColumnCount = innerColumnCount;
         this.result = new Streams[outerColumnCount + innerColumnCount];
@@ -43,7 +43,7 @@ final class JoinOutputBuffer
         this.innerBuffer = new Streams[innerColumnCount];
         this.outerSchema = new Streams[outerColumnCount];
         this.innerSchema = new Streams[innerColumnCount];
-        this.innerPositionsScratch = new int[1024];
+        this.innerPositionsScratch = new int[batchSize];
     }
 
     public int outputCount()
@@ -69,6 +69,11 @@ final class JoinOutputBuffer
     public void captureInnerSchema(Batch batch)
     {
         BufferedJoinInput.captureSchema(batch, innerSchema);
+    }
+
+    public void captureInnerSchema(Streams[] schema)
+    {
+        copySchema(schema, innerSchema);
     }
 
     public void appendMatchAt(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition, int outputPosition, int batchSize)
@@ -243,8 +248,9 @@ final class JoinOutputBuffer
             Streams empty = buffers.emptyLike(schema);
             return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
-        I64Vector empty = allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
-        return new Output(Set.of(Stream.VALUES), stream -> empty, (stream, vector) -> allocator.transfer(allocationContext, vector));
+        return new Output(Set.of(), stream -> {
+            throw new IllegalArgumentException("Output does not expose stream: " + stream);
+        });
     }
 
     private static int batchIndex(long rowReference)
@@ -255,5 +261,14 @@ final class JoinOutputBuffer
     private static int rowPosition(long rowReference)
     {
         return (int) rowReference;
+    }
+
+    private static void copySchema(Streams[] source, Streams[] target)
+    {
+        for (int index = 0; index < target.length; index++) {
+            if (target[index] == null && source[index] != null) {
+                target[index] = source[index];
+            }
+        }
     }
 }

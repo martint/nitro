@@ -574,6 +574,44 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorPreservesObservedSchemaOnEmptyResult()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row("alpha"))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of()),
+                0);
+
+        Batch batch = operator.next();
+        assertThat(batch.borrowMask().count()).isZero();
+        assertThat(batch.output(0).streams()).containsExactly(Stream.VALUES, Stream.NULLS);
+        assertThat(batch.output(1).streams()).containsExactly(Stream.VALUES, Stream.NULLS);
+        assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+        assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+    }
+
+    @Test
+    void testNestedLoopJoinOperatorPreservesObservedSchemaOnEmptyResult()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new NestedLoopJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row("alpha"))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of()),
+                0);
+
+        Batch batch = operator.next();
+        assertThat(batch.borrowMask().count()).isZero();
+        assertThat(batch.output(0).streams()).containsExactly(Stream.VALUES, Stream.NULLS);
+        assertThat(batch.output(1).streams()).containsExactly(Stream.VALUES, Stream.NULLS);
+        assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+        assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+    }
+
+    @Test
     void testTableOperatorProducesBatch()
     {
         Operator operator = new TableOperator(

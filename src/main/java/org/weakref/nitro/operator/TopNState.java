@@ -15,14 +15,16 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
+import java.util.Map;
 
 final class TopNState
 {
     private final int orderingColumn;
-    private final Streams[][] rowSlots;
+    private final Streams[][] slotColumns;
     private final Streams[] schema;
     private final JoinBufferSupport buffers;
     private Streams[] materialized;
@@ -30,29 +32,19 @@ final class TopNState
     TopNState(int orderingColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
     {
         this.orderingColumn = orderingColumn;
-        this.rowSlots = new Streams[capacity][outputCount];
+        this.slotColumns = new Streams[outputCount][capacity];
         this.schema = new Streams[outputCount];
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
     }
 
     public void captureSchema(Batch batch)
     {
-        for (int outputIndex = 0; outputIndex < schema.length; outputIndex++) {
-            if (schema[outputIndex] != null) {
-                continue;
-            }
-            Output output = batch.output(outputIndex);
-            Streams.Builder streams = Streams.builder();
-            for (Stream stream : output.streams()) {
-                streams.put(stream, output.borrow(stream));
-            }
-            schema[outputIndex] = streams.build();
-        }
+        BufferedJoinInput.captureSchema(batch, schema);
     }
 
     public int compareOrderingValue(Output output, int position, int slot)
     {
-        Streams slotOrdering = rowSlots[slot][orderingColumn];
+        Streams slotOrdering = slotColumns[orderingColumn][slot];
         return OperatorOrderingSemantics.compare(
                 output.borrow(Stream.VALUES),
                 (BooleanVector) output.borrowOrNull(Stream.NULLS),
@@ -64,8 +56,8 @@ final class TopNState
 
     public int compareSlots(int leftSlot, int rightSlot)
     {
-        Streams leftOrdering = rowSlots[leftSlot][orderingColumn];
-        Streams rightOrdering = rowSlots[rightSlot][orderingColumn];
+        Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
+        Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
         return OperatorOrderingSemantics.compare(
                 leftOrdering.values(),
                 (BooleanVector) leftOrdering.getOrNull(Stream.NULLS),
@@ -77,8 +69,8 @@ final class TopNState
 
     public void copyRow(Batch batch, int position, int slot)
     {
-        for (int outputIndex = 0; outputIndex < rowSlots[slot].length; outputIndex++) {
-            rowSlots[slot][outputIndex] = buffers.copyPosition(batch.output(outputIndex), rowSlots[slot][outputIndex], position);
+        for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
+            slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], position);
         }
     }
 
@@ -86,7 +78,11 @@ final class TopNState
     {
         materialized = new Streams[schema.length];
         for (int outputIndex = 0; outputIndex < schema.length; outputIndex++) {
-            materialized[outputIndex] = materializeColumn(outputIndex, orderedSlots);
+            Streams columnSchema = schema[outputIndex];
+            if (columnSchema == null) {
+                throw new IllegalStateException("TopN did not observe source output schema");
+            }
+            materialized[outputIndex] = orderedSlots.isEmpty() ? buffers.emptyLike(columnSchema) : materializeColumn(columnSchema, outputIndex, orderedSlots);
         }
     }
 
@@ -95,12 +91,16 @@ final class TopNState
         return materialized[index];
     }
 
-    private Streams materializeColumn(int outputIndex, List<Integer> orderedSlots)
+    private Streams materializeColumn(Streams columnSchema, int outputIndex, List<Integer> orderedSlots)
     {
-        Streams columnSchema = schema[outputIndex];
-        if (columnSchema == null) {
-            throw new IllegalStateException("TopN did not observe source output schema");
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : columnSchema.asMap().entrySet()) {
+            Vector[] rows = new Vector[orderedSlots.size()];
+            for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
+                rows[rowIndex] = slotColumns[outputIndex][orderedSlots.get(rowIndex)].get(entry.getKey());
+            }
+            result.put(entry.getKey(), buffers.materializeStream(entry.getValue(), rows));
         }
-        return buffers.materializeColumn(columnSchema, rowSlots, orderedSlots, outputIndex);
+        return result.build();
     }
 }

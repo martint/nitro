@@ -67,7 +67,7 @@ public class NestedLoopJoinOperator
         this.matcher = matcher;
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
-        this.outputBuffer = new JoinOutputBuffer(buffers, outer.outputCount(), inner.outputCount());
+        this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
     }
 
     @Override
@@ -90,6 +90,7 @@ public class NestedLoopJoinOperator
 
         loadInnerIfNecessary();
         if (bufferedInner.rowCount() == 0) {
+            captureOuterSchemaIfAvailable();
             done = true;
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
         }
@@ -153,6 +154,7 @@ public class NestedLoopJoinOperator
     {
         loadInnerIfNecessary();
         if (bufferedInner.rowCount() == 0) {
+            captureOuterSchemaIfAvailable();
             done = true;
             outputBuffer.clearResults();
             return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
@@ -249,6 +251,14 @@ public class NestedLoopJoinOperator
     private void loadInnerIfNecessary()
     {
         bufferedInner.loadAll(inner, BATCH_SIZE);
+        outputBuffer.captureInnerSchema(bufferedInner.schema());
+    }
+
+    private void captureOuterSchemaIfAvailable()
+    {
+        while (outer.hasNext()) {
+            outputBuffer.captureOuterSchema(outer.next());
+        }
     }
 
     @Override

@@ -28,7 +28,6 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 
 import static java.lang.Math.toIntExact;
@@ -152,33 +151,36 @@ final class JoinBufferSupport
         }
 
         if (existing != null) {
-            Streams updated = existing;
+            Streams.Builder updated = null;
             boolean changed = false;
             for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
-                Vector existingVector = updated.getOrNull(entry.getKey());
+                Vector existingVector = existing.getOrNull(entry.getKey());
                 Vector copied = copyVectorSinglePosition(existingVector, entry.getValue(), sourcePosition, outputPosition, size);
                 if (copied != existingVector) {
-                    updated = updated.with(entry.getKey(), copied);
+                    if (updated == null) {
+                        updated = Streams.builder().putAll(existing);
+                    }
+                    updated.put(entry.getKey(), copied);
                     changed = true;
                 }
             }
-            return changed ? updated : existing;
+            return changed ? updated.build() : existing;
         }
 
-        Streams result = Streams.empty();
+        Streams.Builder result = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
-            result = result.with(entry.getKey(), copyVectorSinglePosition(null, entry.getValue(), sourcePosition, outputPosition, size));
+            result.put(entry.getKey(), copyVectorSinglePosition(null, entry.getValue(), sourcePosition, outputPosition, size));
         }
-        return result;
+        return result.build();
     }
 
     public Streams emptyLike(Streams schema)
     {
-        Streams empty = Streams.empty();
-        for (Stream stream : schema.asMap().keySet()) {
-            empty = empty.with(stream, emptyVector(schema.get(stream)));
+        Streams.Builder empty = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : schema.asMap().entrySet()) {
+            empty.put(entry.getKey(), emptyVector(entry.getValue()));
         }
-        return empty;
+        return empty.build();
     }
 
     public Vector copyStreamVector(Streams streams, Stream stream)
@@ -198,29 +200,6 @@ final class JoinBufferSupport
             case StructVector struct -> materializeStructs(struct, rows);
             default -> throw new IllegalArgumentException("Unsupported materialized vector type: " + sample.getClass().getSimpleName());
         };
-    }
-
-    public Streams materializeColumn(Streams columnSchema, Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex)
-    {
-        Streams.Builder result = Streams.builder();
-        for (Stream stream : columnSchema.asMap().keySet()) {
-            Vector sample = columnSchema.get(stream);
-            Vector materialized = switch (OperatorVectorSupport.flatten(sample)) {
-                case I64Vector _ -> materializeLongs(rowSlots, orderedSlots, outputIndex, stream);
-                case BooleanVector _ -> materializeBooleans(rowSlots, orderedSlots, outputIndex, stream);
-                case F64Vector _ -> materializeDoubles(rowSlots, orderedSlots, outputIndex, stream);
-                case BinaryVector binary -> materializeBinary(binary, rowSlots, orderedSlots, outputIndex, stream);
-                default -> {
-                    Vector[] rows = new Vector[orderedSlots.size()];
-                    for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-                        rows[rowIndex] = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-                    }
-                    yield materializeStream(sample, rows);
-                }
-            };
-            result.put(stream, materialized);
-        }
-        return result.build();
     }
 
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
@@ -526,16 +505,6 @@ final class JoinBufferSupport
         return result;
     }
 
-    private I64Vector materializeLongs(Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
-    {
-        I64Vector result = allocator.allocate(allocationContext, I64Vector.class, orderedSlots.size(), I64Vector::new);
-        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-            result.values()[rowIndex] = OperatorVectorSupport.longValue(row, 0);
-        }
-        return result;
-    }
-
     private BooleanVector materializeBooleans(Vector[] rows)
     {
         BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, totalLength(rows), BooleanVector::new);
@@ -548,16 +517,6 @@ final class JoinBufferSupport
         return result;
     }
 
-    private BooleanVector materializeBooleans(Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
-    {
-        BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, orderedSlots.size(), BooleanVector::new);
-        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-            result.values()[rowIndex] = OperatorVectorSupport.booleanValue(row, 0);
-        }
-        return result;
-    }
-
     private F64Vector materializeDoubles(Vector[] rows)
     {
         F64Vector result = allocator.allocate(allocationContext, F64Vector.class, totalLength(rows), F64Vector::new);
@@ -566,16 +525,6 @@ final class JoinBufferSupport
             for (int position = 0; position < row.length(); position++) {
                 result.values()[outputPosition++] = OperatorVectorSupport.doubleValue(row, position);
             }
-        }
-        return result;
-    }
-
-    private F64Vector materializeDoubles(Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
-    {
-        F64Vector result = allocator.allocate(allocationContext, F64Vector.class, orderedSlots.size(), F64Vector::new);
-        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-            result.values()[rowIndex] = OperatorVectorSupport.doubleValue(row, 0);
         }
         return result;
     }
@@ -602,23 +551,6 @@ final class JoinBufferSupport
         return result;
     }
 
-    private BinaryVector materializeBinary(BinaryVector sample, Streams[][] rowSlots, List<Integer> orderedSlots, int outputIndex, Stream stream)
-    {
-        int totalBytes = 0;
-        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-            totalBytes += OperatorVectorSupport.binaryLength(row, 0);
-        }
-
-        BinaryVector result = allocator.allocateBinary(allocationContext, orderedSlots.size(), totalBytes);
-        result.addTraits(sample.traits());
-        for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-            Vector row = rowSlots[orderedSlots.get(rowIndex)][outputIndex].get(stream);
-            copyBinaryValue(result, rowIndex, row, 0);
-        }
-        return result;
-    }
-
     private ArrayVector materializeArrays(ArrayVector sample, Vector[] rows)
     {
         ArrayVector result = allocator.allocateArray(allocationContext, totalLength(rows));
@@ -633,15 +565,15 @@ final class JoinBufferSupport
         }
         result.offsets()[outputPosition] = elementCount;
 
-        Streams elements = Streams.empty();
+        Streams.Builder elements = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : sample.elements().asMap().entrySet()) {
             Vector[] childRows = new Vector[rows.length];
             for (int index = 0; index < rows.length; index++) {
                 childRows[index] = ((ArrayVector) rows[index]).elements().get(entry.getKey());
             }
-            elements = elements.with(entry.getKey(), materializeStream(entry.getValue(), childRows));
+            elements.put(entry.getKey(), materializeStream(entry.getValue(), childRows));
         }
-        result.setElements(elements);
+        result.setElements(elements.build());
         return result;
     }
 
@@ -659,24 +591,24 @@ final class JoinBufferSupport
         }
         result.offsets()[outputPosition] = entryCount;
 
-        Streams keys = Streams.empty();
+        Streams.Builder keys = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : sample.keys().asMap().entrySet()) {
             Vector[] childRows = new Vector[rows.length];
             for (int index = 0; index < rows.length; index++) {
                 childRows[index] = ((MapVector) rows[index]).keys().get(entry.getKey());
             }
-            keys = keys.with(entry.getKey(), materializeStream(entry.getValue(), childRows));
+            keys.put(entry.getKey(), materializeStream(entry.getValue(), childRows));
         }
 
-        Streams values = Streams.empty();
+        Streams.Builder values = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : sample.values().asMap().entrySet()) {
             Vector[] childRows = new Vector[rows.length];
             for (int index = 0; index < rows.length; index++) {
                 childRows[index] = ((MapVector) rows[index]).values().get(entry.getKey());
             }
-            values = values.with(entry.getKey(), materializeStream(entry.getValue(), childRows));
+            values.put(entry.getKey(), materializeStream(entry.getValue(), childRows));
         }
-        result.setEntries(keys, values);
+        result.setEntries(keys.build(), values.build());
         return result;
     }
 
@@ -684,15 +616,15 @@ final class JoinBufferSupport
     {
         StructVector result = allocator.allocate(allocationContext, StructVector.class, totalLength(rows), StructVector::new);
         for (Map.Entry<String, Streams> field : sample.fields().entrySet()) {
-            Streams streams = Streams.empty();
+            Streams.Builder streams = Streams.builder();
             for (Map.Entry<Stream, Vector> entry : field.getValue().asMap().entrySet()) {
                 Vector[] childRows = new Vector[rows.length];
                 for (int index = 0; index < rows.length; index++) {
                     childRows[index] = ((StructVector) rows[index]).field(field.getKey()).get(entry.getKey());
                 }
-                streams = streams.with(entry.getKey(), materializeStream(entry.getValue(), childRows));
+                streams.put(entry.getKey(), materializeStream(entry.getValue(), childRows));
             }
-            result.setField(field.getKey(), streams);
+            result.setField(field.getKey(), streams.build());
         }
         return result;
     }
