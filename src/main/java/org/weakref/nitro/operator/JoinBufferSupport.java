@@ -31,6 +31,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
+import static java.lang.Math.toIntExact;
+
 final class JoinBufferSupport
 {
     private final Allocator allocator;
@@ -317,7 +319,11 @@ final class JoinBufferSupport
     private BinaryVector copyBinarySinglePosition(BinaryVector source, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         int requiredCapacity = binaryCapacity(existing, outputPosition) + source.length(sourcePosition);
-        BinaryVector output = allocator.allocateOrGrowBinary(allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requiredCapacity);
+        int requestedCapacity = requiredCapacity;
+        if (existing == null && outputPosition == 0 && size > 1) {
+            requestedCapacity = Math.max(requiredCapacity, estimatedBinaryCapacity(source, size));
+        }
+        BinaryVector output = allocator.allocateOrGrowBinary(allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity);
         if (outputPosition == 0) {
             Arrays.fill(output.offsets(), 0);
             output.clearTraits();
@@ -874,6 +880,17 @@ final class JoinBufferSupport
             return values.offsets()[positionCount];
         }
         return 0;
+    }
+
+    private static int estimatedBinaryCapacity(BinaryVector source, int positionCount)
+    {
+        if (source.length() == 0 || positionCount <= 0) {
+            return 0;
+        }
+
+        int usedBytes = source.offsets()[source.length()];
+        long estimated = Math.max(1L, (usedBytes + (long) source.length() - 1) / source.length()) * positionCount;
+        return toIntExact(Math.min(Integer.MAX_VALUE, estimated));
     }
 
     private static boolean isValuesOnly(Output output)
