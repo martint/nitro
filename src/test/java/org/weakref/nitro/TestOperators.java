@@ -462,6 +462,140 @@ public class TestOperators
     }
 
     @Test
+    void testAggregationOperatorDefersWorkUntilBorrowAndSkipsWhenConstrainedEmpty()
+    {
+        AtomicInteger valueBorrows = new AtomicInteger();
+        AtomicInteger payloadBorrows = new AtomicInteger();
+
+        Operator source = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                I64Vector values = new I64Vector(new long[] {1L, 2L, 3L});
+                I64Vector payload = new I64Vector(new long[] {100L, 200L, 300L});
+                return new Batch(
+                        Mask.all(3),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            valueBorrows.incrementAndGet();
+                            return values;
+                        }),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            payloadBorrows.incrementAndGet();
+                            return payload;
+                        }));
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+            }
+
+            @Override
+            public void close()
+            {
+            }
+        };
+
+        try (Operator operator = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0)),
+                source)) {
+            Batch batch = operator.next();
+            assertThat(valueBorrows).hasValue(0);
+            assertThat(payloadBorrows).hasValue(0);
+
+            batch.constrain(Mask.sparse(new int[0], 1));
+            assertThat(batch.borrowMask().count()).isEqualTo(0);
+
+            assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values()[0]).isTrue();
+            assertThat(valueBorrows).hasValue(0);
+            assertThat(payloadBorrows).hasValue(0);
+        }
+    }
+
+    @Test
+    void testAggregationOperatorLeavesUnusedPayloadsCold()
+    {
+        AtomicInteger valueBorrows = new AtomicInteger();
+        AtomicInteger payloadBorrows = new AtomicInteger();
+
+        Operator source = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                I64Vector values = new I64Vector(new long[] {1L, 2L, 3L});
+                I64Vector payload = new I64Vector(new long[] {100L, 200L, 300L});
+                return new Batch(
+                        Mask.all(3),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            valueBorrows.incrementAndGet();
+                            return values;
+                        }),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            payloadBorrows.incrementAndGet();
+                            return payload;
+                        }));
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+            }
+
+            @Override
+            public void close()
+            {
+            }
+        };
+
+        try (Operator operator = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0)),
+                source)) {
+            Batch batch = operator.next();
+            assertThat(valueBorrows).hasValue(0);
+            assertThat(payloadBorrows).hasValue(0);
+
+            I64Vector sums = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(sums.values()[0]).isEqualTo(6L);
+            assertThat(valueBorrows).hasValue(1);
+            assertThat(payloadBorrows).hasValue(0);
+        }
+    }
+
+    @Test
     void testOperatorAssertionsDecodeNestedArrays()
     {
         ArrayVector arrays = new ArrayVector(1);

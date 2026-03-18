@@ -29,9 +29,8 @@ public class AggregationOperator
     private final Operator source;
     private final List<Accumulator> aggregations;
 
-    private final Streams[] results;
-    private Mask mask;
-    private boolean filled;
+    private final Streams[] reusableResults;
+    private BatchState currentBatchState;
     private boolean done;
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
@@ -40,8 +39,7 @@ public class AggregationOperator
         this.source = source;
         this.aggregations = aggregations;
 
-        results = new Streams[aggregations.size()];
-        mask = allocator.allocateAllMask(ALLOCATION_CONTEXT, 1);
+        reusableResults = new Streams[aggregations.size()];
     }
 
     @Override
@@ -54,12 +52,14 @@ public class AggregationOperator
     public Batch next()
     {
         done = true;
+        BatchState batchState = new BatchState(allocator.allocateAllMask(ALLOCATION_CONTEXT, 1));
+        currentBatchState = batchState;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
-            outputs[outputIndex] = resultOutput(output);
+            outputs[outputIndex] = resultOutput(batchState, output);
         }
-        return new Batch(mask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchState.mask, batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
@@ -71,34 +71,47 @@ public class AggregationOperator
     @Override
     public void constrain(Mask mask)
     {
-        this.mask = mask;
+        if (currentBatchState != null) {
+            currentBatchState.constrain(mask);
+        }
     }
 
-    private Output resultOutput(int output)
+    private Output resultOutput(BatchState batchState, int output)
     {
-        doAggregationIfNeeded();
-        return new Output(results[output].asMap().keySet(), results[output]::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+        return new Output(
+                java.util.Set.of(org.weakref.nitro.operator.evaluator.ir.Stream.VALUES, org.weakref.nitro.operator.evaluator.ir.Stream.NULLS),
+                stream -> {
+                    doAggregationIfNeeded(batchState);
+                    return batchState.results[output].get(stream);
+                },
+                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
     }
 
-    private void doAggregationIfNeeded()
+    private void doAggregationIfNeeded(BatchState batchState)
     {
-        if (!filled && !mask.none()) {
-            filled = true;
+        if (!batchState.filled) {
+            batchState.filled = true;
 
             Streams[] state = new Streams[aggregations.size()];
             for (int i = 0; i < state.length; i++) {
                 state[i] = aggregations.get(i).allocate(allocator, ALLOCATION_CONTEXT, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
+                reusableResults[i] = aggregations.get(i).result(1, state[i], reusableResults[i], allocator, ALLOCATION_CONTEXT);
+                batchState.results[i] = reusableResults[i];
+            }
+
+            if (batchState.mask.none()) {
+                return;
             }
 
             while (source.hasNext()) {
                 Batch batch = source.next();
                 Mask mask = batch.borrowMask();
-
                 for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
                     Accumulator accumulator = aggregations.get(aggregation);
                     accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
-                    results[aggregation] = accumulator.result(1, state[aggregation], results[aggregation], allocator, ALLOCATION_CONTEXT);
+                    reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
+                    batchState.results[aggregation] = reusableResults[aggregation];
                 }
             }
         }
@@ -109,5 +122,22 @@ public class AggregationOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private final class BatchState
+    {
+        private final Streams[] results = new Streams[aggregations.size()];
+        private Mask mask;
+        private boolean filled;
+
+        private BatchState(Mask mask)
+        {
+            this.mask = mask;
+        }
+
+        private void constrain(Mask mask)
+        {
+            this.mask = mask;
+        }
     }
 }
