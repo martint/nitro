@@ -50,6 +50,48 @@ final class OperatorKeySemantics
         };
     }
 
+    public static Key reusableProbeKey(Vector values)
+    {
+        return switch (OperatorVectorSupport.flatten(values)) {
+            case I64Vector _ -> new LongProbeKey(0);
+            case BooleanVector _ -> new BooleanProbeKey(false);
+            case F64Vector _ -> new DoubleProbeKey(0);
+            case BinaryVector _ -> new BinaryProbeKey(null, 0);
+            default -> throw new IllegalArgumentException("Unsupported key vector: " + values.getClass().getSimpleName());
+        };
+    }
+
+    public static Key probeKey(Vector values, BooleanVector nulls, int position, Key reusable)
+    {
+        if (OperatorVectorSupport.isNull(nulls, position)) {
+            return null;
+        }
+
+        return switch (OperatorVectorSupport.flatten(values)) {
+            case I64Vector _ -> {
+                LongProbeKey key = (LongProbeKey) reusable;
+                key.setValue(OperatorVectorSupport.longValue(values, position));
+                yield key;
+            }
+            case BooleanVector _ -> {
+                BooleanProbeKey key = (BooleanProbeKey) reusable;
+                key.setValue(OperatorVectorSupport.booleanValue(values, position));
+                yield key;
+            }
+            case F64Vector _ -> {
+                DoubleProbeKey key = (DoubleProbeKey) reusable;
+                key.setBits(Double.doubleToLongBits(OperatorVectorSupport.doubleValue(values, position)));
+                yield key;
+            }
+            case BinaryVector _ -> {
+                BinaryProbeKey key = (BinaryProbeKey) reusable;
+                key.set(values, position);
+                yield key;
+            }
+            default -> throw new IllegalArgumentException("Unsupported key vector: " + values.getClass().getSimpleName());
+        };
+    }
+
     public static Key probeCompositeKey(Key[] keys)
     {
         return keys.length == 1 ? keys[0] : new CompositeProbeKey(keys);
@@ -74,6 +116,9 @@ final class OperatorKeySemantics
         return switch (key) {
             case null -> null;
             case LongKey _, BooleanKey _, DoubleKey _, BinaryKey _, CompositeKey _ -> key;
+            case LongProbeKey probe -> new LongKey(probe.value());
+            case BooleanProbeKey probe -> new BooleanKey(probe.value());
+            case DoubleProbeKey probe -> new DoubleKey(probe.bits());
             case BinaryProbeKey probe -> new BinaryKey(OperatorVectorSupport.binaryBytes(probe.values(), probe.position()));
             case CompositeProbeKey probe -> {
                 Key[] owned = new Key[probe.keys().length];
@@ -91,7 +136,7 @@ final class OperatorKeySemantics
     }
 
     sealed interface Key
-            permits LongKey, BooleanKey, DoubleKey, BinaryKey, BinaryProbeKey, CompositeKey, CompositeProbeKey
+            permits LongKey, LongProbeKey, BooleanKey, BooleanProbeKey, DoubleKey, DoubleProbeKey, BinaryKey, BinaryProbeKey, CompositeKey, CompositeProbeKey
     {
     }
 
@@ -100,14 +145,125 @@ final class OperatorKeySemantics
     {
     }
 
+    public static final class LongProbeKey
+            implements Key
+    {
+        private long value;
+
+        public LongProbeKey(long value)
+        {
+            this.value = value;
+        }
+
+        public long value()
+        {
+            return value;
+        }
+
+        public void setValue(long value)
+        {
+            this.value = value;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            return switch (object) {
+                case LongKey other -> value == other.value();
+                case LongProbeKey other -> value == other.value;
+                default -> false;
+            };
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Long.hashCode(value);
+        }
+    }
+
     public record BooleanKey(boolean value)
             implements Key
     {
     }
 
+    public static final class BooleanProbeKey
+            implements Key
+    {
+        private boolean value;
+
+        public BooleanProbeKey(boolean value)
+        {
+            this.value = value;
+        }
+
+        public boolean value()
+        {
+            return value;
+        }
+
+        public void setValue(boolean value)
+        {
+            this.value = value;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            return switch (object) {
+                case BooleanKey other -> value == other.value();
+                case BooleanProbeKey other -> value == other.value;
+                default -> false;
+            };
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Boolean.hashCode(value);
+        }
+    }
+
     public record DoubleKey(long bits)
             implements Key
     {
+    }
+
+    public static final class DoubleProbeKey
+            implements Key
+    {
+        private long bits;
+
+        public DoubleProbeKey(long bits)
+        {
+            this.bits = bits;
+        }
+
+        public long bits()
+        {
+            return bits;
+        }
+
+        public void setBits(long bits)
+        {
+            this.bits = bits;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            return switch (object) {
+                case DoubleKey other -> bits == other.bits();
+                case DoubleProbeKey other -> bits == other.bits;
+                default -> false;
+            };
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Long.hashCode(bits);
+        }
     }
 
     public record BinaryKey(byte[] bytes)
@@ -130,15 +286,40 @@ final class OperatorKeySemantics
         }
     }
 
-    public record BinaryProbeKey(Vector values, int position)
+    public static final class BinaryProbeKey
             implements Key
     {
+        private Vector values;
+        private int position;
+
+        public BinaryProbeKey(Vector values, int position)
+        {
+            this.values = values;
+            this.position = position;
+        }
+
+        public Vector values()
+        {
+            return values;
+        }
+
+        public int position()
+        {
+            return position;
+        }
+
+        public void set(Vector values, int position)
+        {
+            this.values = values;
+            this.position = position;
+        }
+
         @Override
         public boolean equals(Object object)
         {
             return switch (object) {
                 case BinaryKey other -> OperatorVectorSupport.binaryEquals(values, position, other.bytes());
-                case BinaryProbeKey other -> OperatorVectorSupport.binaryEquals(values, position, other.values(), other.position());
+                case BinaryProbeKey other -> OperatorVectorSupport.binaryEquals(values, position, other.values, other.position);
                 default -> false;
             };
         }

@@ -23,6 +23,7 @@ import org.weakref.nitro.data.Vector;
 final class GroupingState
 {
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
+    private OperatorKeySemantics.Key reusableProbeKey;
     private long nextGroupId;
     private long nullGroup = -1;
 
@@ -34,8 +35,11 @@ final class GroupingState
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
     {
         BooleanVector nullVector = (BooleanVector) nulls;
+        if (reusableProbeKey == null) {
+            reusableProbeKey = OperatorKeySemantics.reusableProbeKey(values);
+        }
         for (int position : mask) {
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nullVector, position);
+            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nullVector, position, reusableProbeKey);
             result.values()[position] = key == null ? nullGroup() : groupForKey(key);
         }
     }
