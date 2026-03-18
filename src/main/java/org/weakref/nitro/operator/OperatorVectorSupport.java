@@ -81,16 +81,6 @@ final class OperatorVectorSupport
         };
     }
 
-    public static byte[] binaryBytes(Vector vector, int position)
-    {
-        return switch (vector) {
-            case BinaryVector values -> values.copyBytes(position);
-            case DictionaryVector values -> binaryBytes(values.values(), values.ids()[position]);
-            case RleVector values -> binaryBytes(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
     public static int binaryHash(Vector vector, int position)
     {
         return switch (vector) {

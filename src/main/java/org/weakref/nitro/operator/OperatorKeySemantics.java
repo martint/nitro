@@ -25,31 +25,6 @@ final class OperatorKeySemantics
 {
     private OperatorKeySemantics() {}
 
-    public static Key key(Vector values, BooleanVector nulls, int position)
-    {
-        return ownedKey(probeKey(values, nulls, position));
-    }
-
-    public static Key compositeKey(Key[] keys)
-    {
-        return keys.length == 1 ? keys[0] : new CompositeKey(keys);
-    }
-
-    public static Key probeKey(Vector values, BooleanVector nulls, int position)
-    {
-        if (OperatorVectorSupport.isNull(nulls, position)) {
-            return null;
-        }
-
-        return switch (OperatorVectorSupport.flatten(values)) {
-            case I64Vector _ -> new LongKey(OperatorVectorSupport.longValue(values, position));
-            case BooleanVector _ -> new BooleanKey(OperatorVectorSupport.booleanValue(values, position));
-            case F64Vector _ -> new DoubleKey(Double.doubleToLongBits(OperatorVectorSupport.doubleValue(values, position)));
-            case BinaryVector _ -> new BinaryProbeKey(values, position);
-            default -> throw new IllegalArgumentException("Unsupported key vector: " + values.getClass().getSimpleName());
-        };
-    }
-
     public static Key reusableProbeKey(Vector values)
     {
         return switch (OperatorVectorSupport.flatten(values)) {
@@ -92,11 +67,6 @@ final class OperatorKeySemantics
         };
     }
 
-    public static Key probeCompositeKey(Key[] keys)
-    {
-        return keys.length == 1 ? keys[0] : new CompositeProbeKey(keys);
-    }
-
     public static CompositeProbeKey reusableCompositeProbeKey(int keyCount)
     {
         return new CompositeProbeKey(new Key[keyCount], false);
@@ -119,7 +89,7 @@ final class OperatorKeySemantics
             case LongProbeKey probe -> new LongKey(probe.value());
             case BooleanProbeKey probe -> new BooleanKey(probe.value());
             case DoubleProbeKey probe -> new DoubleKey(probe.bits());
-            case BinaryProbeKey probe -> new BinaryKey(OperatorVectorSupport.binaryBytes(probe.values(), probe.position()));
+            case BinaryProbeKey probe -> new BinaryKey(copyBinaryBytes(probe.values(), probe.position()));
             case CompositeProbeKey probe -> {
                 Key[] owned = new Key[probe.keys().length];
                 for (int index = 0; index < owned.length; index++) {
@@ -130,9 +100,14 @@ final class OperatorKeySemantics
         };
     }
 
-    public static BinaryKey binaryKey(byte[] bytes)
+    private static byte[] copyBinaryBytes(Vector values, int position)
     {
-        return new BinaryKey(bytes);
+        return switch (values) {
+            case BinaryVector binary -> binary.copyBytes(position);
+            case org.weakref.nitro.data.DictionaryVector dictionary -> copyBinaryBytes(dictionary.values(), dictionary.ids()[position]);
+            case org.weakref.nitro.data.RleVector rle -> copyBinaryBytes(rle.values(), OperatorVectorSupport.runIndex(rle, position));
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + values.getClass().getSimpleName());
+        };
     }
 
     sealed interface Key
