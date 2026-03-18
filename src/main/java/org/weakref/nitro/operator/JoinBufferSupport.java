@@ -77,20 +77,46 @@ final class JoinBufferSupport
 
     public Streams copySinglePosition(Output input, Streams existing, int size, int outputPosition, int sourcePosition)
     {
+        if (existing != null) {
+            Streams updated = existing;
+            boolean changed = false;
+            for (Stream stream : input.streams()) {
+                Vector existingVector = updated.getOrNull(stream);
+                Vector copied = copyVectorSinglePosition(existingVector, input.borrow(stream), sourcePosition, outputPosition, size);
+                if (copied != existingVector) {
+                    updated = updated.with(stream, copied);
+                    changed = true;
+                }
+            }
+            return changed ? updated : existing;
+        }
+
         Streams result = Streams.empty();
         for (Stream stream : input.streams()) {
-            Vector existingVector = existing != null ? existing.getOrNull(stream) : null;
-            result = result.with(stream, copyVectorSinglePosition(existingVector, input.borrow(stream), sourcePosition, outputPosition, size));
+            result = result.with(stream, copyVectorSinglePosition(null, input.borrow(stream), sourcePosition, outputPosition, size));
         }
         return result;
     }
 
     public Streams copySinglePosition(Streams existing, Streams input, int size, int outputPosition, int sourcePosition)
     {
+        if (existing != null) {
+            Streams updated = existing;
+            boolean changed = false;
+            for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
+                Vector existingVector = updated.getOrNull(entry.getKey());
+                Vector copied = copyVectorSinglePosition(existingVector, entry.getValue(), sourcePosition, outputPosition, size);
+                if (copied != existingVector) {
+                    updated = updated.with(entry.getKey(), copied);
+                    changed = true;
+                }
+            }
+            return changed ? updated : existing;
+        }
+
         Streams result = Streams.empty();
         for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
-            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
-            result = result.with(entry.getKey(), copyVectorSinglePosition(existingVector, entry.getValue(), sourcePosition, outputPosition, size));
+            result = result.with(entry.getKey(), copyVectorSinglePosition(null, entry.getValue(), sourcePosition, outputPosition, size));
         }
         return result;
     }
@@ -256,13 +282,14 @@ final class JoinBufferSupport
         int currentOffset = output.offsets()[outputStart];
         for (int index = 0; index < sourcePositions.length; index++) {
             int targetPosition = outputStart + index;
-            byte[] bytes = source.copyBytes(sourcePositions[index]);
             output.offsets()[targetPosition] = currentOffset;
-            if (bytes.length == 0) {
+            int sourcePosition = sourcePositions[index];
+            int length = source.length(sourcePosition);
+            if (length == 0) {
                 output.setNull(targetPosition);
             }
             else {
-                output.setBytes(targetPosition, bytes);
+                output.setBytes(targetPosition, source.data(), source.startOffset(sourcePosition), length);
                 currentOffset = output.endOffset(targetPosition);
             }
         }
