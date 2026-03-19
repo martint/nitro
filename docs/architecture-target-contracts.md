@@ -855,6 +855,11 @@ not use `null` output placeholders.
 - `constrain(mask)` narrows the rows of interest for the current batch only.
 - Operators may use `constrain(mask)` to avoid materializing streams that are no
   longer needed.
+- Lazy narrowing has two distinct scopes:
+  - operator-level narrowing before or during `next()`
+  - batch-local narrowing after `next()` but before first borrow
+- Those scopes are related but distinct capabilities. Supporting one does not
+  automatically imply supporting the other.
 - Some operators may also support retained batches whose outputs remain valid
   after the operator advances. In that case, narrowing must be batch-local:
   later `constrain(mask)` calls must target the retained batch instance that
@@ -869,6 +874,11 @@ not use `null` output placeholders.
 - If an operator can separate decisive work from payload work, it should prefer
   to push a narrower mask upstream before borrowing or materializing payload
   streams.
+- The decisive-versus-payload split is a general execution pattern:
+  - joins need key and predicate streams early, but may defer non-key payloads
+  - `TopN` needs ordering streams early, but may defer carried payloads
+  - grouping and aggregation need grouping keys and referenced aggregate inputs
+    early, but should leave unrelated payloads cold
 - If an operator can separate decisive predicate terms from later terms, it
   should prefer to evaluate later terms only for rows that remain active after
   the earlier terms.
@@ -892,6 +902,10 @@ producing any surviving rows, the result should preserve any output schema that
 was already determined for that operator. Empty outputs must remain
 well-formed stream bundles; they should not fabricate unrelated fallback stream
 types just because no rows survived.
+
+Once an operator has determined the batch's logical output shape, later
+narrowing to zero rows should preserve that shape rather than collapsing to an
+unrelated fallback representation.
 
 ### Late materialization through operators
 
@@ -927,6 +941,18 @@ This same principle should apply outside joins too. Filters, projections,
 source scans, and future operators should all treat masks as the common
 currency for "only do the work still needed" whenever their execution model can
 support that separation.
+
+Scan operators need one more piece beyond mask support: they should defer
+column decode until first borrow when practical, so that later narrowing can
+still suppress work for unrelated columns. Accepting `constrain(mask)` is not
+enough if the scan has already eagerly decoded every selected column in
+`next()`.
+
+Nested scan and nested lazy execution should follow the same rule. Structural
+readers for arrays, maps, and structs should skip unneeded parent rows without
+breaking offsets, child stream alignment, or nested null semantics. Laziness
+for nested columns is acceptable only when the resulting structural layout
+remains valid for the narrowed row domain.
 
 Boolean filters are an important concrete case. A filter with multiple `AND`
 terms should evaluate later terms only on rows that earlier terms left active,
