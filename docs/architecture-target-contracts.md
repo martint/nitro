@@ -1763,6 +1763,11 @@ architecture:
 - Exact grouped-result chunking policy for aggregation output batches.
 - Whether planner- or runtime-visible encoding metadata becomes necessary later,
   beyond the current calling-convention and callback approach.
+- Whether the runtime should grow a Velox-style dictionary peeling optimization,
+  where shared dictionary-wrapped inputs are evaluated once over distinct base
+  values and then rewrapped through the original ids. The current runtime is
+  dictionary-aware, but it does not yet have a general peel-at-the-expression
+  boundary mechanism.
 - The eventual type-system contract for which logical families are orderable,
   equatable, hashable, or otherwise legal as keys. The current runtime may
   support some concrete physical families in specific operators, but the
