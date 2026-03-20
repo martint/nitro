@@ -472,7 +472,7 @@ public final class TrinoParquetScanOperator
     private BinaryVector copyBinary(ColumnSpec column, Block block)
     {
         if (block instanceof VariableWidthBlock variableWidthBlock) {
-            return copyVariableWidthBinary(column, variableWidthBlock);
+            return materializeVariableWidthBinary(column, variableWidthBlock);
         }
         if (block instanceof DictionaryBlock dictionaryBlock && dictionaryBlock.getDictionary() instanceof VariableWidthBlock dictionaryValues) {
             return copyDictionaryBinary(column, dictionaryBlock, dictionaryValues);
@@ -534,7 +534,16 @@ public final class TrinoParquetScanOperator
         return values;
     }
 
-    private BinaryVector copyVariableWidthBinary(ColumnSpec column, VariableWidthBlock block)
+    private BinaryVector materializeVariableWidthBinary(ColumnSpec column, VariableWidthBlock block)
+    {
+        BinaryVector adopted = adoptVariableWidthBinary(column, block);
+        if (adopted != null) {
+            return adopted;
+        }
+        return copyVariableWidthBinary(column, block);
+    }
+
+    private BinaryVector adoptVariableWidthBinary(ColumnSpec column, VariableWidthBlock block)
     {
         int positionCount = block.getPositionCount();
         int[] rawOffsets = rawOffsets(block);
@@ -544,11 +553,24 @@ public final class TrinoParquetScanOperator
         int totalBytes = Math.max(0, lastEnd - firstOffset);
 
         Slice rawSlice = block.getRawSlice();
-        if (rawArrayBase == 0 && rawOffsets.length == positionCount + 1 && firstOffset == 0 && rawSlice.byteArrayOffset() == 0 && rawSlice.byteArray().length == totalBytes) {
-            BinaryVector values = allocator.adopt(ALLOCATION_CONTEXT, new BinaryVector(positionCount, rawOffsets, rawSlice.byteArray()));
-            values.addTraits(column.binaryTraits());
-            return values;
+        if (rawArrayBase != 0 || rawOffsets.length != positionCount + 1 || firstOffset != 0 || rawSlice.byteArrayOffset() != 0 || rawSlice.byteArray().length != totalBytes) {
+            return null;
         }
+
+        BinaryVector values = allocator.adopt(ALLOCATION_CONTEXT, new BinaryVector(positionCount, rawOffsets, rawSlice.byteArray()));
+        values.addTraits(column.binaryTraits());
+        return values;
+    }
+
+    private BinaryVector copyVariableWidthBinary(ColumnSpec column, VariableWidthBlock block)
+    {
+        int positionCount = block.getPositionCount();
+        int[] rawOffsets = rawOffsets(block);
+        int rawArrayBase = rawArrayBase(block);
+        int firstOffset = rawOffsets[rawArrayBase];
+        int lastEnd = rawOffsets[rawArrayBase + positionCount];
+        int totalBytes = Math.max(0, lastEnd - firstOffset);
+        Slice rawSlice = block.getRawSlice();
 
         BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
         values.addTraits(column.binaryTraits());
