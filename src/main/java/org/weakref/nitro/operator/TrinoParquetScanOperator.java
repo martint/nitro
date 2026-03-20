@@ -438,6 +438,10 @@ public final class TrinoParquetScanOperator
 
     private BinaryVector copyBinary(ColumnSpec column, Block block)
     {
+        if (block instanceof VariableWidthBlock variableWidthBlock) {
+            return copyVariableWidthBinary(column, variableWidthBlock);
+        }
+
         int totalBytes = 0;
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
@@ -468,6 +472,30 @@ public final class TrinoParquetScanOperator
                 output[position] = readInt(block, position);
             }
         });
+        return values;
+    }
+
+    private BinaryVector copyVariableWidthBinary(ColumnSpec column, VariableWidthBlock block)
+    {
+        int positionCount = block.getPositionCount();
+        int firstOffset = block.getRawSliceOffset(0);
+        int lastEnd = block.getRawSliceOffset(positionCount - 1) + block.getSliceLength(positionCount - 1);
+        int totalBytes = Math.max(0, lastEnd - firstOffset);
+
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
+        values.addTraits(column.binaryTraits());
+
+        if (totalBytes > 0) {
+            Slice rawSlice = block.getRawSlice();
+            System.arraycopy(rawSlice.byteArray(), rawSlice.byteArrayOffset() + firstOffset, values.data(), 0, totalBytes);
+        }
+
+        int[] offsets = values.offsets();
+        for (int position = 0; position < positionCount; position++) {
+            int start = block.getRawSliceOffset(position) - firstOffset;
+            offsets[position] = start;
+            offsets[position + 1] = start + block.getSliceLength(position);
+        }
         return values;
     }
 
