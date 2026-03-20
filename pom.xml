@@ -20,7 +20,7 @@
     <properties>
         <air.check.skip-pmd>true</air.check.skip-pmd>
         <air.check.skip-spotbugs>true</air.check.skip-spotbugs>
-        <dep.airlift.version>411</dep.airlift.version>
+        <dep.airlift.version>418</dep.airlift.version>
         <air.compiler.enable-preview>true</air.compiler.enable-preview>
         <project.build.targetJdk>25</project.build.targetJdk>
         <benchmark.include>org\.weakref\.nitro\.BenchmarkClickBenchHits\..*</benchmark.include>
@@ -48,6 +48,36 @@
                 <groupId>commons-logging</groupId>
                 <artifactId>commons-logging</artifactId>
                 <version>1.3.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.airlift</groupId>
+                <artifactId>slice</artifactId>
+                <version>2.7</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-api</artifactId>
+                <version>1.60.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-api-incubator</artifactId>
+                <version>1.60.1-alpha</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-common</artifactId>
+                <version>1.60.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-context</artifactId>
+                <version>1.60.1</version>
             </dependency>
 
             <dependency>
@@ -84,15 +114,44 @@
         </dependency>
 
         <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>slice</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-memory-context</artifactId>
+            <version>480-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-parquet</artifactId>
+            <version>480-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-spi</artifactId>
+            <version>480-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
             <groupId>it.unimi.dsi</groupId>
             <artifactId>fastutil</artifactId>
-            <version>8.5.15</version>
+            <version>8.5.18</version>
+        </dependency>
+
+        <dependency>
+            <groupId>joda-time</groupId>
+            <artifactId>joda-time</artifactId>
+            <version>2.14.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-hadoop</artifactId>
-            <version>1.15.2</version>
+            <version>1.17.0</version>
         </dependency>
 
         <dependency>
@@ -191,6 +250,13 @@
             </plugin>
 
             <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>@{argLine} --enable-preview --add-modules jdk.incubator.vector</argLine>
+                </configuration>
+            </plugin>
+
+            <plugin>
                 <artifactId>maven-dependency-plugin</artifactId>
                 <configuration>
                     <ignoredUsedUndeclaredDependencies>
@@ -208,6 +274,18 @@
                         <dependency>
                             <groupId>org.apache.parquet</groupId>
                             <artifactId>parquet-column</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>com.google.inject</groupId>
+                            <artifactId>guice</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.slf4j</groupId>
+                            <artifactId>jcl-over-slf4j</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.slf4j</groupId>
+                            <artifactId>log4j-over-slf4j</artifactId>
                         </dependency>
                     </ignoredDependencies>
                     <ignoredResourcePatterns>

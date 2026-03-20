@@ -72,6 +72,33 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery0SelectAllWithTrinoReader()
+            throws IOException
+    {
+        String previousReader = System.getProperty(ClickBenchHitsSupport.CLICKBENCH_PARQUET_READER_PROPERTY);
+        System.setProperty(ClickBenchHitsSupport.CLICKBENCH_PARQUET_READER_PROPERTY, "trino");
+        try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(0, 1000, 1L, 20130701, "https://google.com", ""),
+                    row(10, 1200, 2L, 20130702, "https://example.com", ""),
+                    row(10, 900, 2L, 20130703, "https://example.com/page", "phone"),
+                    row(20, 800, 1L, 20130701, "https://google.com/maps", "map"),
+                    row(20, 700, 2L, 20130731, "https://yandex.ru", "weather"),
+                    row(0, 640, 4L, 20130801, "", ""),
+                    row(20, 600, 5L, 20130715, "https://google.com/search", "news"),
+                    row(0, 500, ClickBenchHitsSupport.QUERY20_USER_ID, 20130716, "https://google.com/search", "news")));
+        }
+        finally {
+            if (previousReader == null) {
+                System.clearProperty(ClickBenchHitsSupport.CLICKBENCH_PARQUET_READER_PROPERTY);
+            }
+            else {
+                System.setProperty(ClickBenchHitsSupport.CLICKBENCH_PARQUET_READER_PROPERTY, previousReader);
+            }
+        }
+    }
+
+    @Test
     void testClickBenchQuery1CountAll()
             throws IOException
     {

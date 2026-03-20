@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.Max;
@@ -57,6 +58,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
@@ -66,6 +68,7 @@ import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 final class ClickBenchHitsSupport
 {
     static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
+    static final String CLICKBENCH_PARQUET_READER_PROPERTY = "nitro.clickbench.parquet.reader";
     static final long QUERY20_USER_ID = 435_090_932_899_640_449L;
     private static final List<String> ALL_HITS_COLUMNS = List.of(
             "AdvEngineID",
@@ -281,15 +284,28 @@ final class ClickBenchHitsSupport
 
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
     {
+        Function<Path, Operator> operatorFactory = switch (configuredReader()) {
+            case APACHE -> path -> new ParquetScanOperator(allocator, path, List.of(columns));
+            case TRINO -> path -> new TrinoParquetScanOperator(allocator, path, List.of(columns));
+        };
         try {
             if (Files.isDirectory(file)) {
-                return new MultiFileParquetOperator(allocator, parquetFiles(file), List.of(columns));
+                return new MultiFileScanOperator(parquetFiles(file), columns.length, operatorFactory);
             }
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
         }
-        return new ParquetScanOperator(allocator, file, List.of(columns));
+        return operatorFactory.apply(file);
+    }
+
+    private static ReaderKind configuredReader()
+    {
+        return switch (System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY, "apache").strip().toLowerCase()) {
+            case "apache" -> ReaderKind.APACHE;
+            case "trino" -> ReaderKind.TRINO;
+            default -> throw new IllegalArgumentException("Unsupported ClickBench Parquet reader: " + System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY));
+        };
     }
 
     private static boolean isUsableActualHitsDirectory(Path path)
@@ -481,27 +497,27 @@ final class ClickBenchHitsSupport
         }
     }
 
-    private static final class MultiFileParquetOperator
+    private static final class MultiFileScanOperator
             implements Operator
     {
-        private final Allocator allocator;
         private final List<Path> files;
-        private final List<String> columns;
+        private final int outputCount;
+        private final Function<Path, Operator> operatorFactory;
 
         private int fileIndex;
         private Operator current;
 
-        private MultiFileParquetOperator(Allocator allocator, List<Path> files, List<String> columns)
+        private MultiFileScanOperator(List<Path> files, int outputCount, Function<Path, Operator> operatorFactory)
         {
-            this.allocator = allocator;
             this.files = List.copyOf(files);
-            this.columns = List.copyOf(columns);
+            this.outputCount = outputCount;
+            this.operatorFactory = operatorFactory;
         }
 
         @Override
         public int outputCount()
         {
-            return columns.size();
+            return outputCount;
         }
 
         @Override
@@ -538,7 +554,7 @@ final class ClickBenchHitsSupport
         {
             while ((current == null || !current.hasNext()) && fileIndex < files.size()) {
                 closeCurrent();
-                current = new ParquetScanOperator(allocator, files.get(fileIndex++), columns);
+                current = operatorFactory.apply(files.get(fileIndex++));
             }
         }
 
@@ -554,5 +570,11 @@ final class ClickBenchHitsSupport
 
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
     {
+    }
+
+    private enum ReaderKind
+    {
+        APACHE,
+        TRINO,
     }
 }

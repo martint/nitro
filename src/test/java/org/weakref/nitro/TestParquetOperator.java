@@ -32,6 +32,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -44,6 +45,7 @@ import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -96,6 +98,50 @@ public class TestParquetOperator
                             Row.row(11L, 1L, 101L),
                             Row.row(12L, 0L, null),
                             Row.row(13L, 1L, 103L)));
+        }
+    }
+
+    @Test
+    void testTrinoParquetScanReadsPlainColumns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("trino-plain.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, null),
+                new ParquetRow(13, true, 103L)));
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("x", "flag", "maybe"))) {
+            assertThat(operator(operator))
+                    .matchesExactly(List.of(
+                            Row.row(11L, 1L, 101L),
+                            Row.row(12L, 0L, null),
+                            Row.row(13L, 1L, 103L)));
+        }
+    }
+
+    @Test
+    void testTrinoParquetScanReadsClickBenchI32Columns()
+            throws IOException
+    {
+        java.nio.file.Path file = ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("trino-clickbench.parquet"), 3);
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
+            Batch batch = operator.next();
+
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+            assertThat(((I32Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(0);
+            assertThat(((I32Vector) batch.output(1).borrow(Stream.VALUES)).values()[0]).isEqualTo(1000);
+            assertThat(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values()[0]).isEqualTo(1L);
+        }
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
+            assertThat(operator(operator))
+                    .matchesExactly(List.of(
+                            Row.row(0, 1000, 1L),
+                            Row.row(10, 1200, 2L),
+                            Row.row(10, 900, 2L)));
         }
     }
 
@@ -153,6 +199,25 @@ public class TestParquetOperator
     }
 
     @Test
+    void testTrinoParquetScanPreservesDictionaryEncodingForUtf8Columns()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("trino-dictionary-strings.parquet", true, List.of(
+                new BinaryParquetRow("alice", bytes(1, 2, 3)),
+                new BinaryParquetRow("bob", null),
+                new BinaryParquetRow("alice", bytes(4, 5))));
+
+        assertDictionaryEncoding(file, "name");
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
+            Batch batch = operator.next();
+            BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.utf8Value(0)).isEqualTo("alice");
+        }
+    }
+
+    @Test
     void testParquetScanHonorsConstrainBeforeBorrowingPlainColumn()
             throws IOException
     {
@@ -176,6 +241,51 @@ public class TestParquetOperator
             assertThat(nulls.values()[0]).isFalse();
             assertThat(nulls.values()[1]).isFalse();
             assertThat(nulls.values()[2]).isFalse();
+        }
+    }
+
+    @Test
+    void testTrinoParquetScanHonorsConstrainBeforeBorrowingPlainColumn()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("trino-plain-constrained.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, 102L),
+                new ParquetRow(13, true, 103L)));
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("x", "maybe"))) {
+            operator.next();
+            Batch batch = operator.next();
+            operator.constrain(Mask.sparse(new int[] {1}, 2));
+
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.values()[0]).isEqualTo(0L);
+            assertThat(values.values()[1]).isEqualTo(13L);
+            assertThat(nulls.values()[0]).isFalse();
+            assertThat(nulls.values()[1]).isFalse();
+        }
+    }
+
+    @Test
+    void testTrinoParquetScanReadsMultipleFiles()
+            throws IOException
+    {
+        java.nio.file.Path first = writeParquetFile("trino-multi-1.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, null)));
+        java.nio.file.Path second = writeParquetFile("trino-multi-2.parquet", false, List.of(
+                new ParquetRow(13, true, 103L),
+                new ParquetRow(14, false, 104L)));
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), List.of(first, second), List.of("x", "flag", "maybe"))) {
+            assertThat(operator(operator))
+                    .matchesExactly(List.of(
+                            Row.row(11L, 1L, 101L),
+                            Row.row(12L, 0L, null),
+                            Row.row(13L, 1L, 103L),
+                            Row.row(14L, 0L, 104L)));
         }
     }
 
