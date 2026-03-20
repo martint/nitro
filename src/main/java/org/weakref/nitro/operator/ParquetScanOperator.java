@@ -817,7 +817,7 @@ public final class ParquetScanOperator
         }
 
         try {
-            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage().copy());
+            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage());
             I32Vector dictionaryValues = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, columnPages.dictionaryPage().getDictionarySize(), I32Vector::new);
             int[] dictionaryEntries = dictionaryValues.values();
             for (int index = 0; index < dictionaryEntries.length; index++) {
@@ -985,7 +985,7 @@ public final class ParquetScanOperator
         }
 
         try {
-            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage().copy());
+            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage());
             I64Vector dictionaryValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, columnPages.dictionaryPage().getDictionarySize(), I64Vector::new);
             long[] dictionaryEntries = dictionaryValues.values();
             for (int index = 0; index < dictionaryEntries.length; index++) {
@@ -1204,7 +1204,7 @@ public final class ParquetScanOperator
         }
 
         try {
-            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage().copy());
+            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage());
             int dictionaryByteCapacity = 0;
             for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
                 dictionaryByteCapacity += dictionary.decodeToBinary(index).length();
