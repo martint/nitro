@@ -727,10 +727,16 @@ public class Allocator
     private void copyVectorContents(Vector source, Vector target)
     {
         switch (source) {
+            case AvgStateVector values -> {
+                AvgStateVector avgTarget = (AvgStateVector) target;
+                System.arraycopy(values.sums(), 0, avgTarget.sums(), 0, values.length());
+                System.arraycopy(values.counts(), 0, avgTarget.counts(), 0, values.length());
+            }
             case I32Vector values -> System.arraycopy(values.values(), 0, ((I32Vector) target).values(), 0, values.length());
             case I64Vector values -> System.arraycopy(values.values(), 0, ((I64Vector) target).values(), 0, values.length());
             case BooleanVector values -> System.arraycopy(values.values(), 0, ((BooleanVector) target).values(), 0, values.length());
             case F64Vector values -> System.arraycopy(values.values(), 0, ((F64Vector) target).values(), 0, values.length());
+            case Utf8StateVector values -> System.arraycopy(values.values(), 0, ((Utf8StateVector) target).values(), 0, values.length());
             case BinaryVector values -> {
                 BinaryVector binaryTarget = (BinaryVector) target;
                 System.arraycopy(values.offsets(), 0, binaryTarget.offsets(), 0, values.length() + 1);

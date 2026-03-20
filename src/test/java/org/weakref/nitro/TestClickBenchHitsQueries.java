@@ -38,6 +38,12 @@ public class TestClickBenchHitsQueries
         return ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("clickbench-hits.parquet"), ClickBenchHitsSupport.DEFAULT_ROW_COUNT);
     }
 
+    private Path writeHitsFixture(int rowCount)
+            throws IOException
+    {
+        return ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("clickbench-hits-" + rowCount + ".parquet"), rowCount);
+    }
+
     private Path writeSplitHitsFixture()
             throws IOException
     {
@@ -132,6 +138,18 @@ public class TestClickBenchHitsQueries
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(4);
             assertThat(rows.getFirst()).isEqualTo(row("news", 2L));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery13TopSearchPhrasesAcrossManyGroups()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query13TopSearchPhrases(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture(160))) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
         }
     }
 
