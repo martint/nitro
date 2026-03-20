@@ -453,11 +453,14 @@ public final class TrinoParquetScanOperator
     {
         int[] ids = block.getRawIds();
         int idsOffset = block.getRawIdsOffset();
+        int[] rawOffsets = rawOffsets(dictionaryValues);
+        int rawArrayBase = rawArrayBase(dictionaryValues);
         int positionCount = block.getPositionCount();
         int totalBytes = 0;
         for (int position = 0; position < positionCount; position++) {
             if (!block.isNull(position)) {
-                totalBytes += dictionaryValues.getSliceLength(ids[idsOffset + position]);
+                int dictionaryPosition = ids[idsOffset + position];
+                totalBytes += rawOffsets[rawArrayBase + dictionaryPosition + 1] - rawOffsets[rawArrayBase + dictionaryPosition];
             }
         }
 
@@ -477,8 +480,9 @@ public final class TrinoParquetScanOperator
             }
 
             int dictionaryPosition = ids[idsOffset + position];
-            int length = dictionaryValues.getSliceLength(dictionaryPosition);
-            int start = dictionaryValues.getRawSliceOffset(dictionaryPosition);
+            int start = rawOffsets[rawArrayBase + dictionaryPosition];
+            int end = rawOffsets[rawArrayBase + dictionaryPosition + 1];
+            int length = end - start;
             System.arraycopy(source, sourceOffset + start, values.data(), outputOffset, length);
             outputOffset += length;
             offsets[position + 1] = outputOffset;
