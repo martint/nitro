@@ -368,7 +368,7 @@ public final class TrinoParquetScanOperator
     private Vector convertValues(ColumnSpec column, Block block, boolean preserveEncodings)
     {
         if (preserveEncodings) {
-            if (block instanceof DictionaryBlock dictionaryBlock) {
+            if (block instanceof DictionaryBlock dictionaryBlock && column.kind() != ColumnKind.BINARY) {
                 int[] ids = Arrays.copyOfRange(
                         dictionaryBlock.getRawIds(),
                         dictionaryBlock.getRawIdsOffset(),
@@ -438,20 +438,25 @@ public final class TrinoParquetScanOperator
 
     private BinaryVector copyBinary(ColumnSpec column, Block block)
     {
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), 0);
-        values.addTraits(column.binaryTraits());
-        boolean asciiOnly = values.hasTrait(BinaryVector.Trait.UTF8_STRING);
         int totalBytes = 0;
+        boolean asciiOnly = column.binaryTraits().contains(BinaryVector.Trait.UTF8_STRING);
+        for (int position = 0; position < block.getPositionCount(); position++) {
+            if (!block.isNull(position)) {
+                Slice slice = readSlice(block, position);
+                totalBytes += slice.length();
+                asciiOnly &= isAscii(slice);
+            }
+        }
+
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
+        values.addTraits(column.binaryTraits());
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (block.isNull(position)) {
                 values.setNull(position);
                 continue;
             }
             Slice slice = readSlice(block, position);
-            totalBytes += slice.length();
-            values = allocator.allocateOrGrowBinary(ALLOCATION_CONTEXT, values, block.getPositionCount(), totalBytes);
             values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
-            asciiOnly &= isAscii(slice);
         }
         if (values.hasTrait(BinaryVector.Trait.UTF8_STRING) && asciiOnly) {
             values.addTrait(BinaryVector.Trait.ASCII_ONLY);
@@ -497,41 +502,48 @@ public final class TrinoParquetScanOperator
 
     private BinaryVector copyMaskedBinary(ColumnSpec column, Block block, Mask mask)
     {
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), 0);
+        int totalBytes = selectedBinaryBytes(block, mask);
+        boolean asciiOnly = selectedBinaryAsciiOnly(block, mask, column.binaryTraits().contains(BinaryVector.Trait.UTF8_STRING));
+
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
         values.addTraits(column.binaryTraits());
-        boolean asciiOnly = values.hasTrait(BinaryVector.Trait.UTF8_STRING);
-        int totalBytes = 0;
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                if (block.isNull(position)) {
-                    values.setNull(position);
-                    continue;
-                }
-                Slice slice = readSlice(block, position);
-                totalBytes += slice.length();
-                values = allocator.allocateOrGrowBinary(ALLOCATION_CONTEXT, values, block.getPositionCount(), totalBytes);
-                values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
-                asciiOnly &= isAscii(slice);
+        forEachSelected(mask, position -> {
+            if (block.isNull(position)) {
+                values.setNull(position);
+                return;
             }
-        }
-        else {
-            for (int index = 0; index < mask.selectedCount(); index++) {
-                int position = mask.position(index);
-                if (block.isNull(position)) {
-                    values.setNull(position);
-                    continue;
-                }
-                Slice slice = readSlice(block, position);
-                totalBytes += slice.length();
-                values = allocator.allocateOrGrowBinary(ALLOCATION_CONTEXT, values, block.getPositionCount(), totalBytes);
-                values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
-                asciiOnly &= isAscii(slice);
-            }
-        }
+            Slice slice = readSlice(block, position);
+            values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
+        });
         if (values.hasTrait(BinaryVector.Trait.UTF8_STRING) && asciiOnly) {
             values.addTrait(BinaryVector.Trait.ASCII_ONLY);
         }
         return values;
+    }
+
+    private static int selectedBinaryBytes(Block block, Mask mask)
+    {
+        final int[] totalBytes = {0};
+        forEachSelected(mask, position -> {
+            if (!block.isNull(position)) {
+                totalBytes[0] += readSlice(block, position).length();
+            }
+        });
+        return totalBytes[0];
+    }
+
+    private static boolean selectedBinaryAsciiOnly(Block block, Mask mask, boolean asciiOnly)
+    {
+        if (!asciiOnly) {
+            return false;
+        }
+        final boolean[] result = {true};
+        forEachSelected(mask, position -> {
+            if (!block.isNull(position)) {
+                result[0] &= isAscii(readSlice(block, position));
+            }
+        });
+        return result[0];
     }
 
     private BooleanVector copyNulls(Block block, Mask mask)
