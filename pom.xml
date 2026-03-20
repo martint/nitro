@@ -23,6 +23,9 @@
         <dep.airlift.version>411</dep.airlift.version>
         <air.compiler.enable-preview>true</air.compiler.enable-preview>
         <project.build.targetJdk>25</project.build.targetJdk>
+        <benchmark.include>org\.weakref\.nitro\.BenchmarkOperators\.clickBenchHitsQuery.*</benchmark.include>
+        <benchmark.options />
+        <nitro.clickbench.hits.path />
     </properties>
 
     <dependencyManagement>
@@ -206,6 +209,25 @@
                         <ignoredResourcePattern>yarn-default.xml</ignoredResourcePattern>
                     </ignoredResourcePatterns>
                 </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>benchmark</id>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <classpathScope>test</classpathScope>
+                            <executable>${java.home}/bin/java</executable>
+                            <commandlineArgs>--enable-preview -cp %classpath -Dnitro.clickbench.hits.path=${nitro.clickbench.hits.path} org.openjdk.jmh.Main ${benchmark.include} ${benchmark.options}</commandlineArgs>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
