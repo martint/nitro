@@ -31,26 +31,21 @@ public class CountAll
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return Streams.ofValuesAndNulls(
-                allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
-                allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
+        return Streams.ofValues(
+                allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
         I64Vector values = allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.ofValues(values);
     }
 
     @Override
     public void initialize(Streams state, int offset, int length)
     {
-        I64Vector stateVector = (I64Vector) state.values();
-        BooleanVector nulls = (BooleanVector) state.get(Stream.NULLS);
-        Arrays.fill(nulls.values(), offset, offset + length, false);
-        Arrays.fill(stateVector.values(), offset, offset + length, 0L);
+        // CountAll state is append-only and newly allocated/grown ranges are already zeroed.
     }
 
     @Override
@@ -88,6 +83,14 @@ public class CountAll
     @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
-        return state;
+        I64Vector values = (I64Vector) state.values();
+        BooleanVector nulls = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
+                BooleanVector.class,
+                values.length(),
+                BooleanVector::new);
+        Arrays.fill(nulls.values(), 0, values.length(), false);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 }
