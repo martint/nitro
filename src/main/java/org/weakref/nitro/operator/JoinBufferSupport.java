@@ -19,6 +19,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -191,6 +192,7 @@ final class JoinBufferSupport
     public Vector materializeStream(Vector sample, Vector[] rows)
     {
         return switch (OperatorVectorSupport.flatten(sample)) {
+            case I32Vector _ -> materializeInts(rows);
             case I64Vector _ -> materializeLongs(rows);
             case BooleanVector _ -> materializeBooleans(rows);
             case F64Vector _ -> materializeDoubles(rows);
@@ -215,6 +217,7 @@ final class JoinBufferSupport
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         return switch (source) {
+            case I32Vector values -> copyIntPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
             case I64Vector values -> copyLongPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
             case BooleanVector values -> copyBooleanPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
             case F64Vector values -> copyDoublePositions(values, existing, sourcePositions, sourceCount, outputStart, size);
@@ -231,6 +234,7 @@ final class JoinBufferSupport
     private Vector copyVectorSinglePosition(Vector existing, Vector source, int sourcePosition, int outputPosition, int size)
     {
         return switch (source) {
+            case I32Vector values -> copyIntSinglePosition(values, existing, sourcePosition, outputPosition, size);
             case I64Vector values -> copyLongSinglePosition(values, existing, sourcePosition, outputPosition, size);
             case BooleanVector values -> copyBooleanSinglePosition(values, existing, sourcePosition, outputPosition, size);
             case F64Vector values -> copyDoubleSinglePosition(values, existing, sourcePosition, outputPosition, size);
@@ -250,6 +254,22 @@ final class JoinBufferSupport
         for (int index = 0; index < sourceCount; index++) {
             output.values()[outputStart + index] = source.values()[sourcePositions[index]];
         }
+        return output;
+    }
+
+    private I32Vector copyIntPositions(I32Vector source, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
+    {
+        I32Vector output = ensureIntCapacity(existing instanceof I32Vector vector ? vector : null, size);
+        for (int index = 0; index < sourceCount; index++) {
+            output.values()[outputStart + index] = source.values()[sourcePositions[index]];
+        }
+        return output;
+    }
+
+    private I32Vector copyIntSinglePosition(I32Vector source, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        I32Vector output = ensureIntCapacity(existing instanceof I32Vector vector ? vector : null, size);
+        output.values()[outputPosition] = source.values()[sourcePosition];
         return output;
     }
 
@@ -505,6 +525,18 @@ final class JoinBufferSupport
         return result;
     }
 
+    private I32Vector materializeInts(Vector[] rows)
+    {
+        I32Vector result = allocator.allocate(allocationContext, I32Vector.class, totalLength(rows), I32Vector::new);
+        int outputPosition = 0;
+        for (Vector row : rows) {
+            for (int position = 0; position < row.length(); position++) {
+                result.values()[outputPosition++] = (int) OperatorVectorSupport.longValue(row, position);
+            }
+        }
+        return result;
+    }
+
     private BooleanVector materializeBooleans(Vector[] rows)
     {
         BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, totalLength(rows), BooleanVector::new);
@@ -650,6 +682,7 @@ final class JoinBufferSupport
     private Vector emptyVector(Vector source)
     {
         return switch (source) {
+            case I32Vector _ -> allocator.allocate(allocationContext, I32Vector.class, 0, I32Vector::new);
             case I64Vector _ -> allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
             case BooleanVector _ -> allocator.allocate(allocationContext, BooleanVector.class, 0, BooleanVector::new);
             case F64Vector _ -> allocator.allocate(allocationContext, F64Vector.class, 0, F64Vector::new);
@@ -746,6 +779,20 @@ final class JoinBufferSupport
             totalLength += row.length();
         }
         return totalLength;
+    }
+
+    private I32Vector ensureIntCapacity(I32Vector existing, int size)
+    {
+        if (existing == null) {
+            return allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new);
+        }
+        if (existing.length() >= size) {
+            return existing;
+        }
+
+        I32Vector grown = allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new);
+        System.arraycopy(existing.values(), 0, grown.values(), 0, existing.length());
+        return grown;
     }
 
     private I64Vector ensureLongCapacity(I64Vector existing, int size)

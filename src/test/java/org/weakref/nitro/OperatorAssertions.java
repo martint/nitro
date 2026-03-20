@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.RleVector;
@@ -124,6 +125,7 @@ public class OperatorAssertions
         private static Object decodeNonNullValue(Vector values, int position)
         {
             return switch (values) {
+                case I32Vector vector -> vector.values()[position];
                 case I64Vector vector -> vector.values()[position];
                 case BooleanVector vector -> vector.values()[position] ? 1L : 0L;
                 case F64Vector vector -> vector.values()[position];

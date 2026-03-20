@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -90,12 +91,28 @@ public class ConstantTableOperator
     {
         ColumnKind kind = inferColumnKind(rows, column);
         return switch (kind) {
+            case I32 -> buildI32Column(rows, column);
             case I64 -> buildI64Column(rows, column);
             case BOOLEAN -> buildBooleanColumn(rows, column);
             case F64 -> buildDoubleColumn(rows, column);
             case UTF8 -> buildUtf8Column(rows, column);
             case BINARY -> buildBinaryColumn(rows, column);
         };
+    }
+
+    private Streams buildI32Column(List<Row> rows, int column)
+    {
+        I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rows.size(), I32Vector::new);
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
+        for (int position = 0; position < rows.size(); position++) {
+            Object value = value(rows.get(position), column);
+            if (value == null) {
+                nulls.values()[position] = true;
+                continue;
+            }
+            values.values()[position] = ((Number) value).intValue();
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     private Streams buildI64Column(List<Row> rows, int column)
@@ -223,7 +240,8 @@ public class ConstantTableOperator
     private static ColumnKind columnKind(Object value)
     {
         return switch (value) {
-            case Long _, Integer _, Short _, Byte _ -> ColumnKind.I64;
+            case Integer _, Short _, Byte _ -> ColumnKind.I32;
+            case Long _ -> ColumnKind.I64;
             case Boolean _ -> ColumnKind.BOOLEAN;
             case Double _, Float _ -> ColumnKind.F64;
             case String _ -> ColumnKind.UTF8;
@@ -243,6 +261,7 @@ public class ConstantTableOperator
 
     private enum ColumnKind
     {
+        I32,
         I64,
         BOOLEAN,
         F64,

@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -96,14 +97,14 @@ public class OutputOperator
         rowCount++;
         for (int column = 0; column < columns.size(); column++) {
             Output block = columns.get(column);
-            I64Vector values = (I64Vector) block.borrow(Stream.VALUES);
+            Vector values = block.borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) block.borrowOrNull(Stream.NULLS);
 
             if (nulls != null && nulls.values()[position]) {
                 System.out.print("null");
             }
             else {
-                System.out.print(values.values()[position]);
+                System.out.print(formatValue(values, position));
             }
 
             if (column < columns.size() - 1) {
@@ -118,5 +119,14 @@ public class OutputOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private static Object formatValue(Vector values, int position)
+    {
+        return switch (values) {
+            case I32Vector vector -> vector.values()[position];
+            case I64Vector vector -> vector.values()[position];
+            default -> throw new IllegalArgumentException("Unsupported output vector type: " + values.getClass().getSimpleName());
+        };
     }
 }

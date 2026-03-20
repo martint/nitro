@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -62,17 +63,17 @@ public class Min
     {
         I64Vector stateValues = (I64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
-        long[] inputValues = values(streams.values(inputColumn));
+        Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             if (!isNull(inputNulls, position)) {
                 if (stateNulls.values()[group]) {
-                    stateValues.values()[group] = inputValues[position];
+                    stateValues.values()[group] = value(inputValues, position);
                     stateNulls.values()[group] = false;
                 }
                 else {
-                    stateValues.values()[group] = Math.min(stateValues.values()[group], inputValues[position]);
+                    stateValues.values()[group] = Math.min(stateValues.values()[group], value(inputValues, position));
                 }
             }
         }
@@ -84,18 +85,18 @@ public class Min
         I64Vector stateValues = (I64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
-        long[] inputValues = values(streams.values(inputColumn));
+        Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
             if (!isNull(inputNulls, position)) {
                 if (stateNulls.values()[group]) {
-                    stateValues.values()[group] = inputValues[position];
+                    stateValues.values()[group] = value(inputValues, position);
                     stateNulls.values()[group] = false;
                 }
                 else {
-                    stateValues.values()[group] = Math.min(stateValues.values()[group], inputValues[position]);
+                    stateValues.values()[group] = Math.min(stateValues.values()[group], value(inputValues, position));
                 }
             }
         }
@@ -107,9 +108,13 @@ public class Min
         return state;
     }
 
-    private static long[] values(Vector v)
+    private static long value(Vector v, int position)
     {
-        return ((I64Vector) v).values();
+        return switch (v) {
+            case I64Vector values -> values.values()[position];
+            case I32Vector values -> values.values()[position];
+            default -> throw new IllegalArgumentException("Expected integer vector but found " + v.getClass().getSimpleName());
+        };
     }
 
     private static boolean[] nulls(Vector v)

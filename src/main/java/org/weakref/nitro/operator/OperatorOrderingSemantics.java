@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 
@@ -36,7 +37,7 @@ final class OperatorOrderingSemantics
 
         Vector left = OperatorVectorSupport.flatten(leftValues);
         Vector right = OperatorVectorSupport.flatten(rightValues);
-        if (left instanceof I64Vector && right instanceof I64Vector) {
+        if ((left instanceof I64Vector || left instanceof I32Vector) && (right instanceof I64Vector || right instanceof I32Vector)) {
             return Long.compare(
                     OperatorVectorSupport.longValue(leftValues, leftPosition),
                     OperatorVectorSupport.longValue(rightValues, rightPosition));

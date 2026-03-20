@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 
@@ -28,7 +29,7 @@ final class OperatorKeySemantics
     public static Key reusableProbeKey(Vector values)
     {
         return switch (OperatorVectorSupport.flatten(values)) {
-            case I64Vector _ -> new LongProbeKey(0);
+            case I32Vector _, I64Vector _ -> new LongProbeKey(0);
             case BooleanVector _ -> new BooleanProbeKey(false);
             case F64Vector _ -> new DoubleProbeKey(0);
             case BinaryVector _ -> new BinaryProbeKey(null, 0);
@@ -43,7 +44,7 @@ final class OperatorKeySemantics
         }
 
         return switch (OperatorVectorSupport.flatten(values)) {
-            case I64Vector _ -> {
+            case I32Vector _, I64Vector _ -> {
                 LongProbeKey key = (LongProbeKey) reusable;
                 key.setValue(OperatorVectorSupport.longValue(values, position));
                 yield key;

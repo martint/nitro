@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -68,6 +69,17 @@ public class TestOperatorBatches
 
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void testConstantTableOperatorProducesI32Batch()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1), row(2), row(3)));
+
+        Batch batch = operator.next();
+        assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+        assertThat(((I32Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1, 2, 3);
     }
 
     @Test
@@ -150,6 +162,20 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testAggregationOperatorAcceptsI32Input()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new CountAll()),
+                new ConstantTableOperator(allocator, 1, List.of(row(1), row(2), row(3))));
+
+        Batch batch = operator.next();
+        assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
+        assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorProducesGroupedAggregateBatch()
     {
         Allocator allocator = new Allocator();
@@ -207,6 +233,51 @@ public class TestOperatorBatches
 
         Batch batch = operator.next();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(5L, 3L);
+    }
+
+    @Test
+    void testTopNOperatorSupportsI32OrderingAndPayloadColumns()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new TopNOperator(
+                allocator,
+                2,
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1, 10),
+                        row(5, 20),
+                        row(3, 30))));
+
+        Batch batch = operator.next();
+        assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+        assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+        assertThat(Arrays.copyOf(((I32Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(5, 3);
+        assertThat(Arrays.copyOf(((I32Vector) batch.output(1).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(20, 30);
+    }
+
+    @Test
+    void testHashJoinOperatorSupportsI32EquiJoin()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1, 10),
+                        row(2, 20),
+                        row(3, 30))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2, 200),
+                        row(3, 300),
+                        row(4, 400))),
+                0);
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+        assertThat(Arrays.copyOf(((I32Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2, 3);
+        assertThat(Arrays.copyOf(((I32Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(20, 30);
+        assertThat(Arrays.copyOf(((I32Vector) batch.output(3).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(200, 300);
     }
 
     @Test

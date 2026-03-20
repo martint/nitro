@@ -579,6 +579,11 @@ public class Allocator
     public Vector copyVector(Context context, Vector vector)
     {
         return switch (vector) {
+            case I32Vector values -> {
+                I32Vector copy = allocate(context, I32Vector.class, values.length(), I32Vector::new);
+                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
+                yield copy;
+            }
             case I64Vector values -> {
                 I64Vector copy = allocate(context, I64Vector.class, values.length(), I64Vector::new);
                 System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
@@ -630,6 +635,13 @@ public class Allocator
     public Vector copyVector(Context context, Vector vector, int[] positions)
     {
         return switch (vector) {
+            case I32Vector values -> {
+                I32Vector copy = allocate(context, I32Vector.class, positions.length, I32Vector::new);
+                for (int index = 0; index < positions.length; index++) {
+                    copy.values()[index] = values.values()[positions[index]];
+                }
+                yield copy;
+            }
             case I64Vector values -> {
                 I64Vector copy = allocate(context, I64Vector.class, positions.length, I64Vector::new);
                 for (int index = 0; index < positions.length; index++) {
@@ -843,6 +855,7 @@ public class Allocator
     private static long vectorBytes(Vector vector)
     {
         return switch (vector) {
+            case I32Vector values -> (long) values.values().length * Integer.BYTES;
             case I64Vector values -> (long) values.values().length * Long.BYTES;
             case BooleanVector values -> values.values().length;
             case F64Vector values -> (long) values.values().length * Double.BYTES;
@@ -866,6 +879,7 @@ public class Allocator
     private static void clearVector(Vector vector)
     {
         switch (vector) {
+            case I32Vector values -> Arrays.fill(values.values(), 0);
             case I64Vector values -> Arrays.fill(values.values(), 0);
             case BooleanVector values -> Arrays.fill(values.values(), false);
             case F64Vector values -> Arrays.fill(values.values(), 0);

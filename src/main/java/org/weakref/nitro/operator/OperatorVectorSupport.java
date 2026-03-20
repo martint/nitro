@@ -17,6 +17,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -44,10 +45,11 @@ final class OperatorVectorSupport
     public static long longValue(Vector vector, int position)
     {
         return switch (vector) {
+            case I32Vector values -> values.values()[position];
             case I64Vector values -> values.values()[position];
             case DictionaryVector values -> longValue(values.values(), values.ids()[position]);
             case RleVector values -> longValue(values.values(), runIndex(values, position));
-            default -> throw new IllegalArgumentException("Expected I64 vector but found " + vector.getClass().getSimpleName());
+            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
         };
     }
 

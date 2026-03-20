@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -62,19 +63,19 @@ public class Sum
     {
         I64Vector stateVector = (I64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
-        long[] inputValues = values(streams.values(inputColumn));
+        Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         long sum = 0;
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                sum += isNull(inputNulls, position) ? 0 : inputValues[position];
+                sum += isNull(inputNulls, position) ? 0 : value(inputValues, position);
             }
         }
         else {
             for (int position : mask) {
-                sum += isNull(inputNulls, position) ? 0 : inputValues[position];
+                sum += isNull(inputNulls, position) ? 0 : value(inputValues, position);
             }
         }
 
@@ -88,21 +89,21 @@ public class Sum
         I64Vector stateVector = (I64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
-        long[] inputValues = values(streams.values(inputColumn));
+        Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
                 stateNulls.values()[group] = false;
-                stateVector.values()[group] += isNull(inputNulls, position) ? 0 : inputValues[position];
+                stateVector.values()[group] += isNull(inputNulls, position) ? 0 : value(inputValues, position);
             }
         }
         else {
             for (int position : mask) {
                 int group = toIntExact(groupVector.values()[position]);
                 stateNulls.values()[group] = false;
-                stateVector.values()[group] += isNull(inputNulls, position) ? 0 : inputValues[position];
+                stateVector.values()[group] += isNull(inputNulls, position) ? 0 : value(inputValues, position);
             }
         }
     }
@@ -113,9 +114,13 @@ public class Sum
         return state;
     }
 
-    private static long[] values(Vector v)
+    private static long value(Vector v, int position)
     {
-        return ((I64Vector) v).values();
+        return switch (v) {
+            case I64Vector values -> values.values()[position];
+            case I32Vector values -> values.values()[position];
+            default -> throw new IllegalArgumentException("Expected integer vector but found " + v.getClass().getSimpleName());
+        };
     }
 
     private static boolean[] nulls(Vector v)
