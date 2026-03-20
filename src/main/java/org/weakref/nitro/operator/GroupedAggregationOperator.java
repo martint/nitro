@@ -31,25 +31,37 @@ public class GroupedAggregationOperator
     private final Allocator allocator;
 
     private final int groupColumn;
+    private final List<Integer> groupedColumns;
     private final List<Accumulator> aggregations;
     private final Operator source;
+    private final Streams[] groupedResults;
     private final Streams[] result;
     private boolean done;
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
+        this(allocator, groupColumn, List.of(), aggregations, source);
+    }
+
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
+    {
+        if (!groupedColumns.isEmpty() && !(source instanceof GroupedKeySource)) {
+            throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
+        }
         this.allocator = allocator;
         this.groupColumn = groupColumn;
+        this.groupedColumns = groupedColumns;
         this.aggregations = aggregations;
         this.source = source;
 
+        groupedResults = new Streams[groupedColumns.size()];
         result = new Streams[aggregations.size()];
     }
 
     @Override
     public int outputCount()
     {
-        return aggregations.size();
+        return groupedColumns.size() + aggregations.size();
     }
 
     @Override
@@ -98,6 +110,12 @@ public class GroupedAggregationOperator
         for (int i = 0; i < result.length; i++) {
             result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i], allocator, ALLOCATION_CONTEXT);
         }
+        if (!groupedColumns.isEmpty()) {
+            GroupedKeySource groupedKeySource = (GroupedKeySource) source;
+            for (int i = 0; i < groupedColumns.size(); i++) {
+                groupedResults[i] = groupedKeySource.groupedKeyOutput(groupedColumns.get(i), toIntExact(maxGroup), groupedResults[i], allocator, ALLOCATION_CONTEXT);
+            }
+        }
 
         done = true;
 
@@ -124,7 +142,8 @@ public class GroupedAggregationOperator
 
     private Output resultOutput(int output)
     {
-        return new Output(result[output].asMap().keySet(), result[output]::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+        Streams streams = output < groupedResults.length ? groupedResults[output] : result[output - groupedResults.length];
+        return new Output(streams.asMap().keySet(), streams::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
     }
 
     @Override

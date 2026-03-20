@@ -20,7 +20,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 public class GroupOperator
-        implements Operator
+        implements Operator, GroupedKeySource
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
     private final Allocator allocator;
@@ -113,6 +113,15 @@ public class GroupOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    @Override
+    public Streams groupedKeyOutput(int outputIndex, int maxGroup, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        if (outputIndex != groupByColumn + 1) {
+            throw new IllegalArgumentException("Output " + outputIndex + " is not the grouping key output");
+        }
+        return groupingState.groupedValues(maxGroup, output, allocator, allocationContext);
     }
 
     private static final class BatchState

@@ -1321,6 +1321,30 @@ public class TestOperators
     }
 
     @Test
+    void testGroupedAggregationCanExposeGroupingKeyWithoutFirstAccumulator()
+    {
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        allocator,
+                        0,
+                        List.of(1),
+                        List.of(new CountAll()),
+                        new GroupOperator(
+                                allocator,
+                                0,
+                                new ConstantTableOperator(
+                                        allocator,
+                                        1,
+                                        List.of(
+                                                row("alpha"),
+                                                row("alpha"),
+                                                row("beta")))))))
+                .matchesExactly(List.of(
+                        row("alpha", 2L),
+                        row("beta", 1L)));
+    }
+
+    @Test
     void testConstantTable()
     {
         assertThat(operator(new ConstantTableOperator(

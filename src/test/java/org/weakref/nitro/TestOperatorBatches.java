@@ -198,6 +198,34 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorCanExposeGroupingKeyBatch()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new CountAll()),
+                new GroupOperator(
+                        allocator,
+                        0,
+                        new ConstantTableOperator(allocator, 1, List.of(
+                                row("alpha"),
+                                row("alpha"),
+                                row("beta")))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        I64Vector counts = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(keys.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+        assertThat(keys.utf8Value(0)).isEqualTo("alpha");
+        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
+    }
+
+    @Test
     void testLimitOperatorProducesLimitedBatch()
     {
         Allocator allocator = new Allocator();
