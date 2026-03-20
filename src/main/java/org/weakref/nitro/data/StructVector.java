@@ -121,9 +121,9 @@ public final class StructVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(StructVector.class, length(), 2);
     }
 
     @Override

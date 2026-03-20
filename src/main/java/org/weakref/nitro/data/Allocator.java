@@ -30,8 +30,6 @@ import static java.util.Objects.requireNonNull;
 // TODO: support hierarchical contexts
 public class Allocator
 {
-    private static final int MAX_POOLED_VECTORS_PER_BUCKET = 2;
-    private static final int MAX_POOLED_BINARY_VECTORS_PER_POSITION_COUNT = 2;
     private static final int MAX_POOLED_MASKS_PER_BUCKET = 4;
 
     private final Map<Context, ContextState> states = new HashMap<>();
@@ -54,7 +52,7 @@ public class Allocator
     public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
     {
         ContextState state = state(context);
-        Vector vector = state.borrowVector(vectorType, size);
+        Vector vector = state.borrowVector(new Vector.PoolRequest(vectorType, size, true), vectorType);
         boolean reused = vector != null;
         if (!reused) {
             vector = allocator.apply(size);
@@ -78,7 +76,7 @@ public class Allocator
     public BinaryVector allocateBinary(Context context, int positionCount, int byteCapacity)
     {
         ContextState state = state(context);
-        BinaryVector vector = state.borrowBinaryVector(positionCount, byteCapacity);
+        BinaryVector vector = state.borrowVector(new Vector.PoolRequest(BinaryVector.poolFamily(positionCount), byteCapacity, false), BinaryVector.class);
         boolean reused = vector != null;
         if (!reused) {
             vector = new BinaryVector(positionCount, byteCapacity);
@@ -734,9 +732,8 @@ public class Allocator
     private static final class ContextState
     {
         private final Stats stats = new Stats();
-        private final Map<Class<? extends Vector>, TreeMap<Integer, ArrayDeque<Vector>>> vectorPool = new HashMap<>();
-        private final Map<Integer, TreeMap<Integer, ArrayDeque<BinaryVector>>> binaryVectorPool = new HashMap<>();
-        private final Map<Integer, ArrayDeque<BinaryVector>> binaryVectorPoolOrder = new HashMap<>();
+        private final Map<Object, TreeMap<Integer, ArrayDeque<Vector>>> vectorPool = new HashMap<>();
+        private final Map<Object, ArrayDeque<Vector>> vectorPoolOrder = new HashMap<>();
         private final TreeMap<Integer, ArrayDeque<Mask>> maskPool = new TreeMap<>();
         private final List<Vector> inUseVectors = new ArrayList<>();
         private final List<Mask> inUseMasks = new ArrayList<>();
@@ -746,56 +743,34 @@ public class Allocator
             return stats;
         }
 
-        public Vector borrowVector(Class<? extends Vector> vectorType, int size)
+        public <T extends Vector> T borrowVector(Vector.PoolRequest request, Class<T> vectorType)
         {
-            if (vectorType == BinaryVector.class) {
-                throw new IllegalArgumentException("Use allocateBinary for BinaryVector");
-            }
-            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(vectorType);
+            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(request.family());
             if (pool == null) {
                 return null;
             }
 
-            Map.Entry<Integer, ArrayDeque<Vector>> entry = pool.ceilingEntry(size);
-            if (entry != null && entry.getKey() != size) {
-                return null;
-            }
+            Map.Entry<Integer, ArrayDeque<Vector>> entry = pool.ceilingEntry(request.minimumCapacity());
             if (entry == null) {
                 return null;
             }
-
-            Vector vector = entry.getValue().removeFirst();
-            if (entry.getValue().isEmpty()) {
-                pool.remove(entry.getKey());
-            }
-            return vector;
-        }
-
-        public BinaryVector borrowBinaryVector(int positionCount, int byteCapacity)
-        {
-            TreeMap<Integer, ArrayDeque<BinaryVector>> pool = binaryVectorPool.get(positionCount);
-            if (pool == null) {
+            if (request.exactCapacityMatch() && entry.getKey() != request.minimumCapacity()) {
                 return null;
             }
 
-            Map.Entry<Integer, ArrayDeque<BinaryVector>> entry = pool.ceilingEntry(byteCapacity);
-            if (entry == null) {
-                return null;
-            }
-
-            BinaryVector vector = entry.getValue().removeFirst();
+            T vector = vectorType.cast(entry.getValue().removeFirst());
             if (entry.getValue().isEmpty()) {
                 pool.remove(entry.getKey());
             }
-            ArrayDeque<BinaryVector> order = binaryVectorPoolOrder.get(positionCount);
+            ArrayDeque<Vector> order = vectorPoolOrder.get(request.family());
             if (order != null) {
                 order.remove(vector);
                 if (order.isEmpty()) {
-                    binaryVectorPoolOrder.remove(positionCount);
+                    vectorPoolOrder.remove(request.family());
                 }
             }
             if (pool.isEmpty()) {
-                binaryVectorPool.remove(positionCount);
+                vectorPool.remove(request.family());
             }
             return vector;
         }
@@ -813,21 +788,11 @@ public class Allocator
             }
 
             stats.releaseBytes(vector.retainedBytes());
-            if (vector.poolingMode() == Vector.PoolingMode.NONE) {
+            Vector.PoolSlot slot = vector.poolSlot();
+            if (slot == null) {
                 return;
             }
-            if (vector.poolingMode() == Vector.PoolingMode.BINARY) {
-                BinaryVector binaryVector = (BinaryVector) vector;
-                addBinaryVectorToPool(binaryVector);
-                return;
-            }
-            ArrayDeque<Vector> bucket = vectorPool
-                    .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
-                    .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>());
-            bucket.addLast(vector);
-            while (bucket.size() > MAX_POOLED_VECTORS_PER_BUCKET) {
-                bucket.removeFirst();
-            }
+            addVectorToPool(slot, vector);
         }
 
         public void discardVector(Vector vector)
@@ -893,21 +858,9 @@ public class Allocator
         public void release()
         {
             for (Vector vector : inUseVectors) {
-                if (vector.poolingMode() == Vector.PoolingMode.NONE) {
-                    continue;
-                }
-                if (vector.poolingMode() == Vector.PoolingMode.BINARY) {
-                    BinaryVector binaryVector = (BinaryVector) vector;
-                    addBinaryVectorToPool(binaryVector);
-                }
-                else {
-                    ArrayDeque<Vector> bucket = vectorPool
-                            .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
-                            .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>());
-                    bucket.addLast(vector);
-                    while (bucket.size() > MAX_POOLED_VECTORS_PER_BUCKET) {
-                        bucket.removeFirst();
-                    }
+                Vector.PoolSlot slot = vector.poolSlot();
+                if (slot != null) {
+                    addVectorToPool(slot, vector);
                 }
             }
             for (Mask mask : inUseMasks) {
@@ -923,38 +876,38 @@ public class Allocator
             stats.release();
         }
 
-        private void addBinaryVectorToPool(BinaryVector binaryVector)
+        private void addVectorToPool(Vector.PoolSlot slot, Vector vector)
         {
-            binaryVectorPool
-                    .computeIfAbsent(binaryVector.length(), _ -> new TreeMap<>())
-                    .computeIfAbsent(binaryVector.byteCapacity(), _ -> new ArrayDeque<>())
-                    .addLast(binaryVector);
-            ArrayDeque<BinaryVector> order = binaryVectorPoolOrder.computeIfAbsent(binaryVector.length(), _ -> new ArrayDeque<>());
-            order.addLast(binaryVector);
-            while (order.size() > MAX_POOLED_BINARY_VECTORS_PER_POSITION_COUNT) {
-                BinaryVector discarded = order.removeFirst();
-                removeBinaryVectorFromPool(discarded);
+            vectorPool
+                    .computeIfAbsent(slot.family(), _ -> new TreeMap<>())
+                    .computeIfAbsent(slot.capacity(), _ -> new ArrayDeque<>())
+                    .addLast(vector);
+            ArrayDeque<Vector> order = vectorPoolOrder.computeIfAbsent(slot.family(), _ -> new ArrayDeque<>());
+            order.addLast(vector);
+            while (order.size() > slot.maxRetained()) {
+                Vector discarded = order.removeFirst();
+                removeVectorFromPool(requireNonNull(discarded.poolSlot(), "discarded vector has no pool slot"), discarded);
             }
         }
 
-        private void removeBinaryVectorFromPool(BinaryVector binaryVector)
+        private void removeVectorFromPool(Vector.PoolSlot slot, Vector vector)
         {
-            TreeMap<Integer, ArrayDeque<BinaryVector>> pool = binaryVectorPool.get(binaryVector.length());
+            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(slot.family());
             if (pool == null) {
                 return;
             }
 
-            ArrayDeque<BinaryVector> bucket = pool.get(binaryVector.byteCapacity());
+            ArrayDeque<Vector> bucket = pool.get(slot.capacity());
             if (bucket == null) {
                 return;
             }
 
-            bucket.remove(binaryVector);
+            bucket.remove(vector);
             if (bucket.isEmpty()) {
-                pool.remove(binaryVector.byteCapacity());
+                pool.remove(slot.capacity());
             }
             if (pool.isEmpty()) {
-                binaryVectorPool.remove(binaryVector.length());
+                vectorPool.remove(slot.family());
             }
         }
     }

@@ -78,9 +78,9 @@ public class BooleanVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(BooleanVector.class, length(), 2);
     }
 
     @Override

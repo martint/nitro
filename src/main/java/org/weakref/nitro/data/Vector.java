@@ -18,11 +18,12 @@ import java.util.function.Consumer;
 public sealed interface Vector
         permits DictionaryVector, FlatVector, RleVector
 {
-    enum PoolingMode
+    record PoolRequest(Object family, int minimumCapacity, boolean exactCapacityMatch)
     {
-        NONE,
-        STANDARD,
-        BINARY,
+    }
+
+    record PoolSlot(Object family, int capacity, int maxRetained)
+    {
     }
 
     int length();
@@ -43,9 +44,9 @@ public sealed interface Vector
         throw new UnsupportedOperationException("Vector does not support clearForReuse: " + getClass().getSimpleName());
     }
 
-    default PoolingMode poolingMode()
+    default PoolSlot poolSlot()
     {
-        return PoolingMode.NONE;
+        return null;
     }
 
     default void forEachChildVector(Consumer<Vector> consumer)

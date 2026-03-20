@@ -83,8 +83,8 @@ public final class AvgStateVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(AvgStateVector.class, length(), 2);
     }
 }

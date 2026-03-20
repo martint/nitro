@@ -153,9 +153,9 @@ public final class MapVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(MapVector.class, length(), 2);
     }
 
     @Override

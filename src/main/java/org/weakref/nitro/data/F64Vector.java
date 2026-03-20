@@ -78,9 +78,9 @@ public class F64Vector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(F64Vector.class, length(), 2);
     }
 
     @Override

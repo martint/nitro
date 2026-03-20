@@ -59,6 +59,11 @@ public final class BinaryVector
         return data;
     }
 
+    public static Object poolFamily(int positionCount)
+    {
+        return new PoolFamily(positionCount);
+    }
+
     public Set<Trait> traits()
     {
         return Set.copyOf(traits);
@@ -194,14 +199,18 @@ public final class BinaryVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.BINARY;
+        return new PoolSlot(poolFamily(length()), byteCapacity(), 2);
     }
 
     @Override
     public String toString()
     {
         return "BinaryVector{positions=" + positionCount + ", byteCapacity=" + data.length + ", traits=" + traits + "}";
+    }
+
+    private record PoolFamily(int positionCount)
+    {
     }
 }

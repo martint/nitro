@@ -77,8 +77,8 @@ public final class Utf8StateVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(Utf8StateVector.class, length(), 2);
     }
 }

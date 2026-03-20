@@ -135,9 +135,9 @@ public final class ArrayVector
     }
 
     @Override
-    public PoolingMode poolingMode()
+    public PoolSlot poolSlot()
     {
-        return PoolingMode.STANDARD;
+        return new PoolSlot(ArrayVector.class, length(), 2);
     }
 
     @Override
