@@ -81,9 +81,10 @@ final class ClickBenchHitsSupport
             return resolveActualHitsDirectory(directory);
         }
 
-        Path splitDirectory = Path.of(System.getProperty("user.home"), "tmp", "clickbench", "hits_split");
-        if (isUsableActualHitsDirectory(splitDirectory)) {
-            return Optional.of(splitDirectory);
+        Path clickBenchDirectory = Path.of(System.getProperty("user.home"), "tmp", "clickbench");
+        Optional<Path> resolvedDefaultDirectory = resolveActualHitsDirectory(clickBenchDirectory);
+        if (resolvedDefaultDirectory.isPresent()) {
+            return resolvedDefaultDirectory;
         }
         return Optional.empty();
     }
@@ -91,7 +92,7 @@ final class ClickBenchHitsSupport
     public static Path requiredActualHitsDirectory()
     {
         return actualHitsDirectoryIfPresent()
-                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/clickbench or /path/to/hits_split, or place the split data at ~/tmp/clickbench/hits_split"));
+                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/clickbench, or place the split parquet files at ~/tmp/clickbench"));
     }
 
     public static Path writeHitsFixture(Path file, int rowCount)
@@ -299,10 +300,6 @@ final class ClickBenchHitsSupport
     {
         if (isUsableActualHitsDirectory(path)) {
             return Optional.of(path);
-        }
-        Path splitDirectory = path.resolve("hits_split");
-        if (isUsableActualHitsDirectory(splitDirectory)) {
-            return Optional.of(splitDirectory);
         }
         return Optional.empty();
     }
