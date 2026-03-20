@@ -201,6 +201,16 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorComputedCapacityNeverDropsBelowRequestedSize()
+    {
+        assertThat(Allocator.computeCapacity(0)).isEqualTo(0);
+        assertThat(Allocator.computeCapacity(1)).isGreaterThanOrEqualTo(1);
+        assertThat(Allocator.computeCapacity(16)).isGreaterThanOrEqualTo(16);
+        assertThat(Allocator.computeCapacity(156)).isGreaterThanOrEqualTo(156);
+        assertThat(Allocator.computeCapacity(512)).isGreaterThanOrEqualTo(512);
+    }
+
+    @Test
     void testAllocatorReusesMaskInstancesAfterRelease()
     {
         Allocator allocator = new Allocator();

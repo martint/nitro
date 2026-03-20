@@ -37,9 +37,12 @@ public class Allocator
      */
     public static int computeCapacity(int desiredSize)
     {
+        if (desiredSize <= 0) {
+            return 0;
+        }
         // TODO: verify formula
         double growthFactor = 1 + 1.0 / (Math.log(desiredSize + 1) - 6);
-        return (int) (desiredSize + desiredSize * growthFactor);
+        return Math.max(desiredSize, (int) (desiredSize + desiredSize * growthFactor));
     }
 
     public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
