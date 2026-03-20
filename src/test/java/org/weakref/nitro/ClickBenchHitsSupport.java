@@ -301,7 +301,7 @@ final class ClickBenchHitsSupport
 
     private static ReaderKind configuredReader()
     {
-        return switch (System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY, "apache").strip().toLowerCase()) {
+        return switch (System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY, "trino").strip().toLowerCase()) {
             case "apache" -> ReaderKind.APACHE;
             case "trino" -> ReaderKind.TRINO;
             default -> throw new IllegalArgumentException("Unsupported ClickBench Parquet reader: " + System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY));

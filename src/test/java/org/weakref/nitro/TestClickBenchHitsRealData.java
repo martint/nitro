@@ -63,26 +63,38 @@ public class TestClickBenchHitsRealData
     {
         try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), actualHitsDirectory())) {
             assertThat(query.outputCount()).isEqualTo(6);
-            assertThat(query.hasNext()).isTrue();
+            boolean sawBatch = false;
+            long totalRows = 0;
+            while (query.hasNext()) {
+                Batch batch = query.next();
+                var mask = batch.borrowMask();
+                assertThat(mask.none()).isFalse();
 
-            Batch batch = query.next();
-            var mask = batch.borrowMask();
-            assertThat(mask.none()).isFalse();
+                totalRows += mask.selectedCount();
+                if (!sawBatch) {
+                    int firstPosition = mask.position(0);
+                    assertThat(baseVector(batch.output(0).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
+                    assertThat(baseVector(batch.output(1).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
+                    assertThat(baseVector(batch.output(2).borrow(Stream.VALUES))).isInstanceOf(I64Vector.class);
+                    assertThat(baseVector(batch.output(3).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
+                    assertThat(baseVector(batch.output(4).borrow(Stream.VALUES))).isInstanceOf(BinaryVector.class);
+                    assertThat(baseVector(batch.output(5).borrow(Stream.VALUES))).isInstanceOf(BinaryVector.class);
 
-            int firstPosition = mask.position(0);
-            assertThat(baseVector(batch.output(0).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
-            assertThat(baseVector(batch.output(1).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
-            assertThat(baseVector(batch.output(2).borrow(Stream.VALUES))).isInstanceOf(I64Vector.class);
-            assertThat(baseVector(batch.output(3).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
-            assertThat(baseVector(batch.output(4).borrow(Stream.VALUES))).isInstanceOf(BinaryVector.class);
-            assertThat(baseVector(batch.output(5).borrow(Stream.VALUES))).isInstanceOf(BinaryVector.class);
+                    integerValue(batch.output(0).borrow(Stream.VALUES), firstPosition);
+                    integerValue(batch.output(1).borrow(Stream.VALUES), firstPosition);
+                    integerValue(batch.output(2).borrow(Stream.VALUES), firstPosition);
+                    assertThat(integerValue(batch.output(3).borrow(Stream.VALUES), firstPosition)).isPositive();
+                    assertThat(binaryValue(batch.output(4).borrow(Stream.VALUES), firstPosition)).isNotNull();
+                    assertThat(binaryValue(batch.output(5).borrow(Stream.VALUES), firstPosition)).isNotNull();
+                    sawBatch = true;
+                }
 
-            integerValue(batch.output(0).borrow(Stream.VALUES), firstPosition);
-            integerValue(batch.output(1).borrow(Stream.VALUES), firstPosition);
-            integerValue(batch.output(2).borrow(Stream.VALUES), firstPosition);
-            assertThat(integerValue(batch.output(3).borrow(Stream.VALUES), firstPosition)).isPositive();
-            assertThat(binaryValue(batch.output(4).borrow(Stream.VALUES), firstPosition)).isNotNull();
-            assertThat(binaryValue(batch.output(5).borrow(Stream.VALUES), firstPosition)).isNotNull();
+                for (int column = 0; column < query.outputCount(); column++) {
+                    batch.output(column).borrow(Stream.VALUES);
+                }
+            }
+            assertThat(sawBatch).isTrue();
+            assertThat(totalRows).isEqualTo(99_997_497L);
         }
     }
 
