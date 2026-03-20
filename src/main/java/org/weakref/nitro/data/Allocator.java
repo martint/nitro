@@ -122,8 +122,10 @@ public class Allocator
             return allocate(context, vectorType, size, vectorAllocator);
         }
         if (vector.length() < size) {
+            T grown = allocate(context, vectorType, size, vectorAllocator);
+            copyVectorContents(vector, grown);
             releaseVector(context, vector);
-            return allocate(context, vectorType, size, vectorAllocator);
+            return grown;
         }
         return vector;
     }
@@ -135,8 +137,10 @@ public class Allocator
         }
 
         if (vector.length() < count) {
+            T grown = allocate(context, vectorType, count, vectorAllocator);
+            copyVectorContents(vector, grown);
             releaseVector(context, vector);
-            return allocate(context, vectorType, count, vectorAllocator);
+            return grown;
         }
 
         return vector;
@@ -718,6 +722,40 @@ public class Allocator
             case RleVector values -> copyVector(context, values.values(), rlePositions(values, positions));
             default -> throw new IllegalArgumentException("Unsupported vector type for copying: " + vector.getClass().getSimpleName());
         };
+    }
+
+    private void copyVectorContents(Vector source, Vector target)
+    {
+        switch (source) {
+            case I32Vector values -> System.arraycopy(values.values(), 0, ((I32Vector) target).values(), 0, values.length());
+            case I64Vector values -> System.arraycopy(values.values(), 0, ((I64Vector) target).values(), 0, values.length());
+            case BooleanVector values -> System.arraycopy(values.values(), 0, ((BooleanVector) target).values(), 0, values.length());
+            case F64Vector values -> System.arraycopy(values.values(), 0, ((F64Vector) target).values(), 0, values.length());
+            case BinaryVector values -> {
+                BinaryVector binaryTarget = (BinaryVector) target;
+                System.arraycopy(values.offsets(), 0, binaryTarget.offsets(), 0, values.length() + 1);
+                int byteLength = values.offsets()[values.length()];
+                System.arraycopy(values.data(), 0, binaryTarget.data(), 0, byteLength);
+                binaryTarget.addTraits(values.traits());
+            }
+            case ArrayVector values -> {
+                ArrayVector arrayTarget = (ArrayVector) target;
+                System.arraycopy(values.offsets(), 0, arrayTarget.offsets(), 0, values.length() + 1);
+                arrayTarget.setElements(values.elements());
+            }
+            case MapVector values -> {
+                MapVector mapTarget = (MapVector) target;
+                System.arraycopy(values.offsets(), 0, mapTarget.offsets(), 0, values.length() + 1);
+                mapTarget.setEntries(values.keys(), values.values());
+            }
+            case StructVector values -> {
+                StructVector structTarget = (StructVector) target;
+                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
+                    structTarget.setField(entry.getKey(), entry.getValue());
+                }
+            }
+            default -> throw new IllegalArgumentException("Unsupported vector type for growth copy: " + source.getClass().getSimpleName());
+        }
     }
 
     private static int[] dictionaryPositions(int[] ids, int[] positions)

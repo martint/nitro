@@ -15,6 +15,9 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -53,23 +56,43 @@ public final class EqualI64
         Vector right = inputs.get(1).values();
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
-        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
-            return Streams.of(Stream.VALUES, I64BinaryDispatch.rleRleBoolean(leftRle, rightRle, values, EqualI64::apply));
-        }
-
         BooleanVector result = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
-                I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
+                BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
-        I64BinaryDispatch.applyBoolean(left, right, mask, result, EqualI64::apply);
+        applyIntegerEquality(left, right, mask, result);
         return Streams.of(Stream.VALUES, result);
     }
 
-    private static boolean apply(long leftValue, long rightValue)
+    private static void applyIntegerEquality(Vector left, Vector right, Mask mask, BooleanVector output)
     {
-        return leftValue == rightValue;
+        BinaryDispatchSupport.validateLength(left, mask);
+        BinaryDispatchSupport.validateLength(right, mask);
+
+        boolean[] values = output.values();
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                values[position] = integerValue(left, position) == integerValue(right, position);
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            values[position] = integerValue(left, position) == integerValue(right, position);
+        }
+    }
+
+    private static long integerValue(Vector vector, int position)
+    {
+        return switch (vector) {
+            case I32Vector values -> values.values()[position];
+            case I64Vector values -> values.values()[position];
+            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
+            case RleVector values -> integerValue(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected integer vector but got " + vector.getClass().getSimpleName());
+        };
     }
 }

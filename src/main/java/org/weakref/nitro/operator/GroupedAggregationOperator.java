@@ -66,6 +66,9 @@ public class GroupedAggregationOperator
         while (source.hasNext()) {
             Batch batch = source.next();
             Mask mask = batch.borrowMask();
+            if (mask.none()) {
+                continue;
+            }
             I64Vector group = (I64Vector) batch.output(groupColumn).borrow(Stream.VALUES);
 
             long previousMaxGroup = maxGroup;

@@ -25,6 +25,7 @@ import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
+import org.weakref.nitro.operator.HardwoodParquetScanOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.TopNOperator;
@@ -47,25 +48,49 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 
 final class ClickBenchHitsSupport
 {
+    static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
+
     private ClickBenchHitsSupport() {}
 
     public static final int DEFAULT_ROW_COUNT = 7;
     public static final int BENCHMARK_ROW_COUNT = 100_000;
 
+    public static Optional<Path> actualHitsFileIfPresent()
+    {
+        String configuredPath = System.getProperty(CLICKBENCH_HITS_PATH_PROPERTY);
+        if (configuredPath != null && !configuredPath.isBlank()) {
+            Path file = Path.of(configuredPath);
+            return Files.isRegularFile(file) ? Optional.of(file) : Optional.empty();
+        }
+
+        Path defaultFile = Path.of(System.getProperty("user.home"), "tmp", "clickbench", "hits.parquet");
+        return Files.isRegularFile(defaultFile) ? Optional.of(defaultFile) : Optional.empty();
+    }
+
+    public static Path requiredActualHitsFile()
+    {
+        return actualHitsFileIfPresent()
+                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/hits.parquet or place the file at ~/tmp/clickbench/hits.parquet"));
+    }
+
     public static Path writeHitsFixture(Path file, int rowCount)
             throws IOException
     {
         MessageType schema = Types.buildMessage()
-                .required(INT64).named("AdvEngineID")
+                .required(INT32).named("AdvEngineID")
                 .required(INT64).named("ResolutionWidth")
                 .required(INT64).named("UserID")
                 .required(INT64).named("EventDate")
@@ -81,7 +106,7 @@ final class ClickBenchHitsSupport
             for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
                 HitRow row = templateRows.get(rowIndex % templateRows.size()).vary(rowIndex / templateRows.size());
                 writer.write(groups.newGroup()
-                        .append("AdvEngineID", row.advEngineId())
+                        .append("AdvEngineID", (int) row.advEngineId())
                         .append("ResolutionWidth", row.resolutionWidth())
                         .append("UserID", row.userId())
                         .append("EventDate", row.eventDate())
@@ -97,7 +122,7 @@ final class ClickBenchHitsSupport
         return new AggregationOperator(
                 allocator,
                 List.of(new CountAll()),
-                new ParquetScanOperator(allocator, file, List.of("UserID")));
+                clickBenchScan(allocator, file));
     }
 
     public static Operator query2CountNonZeroAdvEngineId(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -113,13 +138,13 @@ final class ClickBenchHitsSupport
         return new AggregationOperator(
                 allocator,
                 List.of(new Min(0), new Max(0)),
-                new ParquetScanOperator(allocator, file, List.of("EventDate")));
+                clickBenchScan(allocator, file, "EventDate"));
     }
 
     public static Operator query8GroupByAdvEngineId(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         FilterSpec predicate = notEqualI64(0, 0);
-        Operator scan = new ParquetScanOperator(allocator, file, List.of("AdvEngineID"));
+        Operator scan = clickBenchScan(allocator, file, "AdvEngineID");
         Operator filtered = new FilterOperator(
                 scan,
                 predicate.plan(),
@@ -146,11 +171,24 @@ final class ClickBenchHitsSupport
     private static Operator filter(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, List<String> columns, FilterSpec filterSpec)
     {
         return new FilterOperator(
-                new ParquetScanOperator(allocator, file, columns),
+                clickBenchScan(allocator, file, columns.toArray(String[]::new)),
                 filterSpec.plan(),
                 primitiveRegistry,
                 filterSpec.predicate(),
                 allocator);
+    }
+
+    private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
+    {
+        try {
+            if (Files.size(file) <= Integer.MAX_VALUE) {
+                return new HardwoodParquetScanOperator(allocator, file, List.of(columns));
+            }
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
+        }
+        return new ParquetScanOperator(allocator, file, List.of(columns));
     }
 
     private static FilterSpec notEqualI64(int inputIndex, long constant)

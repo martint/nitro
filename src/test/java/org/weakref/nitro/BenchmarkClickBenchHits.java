@@ -31,7 +31,6 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
@@ -43,8 +42,6 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkClickBenchHits
 {
-    private static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
-
     private final Allocator allocator = new Allocator();
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
     private Path clickBenchHitsFile;
@@ -52,7 +49,7 @@ public class BenchmarkClickBenchHits
     @Setup
     public void setup()
     {
-        clickBenchHitsFile = clickBenchHitsFile();
+        clickBenchHitsFile = ClickBenchHitsSupport.requiredActualHitsFile();
     }
 
     @Benchmark
@@ -83,20 +80,6 @@ public class BenchmarkClickBenchHits
     public void query21CountUrlsContainingGoogle()
     {
         consume(ClickBenchHitsSupport.query21CountUrlsContainingGoogle(allocator, primitiveRegistry, clickBenchHitsFile));
-    }
-
-    private static Path clickBenchHitsFile()
-    {
-        String path = System.getProperty(CLICKBENCH_HITS_PATH_PROPERTY);
-        if (path == null || path.isBlank()) {
-            throw new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/hits.parquet to run ClickBench hits benchmarks");
-        }
-
-        Path file = Path.of(path);
-        if (!Files.isRegularFile(file)) {
-            throw new IllegalStateException("ClickBench hits benchmark file does not exist: " + file);
-        }
-        return file;
     }
 
     private static void consume(Operator operator)

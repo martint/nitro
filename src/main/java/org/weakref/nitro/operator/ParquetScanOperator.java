@@ -42,6 +42,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -68,6 +69,7 @@ import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
 
@@ -75,6 +77,7 @@ public final class ParquetScanOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ParquetScanOperator");
+    private static final int MAX_BATCH_ROWS = 512;
 
     private final Allocator allocator;
     private final ParquetFileReader reader;
@@ -83,6 +86,10 @@ public final class ParquetScanOperator
     private final GroupConverter recordConverter;
     private final List<ColumnSpec> columns;
 
+    private PageReadStore currentRowGroup;
+    private ColumnPages[] currentRowGroupColumnPages;
+    private List<ColumnPages>[] currentRowGroupNestedColumnPages;
+    private int currentRowGroupPosition;
     private PageReadStore nextRowGroup;
     private RowGroupBatchState currentBatchState;
 
@@ -100,6 +107,9 @@ public final class ParquetScanOperator
             this.columns = columns.stream()
                     .map(this::resolveColumn)
                     .toList();
+            reader.setRequestedSchema(new MessageType(schema.getName(), this.columns.stream()
+                    .map(ColumnSpec::projectedType)
+                    .toList()));
             nextRowGroup = reader.readNextRowGroup();
         }
         catch (IOException exception) {
@@ -116,7 +126,7 @@ public final class ParquetScanOperator
     @Override
     public boolean hasNext()
     {
-        return nextRowGroup != null;
+        return (currentRowGroup != null && currentRowGroupPosition < currentRowGroup.getRowCount()) || nextRowGroup != null;
     }
 
     @Override
@@ -126,13 +136,20 @@ public final class ParquetScanOperator
             throw new IllegalStateException("No more Parquet row groups");
         }
 
-        PageReadStore currentRowGroup = nextRowGroup;
-        loadNextRowGroup();
+        advanceRowGroupIfNecessary();
+        int rowGroupRowCount = toIntExact(currentRowGroup.getRowCount());
+        int batchStart = currentRowGroupPosition;
+        int batchRowCount = Math.min(MAX_BATCH_ROWS, rowGroupRowCount - batchStart);
+        currentRowGroupPosition += batchRowCount;
 
         RowGroupBatchState batchState = new RowGroupBatchState(
                 currentRowGroup,
-                toIntExact(currentRowGroup.getRowCount()),
-                allocator.allocateAllMask(ALLOCATION_CONTEXT, toIntExact(currentRowGroup.getRowCount())));
+                rowGroupRowCount,
+                batchStart,
+                batchRowCount,
+                currentRowGroupColumnPages,
+                currentRowGroupNestedColumnPages,
+                allocator.allocateAllMask(ALLOCATION_CONTEXT, batchRowCount));
         currentBatchState = batchState;
 
         Output[] outputs = new Output[columns.size()];
@@ -182,6 +199,26 @@ public final class ParquetScanOperator
         }
     }
 
+    private void advanceRowGroupIfNecessary()
+    {
+        if (currentRowGroup != null && currentRowGroupPosition < currentRowGroup.getRowCount()) {
+            return;
+        }
+        currentRowGroup = nextRowGroup;
+        if (currentRowGroup != null) {
+            currentRowGroupColumnPages = new ColumnPages[columns.size()];
+            @SuppressWarnings("unchecked")
+            List<ColumnPages>[] nestedColumnPages = (List<ColumnPages>[]) new List<?>[columns.size()];
+            currentRowGroupNestedColumnPages = nestedColumnPages;
+        }
+        else {
+            currentRowGroupColumnPages = null;
+            currentRowGroupNestedColumnPages = null;
+        }
+        currentRowGroupPosition = 0;
+        loadNextRowGroup();
+    }
+
     private void loadNextRowGroup()
     {
         try {
@@ -201,21 +238,25 @@ public final class ParquetScanOperator
 
         ColumnSpec column = columns.get(columnIndex);
         buffer = switch (column.kind()) {
+            case I32 -> {
+                ColumnPages columnPages = columnPages(columnIndex, batchState);
+                yield readI32Column(column, columnPages, batchState.startRow(), batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
+            }
             case I64 -> {
                 ColumnPages columnPages = columnPages(columnIndex, batchState);
-                yield readI64Column(column, columnPages, batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
+                yield readI64Column(column, columnPages, batchState.startRow(), batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
             }
             case BOOLEAN -> {
                 ColumnPages columnPages = columnPages(columnIndex, batchState);
-                yield readBooleanColumn(column, batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
+                yield readBooleanColumn(column, batchState.startRow(), batchState.rowCount(), createColumnReader(columnPages), batchState.mask());
             }
             case BINARY -> {
                 ColumnPages columnPages = columnPages(columnIndex, batchState);
-                yield readBinaryColumn(column, columnPages, batchState.rowCount(), batchState.mask());
+                yield readBinaryColumn(column, columnPages, batchState.startRow(), batchState.rowCount(), batchState.mask());
             }
-            case ARRAY_I64 -> readArrayI64Column(column, columnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
-            case MAP -> readMapColumn(column, nestedColumnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
-            case STRUCT -> readStructColumn(column, nestedColumnPages(columnIndex, batchState), batchState.rowCount(), batchState.mask());
+            case ARRAY_I64 -> readArrayI64Column(column, columnPages(columnIndex, batchState), batchState.rowGroupRowCount(), batchState.startRow(), batchState.rowCount(), batchState.mask());
+            case MAP -> readMapColumn(column, nestedColumnPages(columnIndex, batchState), batchState.rowGroupRowCount(), batchState.startRow(), batchState.rowCount(), batchState.mask());
+            case STRUCT -> readStructColumn(column, nestedColumnPages(columnIndex, batchState), batchState.rowGroupRowCount(), batchState.startRow(), batchState.rowCount(), batchState.mask());
         };
         batchState.buffers()[columnIndex] = buffer;
         return buffer;
@@ -249,20 +290,23 @@ public final class ParquetScanOperator
     private final class RowGroupBatchState
     {
         private final PageReadStore rowGroup;
+        private final int rowGroupRowCount;
+        private final int startRow;
         private final int rowCount;
-        private final Mask[] maskHolder;
         private final ColumnPages[] columnPages;
         private final List<ColumnPages>[] nestedColumnPages;
+        private final Mask[] maskHolder;
         private final ColumnBuffer[] buffers;
 
-        @SuppressWarnings("unchecked")
-        private RowGroupBatchState(PageReadStore rowGroup, int rowCount, Mask mask)
+        private RowGroupBatchState(PageReadStore rowGroup, int rowGroupRowCount, int startRow, int rowCount, ColumnPages[] columnPages, List<ColumnPages>[] nestedColumnPages, Mask mask)
         {
             this.rowGroup = rowGroup;
+            this.rowGroupRowCount = rowGroupRowCount;
+            this.startRow = startRow;
             this.rowCount = rowCount;
+            this.columnPages = columnPages;
+            this.nestedColumnPages = nestedColumnPages;
             this.maskHolder = new Mask[] {mask};
-            this.columnPages = new ColumnPages[columns.size()];
-            this.nestedColumnPages = (List<ColumnPages>[]) new List<?>[columns.size()];
             this.buffers = new ColumnBuffer[columns.size()];
         }
 
@@ -274,6 +318,16 @@ public final class ParquetScanOperator
         private int rowCount()
         {
             return rowCount;
+        }
+
+        private int rowGroupRowCount()
+        {
+            return rowGroupRowCount;
+        }
+
+        private int startRow()
+        {
+            return startRow;
         }
 
         private Mask mask()
@@ -317,6 +371,7 @@ public final class ParquetScanOperator
                             default -> throw new IllegalArgumentException("Unsupported repeated Parquet primitive type for column %s: %s".formatted(name, primitiveType.getPrimitiveTypeName()));
                         };
                         case OPTIONAL, REQUIRED -> switch (primitiveType.getPrimitiveTypeName()) {
+                            case INT32 -> ColumnKind.I32;
                             case INT64 -> ColumnKind.I64;
                             case BOOLEAN -> ColumnKind.BOOLEAN;
                             case BINARY -> ColumnKind.BINARY;
@@ -346,6 +401,7 @@ public final class ParquetScanOperator
             PrimitiveType primitiveKeyType = keyType.asPrimitiveType();
             checkArgument(primitiveKeyType.getRepetition() == REQUIRED, "Parquet map keys must be required: %s", name);
             ColumnKind keyKind = switch (primitiveKeyType.getPrimitiveTypeName()) {
+                case INT32 -> ColumnKind.I32;
                 case INT64 -> ColumnKind.I64;
                 case BINARY -> ColumnKind.BINARY;
                 default -> throw new IllegalArgumentException("Unsupported Parquet map key type for column %s: %s".formatted(name, primitiveKeyType.getPrimitiveTypeName()));
@@ -355,6 +411,7 @@ public final class ParquetScanOperator
             checkArgument(valueType.isPrimitive(), "Parquet map values must be primitive: %s", name);
             PrimitiveType primitiveValueType = valueType.asPrimitiveType();
             ColumnKind valueKind = switch (primitiveValueType.getPrimitiveTypeName()) {
+                case INT32 -> ColumnKind.I32;
                 case INT64 -> ColumnKind.I64;
                 case BINARY -> ColumnKind.BINARY;
                 default -> throw new IllegalArgumentException("Unsupported Parquet map value type for column %s: %s".formatted(name, primitiveValueType.getPrimitiveTypeName()));
@@ -405,6 +462,7 @@ public final class ParquetScanOperator
                     return new StructFieldSpec(
                             field.getName(),
                             switch (primitiveField.getPrimitiveTypeName()) {
+                                case INT32 -> ColumnKind.I32;
                                 case INT64 -> ColumnKind.I64;
                                 case BOOLEAN -> ColumnKind.BOOLEAN;
                                 case BINARY -> ColumnKind.BINARY;
@@ -430,15 +488,16 @@ public final class ParquetScanOperator
                 null);
     }
 
-    private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, Mask mask)
+    private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowGroupRowCount, int startRow, int rowCount, Mask mask)
     {
         ArrayVector values = allocator.allocateArray(ALLOCATION_CONTEXT, rowCount);
         String columnName = column.name();
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
         RecordReader<Group> recordReader = columnIo.getRecordReader(
-                new ReplayPageReadStore(rowCount, List.of(columnPages)),
+                new ReplayPageReadStore(rowGroupRowCount, List.of(columnPages)),
                 new GroupRecordConverter(projectedSchema));
+        skipRecords(recordReader, startRow);
         int[] offsets = values.offsets();
 
         int elementCount = 0;
@@ -460,8 +519,9 @@ public final class ParquetScanOperator
         I64Vector elementValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, elementCount, I64Vector::new);
         BooleanVector elementNulls = column.elementNullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, elementCount, BooleanVector::new) : null;
         recordReader = columnIo.getRecordReader(
-                new ReplayPageReadStore(rowCount, List.of(columnPages)),
+                new ReplayPageReadStore(rowGroupRowCount, List.of(columnPages)),
                 new GroupRecordConverter(projectedSchema));
+        skipRecords(recordReader, startRow);
         int elementIndex = 0;
         maskIndex = 0;
         nextMaskPosition = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
@@ -495,7 +555,7 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, null);
     }
 
-    private ColumnBuffer readMapColumn(ColumnSpec column, List<ColumnPages> mapPages, int rowCount, Mask mask)
+    private ColumnBuffer readMapColumn(ColumnSpec column, List<ColumnPages> mapPages, int rowGroupRowCount, int startRow, int rowCount, Mask mask)
     {
         checkArgument(column.mapSpec() != null, "Map column is missing map metadata: %s", column.name());
 
@@ -507,7 +567,8 @@ public final class ParquetScanOperator
         int entryCount = 0;
         int keyBinaryCapacity = 0;
         int valueBinaryCapacity = 0;
-        RecordReader<Group> recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, mapPages), new GroupRecordConverter(projectedSchema));
+        RecordReader<Group> recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowGroupRowCount, mapPages), new GroupRecordConverter(projectedSchema));
+        skipRecords(recordReader, startRow);
         int maskIndex = 0;
         int nextMaskPosition = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         for (int position = 0; position < rowCount; position++) {
@@ -548,18 +609,21 @@ public final class ParquetScanOperator
         }
 
         Vector keyValues = switch (column.mapSpec().key().kind()) {
+            case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, entryCount, I32Vector::new);
             case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
             case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, keyBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
         };
         Vector valueValues = switch (column.mapSpec().value().kind()) {
+            case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, entryCount, I32Vector::new);
             case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
             case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, valueBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map value kind: " + column.mapSpec().value().kind());
         };
         BooleanVector valueNulls = column.mapSpec().value().nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, entryCount, BooleanVector::new) : null;
 
-        recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, mapPages), new GroupRecordConverter(projectedSchema));
+        recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowGroupRowCount, mapPages), new GroupRecordConverter(projectedSchema));
+        skipRecords(recordReader, startRow);
         int entryIndex = 0;
         maskIndex = 0;
         nextMaskPosition = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
@@ -581,6 +645,7 @@ public final class ParquetScanOperator
             for (int valueIndex = 0; valueIndex < valueCount; valueIndex++) {
                 Group entry = mapGroup.getGroup(column.mapSpec().entriesName(), valueIndex);
                 switch (column.mapSpec().key().kind()) {
+                    case I32 -> ((I32Vector) keyValues).values()[entryIndex] = entry.getInteger(column.mapSpec().key().name(), 0);
                     case I64 -> ((I64Vector) keyValues).values()[entryIndex] = entry.getLong(column.mapSpec().key().name(), 0);
                     case BINARY -> ((BinaryVector) keyValues).setBytes(entryIndex, entry.getBinary(column.mapSpec().key().name(), 0).getBytesUnsafe());
                     default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
@@ -594,6 +659,7 @@ public final class ParquetScanOperator
                 }
                 else {
                     switch (column.mapSpec().value().kind()) {
+                        case I32 -> ((I32Vector) valueValues).values()[entryIndex] = entry.getInteger(column.mapSpec().value().name(), 0);
                         case I64 -> ((I64Vector) valueValues).values()[entryIndex] = entry.getLong(column.mapSpec().value().name(), 0);
                         case BINARY -> ((BinaryVector) valueValues).setBytes(entryIndex, entry.getBinary(column.mapSpec().value().name(), 0).getBytesUnsafe());
                         default -> throw new IllegalArgumentException("Unsupported map value kind: " + column.mapSpec().value().kind());
@@ -619,16 +685,17 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
-    private ColumnBuffer readStructColumn(ColumnSpec column, List<ColumnPages> fieldPages, int rowCount, Mask mask)
+    private ColumnBuffer readStructColumn(ColumnSpec column, List<ColumnPages> fieldPages, int rowGroupRowCount, int startRow, int rowCount, Mask mask)
     {
         StructVector values = allocator.allocate(ALLOCATION_CONTEXT, StructVector.class, rowCount, StructVector::new);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
-        ReplayPageReadStore replayPageStore = new ReplayPageReadStore(rowCount, fieldPages);
+        ReplayPageReadStore replayPageStore = new ReplayPageReadStore(rowGroupRowCount, fieldPages);
 
         int[] binaryCapacities = new int[column.structFields().size()];
         RecordReader<Group> recordReader = columnIo.getRecordReader(replayPageStore, new GroupRecordConverter(projectedSchema));
+        skipRecords(recordReader, startRow);
         int maskIndex = 0;
         int nextMaskPosition = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         for (int position = 0; position < rowCount; position++) {
@@ -661,6 +728,7 @@ public final class ParquetScanOperator
         for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
             StructFieldSpec field = column.structFields().get(fieldIndex);
             fieldValues[fieldIndex] = switch (field.kind()) {
+                case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rowCount, I32Vector::new);
                 case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
                 case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
                 case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, binaryCapacities[fieldIndex]);
@@ -669,7 +737,8 @@ public final class ParquetScanOperator
             fieldNulls[fieldIndex] = field.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         }
 
-        recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowCount, fieldPages), new GroupRecordConverter(projectedSchema));
+        recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowGroupRowCount, fieldPages), new GroupRecordConverter(projectedSchema));
+        skipRecords(recordReader, startRow);
         maskIndex = 0;
         nextMaskPosition = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         for (int position = 0; position < rowCount; position++) {
@@ -705,6 +774,7 @@ public final class ParquetScanOperator
                 }
 
                 switch (field.kind()) {
+                    case I32 -> ((I32Vector) fieldValues[fieldIndex]).values()[position] = struct.getInteger(field.name(), 0);
                     case I64 -> ((I64Vector) fieldValues[fieldIndex]).values()[position] = struct.getLong(field.name(), 0);
                     case BOOLEAN -> ((BooleanVector) fieldValues[fieldIndex]).values()[position] = struct.getBoolean(field.name(), 0);
                     case BINARY -> ((BinaryVector) fieldValues[fieldIndex]).setBytes(position, struct.getBinary(field.name(), 0).getBytesUnsafe());
@@ -731,6 +801,160 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
+    private ColumnBuffer readI32Column(ColumnSpec column, ColumnPages columnPages, int startRow, int rowCount, ColumnReader columnReader, Mask mask)
+    {
+        skipColumnEntries(columnReader, startRow);
+        if (columnPages.dictionaryEncoded()) {
+            return readDictionaryI32Column(column, columnPages, rowCount, columnReader, mask);
+        }
+        return readFlatI32Column(column, rowCount, columnReader, mask);
+    }
+
+    private ColumnBuffer readDictionaryI32Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader, Mask mask)
+    {
+        if (columnPages.dictionaryPage() == null || columnPages.dictionaryPage().getDictionarySize() == 0) {
+            return readFlatI32Column(column, rowCount, columnReader, mask);
+        }
+
+        try {
+            Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage().copy());
+            I32Vector dictionaryValues = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, columnPages.dictionaryPage().getDictionarySize(), I32Vector::new);
+            int[] dictionaryEntries = dictionaryValues.values();
+            for (int index = 0; index < dictionaryEntries.length; index++) {
+                dictionaryEntries[index] = dictionary.decodeToInt(index);
+            }
+
+            int[] ids = new int[rowCount];
+            BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            boolean[] outputNulls = nulls == null ? null : nulls.values();
+            int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+            if (mask.all()) {
+                if (nulls == null) {
+                    for (int position = 0; position < rowCount; position++) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                        columnReader.consume();
+                    }
+                }
+                else {
+                    for (int position = 0; position < rowCount; position++) {
+                        if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                            ids[position] = columnReader.getCurrentValueDictionaryID();
+                        }
+                        else {
+                            outputNulls[position] = true;
+                        }
+                        columnReader.consume();
+                    }
+                }
+            }
+            else if (nulls == null) {
+                int maskIndex = 0;
+                int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
+                for (int position = 0; position < rowCount; position++) {
+                    if (position == nextMaskPosition) {
+                        ids[position] = columnReader.getCurrentValueDictionaryID();
+                        maskIndex++;
+                        nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                    }
+                    else {
+                        columnReader.getCurrentValueDictionaryID();
+                    }
+                    columnReader.consume();
+                }
+            }
+            else {
+                int maskIndex = 0;
+                int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
+                for (int position = 0; position < rowCount; position++) {
+                    boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                    if (position == nextMaskPosition) {
+                        if (present) {
+                            ids[position] = columnReader.getCurrentValueDictionaryID();
+                        }
+                        else {
+                            outputNulls[position] = true;
+                        }
+                        maskIndex++;
+                        nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                    }
+                    else if (present) {
+                        columnReader.getCurrentValueDictionaryID();
+                    }
+                    columnReader.consume();
+                }
+            }
+            return new ColumnBuffer(allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues), nulls);
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);
+        }
+    }
+
+    private ColumnBuffer readFlatI32Column(ColumnSpec column, int rowCount, ColumnReader columnReader, Mask mask)
+    {
+        I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rowCount, I32Vector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        int[] outputValues = values.values();
+        boolean[] outputNulls = nulls == null ? null : nulls.values();
+        int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
+        if (mask.all()) {
+            if (nulls == null) {
+                for (int position = 0; position < rowCount; position++) {
+                    outputValues[position] = columnReader.getInteger();
+                    columnReader.consume();
+                }
+            }
+            else {
+                for (int position = 0; position < rowCount; position++) {
+                    if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                        outputValues[position] = columnReader.getInteger();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    columnReader.consume();
+                }
+            }
+        }
+        else if (nulls == null) {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
+            for (int position = 0; position < rowCount; position++) {
+                if (position == nextMaskPosition) {
+                    outputValues[position] = columnReader.getInteger();
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                }
+                else {
+                    columnReader.getInteger();
+                }
+                columnReader.consume();
+            }
+        }
+        else {
+            int maskIndex = 0;
+            int nextMaskPosition = mask.count() == 0 ? rowCount : mask.position(0);
+            for (int position = 0; position < rowCount; position++) {
+                boolean present = columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel;
+                if (position == nextMaskPosition) {
+                    if (present) {
+                        outputValues[position] = columnReader.getInteger();
+                    }
+                    else {
+                        outputNulls[position] = true;
+                    }
+                    maskIndex++;
+                    nextMaskPosition = maskIndex < mask.count() ? mask.position(maskIndex) : rowCount;
+                }
+                else if (present) {
+                    columnReader.getInteger();
+                }
+                columnReader.consume();
+            }
+        }
+        return new ColumnBuffer(values, nulls);
+    }
+
     private static List<ColumnPages> captureMapColumnPages(PageReadStore rowGroup, ColumnSpec column)
     {
         return List.of(
@@ -745,8 +969,9 @@ public final class ParquetScanOperator
                 .toList();
     }
 
-    private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int rowCount, ColumnReader columnReader, Mask mask)
+    private ColumnBuffer readI64Column(ColumnSpec column, ColumnPages columnPages, int startRow, int rowCount, ColumnReader columnReader, Mask mask)
     {
+        skipColumnEntries(columnReader, startRow);
         if (columnPages.dictionaryEncoded()) {
             return readDictionaryI64Column(column, columnPages, rowCount, columnReader, mask);
         }
@@ -898,8 +1123,9 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
-    private ColumnBuffer readBooleanColumn(ColumnSpec column, int rowCount, ColumnReader columnReader, Mask mask)
+    private ColumnBuffer readBooleanColumn(ColumnSpec column, int startRow, int rowCount, ColumnReader columnReader, Mask mask)
     {
+        skipColumnEntries(columnReader, startRow);
         BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         boolean[] outputValues = values.values();
@@ -963,18 +1189,18 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
-    private ColumnBuffer readBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount, Mask mask)
+    private ColumnBuffer readBinaryColumn(ColumnSpec column, ColumnPages columnPages, int startRow, int rowCount, Mask mask)
     {
         if (columnPages.dictionaryEncoded()) {
-            return readDictionaryBinaryColumn(column, columnPages, rowCount, mask);
+            return readDictionaryBinaryColumn(column, columnPages, startRow, rowCount, mask);
         }
-        return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages, mask), createColumnReader(columnPages), mask);
+        return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, startRow, rowCount, columnPages, mask), createColumnReader(columnPages, startRow), mask);
     }
 
-    private ColumnBuffer readDictionaryBinaryColumn(ColumnSpec column, ColumnPages columnPages, int rowCount, Mask mask)
+    private ColumnBuffer readDictionaryBinaryColumn(ColumnSpec column, ColumnPages columnPages, int startRow, int rowCount, Mask mask)
     {
         if (columnPages.dictionaryPage() == null || columnPages.dictionaryPage().getDictionarySize() == 0) {
-            return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, rowCount, columnPages, mask), createColumnReader(columnPages), mask);
+            return readFlatBinaryColumn(column, rowCount, requiredBinaryByteCapacity(column, startRow, rowCount, columnPages, mask), createColumnReader(columnPages, startRow), mask);
         }
 
         try {
@@ -989,7 +1215,7 @@ public final class ParquetScanOperator
             }
             applyBinaryTraits(dictionaryValues, column.binaryTraits(), dictionaryValues.length());
 
-            ColumnReader columnReader = createColumnReader(columnPages);
+            ColumnReader columnReader = createColumnReader(columnPages, startRow);
             int[] ids = new int[rowCount];
             BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] outputNulls = nulls == null ? null : nulls.values();
@@ -1127,6 +1353,20 @@ public final class ParquetScanOperator
         return new ColumnBuffer(values, nulls);
     }
 
+    private static void skipRecords(RecordReader<Group> recordReader, int count)
+    {
+        for (int skipped = 0; skipped < count; skipped++) {
+            recordReader.read();
+        }
+    }
+
+    private static void skipColumnEntries(ColumnReader columnReader, int count)
+    {
+        for (int skipped = 0; skipped < count; skipped++) {
+            columnReader.consume();
+        }
+    }
+
     private static Set<BinaryVector.Trait> binaryTraits(PrimitiveType primitiveType)
     {
         if (primitiveType.getPrimitiveTypeName() != BINARY) {
@@ -1159,9 +1399,9 @@ public final class ParquetScanOperator
         return true;
     }
 
-    private int requiredBinaryByteCapacity(ColumnSpec column, int rowCount, ColumnPages columnPages, Mask mask)
+    private int requiredBinaryByteCapacity(ColumnSpec column, int startRow, int rowCount, ColumnPages columnPages, Mask mask)
     {
-        ColumnReader columnReader = createColumnReader(columnPages);
+        ColumnReader columnReader = createColumnReader(columnPages, startRow);
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
         int byteCapacity = 0;
         if (mask.all()) {
@@ -1193,12 +1433,19 @@ public final class ParquetScanOperator
 
     private ColumnReader createColumnReader(ColumnPages columnPages)
     {
-        return new ColumnReadStoreImpl(
+        return createColumnReader(columnPages, 0);
+    }
+
+    private ColumnReader createColumnReader(ColumnPages columnPages, int startRow)
+    {
+        ColumnReader columnReader = new ColumnReadStoreImpl(
                 new ReplayPageReadStore(columnPages.totalValueCount(), List.of(columnPages)),
                 recordConverter,
                 schema,
                 createdBy)
                 .getColumnReader(columnPages.descriptor());
+        skipColumnEntries(columnReader, startRow);
+        return columnReader;
     }
 
     private static ColumnPages captureColumnPages(PageReadStore rowGroup, ColumnDescriptor descriptor)
@@ -1329,6 +1576,7 @@ public final class ParquetScanOperator
 
     private enum ColumnKind
     {
+        I32,
         I64,
         BOOLEAN,
         BINARY,
@@ -1489,7 +1737,7 @@ public final class ParquetScanOperator
                 return null;
             }
             dictionaryRead = true;
-            return copyDictionaryPage(column.dictionaryPage());
+            return column.dictionaryPage();
         }
 
         @Override
@@ -1504,7 +1752,7 @@ public final class ParquetScanOperator
             if (pageIndex >= column.dataPages().size()) {
                 return null;
             }
-            return copyDataPage(column.dataPages().get(pageIndex++));
+            return column.dataPages().get(pageIndex++);
         }
     }
 }
