@@ -54,6 +54,8 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -71,6 +73,7 @@ public class BenchmarkOperators
     private static final int UTF8_JOIN_SECONDARY_DISTINCT_KEYS = 32;
     private static final int UTF8_JOIN_NULL_EVERY = 7;
     private static final int UTF8_JOIN_WIDE_PAYLOAD_LENGTH = 128;
+    private static final int CLICKBENCH_HITS_ROWS = ClickBenchHitsSupport.BENCHMARK_ROW_COUNT;
 
     private final Allocator allocator = new Allocator();
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
@@ -83,9 +86,11 @@ public class BenchmarkOperators
     private TableOperator.Page innerJoinUtf8MultiKeyPage;
     private TableOperator.Page outerJoinUtf8PayloadPage;
     private TableOperator.Page innerJoinUtf8PayloadPage;
+    private Path clickBenchHitsFile;
 
     @Setup
     public void setup()
+            throws Exception
     {
         groupUtf8Page = utf8Page(UTF8_GROUP_ROWS, UTF8_JOIN_DISTINCT_KEYS);
         outerJoinUtf8Page = utf8Page(UTF8_JOIN_OUTER_ROWS, UTF8_JOIN_DISTINCT_KEYS);
@@ -96,6 +101,9 @@ public class BenchmarkOperators
         innerJoinUtf8MultiKeyPage = utf8MultiKeyPage(UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_SECONDARY_DISTINCT_KEYS);
         outerJoinUtf8PayloadPage = utf8PayloadPage(UTF8_JOIN_OUTER_ROWS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_WIDE_PAYLOAD_LENGTH);
         innerJoinUtf8PayloadPage = utf8PayloadPage(UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_DISTINCT_KEYS, UTF8_JOIN_WIDE_PAYLOAD_LENGTH);
+        clickBenchHitsFile = ClickBenchHitsSupport.writeHitsFixture(
+                Files.createTempFile("clickbench-hits-benchmark", ".parquet"),
+                CLICKBENCH_HITS_ROWS);
     }
 
     @Benchmark
@@ -319,6 +327,41 @@ public class BenchmarkOperators
                 0);
 
         consume(operator);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(CLICKBENCH_HITS_ROWS)
+    public void clickBenchHitsQuery1CountAll()
+    {
+        consume(ClickBenchHitsSupport.query1CountAll(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(CLICKBENCH_HITS_ROWS)
+    public void clickBenchHitsQuery2CountNonZeroAdvEngineId()
+    {
+        consume(ClickBenchHitsSupport.query2CountNonZeroAdvEngineId(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(CLICKBENCH_HITS_ROWS)
+    public void clickBenchHitsQuery7MinAndMaxEventDate()
+    {
+        consume(ClickBenchHitsSupport.query7MinAndMaxEventDate(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(CLICKBENCH_HITS_ROWS)
+    public void clickBenchHitsQuery8GroupByAdvEngineId()
+    {
+        consume(ClickBenchHitsSupport.query8GroupByAdvEngineId(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(CLICKBENCH_HITS_ROWS)
+    public void clickBenchHitsQuery21CountUrlsContainingGoogle()
+    {
+        consume(ClickBenchHitsSupport.query21CountUrlsContainingGoogle(allocator, primitiveRegistry, clickBenchHitsFile));
     }
 
     private static TableOperator.Page utf8Page(int rowCount, int distinctKeys)
