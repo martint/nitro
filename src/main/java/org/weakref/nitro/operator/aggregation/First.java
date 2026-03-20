@@ -15,9 +15,11 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -103,6 +105,8 @@ public class First
         return switch (v) {
             case I64Vector values -> values.values()[position];
             case I32Vector values -> values.values()[position];
+            case DictionaryVector values -> value(values.values(), values.ids()[position]);
+            case RleVector values -> value(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected integer vector but found " + v.getClass().getSimpleName());
         };
     }

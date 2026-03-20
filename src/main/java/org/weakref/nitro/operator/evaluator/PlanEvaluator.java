@@ -183,6 +183,7 @@ public final class PlanEvaluator
             result = switch (literal.value()) {
                 case Long value -> Streams.ofValues(fillLong(value, length));
                 case Boolean value -> Streams.of(Stream.VALUES, fillBoolean(value, length));
+                case String value -> Streams.of(Stream.VALUES, fillUtf8(value, length));
                 default -> throw new IllegalArgumentException("Unsupported literal value: " + literal.value());
             };
         }
@@ -503,6 +504,20 @@ public final class PlanEvaluator
         BooleanVector result = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, length, BooleanVector::new);
         for (int position = 0; position < length; position++) {
             result.values()[position] = value;
+        }
+        return result;
+    }
+
+    private Vector fillUtf8(String value, int length)
+    {
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        BinaryVector result = allocator.allocateBinary(ALLOCATION_CONTEXT, length, bytes.length * length);
+        result.addTrait(BinaryVector.Trait.UTF8_STRING);
+        if (bytes.length == value.length()) {
+            result.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        }
+        for (int position = 0; position < length; position++) {
+            result.setBytes(position, bytes);
         }
         return result;
     }

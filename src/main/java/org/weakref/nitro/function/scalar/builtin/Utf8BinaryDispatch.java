@@ -47,6 +47,11 @@ public final class Utf8BinaryDispatch
         return apply(functionName, allocationContext, Operation.STARTS_WITH, inputs, mask, requestedStreams, output, context);
     }
 
+    public static Streams applyContains(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    {
+        return apply(functionName, allocationContext, Operation.CONTAINS, inputs, mask, requestedStreams, output, context);
+    }
+
     private static Streams apply(String functionName, Allocator.Context allocationContext, Operation operation, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
@@ -183,6 +188,7 @@ public final class Utf8BinaryDispatch
             case EQUALS -> compareEquals(functionName, left, leftPosition, right, rightPosition);
             case LESS_THAN -> compareLessThan(functionName, left, leftPosition, right, rightPosition, ascii);
             case STARTS_WITH -> compareStartsWith(functionName, left, leftPosition, right, rightPosition, ascii);
+            case CONTAINS -> compareContains(functionName, left, leftPosition, right, rightPosition, ascii);
         };
     }
 
@@ -202,6 +208,12 @@ public final class Utf8BinaryDispatch
     {
         requireUtf8Traits(functionName, left, right);
         return ascii ? binaryStartsWith(left, leftPosition, right, rightPosition) : left.utf8Value(leftPosition).startsWith(right.utf8Value(rightPosition));
+    }
+
+    private static boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
+    {
+        requireUtf8Traits(functionName, left, right);
+        return ascii ? binaryContains(left, leftPosition, right, rightPosition) : left.utf8Value(leftPosition).contains(right.utf8Value(rightPosition));
     }
 
     private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
@@ -300,10 +312,42 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
+    private static boolean binaryContains(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    {
+        int haystackLength = left.length(leftPosition);
+        int needleLength = right.length(rightPosition);
+        if (needleLength == 0) {
+            return true;
+        }
+        if (haystackLength < needleLength) {
+            return false;
+        }
+
+        byte[] haystackData = left.data();
+        byte[] needleData = right.data();
+        int haystackStart = left.startOffset(leftPosition);
+        int needleStart = right.startOffset(rightPosition);
+        int lastStart = haystackLength - needleLength;
+        for (int offset = 0; offset <= lastStart; offset++) {
+            boolean match = true;
+            for (int index = 0; index < needleLength; index++) {
+                if (haystackData[haystackStart + offset + index] != needleData[needleStart + index]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private enum Operation
     {
         EQUALS,
         LESS_THAN,
         STARTS_WITH,
+        CONTAINS,
     }
 }
