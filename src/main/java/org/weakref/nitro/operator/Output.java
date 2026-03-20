@@ -20,19 +20,23 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
 public final class Output
+        implements AutoCloseable
 {
     private final EnumSet<Stream> exposedStreams;
     private final Set<Stream> exposedStreamsView;
     private final Function<Stream, Vector> resolver;
     private final BiFunction<Stream, Vector, Vector> takeResolver;
+    private final BiConsumer<Stream, Vector> releaseResolver;
     private final EnumMap<Stream, Vector> resolvedStreams = new EnumMap<>(Stream.class);
     private final EnumSet<Stream> takenStreams = EnumSet.noneOf(Stream.class);
+    private boolean closed;
 
     public static Output of(Streams streams)
     {
@@ -43,20 +47,27 @@ public final class Output
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
-        this(exposedStreams, resolver, (_, vector) -> vector);
+        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {});
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
+    {
+        this(exposedStreams, resolver, takeResolver, (_, _) -> {});
+    }
+
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedStreams = exposedStreams.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(exposedStreams);
         this.exposedStreamsView = Collections.unmodifiableSet(this.exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
         this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
+        this.releaseResolver = requireNonNull(releaseResolver, "releaseResolver is null");
     }
 
     public Vector borrow(Stream stream)
     {
+        checkOpen();
         requireNonNull(stream, "stream is null");
         if (takenStreams.contains(stream)) {
             throw new IllegalStateException("Stream already taken: " + stream);
@@ -69,6 +80,7 @@ public final class Output
 
     public Vector borrowOrNull(Stream stream)
     {
+        checkOpen();
         requireNonNull(stream, "stream is null");
         if (!exposedStreams.contains(stream)) {
             return null;
@@ -78,6 +90,7 @@ public final class Output
 
     public Vector take(Stream stream)
     {
+        checkOpen();
         Vector vector = requireNonNull(takeResolver.apply(stream, borrow(stream)), "takeResolver returned null");
         takenStreams.add(stream);
         return vector;
@@ -86,5 +99,28 @@ public final class Output
     public Set<Stream> streams()
     {
         return exposedStreamsView;
+    }
+
+    @Override
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        for (var entry : resolvedStreams.entrySet()) {
+            if (!takenStreams.contains(entry.getKey())) {
+                releaseResolver.accept(entry.getKey(), entry.getValue());
+            }
+        }
+        resolvedStreams.clear();
+        takenStreams.clear();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Output already closed");
+        }
     }
 }

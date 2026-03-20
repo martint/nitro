@@ -66,6 +66,7 @@ public final class HardwoodParquetScanOperator
 
     private int nextBatchStart;
     private BatchState currentBatchState;
+    private Batch currentBatch;
 
     public HardwoodParquetScanOperator(Allocator allocator, Path file, List<String> columns)
     {
@@ -134,6 +135,7 @@ public final class HardwoodParquetScanOperator
         if (!hasNext()) {
             throw new IllegalStateException("No more Parquet rows");
         }
+        closeCurrentBatch();
 
         int batchStart = nextBatchStart;
         int rowCount = Math.min(MAX_BATCH_ROWS, totalRows - batchStart);
@@ -156,9 +158,18 @@ public final class HardwoodParquetScanOperator
                             default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
                         };
                     },
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
+                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(batchState.mask(), batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        Batch batch = new Batch(
+                batchState.mask(),
+                batchState::constrain,
+                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                mask -> allocator.release(ALLOCATION_CONTEXT, mask),
+                () -> {},
+                outputs);
+        currentBatch = batch;
+        return batch;
     }
 
     @Override
@@ -178,6 +189,7 @@ public final class HardwoodParquetScanOperator
     @Override
     public void close()
     {
+        closeCurrentBatch();
         try {
             for (ColumnCursor cursor : cursors) {
                 cursor.close();
@@ -194,6 +206,14 @@ public final class HardwoodParquetScanOperator
         }
         finally {
             allocator.release(ALLOCATION_CONTEXT);
+        }
+    }
+
+    private void closeCurrentBatch()
+    {
+        if (currentBatch != null) {
+            currentBatch.close();
+            currentBatch = null;
         }
     }
 

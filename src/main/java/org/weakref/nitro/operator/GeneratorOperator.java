@@ -39,6 +39,7 @@ public class GeneratorOperator
     private long remaining;
     private int currentBatchSize;
     private Mask mask;
+    private Batch currentBatch;
 
     public GeneratorOperator(Allocator allocator, long rowCount, List<I64Generator> generators)
     {
@@ -74,6 +75,8 @@ public class GeneratorOperator
     @Override
     public Batch next()
     {
+        closeCurrentBatch();
+
         for (int i = 0; i < filled.length; i++) {
             if (!filled[i]) {
                 generators.get(i).skip(currentBatchSize);
@@ -99,9 +102,18 @@ public class GeneratorOperator
                     (stream, vector) -> {
                         results[output] = null;
                         return allocator.transfer(ALLOCATION_CONTEXT, vector);
-                    });
+                    },
+                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(mask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        Batch batch = new Batch(
+                mask,
+                _ -> {},
+                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
+                () -> {},
+                outputs);
+        currentBatch = batch;
+        return batch;
     }
 
     @Override
@@ -136,6 +148,15 @@ public class GeneratorOperator
     @Override
     public void close()
     {
+        closeCurrentBatch();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private void closeCurrentBatch()
+    {
+        if (currentBatch != null) {
+            currentBatch.close();
+            currentBatch = null;
+        }
     }
 }

@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -30,9 +31,11 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +62,26 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testOutputCloseReleasesBorrowedButNotTakenStreams()
+    {
+        I64Vector values = new I64Vector(new long[] {11, 12, 13});
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, true, false});
+        List<Vector> released = new ArrayList<>();
+        Output output = new Output(
+                Set.of(Stream.VALUES, Stream.NULLS),
+                stream -> stream == Stream.VALUES ? values : nulls,
+                (_, vector) -> vector,
+                (_, vector) -> released.add(vector));
+
+        assertThat(output.borrow(Stream.VALUES)).isSameAs(values);
+        assertThat(output.take(Stream.NULLS)).isSameAs(nulls);
+
+        output.close();
+
+        assertThat(released).containsExactly(values);
+    }
+
+    @Test
     void testOptionalStreamAccessReturnsNullWhenStreamIsAbsent()
     {
         I64Vector values = new I64Vector(new long[] {11, 12, 13});
@@ -81,6 +104,20 @@ public class TestBatchRuntime
         assertThatThrownBy(batch::borrowMask)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("already taken");
+    }
+
+    @Test
+    void testBatchCloseReleasesBorrowedMask()
+    {
+        Mask mask = Mask.range(5, 3);
+        List<Mask> released = new ArrayList<>();
+        Batch batch = new Batch(mask, _ -> {}, Function.identity(), released::add, () -> {}, Output.of(Streams.ofValues(new I64Vector(8))));
+
+        assertThat(batch.borrowMask()).isSameAs(mask);
+
+        batch.close();
+
+        assertThat(released).containsExactly(mask);
     }
 
     @Test

@@ -557,6 +557,16 @@ public class Allocator
         state(context).release();
     }
 
+    public void release(Context context, Mask mask)
+    {
+        state(context).releaseMask(mask);
+    }
+
+    public void release(Context context, Vector vector)
+    {
+        releaseVectorTree(context, vector);
+    }
+
     public void releaseIfPresent(Context context)
     {
         ContextState state = states.get(context);
@@ -865,6 +875,29 @@ public class Allocator
         state(context).releaseVector(vector);
     }
 
+    private void releaseVectorTree(Context context, Vector vector)
+    {
+        switch (vector) {
+            case ArrayVector values -> releaseStreams(context, values.elements());
+            case MapVector values -> {
+                releaseStreams(context, values.keys());
+                releaseStreams(context, values.values());
+            }
+            case StructVector values -> values.fields().values().forEach(streams -> releaseStreams(context, streams));
+            case DictionaryVector values -> releaseVectorTree(context, values.values());
+            case RleVector values -> releaseVectorTree(context, values.values());
+            default -> {}
+        }
+        releaseVector(context, vector);
+    }
+
+    private void releaseStreams(Context context, Streams streams)
+    {
+        for (Vector child : streams.asMap().values()) {
+            releaseVectorTree(context, child);
+        }
+    }
+
     private void discardVector(Context context, Vector vector)
     {
         state(context).discardVector(vector);
@@ -1124,6 +1157,20 @@ public class Allocator
             }
             stats.releaseBytes(maskBytes(mask));
             return true;
+        }
+
+        public void releaseMask(Mask mask)
+        {
+            if (!inUseMasks.remove(mask)) {
+                return;
+            }
+            stats.releaseBytes(maskBytes(mask));
+            ArrayDeque<Mask> bucket = maskPool
+                    .computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
+            bucket.addLast(mask);
+            while (bucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
+                bucket.removeFirst();
+            }
         }
 
         public void release()

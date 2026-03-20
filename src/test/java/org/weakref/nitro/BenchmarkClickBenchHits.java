@@ -156,14 +156,17 @@ public class BenchmarkClickBenchHits
 
     private static void consume(Operator operator)
     {
-        while (operator.hasNext()) {
-            var batch = operator.next();
-            Mask mask = batch.borrowMask();
-            if (mask.none()) {
-                continue;
-            }
-            for (int column = 0; column < operator.outputCount(); column++) {
-                consume(batch.output(column).borrow(Stream.VALUES));
+        try (operator) {
+            while (operator.hasNext()) {
+                try (var batch = operator.next()) {
+                    Mask mask = batch.borrowMask();
+                    if (mask.none()) {
+                        continue;
+                    }
+                    for (int column = 0; column < operator.outputCount(); column++) {
+                        consume(batch.output(column).borrow(Stream.VALUES));
+                    }
+                }
             }
         }
     }

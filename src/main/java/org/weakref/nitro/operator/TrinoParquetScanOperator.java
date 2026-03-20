@@ -55,6 +55,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
@@ -76,15 +77,16 @@ public final class TrinoParquetScanOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TrinoParquetScanOperator");
-    private static final int MAX_BATCH_ROWS = 512;
-    private static final DataSize MAX_READ_BLOCK_SIZE = DataSize.of(8, MEGABYTE);
+    private static final int MAX_BATCH_ROWS = 128;
+    private static final DataSize MAX_READ_BLOCK_SIZE = DataSize.of(2, MEGABYTE);
     private static final DataSize MAX_MERGE_DISTANCE = DataSize.of(1, MEGABYTE);
-    private static final DataSize MAX_BUFFER_SIZE = DataSize.of(8, MEGABYTE);
-    private static final DataSize MAX_PAGE_READ_SIZE = DataSize.of(8, MEGABYTE);
+    private static final DataSize MAX_BUFFER_SIZE = DataSize.of(2, MEGABYTE);
+    private static final DataSize MAX_PAGE_READ_SIZE = DataSize.of(2, MEGABYTE);
     private static final Method LONG_ARRAY_RAW_VALUES = declaredMethod(LongArrayBlock.class, "getRawValues");
     private static final Method LONG_ARRAY_RAW_VALUES_OFFSET = declaredMethod(LongArrayBlock.class, "getRawValuesOffset");
     private static final Method VARIABLE_WIDTH_RAW_OFFSETS = declaredMethod(VariableWidthBlock.class, "getRawOffsets");
     private static final Method VARIABLE_WIDTH_RAW_ARRAY_BASE = declaredMethod(VariableWidthBlock.class, "getRawArrayBase");
+    private static final Field PARQUET_SOURCE_PAGE_BLOCKS = declaredField("io.trino.parquet.reader.ParquetReader$ParquetSourcePage", "blocks");
 
     private final Allocator allocator;
     private final List<Path> files;
@@ -92,6 +94,7 @@ public final class TrinoParquetScanOperator
 
     private int fileIndex;
     private SingleFileScan currentFile;
+    private Batch currentBatch;
 
     public TrinoParquetScanOperator(Allocator allocator, Path file, List<String> columns)
     {
@@ -127,6 +130,7 @@ public final class TrinoParquetScanOperator
         if (!hasNext()) {
             throw new IllegalStateException("No more Parquet rows");
         }
+        closeCurrentBatch();
         return currentFile.next();
     }
 
@@ -147,6 +151,7 @@ public final class TrinoParquetScanOperator
     @Override
     public void close()
     {
+        closeCurrentBatch();
         closeCurrent();
     }
 
@@ -165,6 +170,14 @@ public final class TrinoParquetScanOperator
         }
         currentFile.close();
         currentFile = null;
+    }
+
+    private void closeCurrentBatch()
+    {
+        if (currentBatch != null) {
+            currentBatch.close();
+            currentBatch = null;
+        }
     }
 
     private final class SingleFileScan
@@ -188,6 +201,7 @@ public final class TrinoParquetScanOperator
                         .withMaxMergeDistance(MAX_MERGE_DISTANCE)
                         .withMaxBufferSize(MAX_BUFFER_SIZE)
                         .withMaxPageReadSize(MAX_PAGE_READ_SIZE)
+                        .withVectorizedDecodingEnabled(false)
                         .build();
 
                 FileParquetDataSource dataSource = new FileParquetDataSource(file.toFile(), options);
@@ -239,11 +253,7 @@ public final class TrinoParquetScanOperator
             SourcePage page = nextPage;
             nextPage = null;
             currentBatchState = null;
-            Block[] blocks = new Block[columns.size()];
-            for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
-                blocks[columnIndex] = page.getBlock(columnIndex);
-            }
-            BatchState batchState = new BatchState(blocks, allocator.allocateAllMask(ALLOCATION_CONTEXT, page.getPositionCount()));
+            BatchState batchState = new BatchState(page, allocator.allocateAllMask(ALLOCATION_CONTEXT, page.getPositionCount()), columns.size());
             currentBatchState = batchState;
 
             Output[] outputs = new Output[columns.size()];
@@ -260,9 +270,18 @@ public final class TrinoParquetScanOperator
                                 default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
                             };
                         },
-                        (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                        (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
+                        (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
             }
-            return new Batch(batchState.mask(), batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+            Batch batch = new Batch(
+                    batchState.mask(),
+                    batchState::constrain,
+                    takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                    mask -> allocator.release(ALLOCATION_CONTEXT, mask),
+                    () -> {},
+                    outputs);
+            currentBatch = batch;
+            return batch;
         }
 
         private void constrain(Mask mask)
@@ -354,10 +373,11 @@ public final class TrinoParquetScanOperator
             }
 
             ColumnSpec column = columns.get(columnIndex);
-            Block block = batchState.blocks()[columnIndex];
+            Block block = batchState.page().getBlock(columnIndex);
             buffer = batchState.mask().all()
                     ? readFullColumn(column, block)
                     : readMaskedColumn(column, block, batchState.mask());
+            batchState.releaseBlock(columnIndex);
             batchState.buffers()[columnIndex] = buffer;
             return buffer;
         }
@@ -717,6 +737,18 @@ public final class TrinoParquetScanOperator
         }
     }
 
+    private static Field declaredField(String className, String fieldName)
+    {
+        try {
+            Field field = Class.forName(className).getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field;
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Missing Trino field " + className + "." + fieldName, exception);
+        }
+    }
+
     private static int rawValuesOffset(LongArrayBlock block)
     {
         try {
@@ -778,11 +810,16 @@ public final class TrinoParquetScanOperator
         return Set.of();
     }
 
-    private record BatchState(Block[] blocks, Mask[] maskHolder, ColumnBuffer[] buffers)
+    private record BatchState(SourcePage[] pageHolder, Mask[] maskHolder, ColumnBuffer[] buffers)
     {
-        private BatchState(Block[] blocks, Mask mask)
+        private BatchState(SourcePage page, Mask mask, int columnCount)
         {
-            this(blocks, new Mask[] {mask}, new ColumnBuffer[blocks.length]);
+            this(new SourcePage[] {page}, new Mask[] {mask}, new ColumnBuffer[columnCount]);
+        }
+
+        private SourcePage page()
+        {
+            return pageHolder[0];
         }
 
         private Mask mask()
@@ -794,6 +831,21 @@ public final class TrinoParquetScanOperator
         {
             maskHolder[0] = mask;
             Arrays.fill(buffers, null);
+        }
+
+        private void releaseBlock(int columnIndex)
+        {
+            SourcePage page = page();
+            if (page == null || !PARQUET_SOURCE_PAGE_BLOCKS.getDeclaringClass().isInstance(page)) {
+                return;
+            }
+            try {
+                Block[] blocks = (Block[]) PARQUET_SOURCE_PAGE_BLOCKS.get(page);
+                blocks[columnIndex] = null;
+            }
+            catch (IllegalAccessException exception) {
+                throw new IllegalStateException("Unable to clear Trino source page block cache", exception);
+            }
         }
     }
 

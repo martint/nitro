@@ -23,33 +23,45 @@ import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
 public final class Batch
+        implements AutoCloseable
 {
     private Mask mask;
     private final Output[] outputs;
     private final Function<Mask, Mask> maskTakeResolver;
+    private final Consumer<Mask> maskReleaseResolver;
     private final Consumer<Mask> constrainer;
+    private final Runnable closeAction;
     private boolean maskTaken;
+    private boolean closed;
 
     public Batch(Mask mask, Output... outputs)
     {
-        this(mask, _ -> {}, Function.identity(), outputs);
+        this(mask, _ -> {}, Function.identity(), _ -> {}, () -> {}, outputs);
     }
 
     public Batch(Mask mask, Function<Mask, Mask> maskTakeResolver, Output... outputs)
     {
-        this(mask, _ -> {}, maskTakeResolver, outputs);
+        this(mask, _ -> {}, maskTakeResolver, _ -> {}, () -> {}, outputs);
     }
 
     public Batch(Mask mask, Consumer<Mask> constrainer, Function<Mask, Mask> maskTakeResolver, Output... outputs)
     {
+        this(mask, constrainer, maskTakeResolver, _ -> {}, () -> {}, outputs);
+    }
+
+    public Batch(Mask mask, Consumer<Mask> constrainer, Function<Mask, Mask> maskTakeResolver, Consumer<Mask> maskReleaseResolver, Runnable closeAction, Output... outputs)
+    {
         this.mask = requireNonNull(mask, "mask is null");
         this.constrainer = requireNonNull(constrainer, "constrainer is null");
         this.maskTakeResolver = requireNonNull(maskTakeResolver, "maskTakeResolver is null");
+        this.maskReleaseResolver = requireNonNull(maskReleaseResolver, "maskReleaseResolver is null");
+        this.closeAction = requireNonNull(closeAction, "closeAction is null");
         this.outputs = Arrays.copyOf(outputs, outputs.length);
     }
 
     public Mask borrowMask()
     {
+        checkOpen();
         if (maskTaken) {
             throw new IllegalStateException("Mask already taken");
         }
@@ -58,6 +70,7 @@ public final class Batch
 
     public Mask takeMask()
     {
+        checkOpen();
         Mask borrowedMask = borrowMask();
         maskTaken = true;
         return requireNonNull(maskTakeResolver.apply(borrowedMask), "maskTakeResolver returned null");
@@ -65,6 +78,7 @@ public final class Batch
 
     public void constrain(Mask mask)
     {
+        checkOpen();
         if (maskTaken) {
             throw new IllegalStateException("Mask already taken");
         }
@@ -74,6 +88,30 @@ public final class Batch
 
     public Output output(int outputIndex)
     {
+        checkOpen();
         return outputs[checkIndex(outputIndex, outputs.length)];
+    }
+
+    @Override
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        for (Output output : outputs) {
+            output.close();
+        }
+        if (!maskTaken) {
+            maskReleaseResolver.accept(mask);
+        }
+        closeAction.run();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Batch already closed");
+        }
     }
 }
