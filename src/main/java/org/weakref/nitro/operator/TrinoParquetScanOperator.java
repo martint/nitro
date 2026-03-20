@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import io.airlift.slice.Slice;
+import io.airlift.units.DataSize;
 import io.trino.memory.context.AggregatedMemoryContext;
 import io.trino.parquet.AbstractParquetDataSource;
 import io.trino.parquet.Column;
@@ -66,6 +67,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.Objects.requireNonNull;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
@@ -75,6 +77,10 @@ public final class TrinoParquetScanOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TrinoParquetScanOperator");
     private static final int MAX_BATCH_ROWS = 512;
+    private static final DataSize MAX_READ_BLOCK_SIZE = DataSize.of(8, MEGABYTE);
+    private static final DataSize MAX_MERGE_DISTANCE = DataSize.of(1, MEGABYTE);
+    private static final DataSize MAX_BUFFER_SIZE = DataSize.of(8, MEGABYTE);
+    private static final DataSize MAX_PAGE_READ_SIZE = DataSize.of(8, MEGABYTE);
     private static final Method LONG_ARRAY_RAW_VALUES = declaredMethod(LongArrayBlock.class, "getRawValues");
     private static final Method LONG_ARRAY_RAW_VALUES_OFFSET = declaredMethod(LongArrayBlock.class, "getRawValuesOffset");
     private static final Method VARIABLE_WIDTH_RAW_OFFSETS = declaredMethod(VariableWidthBlock.class, "getRawOffsets");
@@ -176,7 +182,11 @@ public final class TrinoParquetScanOperator
 
             try {
                 ParquetReaderOptions options = ParquetReaderOptions.builder()
+                        .withMaxReadBlockSize(MAX_READ_BLOCK_SIZE)
                         .withMaxReadBlockRowCount(MAX_BATCH_ROWS)
+                        .withMaxMergeDistance(MAX_MERGE_DISTANCE)
+                        .withMaxBufferSize(MAX_BUFFER_SIZE)
+                        .withMaxPageReadSize(MAX_PAGE_READ_SIZE)
                         .build();
 
                 FileParquetDataSource dataSource = new FileParquetDataSource(file.toFile(), options);
