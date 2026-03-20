@@ -57,9 +57,36 @@ public final class CountStateVector
         return length;
     }
 
+    @Override
+    public long retainedBytes()
+    {
+        return bytes();
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        return allocator.adopt(allocationContext, new CountStateVector(this, length));
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        CountStateVector copy = new CountStateVector(positions.length);
+        for (int index = 0; index < positions.length; index++) {
+            copy.increment(index, value(positions[index]));
+        }
+        return allocator.adopt(allocationContext, copy);
+    }
+
     public void increment(int index, long count)
     {
         chunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+    }
+
+    public long value(int index)
+    {
+        return chunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
     }
 
     public void copyTo(I64Vector output)

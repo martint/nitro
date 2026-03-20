@@ -139,6 +139,67 @@ public final class BinaryVector
     }
 
     @Override
+    public long retainedBytes()
+    {
+        return (long) offsets.length * Integer.BYTES + data.length;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        int byteLength = offsets[positionCount];
+        BinaryVector copy = allocator.allocateBinary(allocationContext, positionCount, byteLength);
+        copyInto(copy);
+        return copy;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        int totalBytes = 0;
+        for (int position : positions) {
+            totalBytes += length(position);
+        }
+        BinaryVector copy = allocator.allocateBinary(allocationContext, positions.length, totalBytes);
+        copy.addTraits(traits);
+        for (int index = 0; index < positions.length; index++) {
+            int position = positions[index];
+            int valueLength = length(position);
+            if (valueLength == 0) {
+                copy.setNull(index);
+            }
+            else {
+                copy.setBytes(index, data, startOffset(position), valueLength);
+            }
+        }
+        return copy;
+    }
+
+    @Override
+    public void copyInto(Vector target)
+    {
+        BinaryVector copy = (BinaryVector) target;
+        System.arraycopy(offsets, 0, copy.offsets(), 0, offsets.length);
+        int byteLength = offsets[positionCount];
+        System.arraycopy(data, 0, copy.data(), 0, byteLength);
+        copy.addTraits(traits);
+    }
+
+    @Override
+    public void clearForReuse()
+    {
+        clearTraits();
+        Arrays.fill(offsets, 0);
+        Arrays.fill(data, (byte) 0);
+    }
+
+    @Override
+    public PoolingMode poolingMode()
+    {
+        return PoolingMode.BINARY;
+    }
+
+    @Override
     public String toString()
     {
         return "BinaryVector{positions=" + positionCount + ", byteCapacity=" + data.length + ", traits=" + traits + "}";

@@ -13,8 +13,42 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.function.Consumer;
+
 public sealed interface Vector
         permits DictionaryVector, FlatVector, RleVector
 {
+    enum PoolingMode
+    {
+        NONE,
+        STANDARD,
+        BINARY,
+    }
+
     int length();
+
+    long retainedBytes();
+
+    Vector copy(Allocator allocator, Allocator.Context allocationContext);
+
+    Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions);
+
+    default void copyInto(Vector target)
+    {
+        throw new UnsupportedOperationException("Vector does not support copyInto: " + getClass().getSimpleName());
+    }
+
+    default void clearForReuse()
+    {
+        throw new UnsupportedOperationException("Vector does not support clearForReuse: " + getClass().getSimpleName());
+    }
+
+    default PoolingMode poolingMode()
+    {
+        return PoolingMode.NONE;
+    }
+
+    default void forEachChildVector(Consumer<Vector> consumer)
+    {
+    }
 }

@@ -60,7 +60,7 @@ public class Allocator
             vector = allocator.apply(size);
         }
         else {
-            clearVector(vector);
+            vector.clearForReuse();
         }
 
         @SuppressWarnings("unchecked")
@@ -84,7 +84,7 @@ public class Allocator
             vector = new BinaryVector(positionCount, byteCapacity);
         }
         else {
-            clearVector(vector);
+            vector.clearForReuse();
         }
         state.trackVector(vector, reused);
         return vector;
@@ -138,7 +138,7 @@ public class Allocator
         }
         if (vector.length() < size) {
             T grown = allocate(context, vectorType, size, vectorAllocator);
-            copyVectorContents(vector, grown);
+            vector.copyInto(grown);
             discardVector(context, vector);
             return grown;
         }
@@ -153,7 +153,7 @@ public class Allocator
 
         if (vector.length() < count) {
             T grown = allocate(context, vectorType, count, vectorAllocator);
-            copyVectorContents(vector, grown);
+            vector.copyInto(grown);
             discardVector(context, vector);
             return grown;
         }
@@ -612,216 +612,12 @@ public class Allocator
 
     public Vector copyVector(Context context, Vector vector)
     {
-        return switch (vector) {
-            case I32Vector values -> {
-                I32Vector copy = allocate(context, I32Vector.class, values.length(), I32Vector::new);
-                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
-                yield copy;
-            }
-            case I64Vector values -> {
-                I64Vector copy = allocate(context, I64Vector.class, values.length(), I64Vector::new);
-                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
-                yield copy;
-            }
-            case BooleanVector values -> {
-                BooleanVector copy = allocate(context, BooleanVector.class, values.length(), BooleanVector::new);
-                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
-                yield copy;
-            }
-            case F64Vector values -> {
-                F64Vector copy = allocate(context, F64Vector.class, values.length(), F64Vector::new);
-                System.arraycopy(values.values(), 0, copy.values(), 0, values.length());
-                yield copy;
-            }
-            case BinaryVector values -> {
-                int byteLength = values.offsets()[values.length()];
-                BinaryVector copy = allocateBinary(context, values.length(), byteLength);
-                System.arraycopy(values.offsets(), 0, copy.offsets(), 0, values.offsets().length);
-                System.arraycopy(values.data(), 0, copy.data(), 0, byteLength);
-                copy.addTraits(values.traits());
-                yield copy;
-            }
-            case ArrayVector values -> {
-                ArrayVector copy = allocateArray(context, values.length());
-                System.arraycopy(values.offsets(), 0, copy.offsets(), 0, values.offsets().length);
-                copy.setElements(copyStreams(context, values.elements()));
-                yield copy;
-            }
-            case MapVector values -> {
-                MapVector copy = allocateMap(context, values.length());
-                System.arraycopy(values.offsets(), 0, copy.offsets(), 0, values.offsets().length);
-                copy.setEntries(copyStreams(context, values.keys()), copyStreams(context, values.values()));
-                yield copy;
-            }
-            case StructVector values -> {
-                StructVector copy = allocate(context, StructVector.class, values.length(), StructVector::new);
-                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
-                    copy.setField(entry.getKey(), copyStreams(context, entry.getValue()));
-                }
-                yield copy;
-            }
-            case DictionaryVector values -> allocateDictionary(context, values.ids(), copyVector(context, values.values()));
-            case RleVector values -> allocateRle(context, values.counts(), copyVector(context, values.values()));
-            default -> throw new IllegalArgumentException("Unsupported vector type for copying: " + vector.getClass().getSimpleName());
-        };
+        return vector.copy(this, context);
     }
 
     public Vector copyVector(Context context, Vector vector, int[] positions)
     {
-        return switch (vector) {
-            case I32Vector values -> {
-                I32Vector copy = allocate(context, I32Vector.class, positions.length, I32Vector::new);
-                for (int index = 0; index < positions.length; index++) {
-                    copy.values()[index] = values.values()[positions[index]];
-                }
-                yield copy;
-            }
-            case I64Vector values -> {
-                I64Vector copy = allocate(context, I64Vector.class, positions.length, I64Vector::new);
-                for (int index = 0; index < positions.length; index++) {
-                    copy.values()[index] = values.values()[positions[index]];
-                }
-                yield copy;
-            }
-            case BooleanVector values -> {
-                BooleanVector copy = allocate(context, BooleanVector.class, positions.length, BooleanVector::new);
-                for (int index = 0; index < positions.length; index++) {
-                    copy.values()[index] = values.values()[positions[index]];
-                }
-                yield copy;
-            }
-            case F64Vector values -> {
-                F64Vector copy = allocate(context, F64Vector.class, positions.length, F64Vector::new);
-                for (int index = 0; index < positions.length; index++) {
-                    copy.values()[index] = values.values()[positions[index]];
-                }
-                yield copy;
-            }
-            case BinaryVector values -> {
-                int totalBytes = 0;
-                for (int position : positions) {
-                    totalBytes += values.length(position);
-                }
-                BinaryVector copy = allocateBinary(context, positions.length, totalBytes);
-                copy.addTraits(values.traits());
-                for (int index = 0; index < positions.length; index++) {
-                    int position = positions[index];
-                    int length = values.length(position);
-                    if (length == 0) {
-                        copy.setNull(index);
-                    }
-                    else {
-                        copy.setBytes(index, values.data(), values.startOffset(position), length);
-                    }
-                }
-                yield copy;
-            }
-            case ArrayVector values -> {
-                ArrayVector copy = allocateArray(context, positions.length);
-                int totalElements = 0;
-                for (int index = 0; index < positions.length; index++) {
-                    copy.offsets()[index] = totalElements;
-                    totalElements += values.length(positions[index]);
-                }
-                copy.offsets()[positions.length] = totalElements;
-                copy.setElements(copyStreams(context, values.elements(), nestedPositions(values.offsets(), positions, totalElements)));
-                yield copy;
-            }
-            case MapVector values -> {
-                MapVector copy = allocateMap(context, positions.length);
-                int totalEntries = 0;
-                for (int index = 0; index < positions.length; index++) {
-                    copy.offsets()[index] = totalEntries;
-                    totalEntries += values.length(positions[index]);
-                }
-                copy.offsets()[positions.length] = totalEntries;
-                int[] entryPositions = nestedPositions(values.offsets(), positions, totalEntries);
-                copy.setEntries(
-                        copyStreams(context, values.keys(), entryPositions),
-                        copyStreams(context, values.values(), entryPositions));
-                yield copy;
-            }
-            case StructVector values -> {
-                StructVector copy = allocate(context, StructVector.class, positions.length, StructVector::new);
-                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
-                    copy.setField(entry.getKey(), copyStreams(context, entry.getValue(), positions));
-                }
-                yield copy;
-            }
-            case DictionaryVector values -> copyVector(context, values.values(), dictionaryPositions(values.ids(), positions));
-            case RleVector values -> copyVector(context, values.values(), rlePositions(values, positions));
-            default -> throw new IllegalArgumentException("Unsupported vector type for copying: " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private void copyVectorContents(Vector source, Vector target)
-    {
-        switch (source) {
-            case AvgStateVector values -> {
-                AvgStateVector avgTarget = (AvgStateVector) target;
-                System.arraycopy(values.sums(), 0, avgTarget.sums(), 0, values.length());
-                System.arraycopy(values.counts(), 0, avgTarget.counts(), 0, values.length());
-            }
-            case I32Vector values -> System.arraycopy(values.values(), 0, ((I32Vector) target).values(), 0, values.length());
-            case I64Vector values -> System.arraycopy(values.values(), 0, ((I64Vector) target).values(), 0, values.length());
-            case BooleanVector values -> System.arraycopy(values.values(), 0, ((BooleanVector) target).values(), 0, values.length());
-            case F64Vector values -> System.arraycopy(values.values(), 0, ((F64Vector) target).values(), 0, values.length());
-            case Utf8StateVector values -> System.arraycopy(values.values(), 0, ((Utf8StateVector) target).values(), 0, values.length());
-            case BinaryVector values -> {
-                BinaryVector binaryTarget = (BinaryVector) target;
-                System.arraycopy(values.offsets(), 0, binaryTarget.offsets(), 0, values.length() + 1);
-                int byteLength = values.offsets()[values.length()];
-                System.arraycopy(values.data(), 0, binaryTarget.data(), 0, byteLength);
-                binaryTarget.addTraits(values.traits());
-            }
-            case ArrayVector values -> {
-                ArrayVector arrayTarget = (ArrayVector) target;
-                System.arraycopy(values.offsets(), 0, arrayTarget.offsets(), 0, values.length() + 1);
-                arrayTarget.setElements(values.elements());
-            }
-            case MapVector values -> {
-                MapVector mapTarget = (MapVector) target;
-                System.arraycopy(values.offsets(), 0, mapTarget.offsets(), 0, values.length() + 1);
-                mapTarget.setEntries(values.keys(), values.values());
-            }
-            case StructVector values -> {
-                StructVector structTarget = (StructVector) target;
-                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
-                    structTarget.setField(entry.getKey(), entry.getValue());
-                }
-            }
-            default -> throw new IllegalArgumentException("Unsupported vector type for growth copy: " + source.getClass().getSimpleName());
-        }
-    }
-
-    private static int[] dictionaryPositions(int[] ids, int[] positions)
-    {
-        int[] result = new int[positions.length];
-        for (int index = 0; index < positions.length; index++) {
-            result[index] = ids[positions[index]];
-        }
-        return result;
-    }
-
-    private static int[] rlePositions(RleVector values, int[] positions)
-    {
-        int[] result = new int[positions.length];
-        for (int index = 0; index < positions.length; index++) {
-            result[index] = values.runIndex(positions[index]);
-        }
-        return result;
-    }
-
-    private static int[] nestedPositions(int[] offsets, int[] positions, int totalElements)
-    {
-        int[] result = new int[totalElements];
-        int next = 0;
-        for (int position : positions) {
-            for (int element = offsets[position]; element < offsets[position + 1]; element++) {
-                result[next++] = element;
-            }
-        }
-        return result;
+        return vector.copy(this, context, positions);
     }
 
     private void transferMask(Mask mask, Context preferredContext)
@@ -842,17 +638,7 @@ public class Allocator
 
     private void transferVector(Vector vector, Context preferredContext)
     {
-        switch (vector) {
-            case ArrayVector values -> transferStreams(values.elements(), preferredContext);
-            case MapVector values -> {
-                transferStreams(values.keys(), preferredContext);
-                transferStreams(values.values(), preferredContext);
-            }
-            case StructVector values -> values.fields().values().forEach(streams -> transferStreams(streams, preferredContext));
-            case DictionaryVector values -> transferVector(values.values(), preferredContext);
-            case RleVector values -> transferVector(values.values(), preferredContext);
-            default -> {}
-        }
+        vector.forEachChildVector(child -> transferVector(child, preferredContext));
 
         ContextState preferredState = states.get(preferredContext);
         if (preferredState != null && preferredState.transferVector(vector)) {
@@ -882,25 +668,8 @@ public class Allocator
 
     private void releaseVectorTree(Context context, Vector vector)
     {
-        switch (vector) {
-            case ArrayVector values -> releaseStreams(context, values.elements());
-            case MapVector values -> {
-                releaseStreams(context, values.keys());
-                releaseStreams(context, values.values());
-            }
-            case StructVector values -> values.fields().values().forEach(streams -> releaseStreams(context, streams));
-            case DictionaryVector values -> releaseVectorTree(context, values.values());
-            case RleVector values -> releaseVectorTree(context, values.values());
-            default -> {}
-        }
+        vector.forEachChildVector(child -> releaseVectorTree(context, child));
         releaseVector(context, vector);
-    }
-
-    private void releaseStreams(Context context, Streams streams)
-    {
-        for (Vector child : streams.asMap().values()) {
-            releaseVectorTree(context, child);
-        }
     }
 
     private void discardVector(Context context, Vector vector)
@@ -952,65 +721,6 @@ public class Allocator
             positions[index] = source.position(index);
         }
         target.setSelection(source.size(), source.selectedCount(), false);
-    }
-
-    private static long vectorBytes(Vector vector)
-    {
-        return switch (vector) {
-            case AvgStateVector values -> (long) values.sums().length * Long.BYTES * 2;
-            case CountStateVector values -> values.bytes();
-            case I32Vector values -> (long) values.values().length * Integer.BYTES;
-            case I64Vector values -> (long) values.values().length * Long.BYTES;
-            case BooleanVector values -> values.values().length;
-            case F64Vector values -> (long) values.values().length * Double.BYTES;
-            case Utf8StateVector values -> Arrays.stream(values.values()).filter(java.util.Objects::nonNull).mapToLong(entry -> entry.length).sum();
-            case BinaryVector values -> (long) values.offsets().length * Integer.BYTES + values.data().length;
-            case ArrayVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.elements());
-            case MapVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.keys()) + streamsBytes(values.values());
-            case StructVector values -> values.fields().values().stream().mapToLong(Allocator::streamsBytes).sum();
-            case DictionaryVector values -> (long) values.ids().length * Integer.BYTES;
-            case RleVector values -> (long) values.counts().length * Integer.BYTES;
-            default -> throw new IllegalArgumentException("Unsupported vector type for sizing: " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static long streamsBytes(Streams streams)
-    {
-        return streams.asMap().values().stream()
-                .mapToLong(Allocator::vectorBytes)
-                .sum();
-    }
-
-    private static void clearVector(Vector vector)
-    {
-        switch (vector) {
-            case AvgStateVector values -> {
-                Arrays.fill(values.sums(), 0);
-                Arrays.fill(values.counts(), 0);
-            }
-            case I32Vector values -> Arrays.fill(values.values(), 0);
-            case I64Vector values -> Arrays.fill(values.values(), 0);
-            case BooleanVector values -> Arrays.fill(values.values(), false);
-            case F64Vector values -> Arrays.fill(values.values(), 0);
-            case Utf8StateVector values -> Arrays.fill(values.values(), null);
-            case BinaryVector values -> {
-                values.clearTraits();
-                Arrays.fill(values.offsets(), 0);
-                Arrays.fill(values.data(), (byte) 0);
-            }
-            case ArrayVector values -> {
-                Arrays.fill(values.offsets(), 0);
-                values.clearElements();
-            }
-            case MapVector values -> {
-                Arrays.fill(values.offsets(), 0);
-                values.clearEntries();
-            }
-            case StructVector values -> values.clearFields();
-            case DictionaryVector _ -> throw new IllegalArgumentException("Allocator pooling does not support dictionary vectors");
-            case RleVector _ -> throw new IllegalArgumentException("Allocator pooling does not support RLE vectors");
-            default -> throw new IllegalArgumentException("Unsupported vector type for clearing: " + vector.getClass().getSimpleName());
-        }
     }
 
     private static long maskBytes(Mask mask)
@@ -1093,7 +803,7 @@ public class Allocator
         public void trackVector(Vector vector, boolean reused)
         {
             inUseVectors.add(vector);
-            stats.acquire(vectorBytes(vector), reused);
+            stats.acquire(vector.retainedBytes(), reused);
         }
 
         public void releaseVector(Vector vector)
@@ -1102,11 +812,12 @@ public class Allocator
                 return;
             }
 
-            stats.releaseBytes(vectorBytes(vector));
-            if (vector instanceof DictionaryVector || vector instanceof RleVector || vector instanceof CountStateVector) {
+            stats.releaseBytes(vector.retainedBytes());
+            if (vector.poolingMode() == Vector.PoolingMode.NONE) {
                 return;
             }
-            if (vector instanceof BinaryVector binaryVector) {
+            if (vector.poolingMode() == Vector.PoolingMode.BINARY) {
+                BinaryVector binaryVector = (BinaryVector) vector;
                 addBinaryVectorToPool(binaryVector);
                 return;
             }
@@ -1124,7 +835,7 @@ public class Allocator
             if (!inUseVectors.remove(vector)) {
                 return;
             }
-            stats.releaseBytes(vectorBytes(vector));
+            stats.releaseBytes(vector.retainedBytes());
         }
 
         public boolean transferVector(Vector vector)
@@ -1132,7 +843,7 @@ public class Allocator
             if (!inUseVectors.remove(vector)) {
                 return false;
             }
-            stats.releaseBytes(vectorBytes(vector));
+            stats.releaseBytes(vector.retainedBytes());
             return true;
         }
 
@@ -1182,10 +893,11 @@ public class Allocator
         public void release()
         {
             for (Vector vector : inUseVectors) {
-                if (vector instanceof DictionaryVector || vector instanceof RleVector || vector instanceof CountStateVector) {
+                if (vector.poolingMode() == Vector.PoolingMode.NONE) {
                     continue;
                 }
-                if (vector instanceof BinaryVector binaryVector) {
+                if (vector.poolingMode() == Vector.PoolingMode.BINARY) {
+                    BinaryVector binaryVector = (BinaryVector) vector;
                     addBinaryVectorToPool(binaryVector);
                 }
                 else {

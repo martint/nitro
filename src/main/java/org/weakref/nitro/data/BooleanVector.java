@@ -42,6 +42,48 @@ public class BooleanVector
     }
 
     @Override
+    public long retainedBytes()
+    {
+        return values.length;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        BooleanVector copy = allocator.allocate(allocationContext, BooleanVector.class, values.length, BooleanVector::new);
+        copyInto(copy);
+        return copy;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        BooleanVector copy = allocator.allocate(allocationContext, BooleanVector.class, positions.length, BooleanVector::new);
+        for (int index = 0; index < positions.length; index++) {
+            copy.values()[index] = values[positions[index]];
+        }
+        return copy;
+    }
+
+    @Override
+    public void copyInto(Vector target)
+    {
+        System.arraycopy(values, 0, ((BooleanVector) target).values(), 0, values.length);
+    }
+
+    @Override
+    public void clearForReuse()
+    {
+        Arrays.fill(values, false);
+    }
+
+    @Override
+    public PoolingMode poolingMode()
+    {
+        return PoolingMode.STANDARD;
+    }
+
+    @Override
     public String toString()
     {
         return "BooleanVector" + Arrays.toString(values);

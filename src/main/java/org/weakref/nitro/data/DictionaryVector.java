@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import java.util.Arrays;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -55,6 +56,34 @@ public final class DictionaryVector
     public int length()
     {
         return ids.length;
+    }
+
+    @Override
+    public long retainedBytes()
+    {
+        return (long) ids.length * Integer.BYTES;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        return allocator.allocateDictionary(allocationContext, ids, values.copy(allocator, allocationContext));
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        int[] dictionaryPositions = new int[positions.length];
+        for (int index = 0; index < positions.length; index++) {
+            dictionaryPositions[index] = ids[positions[index]];
+        }
+        return values.copy(allocator, allocationContext, dictionaryPositions);
+    }
+
+    @Override
+    public void forEachChildVector(Consumer<Vector> consumer)
+    {
+        consumer.accept(values);
     }
 
     @Override

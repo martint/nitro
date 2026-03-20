@@ -19,6 +19,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 
@@ -76,5 +77,58 @@ public final class StructVector
     public int length()
     {
         return positionCount;
+    }
+
+    @Override
+    public long retainedBytes()
+    {
+        return 0;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        StructVector copy = allocator.allocate(allocationContext, StructVector.class, positionCount, StructVector::new);
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            copy.setField(entry.getKey(), allocator.copyStreams(allocationContext, entry.getValue()));
+        }
+        return copy;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        StructVector copy = allocator.allocate(allocationContext, StructVector.class, positions.length, StructVector::new);
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            copy.setField(entry.getKey(), allocator.copyStreams(allocationContext, entry.getValue(), positions));
+        }
+        return copy;
+    }
+
+    @Override
+    public void copyInto(Vector target)
+    {
+        StructVector structTarget = (StructVector) target;
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            structTarget.setField(entry.getKey(), entry.getValue());
+        }
+    }
+
+    @Override
+    public void clearForReuse()
+    {
+        clearFields();
+    }
+
+    @Override
+    public PoolingMode poolingMode()
+    {
+        return PoolingMode.STANDARD;
+    }
+
+    @Override
+    public void forEachChildVector(Consumer<Vector> consumer)
+    {
+        fields.values().forEach(streams -> streams.asMap().values().forEach(consumer));
     }
 }

@@ -42,6 +42,48 @@ public class I32Vector
     }
 
     @Override
+    public long retainedBytes()
+    {
+        return (long) values.length * Integer.BYTES;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        I32Vector copy = allocator.allocate(allocationContext, I32Vector.class, values.length, I32Vector::new);
+        copyInto(copy);
+        return copy;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        I32Vector copy = allocator.allocate(allocationContext, I32Vector.class, positions.length, I32Vector::new);
+        for (int index = 0; index < positions.length; index++) {
+            copy.values()[index] = values[positions[index]];
+        }
+        return copy;
+    }
+
+    @Override
+    public void copyInto(Vector target)
+    {
+        System.arraycopy(values, 0, ((I32Vector) target).values(), 0, values.length);
+    }
+
+    @Override
+    public void clearForReuse()
+    {
+        Arrays.fill(values, 0);
+    }
+
+    @Override
+    public PoolingMode poolingMode()
+    {
+        return PoolingMode.STANDARD;
+    }
+
+    @Override
     public String toString()
     {
         return "I32Vector" + Arrays.toString(values);

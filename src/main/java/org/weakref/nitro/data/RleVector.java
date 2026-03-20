@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import java.util.Arrays;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -99,6 +100,34 @@ public final class RleVector
     public int length()
     {
         return length;
+    }
+
+    @Override
+    public long retainedBytes()
+    {
+        return (long) counts.length * Integer.BYTES;
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext)
+    {
+        return allocator.allocateRle(allocationContext, counts, values.copy(allocator, allocationContext));
+    }
+
+    @Override
+    public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
+    {
+        int[] runPositions = new int[positions.length];
+        for (int index = 0; index < positions.length; index++) {
+            runPositions[index] = runIndex(positions[index]);
+        }
+        return values.copy(allocator, allocationContext, runPositions);
+    }
+
+    @Override
+    public void forEachChildVector(Consumer<Vector> consumer)
+    {
+        consumer.accept(values);
     }
 
     private int[] computeRunEnds()
