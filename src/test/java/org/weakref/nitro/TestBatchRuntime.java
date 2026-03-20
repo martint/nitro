@@ -201,6 +201,27 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorDoesNotPoolSupersededGrowthVectors()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("DiscardGrowthVectors");
+
+        I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        I64Vector second = allocator.allocateOrGrow(context, first, I64Vector.class, 16, I64Vector::new);
+        I64Vector third = allocator.allocateOrGrow(context, second, I64Vector.class, 32, I64Vector::new);
+
+        allocator.release(context);
+
+        I64Vector reusedFinal = allocator.allocate(context, I64Vector.class, 32, I64Vector::new);
+        I64Vector freshSmaller = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        I64Vector freshMiddle = allocator.allocate(context, I64Vector.class, 16, I64Vector::new);
+
+        assertThat(reusedFinal).isSameAs(third);
+        assertThat(freshSmaller).isNotSameAs(first);
+        assertThat(freshMiddle).isNotSameAs(second);
+    }
+
+    @Test
     void testAllocatorComputedCapacityNeverDropsBelowRequestedSize()
     {
         assertThat(Allocator.computeCapacity(0)).isEqualTo(0);

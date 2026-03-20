@@ -103,7 +103,7 @@ public class Allocator
             int bytesUsed = Arrays.stream(vector.offsets()).max().orElse(0);
             System.arraycopy(vector.data(), 0, grown.data(), 0, bytesUsed);
             grown.addTraits(vector.traits());
-            releaseVector(context, vector);
+            discardVector(context, vector);
             return grown;
         }
         return vector;
@@ -127,7 +127,7 @@ public class Allocator
         if (vector.length() < size) {
             T grown = allocate(context, vectorType, size, vectorAllocator);
             copyVectorContents(vector, grown);
-            releaseVector(context, vector);
+            discardVector(context, vector);
             return grown;
         }
         return vector;
@@ -142,7 +142,7 @@ public class Allocator
         if (vector.length() < count) {
             T grown = allocate(context, vectorType, count, vectorAllocator);
             copyVectorContents(vector, grown);
-            releaseVector(context, vector);
+            discardVector(context, vector);
             return grown;
         }
 
@@ -853,6 +853,11 @@ public class Allocator
         state(context).releaseVector(vector);
     }
 
+    private void discardVector(Context context, Vector vector)
+    {
+        state(context).discardVector(vector);
+    }
+
     private ContextState state(Context context)
     {
         return states.computeIfAbsent(context, _ -> new ContextState());
@@ -1048,6 +1053,14 @@ public class Allocator
                     .computeIfAbsent(vector.getClass(), _ -> new TreeMap<>())
                     .computeIfAbsent(vector.length(), _ -> new ArrayDeque<>())
                     .addLast(vector);
+        }
+
+        public void discardVector(Vector vector)
+        {
+            if (!inUseVectors.remove(vector)) {
+                return;
+            }
+            stats.releaseBytes(vectorBytes(vector));
         }
 
         public boolean transferVector(Vector vector)
