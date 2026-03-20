@@ -13,13 +13,17 @@
  */
 package org.weakref.nitro;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -54,7 +58,7 @@ public class TestClickBenchHitsRealData
         }
     }
 
-    @Test
+    @RepeatedTest(1000)
     void testClickBenchQuery0SelectAllOnActualHits()
     {
         try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), actualHitsDirectory())) {
@@ -66,19 +70,19 @@ public class TestClickBenchHitsRealData
             assertThat(mask.none()).isFalse();
 
             int firstPosition = mask.position(0);
-            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
-            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
-            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
-            assertThat(batch.output(3).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
-            assertThat(batch.output(4).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
-            assertThat(batch.output(5).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+            assertThat(baseVector(batch.output(0).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
+            assertThat(baseVector(batch.output(1).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
+            assertThat(baseVector(batch.output(2).borrow(Stream.VALUES))).isInstanceOf(I64Vector.class);
+            assertThat(baseVector(batch.output(3).borrow(Stream.VALUES))).isInstanceOf(I32Vector.class);
+            assertThat(baseVector(batch.output(4).borrow(Stream.VALUES))).isInstanceOf(BinaryVector.class);
+            assertThat(baseVector(batch.output(5).borrow(Stream.VALUES))).isInstanceOf(BinaryVector.class);
 
             integerValue(batch.output(0).borrow(Stream.VALUES), firstPosition);
             integerValue(batch.output(1).borrow(Stream.VALUES), firstPosition);
             integerValue(batch.output(2).borrow(Stream.VALUES), firstPosition);
             assertThat(integerValue(batch.output(3).borrow(Stream.VALUES), firstPosition)).isPositive();
-            assertThat(((BinaryVector) batch.output(4).borrow(Stream.VALUES)).utf8Value(firstPosition)).isNotNull();
-            assertThat(((BinaryVector) batch.output(5).borrow(Stream.VALUES)).utf8Value(firstPosition)).isNotNull();
+            assertThat(binaryValue(batch.output(4).borrow(Stream.VALUES), firstPosition)).isNotNull();
+            assertThat(binaryValue(batch.output(5).borrow(Stream.VALUES), firstPosition)).isNotNull();
         }
     }
 
@@ -266,7 +270,28 @@ public class TestClickBenchHitsRealData
         return switch (vector) {
             case I32Vector typed -> typed.values()[position];
             case I64Vector typed -> typed.values()[position];
+            case DictionaryVector typed -> integerValue(typed.values(), typed.ids()[position]);
+            case RleVector typed -> integerValue(typed.values(), typed.runIndex(position));
             default -> throw new AssertionError("Expected integer vector but got " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static String binaryValue(Object vector, int position)
+    {
+        return switch (vector) {
+            case BinaryVector typed -> typed.utf8Value(position);
+            case DictionaryVector typed -> binaryValue(typed.values(), typed.ids()[position]);
+            case RleVector typed -> binaryValue(typed.values(), typed.runIndex(position));
+            default -> throw new AssertionError("Expected binary vector but got " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static Vector baseVector(Object vector)
+    {
+        return switch ((Vector) vector) {
+            case DictionaryVector typed -> baseVector(typed.values());
+            case RleVector typed -> baseVector(typed.values());
+            case Vector typed -> typed;
         };
     }
 }

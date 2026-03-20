@@ -21,11 +21,11 @@ import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
-import org.weakref.nitro.operator.HardwoodParquetScanOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
@@ -283,10 +283,7 @@ final class ClickBenchHitsSupport
     {
         try {
             if (Files.isDirectory(file)) {
-                return new HardwoodParquetScanOperator(allocator, parquetFiles(file), List.of(columns));
-            }
-            if (Files.size(file) <= Integer.MAX_VALUE) {
-                return new HardwoodParquetScanOperator(allocator, file, List.of(columns));
+                return new MultiFileParquetOperator(allocator, parquetFiles(file), List.of(columns));
             }
         }
         catch (IOException exception) {
@@ -481,6 +478,77 @@ final class ClickBenchHitsSupport
                     eventDate,
                     url,
                     searchPhrase);
+        }
+    }
+
+    private static final class MultiFileParquetOperator
+            implements Operator
+    {
+        private final Allocator allocator;
+        private final List<Path> files;
+        private final List<String> columns;
+
+        private int fileIndex;
+        private Operator current;
+
+        private MultiFileParquetOperator(Allocator allocator, List<Path> files, List<String> columns)
+        {
+            this.allocator = allocator;
+            this.files = List.copyOf(files);
+            this.columns = List.copyOf(columns);
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return columns.size();
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            advanceIfNecessary();
+            return current != null && current.hasNext();
+        }
+
+        @Override
+        public org.weakref.nitro.operator.Batch next()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more Parquet rows");
+            }
+            return current.next();
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (current != null) {
+                current.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            closeCurrent();
+        }
+
+        private void advanceIfNecessary()
+        {
+            while ((current == null || !current.hasNext()) && fileIndex < files.size()) {
+                closeCurrent();
+                current = new ParquetScanOperator(allocator, files.get(fileIndex++), columns);
+            }
+        }
+
+        private void closeCurrent()
+        {
+            if (current == null) {
+                return;
+            }
+            current.close();
+            current = null;
         }
     }
 
