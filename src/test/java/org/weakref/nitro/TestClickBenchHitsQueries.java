@@ -43,7 +43,7 @@ public class TestClickBenchHitsQueries
             throws IOException
     {
         try (Operator query = ClickBenchHitsSupport.query1CountAll(new Allocator(), writeHitsFixture())) {
-            assertThat(operator(query)).matchesExactly(List.of(row(7L)));
+            assertThat(operator(query)).matchesExactly(List.of(row(8L)));
         }
     }
 
@@ -66,6 +66,42 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery3SumAdvEngineAndAvgResolutionWidth()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query3SumAdvEngineAndAvgResolutionWidth(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(80L, 8L, 792.5)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery4AvgUserId()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query4AvgUserId(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(54_386_366_612_455_058.0)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery5CountDistinctUserId()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query5CountDistinctUserId(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(5L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery6CountDistinctSearchPhrase()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query6CountDistinctSearchPhrase(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(5L)));
+        }
+    }
+
+    @Test
     void testClickBenchQuery8GroupByAdvEngineId()
             throws IOException
     {
@@ -79,11 +115,98 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery13TopSearchPhrases()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query13TopSearchPhrases(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(4);
+            assertThat(rows.getFirst()).isEqualTo(row("news", 2L));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery16TopUserIds()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query16TopUserIds(new Allocator(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(5);
+            assertThat(rows.getFirst()).isEqualTo(row(2L, 3L));
+            assertThat(rows.get(1)).isEqualTo(row(1L, 2L));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery20SearchPhrasesForUserId()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query20SearchPhrasesForUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row("news")));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery26SearchPhrasesOrderedAscending()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row("map"),
+                    row("news"),
+                    row("news"),
+                    row("phone"),
+                    row("weather")));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery30SumResolutionWidthPlusOffsets()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(
+                    6_348L,
+                    6_356L,
+                    6_364L,
+                    6_372L,
+                    6_380L,
+                    6_388L,
+                    6_396L,
+                    6_404L,
+                    6_412L,
+                    6_420L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery34TopUrls()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query34TopUrls(new Allocator(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(7);
+            assertThat(rows.getFirst()).isEqualTo(row("https://google.com/search", 2L));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery35ConstantAndTopUrls()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query35ConstantAndTopUrls(new Allocator(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(7);
+            assertThat(rows.getFirst()).isEqualTo(row(1L, "https://google.com/search", 2L));
+        }
+    }
+
+    @Test
     void testClickBenchQuery21CountUrlsContainingGoogle()
             throws IOException
     {
         try (Operator query = ClickBenchHitsSupport.query21CountUrlsContainingGoogle(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
-            assertThat(operator(query)).matchesExactly(List.of(row(3L)));
+            assertThat(operator(query)).matchesExactly(List.of(row(4L)));
         }
     }
 }

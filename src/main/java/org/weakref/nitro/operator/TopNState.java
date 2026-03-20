@@ -26,6 +26,7 @@ import java.util.Set;
 final class TopNState
 {
     private final int orderingColumn;
+    private final boolean descending;
     private final Streams[][] slotColumns;
     private final Streams[] schema;
     private final Set<Stream>[] exposedStreams;
@@ -37,9 +38,10 @@ final class TopNState
     private Batch fallbackBatch;
 
     @SuppressWarnings("unchecked")
-    TopNState(int orderingColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
+    TopNState(int orderingColumn, boolean descending, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
     {
         this.orderingColumn = orderingColumn;
+        this.descending = descending;
         this.slotColumns = new Streams[outputCount][capacity];
         this.schema = new Streams[outputCount];
         this.exposedStreams = (Set<Stream>[]) new Set<?>[outputCount];
@@ -61,26 +63,28 @@ final class TopNState
     public int compareOrderingValue(Output output, int position, int slot)
     {
         Streams slotOrdering = slotColumns[orderingColumn][slot];
-        return OperatorOrderingSemantics.compare(
+        int comparison = OperatorOrderingSemantics.compare(
                 output.borrow(Stream.VALUES),
                 (BooleanVector) output.borrowOrNull(Stream.NULLS),
                 position,
                 slotOrdering.values(),
                 (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
                 0);
+        return descending ? comparison : -comparison;
     }
 
     public int compareSlots(int leftSlot, int rightSlot)
     {
         Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
         Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
-        return OperatorOrderingSemantics.compare(
+        int comparison = OperatorOrderingSemantics.compare(
                 leftOrdering.values(),
                 (BooleanVector) leftOrdering.getOrNull(Stream.NULLS),
                 0,
                 rightOrdering.values(),
                 (BooleanVector) rightOrdering.getOrNull(Stream.NULLS),
                 0);
+        return descending ? comparison : -comparison;
     }
 
     public void copyRow(Batch batch, int position, int slot)

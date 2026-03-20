@@ -893,10 +893,12 @@ public class Allocator
     private static long vectorBytes(Vector vector)
     {
         return switch (vector) {
+            case AvgStateVector values -> (long) values.sums().length * Long.BYTES * 2;
             case I32Vector values -> (long) values.values().length * Integer.BYTES;
             case I64Vector values -> (long) values.values().length * Long.BYTES;
             case BooleanVector values -> values.values().length;
             case F64Vector values -> (long) values.values().length * Double.BYTES;
+            case Utf8StateVector values -> Arrays.stream(values.values()).filter(java.util.Objects::nonNull).mapToLong(entry -> entry.length).sum();
             case BinaryVector values -> (long) values.offsets().length * Integer.BYTES + values.data().length;
             case ArrayVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.elements());
             case MapVector values -> (long) values.offsets().length * Integer.BYTES + streamsBytes(values.keys()) + streamsBytes(values.values());
@@ -917,10 +919,15 @@ public class Allocator
     private static void clearVector(Vector vector)
     {
         switch (vector) {
+            case AvgStateVector values -> {
+                Arrays.fill(values.sums(), 0);
+                Arrays.fill(values.counts(), 0);
+            }
             case I32Vector values -> Arrays.fill(values.values(), 0);
             case I64Vector values -> Arrays.fill(values.values(), 0);
             case BooleanVector values -> Arrays.fill(values.values(), false);
             case F64Vector values -> Arrays.fill(values.values(), 0);
+            case Utf8StateVector values -> Arrays.fill(values.values(), null);
             case BinaryVector values -> {
                 values.clearTraits();
                 Arrays.fill(values.offsets(), 0);

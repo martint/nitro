@@ -65,6 +65,30 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query3SumAdvEngineAndAvgResolutionWidth()
+    {
+        consume(ClickBenchHitsSupport.query3SumAdvEngineAndAvgResolutionWidth(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query4AvgUserId()
+    {
+        consume(ClickBenchHitsSupport.query4AvgUserId(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query5CountDistinctUserId()
+    {
+        consume(ClickBenchHitsSupport.query5CountDistinctUserId(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query6CountDistinctSearchPhrase()
+    {
+        consume(ClickBenchHitsSupport.query6CountDistinctSearchPhrase(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
     public void query7MinAndMaxEventDate()
     {
         consume(ClickBenchHitsSupport.query7MinAndMaxEventDate(allocator, clickBenchHitsFile));
@@ -77,9 +101,51 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query13TopSearchPhrases()
+    {
+        consume(ClickBenchHitsSupport.query13TopSearchPhrases(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query16TopUserIds()
+    {
+        consume(ClickBenchHitsSupport.query16TopUserIds(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query20SearchPhrasesForUserId()
+    {
+        consume(ClickBenchHitsSupport.query20SearchPhrasesForUserId(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
     public void query21CountUrlsContainingGoogle()
     {
         consume(ClickBenchHitsSupport.query21CountUrlsContainingGoogle(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query26SearchPhrasesOrderedAscending()
+    {
+        consume(ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query30SumResolutionWidthPlusOffsets()
+    {
+        consume(ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(allocator, primitiveRegistry, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query34TopUrls()
+    {
+        consume(ClickBenchHitsSupport.query34TopUrls(allocator, clickBenchHitsFile));
+    }
+
+    @Benchmark
+    public void query35ConstantAndTopUrls()
+    {
+        consume(ClickBenchHitsSupport.query35ConstantAndTopUrls(allocator, clickBenchHitsFile));
     }
 
     private static void consume(Operator operator)

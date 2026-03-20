@@ -28,6 +28,7 @@ public class TopNOperator
 
     private final int n;
     private final int column;
+    private final boolean descending;
     private final Operator source;
     private final TopNState state;
 
@@ -35,11 +36,17 @@ public class TopNOperator
 
     public TopNOperator(Allocator allocator, int n, int column, Operator source)
     {
+        this(allocator, n, column, true, source);
+    }
+
+    public TopNOperator(Allocator allocator, int n, int column, boolean descending, Operator source)
+    {
         this.allocator = allocator;
         this.n = n;
         this.column = column;
+        this.descending = descending;
         this.source = source;
-        state = new TopNState(column, allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
+        state = new TopNState(column, descending, allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
     }
 
     @Override
