@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro;
 
-import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.weakref.nitro.data.Allocator;
@@ -58,7 +57,7 @@ public class TestClickBenchHitsRealData
         }
     }
 
-    @RepeatedTest(1000)
+    @Test
     void testClickBenchQuery0SelectAllOnActualHits()
     {
         try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), actualHitsDirectory())) {

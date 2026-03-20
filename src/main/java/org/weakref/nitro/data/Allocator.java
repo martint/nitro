@@ -974,7 +974,7 @@ public class Allocator
     {
         private final Stats stats = new Stats();
         private final Map<Class<? extends Vector>, TreeMap<Integer, ArrayDeque<Vector>>> vectorPool = new HashMap<>();
-        private final List<BinaryVector> binaryVectorPool = new ArrayList<>();
+        private final Map<Integer, TreeMap<Integer, ArrayDeque<BinaryVector>>> binaryVectorPool = new HashMap<>();
         private final TreeMap<Integer, ArrayDeque<Mask>> maskPool = new TreeMap<>();
         private final List<Vector> inUseVectors = new ArrayList<>();
         private final List<Mask> inUseMasks = new ArrayList<>();
@@ -1011,22 +1011,24 @@ public class Allocator
 
         public BinaryVector borrowBinaryVector(int positionCount, int byteCapacity)
         {
-            int bestIndex = -1;
-            BinaryVector best = null;
-            for (int index = 0; index < binaryVectorPool.size(); index++) {
-                BinaryVector candidate = binaryVectorPool.get(index);
-                if (candidate.length() != positionCount || candidate.byteCapacity() < byteCapacity) {
-                    continue;
-                }
-                if (best == null || candidate.byteCapacity() < best.byteCapacity()) {
-                    best = candidate;
-                    bestIndex = index;
-                }
-            }
-            if (bestIndex < 0) {
+            TreeMap<Integer, ArrayDeque<BinaryVector>> pool = binaryVectorPool.get(positionCount);
+            if (pool == null) {
                 return null;
             }
-            return binaryVectorPool.remove(bestIndex);
+
+            Map.Entry<Integer, ArrayDeque<BinaryVector>> entry = pool.ceilingEntry(byteCapacity);
+            if (entry == null) {
+                return null;
+            }
+
+            BinaryVector vector = entry.getValue().removeFirst();
+            if (entry.getValue().isEmpty()) {
+                pool.remove(entry.getKey());
+            }
+            if (pool.isEmpty()) {
+                binaryVectorPool.remove(positionCount);
+            }
+            return vector;
         }
 
         public void trackVector(Vector vector, boolean reused)
@@ -1046,7 +1048,7 @@ public class Allocator
                 return;
             }
             if (vector instanceof BinaryVector binaryVector) {
-                binaryVectorPool.add(binaryVector);
+                addBinaryVectorToPool(binaryVector);
                 return;
             }
             vectorPool
@@ -1108,7 +1110,7 @@ public class Allocator
                     continue;
                 }
                 if (vector instanceof BinaryVector binaryVector) {
-                    binaryVectorPool.add(binaryVector);
+                    addBinaryVectorToPool(binaryVector);
                 }
                 else {
                     vectorPool
@@ -1125,6 +1127,14 @@ public class Allocator
             inUseVectors.clear();
             inUseMasks.clear();
             stats.release();
+        }
+
+        private void addBinaryVectorToPool(BinaryVector binaryVector)
+        {
+            binaryVectorPool
+                    .computeIfAbsent(binaryVector.length(), _ -> new TreeMap<>())
+                    .computeIfAbsent(binaryVector.byteCapacity(), _ -> new ArrayDeque<>())
+                    .addLast(binaryVector);
         }
     }
 
