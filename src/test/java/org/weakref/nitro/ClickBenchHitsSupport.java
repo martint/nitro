@@ -75,27 +75,25 @@ final class ClickBenchHitsSupport
     public static final int DEFAULT_ROW_COUNT = 8;
     public static final int BENCHMARK_ROW_COUNT = 100_000;
 
-    public static Optional<Path> actualHitsFileIfPresent()
+    public static Optional<Path> actualHitsDirectoryIfPresent()
     {
         String configuredPath = System.getProperty(CLICKBENCH_HITS_PATH_PROPERTY);
         if (configuredPath != null && !configuredPath.isBlank()) {
-            Path path = Path.of(configuredPath);
-            return isUsableActualHitsPath(path) ? Optional.of(path) : Optional.empty();
+            Path directory = Path.of(configuredPath);
+            return isUsableActualHitsDirectory(directory) ? Optional.of(directory) : Optional.empty();
         }
 
         Path splitDirectory = Path.of(System.getProperty("user.home"), "tmp", "clickbench", "hits_split");
-        if (isUsableActualHitsPath(splitDirectory)) {
+        if (isUsableActualHitsDirectory(splitDirectory)) {
             return Optional.of(splitDirectory);
         }
-
-        Path defaultFile = Path.of(System.getProperty("user.home"), "tmp", "clickbench", "hits.parquet");
-        return isUsableActualHitsPath(defaultFile) ? Optional.of(defaultFile) : Optional.empty();
+        return Optional.empty();
     }
 
-    public static Path requiredActualHitsFile()
+    public static Path requiredActualHitsDirectory()
     {
-        return actualHitsFileIfPresent()
-                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/hits.parquet or /path/to/hits_split, or place the data at ~/tmp/clickbench/hits_split or ~/tmp/clickbench/hits.parquet"));
+        return actualHitsDirectoryIfPresent()
+                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/hits_split, or place the split data at ~/tmp/clickbench/hits_split"));
     }
 
     public static Path writeHitsFixture(Path file, int rowCount)
@@ -285,11 +283,8 @@ final class ClickBenchHitsSupport
         return new ParquetScanOperator(allocator, file, List.of(columns));
     }
 
-    private static boolean isUsableActualHitsPath(Path path)
+    private static boolean isUsableActualHitsDirectory(Path path)
     {
-        if (Files.isRegularFile(path)) {
-            return true;
-        }
         if (!Files.isDirectory(path)) {
             return false;
         }

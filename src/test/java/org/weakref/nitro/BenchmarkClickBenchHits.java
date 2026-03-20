@@ -44,108 +44,108 @@ public class BenchmarkClickBenchHits
 {
     private final Allocator allocator = new Allocator();
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
-    private Path clickBenchHitsFile;
+    private Path clickBenchHitsDirectory;
 
     @Setup
     public void setup()
     {
-        clickBenchHitsFile = ClickBenchHitsSupport.requiredActualHitsFile();
+        clickBenchHitsDirectory = ClickBenchHitsSupport.requiredActualHitsDirectory();
     }
 
     @Benchmark
     public void query1CountAll()
     {
-        consume(ClickBenchHitsSupport.query1CountAll(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query1CountAll(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query2CountNonZeroAdvEngineId()
     {
-        consume(ClickBenchHitsSupport.query2CountNonZeroAdvEngineId(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query2CountNonZeroAdvEngineId(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query3SumAdvEngineAndAvgResolutionWidth()
     {
-        consume(ClickBenchHitsSupport.query3SumAdvEngineAndAvgResolutionWidth(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query3SumAdvEngineAndAvgResolutionWidth(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query4AvgUserId()
     {
-        consume(ClickBenchHitsSupport.query4AvgUserId(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query4AvgUserId(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query5CountDistinctUserId()
     {
-        consume(ClickBenchHitsSupport.query5CountDistinctUserId(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query5CountDistinctUserId(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query6CountDistinctSearchPhrase()
     {
-        consume(ClickBenchHitsSupport.query6CountDistinctSearchPhrase(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query6CountDistinctSearchPhrase(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query7MinAndMaxEventDate()
     {
-        consume(ClickBenchHitsSupport.query7MinAndMaxEventDate(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query7MinAndMaxEventDate(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query8GroupByAdvEngineId()
     {
-        consume(ClickBenchHitsSupport.query8GroupByAdvEngineId(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query8GroupByAdvEngineId(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query13TopSearchPhrases()
     {
-        consume(ClickBenchHitsSupport.query13TopSearchPhrases(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query13TopSearchPhrases(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query16TopUserIds()
     {
-        consume(ClickBenchHitsSupport.query16TopUserIds(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query16TopUserIds(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query20SearchPhrasesForUserId()
     {
-        consume(ClickBenchHitsSupport.query20SearchPhrasesForUserId(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query20SearchPhrasesForUserId(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query21CountUrlsContainingGoogle()
     {
-        consume(ClickBenchHitsSupport.query21CountUrlsContainingGoogle(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query21CountUrlsContainingGoogle(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query26SearchPhrasesOrderedAscending()
     {
-        consume(ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query30SumResolutionWidthPlusOffsets()
     {
-        consume(ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(allocator, primitiveRegistry, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query34TopUrls()
     {
-        consume(ClickBenchHitsSupport.query34TopUrls(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query34TopUrls(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
     public void query35ConstantAndTopUrls()
     {
-        consume(ClickBenchHitsSupport.query35ConstantAndTopUrls(allocator, clickBenchHitsFile));
+        consume(ClickBenchHitsSupport.query35ConstantAndTopUrls(allocator, clickBenchHitsDirectory));
     }
 
     private static void consume(Operator operator)
