@@ -446,25 +446,7 @@ public final class TrinoParquetScanOperator
             return copyDictionaryBinary(column, dictionaryBlock, dictionaryValues);
         }
 
-        int totalBytes = 0;
-        for (int position = 0; position < block.getPositionCount(); position++) {
-            if (!block.isNull(position)) {
-                Slice slice = readSlice(block, position);
-                totalBytes += slice.length();
-            }
-        }
-
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
-        values.addTraits(column.binaryTraits());
-        for (int position = 0; position < block.getPositionCount(); position++) {
-            if (block.isNull(position)) {
-                values.setNull(position);
-                continue;
-            }
-            Slice slice = readSlice(block, position);
-            values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
-        }
-        return values;
+        throw new IllegalArgumentException("Unsupported Trino binary block type for full-batch fast path: " + block.getClass().getSimpleName());
     }
 
     private BinaryVector copyDictionaryBinary(ColumnSpec column, DictionaryBlock block, VariableWidthBlock dictionaryValues)
