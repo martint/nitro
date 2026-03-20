@@ -53,6 +53,12 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query0SelectAll()
+    {
+        consume(ClickBenchHitsSupport.query0SelectAll(allocator, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
     public void query1CountAll()
     {
         consume(ClickBenchHitsSupport.query1CountAll(allocator, clickBenchHitsDirectory));

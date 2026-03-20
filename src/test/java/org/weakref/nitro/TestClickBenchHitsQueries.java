@@ -55,6 +55,23 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery0SelectAll()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(0, 1000L, 1L, 20130701L, "https://google.com", ""),
+                    row(10, 1200L, 2L, 20130702L, "https://example.com", ""),
+                    row(10, 900L, 2L, 20130703L, "https://example.com/page", "phone"),
+                    row(20, 800L, 1L, 20130701L, "https://google.com/maps", "map"),
+                    row(20, 700L, 2L, 20130731L, "https://yandex.ru", "weather"),
+                    row(0, 640L, 4L, 20130801L, "", ""),
+                    row(20, 600L, 5L, 20130715L, "https://google.com/search", "news"),
+                    row(0, 500L, ClickBenchHitsSupport.QUERY20_USER_ID, 20130716L, "https://google.com/search", "news")));
+        }
+    }
+
+    @Test
     void testClickBenchQuery1CountAll()
             throws IOException
     {

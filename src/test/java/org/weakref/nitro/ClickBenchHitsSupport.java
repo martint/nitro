@@ -67,6 +67,13 @@ final class ClickBenchHitsSupport
 {
     static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
     static final long QUERY20_USER_ID = 435_090_932_899_640_449L;
+    private static final List<String> ALL_HITS_COLUMNS = List.of(
+            "AdvEngineID",
+            "ResolutionWidth",
+            "UserID",
+            "EventDate",
+            "URL",
+            "SearchPhrase");
 
     private ClickBenchHitsSupport() {}
 
@@ -132,6 +139,11 @@ final class ClickBenchHitsSupport
                 allocator,
                 List.of(new CountAll()),
                 clickBenchScan(allocator, file));
+    }
+
+    public static Operator query0SelectAll(Allocator allocator, Path file)
+    {
+        return clickBenchScan(allocator, file, ALL_HITS_COLUMNS.toArray(String[]::new));
     }
 
     public static Operator query2CountNonZeroAdvEngineId(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
