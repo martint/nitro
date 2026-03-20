@@ -439,12 +439,10 @@ public final class TrinoParquetScanOperator
     private BinaryVector copyBinary(ColumnSpec column, Block block)
     {
         int totalBytes = 0;
-        boolean asciiOnly = column.binaryTraits().contains(BinaryVector.Trait.UTF8_STRING);
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
                 Slice slice = readSlice(block, position);
                 totalBytes += slice.length();
-                asciiOnly &= isAscii(slice);
             }
         }
 
@@ -457,9 +455,6 @@ public final class TrinoParquetScanOperator
             }
             Slice slice = readSlice(block, position);
             values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
-        }
-        if (values.hasTrait(BinaryVector.Trait.UTF8_STRING) && asciiOnly) {
-            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
         }
         return values;
     }
@@ -503,8 +498,6 @@ public final class TrinoParquetScanOperator
     private BinaryVector copyMaskedBinary(ColumnSpec column, Block block, Mask mask)
     {
         int totalBytes = selectedBinaryBytes(block, mask);
-        boolean asciiOnly = selectedBinaryAsciiOnly(block, mask, column.binaryTraits().contains(BinaryVector.Trait.UTF8_STRING));
-
         BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
         values.addTraits(column.binaryTraits());
         forEachSelected(mask, position -> {
@@ -515,9 +508,6 @@ public final class TrinoParquetScanOperator
             Slice slice = readSlice(block, position);
             values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
         });
-        if (values.hasTrait(BinaryVector.Trait.UTF8_STRING) && asciiOnly) {
-            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
-        }
         return values;
     }
 
@@ -530,20 +520,6 @@ public final class TrinoParquetScanOperator
             }
         });
         return totalBytes[0];
-    }
-
-    private static boolean selectedBinaryAsciiOnly(Block block, Mask mask, boolean asciiOnly)
-    {
-        if (!asciiOnly) {
-            return false;
-        }
-        final boolean[] result = {true};
-        forEachSelected(mask, position -> {
-            if (!block.isNull(position)) {
-                result[0] &= isAscii(readSlice(block, position));
-            }
-        });
-        return result[0];
     }
 
     private BooleanVector copyNulls(Block block, Mask mask)
@@ -613,16 +589,6 @@ public final class TrinoParquetScanOperator
         for (int index = 0; index < mask.selectedCount(); index++) {
             consumer.accept(mask.position(index));
         }
-    }
-
-    private static boolean isAscii(Slice slice)
-    {
-        for (int index = 0; index < slice.length(); index++) {
-            if (slice.getByte(index) < 0) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static Set<BinaryVector.Trait> binaryTraits(PrimitiveType primitive)

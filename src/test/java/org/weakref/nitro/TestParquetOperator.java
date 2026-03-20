@@ -305,7 +305,6 @@ public class TestParquetOperator
             BooleanVector payloadNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
 
             assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(names.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(payloads.traits()).isEmpty();
             assertThat(names.utf8Value(0)).isEqualTo("alice");
             assertThat(names.utf8Value(1)).isEqualTo("bob");
@@ -386,7 +385,6 @@ public class TestParquetOperator
             assertThat(names.values()).isInstanceOf(BinaryVector.class);
             BinaryVector dictionaryValues = (BinaryVector) names.values();
             assertThat(dictionaryValues.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(dictionaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(dictionaryValues.utf8Value(names.ids()[0])).isEqualTo("alpha");
             assertThat(dictionaryValues.utf8Value(names.ids()[1])).isEqualTo("beta");
         }
@@ -440,9 +438,7 @@ public class TestParquetOperator
             BooleanVector rightNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
 
             assertThat(left.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(left.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(right.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(right.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
 
             Streams result = eqUtf8().apply(
                     List.of(
@@ -680,7 +676,6 @@ public class TestParquetOperator
             DictionaryVector dictionary = (DictionaryVector) names;
             BinaryVector values = (BinaryVector) dictionary.values();
             assertThat(values.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(values.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
         }
     }
 
@@ -947,7 +942,6 @@ public class TestParquetOperator
             assertThat(ids.values()).startsWith(11L, 12L, 13L);
 
             assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(names.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(names.utf8Value(0)).isEqualTo("alice");
             assertThat(names.utf8Value(2)).isEqualTo("carol");
             assertThat(nameNulls.values()).startsWith(false, true, false);
@@ -1039,7 +1033,6 @@ public class TestParquetOperator
             assertThat(maps.length(3)).isEqualTo(1);
 
             assertThat(keys.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(keys.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(keys.utf8Value(0)).isEqualTo("alpha");
             assertThat(keys.utf8Value(1)).isEqualTo("beta");
             assertThat(keys.utf8Value(2)).isEqualTo("gamma");
@@ -1268,7 +1261,6 @@ public class TestParquetOperator
             assertThat(arrays.length(2)).isEqualTo(0);
             assertThat(arrays.length(3)).isEqualTo(1);
             assertThat(keysVector.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(keysVector.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(keysVector.utf8Value(0)).isEqualTo("alpha");
             assertThat(keysVector.utf8Value(1)).isEqualTo("beta");
             assertThat(keysVector.utf8Value(2)).isEqualTo("gamma");
@@ -1437,7 +1429,6 @@ public class TestParquetOperator
             assertThat(arrays.length(2)).isEqualTo(0);
             assertThat(arrays.length(3)).isEqualTo(1);
             assertThat(values.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(values.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(values.utf8Value(0)).isEqualTo("one");
             assertThat(values.utf8Value(2)).isEqualTo("three");
             assertThat(elementNulls.values()).startsWith(false, true, false);

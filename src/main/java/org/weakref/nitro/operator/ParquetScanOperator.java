@@ -1381,22 +1381,6 @@ public final class ParquetScanOperator
     private static void applyBinaryTraits(BinaryVector values, Set<BinaryVector.Trait> declaredTraits, int positionCount)
     {
         values.addTraits(declaredTraits);
-        if (values.hasTrait(BinaryVector.Trait.UTF8_STRING) && isAsciiOnly(values, positionCount)) {
-            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
-        }
-    }
-
-    private static boolean isAsciiOnly(BinaryVector values, int positionCount)
-    {
-        byte[] data = values.data();
-        for (int position = 0; position < positionCount; position++) {
-            for (int index = values.startOffset(position); index < values.endOffset(position); index++) {
-                if ((data[index] & 0x80) != 0) {
-                    return false;
-                }
-            }
-        }
-        return true;
     }
 
     private int requiredBinaryByteCapacity(ColumnSpec column, int startRow, int rowCount, ColumnPages columnPages, Mask mask)
