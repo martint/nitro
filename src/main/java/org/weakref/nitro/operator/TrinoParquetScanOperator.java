@@ -53,6 +53,8 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -72,6 +74,8 @@ public final class TrinoParquetScanOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TrinoParquetScanOperator");
     private static final int MAX_BATCH_ROWS = 512;
+    private static final Method VARIABLE_WIDTH_RAW_OFFSETS = declaredMethod(VariableWidthBlock.class, "getRawOffsets");
+    private static final Method VARIABLE_WIDTH_RAW_ARRAY_BASE = declaredMethod(VariableWidthBlock.class, "getRawArrayBase");
 
     private final Allocator allocator;
     private final List<Path> files;
@@ -515,8 +519,10 @@ public final class TrinoParquetScanOperator
     private BinaryVector copyVariableWidthBinary(ColumnSpec column, VariableWidthBlock block)
     {
         int positionCount = block.getPositionCount();
-        int firstOffset = block.getRawSliceOffset(0);
-        int lastEnd = block.getRawSliceOffset(positionCount - 1) + block.getSliceLength(positionCount - 1);
+        int[] rawOffsets = rawOffsets(block);
+        int rawArrayBase = rawArrayBase(block);
+        int firstOffset = rawOffsets[rawArrayBase];
+        int lastEnd = rawOffsets[rawArrayBase + positionCount];
         int totalBytes = Math.max(0, lastEnd - firstOffset);
 
         BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
@@ -528,10 +534,11 @@ public final class TrinoParquetScanOperator
         }
 
         int[] offsets = values.offsets();
-        for (int position = 0; position < positionCount; position++) {
-            int start = block.getRawSliceOffset(position) - firstOffset;
-            offsets[position] = start;
-            offsets[position + 1] = start + block.getSliceLength(position);
+        System.arraycopy(rawOffsets, rawArrayBase, offsets, 0, positionCount + 1);
+        if (firstOffset != 0) {
+            for (int index = 0; index < offsets.length; index++) {
+                offsets[index] -= firstOffset;
+            }
         }
         return values;
     }
@@ -641,6 +648,38 @@ public final class TrinoParquetScanOperator
     private static IllegalArgumentException unsupported(Block block)
     {
         return new IllegalArgumentException("Unsupported Trino block type: " + block.getClass().getSimpleName());
+    }
+
+    private static Method declaredMethod(Class<?> type, String name)
+    {
+        try {
+            Method method = type.getDeclaredMethod(name);
+            method.setAccessible(true);
+            return method;
+        }
+        catch (NoSuchMethodException exception) {
+            throw new IllegalStateException("Missing Trino VariableWidthBlock method: " + name, exception);
+        }
+    }
+
+    private static int[] rawOffsets(VariableWidthBlock block)
+    {
+        try {
+            return (int[]) VARIABLE_WIDTH_RAW_OFFSETS.invoke(block);
+        }
+        catch (IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalStateException("Unable to access Trino VariableWidthBlock offsets", exception);
+        }
+    }
+
+    private static int rawArrayBase(VariableWidthBlock block)
+    {
+        try {
+            return (int) VARIABLE_WIDTH_RAW_ARRAY_BASE.invoke(block);
+        }
+        catch (IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalStateException("Unable to access Trino VariableWidthBlock array base", exception);
+        }
     }
 
     private static void forEachSelected(Mask mask, java.util.function.IntConsumer consumer)
