@@ -31,10 +31,10 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.TopUtf8CountsOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.First;
-import org.weakref.nitro.operator.aggregation.FirstUtf8;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.Sum;
@@ -341,13 +341,7 @@ final class ClickBenchHitsSupport
                     notEqualUtf8(0, "").predicate(),
                     allocator);
         }
-        Operator grouped = new GroupOperator(allocator, 0, source);
-        Operator aggregated = new GroupedAggregationOperator(
-                allocator,
-                0,
-                List.of(new FirstUtf8(1), new CountAll()),
-                grouped);
-        return new TopNOperator(allocator, 10, 1, aggregated);
+        return new TopUtf8CountsOperator(allocator, 10, 0, source);
     }
 
     private static Operator projectInputs(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int... inputIndexes)
