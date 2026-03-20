@@ -201,6 +201,44 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorCapsFlatVectorPoolBucketSize()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("CappedVectorPool");
+
+        I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        I64Vector second = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        I64Vector third = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+
+        allocator.release(context);
+
+        I64Vector reusedOne = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        I64Vector reusedTwo = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        I64Vector fresh = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+
+        assertThat(reusedCount(List.of(first, second, third), List.of(reusedOne, reusedTwo, fresh))).isEqualTo(2);
+    }
+
+    @Test
+    void testAllocatorCapsBinaryVectorPoolPerPositionCount()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("CappedBinaryVectorPool");
+
+        BinaryVector first = allocator.allocateBinary(context, 8, 16);
+        BinaryVector second = allocator.allocateBinary(context, 8, 32);
+        BinaryVector third = allocator.allocateBinary(context, 8, 64);
+
+        allocator.release(context);
+
+        BinaryVector reusedOne = allocator.allocateBinary(context, 8, 8);
+        BinaryVector reusedTwo = allocator.allocateBinary(context, 8, 24);
+        BinaryVector fresh = allocator.allocateBinary(context, 8, 48);
+
+        assertThat(reusedCount(List.of(first, second, third), List.of(reusedOne, reusedTwo, fresh))).isEqualTo(2);
+    }
+
+    @Test
     void testAllocatorDoesNotPoolSupersededGrowthVectors()
     {
         Allocator allocator = new Allocator();
@@ -377,5 +415,16 @@ public class TestBatchRuntime
     {
         return StreamSupport.stream(mask.spliterator(), false)
                 .toList();
+    }
+
+    private static int reusedCount(List<?> pooled, List<?> allocated)
+    {
+        int count = 0;
+        for (Object candidate : allocated) {
+            if (pooled.stream().anyMatch(vector -> vector == candidate)) {
+                count++;
+            }
+        }
+        return count;
     }
 }
