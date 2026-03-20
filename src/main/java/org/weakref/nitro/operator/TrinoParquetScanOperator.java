@@ -65,9 +65,6 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
 
 public final class TrinoParquetScanOperator
@@ -441,6 +438,9 @@ public final class TrinoParquetScanOperator
         if (block instanceof VariableWidthBlock variableWidthBlock) {
             return copyVariableWidthBinary(column, variableWidthBlock);
         }
+        if (block instanceof DictionaryBlock dictionaryBlock && dictionaryBlock.getDictionary() instanceof VariableWidthBlock dictionaryValues) {
+            return copyDictionaryBinary(column, dictionaryBlock, dictionaryValues);
+        }
 
         int totalBytes = 0;
         for (int position = 0; position < block.getPositionCount(); position++) {
@@ -459,6 +459,43 @@ public final class TrinoParquetScanOperator
             }
             Slice slice = readSlice(block, position);
             values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
+        }
+        return values;
+    }
+
+    private BinaryVector copyDictionaryBinary(ColumnSpec column, DictionaryBlock block, VariableWidthBlock dictionaryValues)
+    {
+        int[] ids = block.getRawIds();
+        int idsOffset = block.getRawIdsOffset();
+        int positionCount = block.getPositionCount();
+        int totalBytes = 0;
+        for (int position = 0; position < positionCount; position++) {
+            if (!block.isNull(position)) {
+                totalBytes += dictionaryValues.getSliceLength(ids[idsOffset + position]);
+            }
+        }
+
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
+        values.addTraits(column.binaryTraits());
+
+        Slice rawSlice = dictionaryValues.getRawSlice();
+        byte[] source = rawSlice.byteArray();
+        int sourceOffset = rawSlice.byteArrayOffset();
+        int[] offsets = values.offsets();
+        int outputOffset = 0;
+        for (int position = 0; position < positionCount; position++) {
+            offsets[position] = outputOffset;
+            if (block.isNull(position)) {
+                offsets[position + 1] = outputOffset;
+                continue;
+            }
+
+            int dictionaryPosition = ids[idsOffset + position];
+            int length = dictionaryValues.getSliceLength(dictionaryPosition);
+            int start = dictionaryValues.getRawSliceOffset(dictionaryPosition);
+            System.arraycopy(source, sourceOffset + start, values.data(), outputOffset, length);
+            outputOffset += length;
+            offsets[position + 1] = outputOffset;
         }
         return values;
     }
