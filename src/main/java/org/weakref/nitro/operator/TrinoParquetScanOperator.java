@@ -42,6 +42,7 @@ import org.joda.time.DateTimeZone;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -74,6 +75,8 @@ public final class TrinoParquetScanOperator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TrinoParquetScanOperator");
     private static final int MAX_BATCH_ROWS = 512;
+    private static final Method LONG_ARRAY_RAW_VALUES = declaredMethod(LongArrayBlock.class, "getRawValues");
+    private static final Method LONG_ARRAY_RAW_VALUES_OFFSET = declaredMethod(LongArrayBlock.class, "getRawValuesOffset");
     private static final Method VARIABLE_WIDTH_RAW_OFFSETS = declaredMethod(VariableWidthBlock.class, "getRawOffsets");
     private static final Method VARIABLE_WIDTH_RAW_ARRAY_BASE = declaredMethod(VariableWidthBlock.class, "getRawArrayBase");
 
@@ -369,13 +372,10 @@ public final class TrinoParquetScanOperator
     private Vector convertValues(ColumnSpec column, Block block, boolean preserveEncodings)
     {
         if (preserveEncodings) {
-            if (block instanceof DictionaryBlock dictionaryBlock && column.kind() != ColumnKind.BINARY) {
-                int[] ids = Arrays.copyOfRange(
-                        dictionaryBlock.getRawIds(),
-                        dictionaryBlock.getRawIdsOffset(),
-                        dictionaryBlock.getRawIdsOffset() + dictionaryBlock.getPositionCount());
+            if (block instanceof DictionaryBlock dictionaryBlock) {
+                int[] ids = dictionaryIds(dictionaryBlock);
                 Vector dictionaryValues = convertValues(column, dictionaryBlock.getDictionary(), true);
-                return allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues);
+                return allocator.adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(ids, dictionaryValues));
             }
             if (block instanceof RunLengthEncodedBlock runLengthEncodedBlock) {
                 Vector values = convertValues(column, runLengthEncodedBlock.getValue(), true);
@@ -403,6 +403,13 @@ public final class TrinoParquetScanOperator
 
     private I32Vector copyI32(Block block)
     {
+        if (block instanceof IntArrayBlock intArrayBlock) {
+            int[] rawValues = intArrayBlock.getRawValues();
+            if (intArrayBlock.getRawValuesOffset() == 0 && rawValues.length == block.getPositionCount()) {
+                return allocator.adopt(ALLOCATION_CONTEXT, new I32Vector(rawValues));
+            }
+        }
+
         I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, block.getPositionCount(), I32Vector::new);
         int[] output = values.values();
         for (int position = 0; position < block.getPositionCount(); position++) {
@@ -415,6 +422,13 @@ public final class TrinoParquetScanOperator
 
     private I64Vector copyI64(Block block)
     {
+        if (block instanceof LongArrayBlock longArrayBlock) {
+            long[] rawValues = rawValues(longArrayBlock);
+            if (rawValuesOffset(longArrayBlock) == 0 && rawValues.length == block.getPositionCount()) {
+                return allocator.adopt(ALLOCATION_CONTEXT, new I64Vector(rawValues));
+            }
+        }
+
         I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, block.getPositionCount(), I64Vector::new);
         long[] output = values.values();
         for (int position = 0; position < block.getPositionCount(); position++) {
@@ -511,11 +525,17 @@ public final class TrinoParquetScanOperator
         int lastEnd = rawOffsets[rawArrayBase + positionCount];
         int totalBytes = Math.max(0, lastEnd - firstOffset);
 
+        Slice rawSlice = block.getRawSlice();
+        if (rawArrayBase == 0 && rawOffsets.length == positionCount + 1 && firstOffset == 0 && rawSlice.byteArrayOffset() == 0 && rawSlice.byteArray().length == totalBytes) {
+            BinaryVector values = allocator.adopt(ALLOCATION_CONTEXT, new BinaryVector(positionCount, rawOffsets, rawSlice.byteArray()));
+            values.addTraits(column.binaryTraits());
+            return values;
+        }
+
         BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
         values.addTraits(column.binaryTraits());
 
         if (totalBytes > 0) {
-            Slice rawSlice = block.getRawSlice();
             System.arraycopy(rawSlice.byteArray(), rawSlice.byteArrayOffset() + firstOffset, values.data(), 0, totalBytes);
         }
 
@@ -636,6 +656,15 @@ public final class TrinoParquetScanOperator
         return new IllegalArgumentException("Unsupported Trino block type: " + block.getClass().getSimpleName());
     }
 
+    private static int[] dictionaryIds(DictionaryBlock block)
+    {
+        int[] rawIds = block.getRawIds();
+        if (block.getRawIdsOffset() == 0 && rawIds.length == block.getPositionCount()) {
+            return rawIds;
+        }
+        return Arrays.copyOfRange(rawIds, block.getRawIdsOffset(), block.getRawIdsOffset() + block.getPositionCount());
+    }
+
     private static Method declaredMethod(Class<?> type, String name)
     {
         try {
@@ -644,7 +673,27 @@ public final class TrinoParquetScanOperator
             return method;
         }
         catch (NoSuchMethodException exception) {
-            throw new IllegalStateException("Missing Trino VariableWidthBlock method: " + name, exception);
+            throw new IllegalStateException("Missing Trino block method " + type.getSimpleName() + "." + name, exception);
+        }
+    }
+
+    private static int rawValuesOffset(LongArrayBlock block)
+    {
+        try {
+            return (int) LONG_ARRAY_RAW_VALUES_OFFSET.invoke(block);
+        }
+        catch (IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalStateException("Unable to access Trino LongArrayBlock values offset", exception);
+        }
+    }
+
+    private static long[] rawValues(LongArrayBlock block)
+    {
+        try {
+            return (long[]) LONG_ARRAY_RAW_VALUES.invoke(block);
+        }
+        catch (IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalStateException("Unable to access Trino LongArrayBlock values", exception);
         }
     }
 

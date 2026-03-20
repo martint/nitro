@@ -25,8 +25,18 @@ public final class DictionaryVector
 
     public DictionaryVector(int[] ids, Vector values)
     {
+        this(ids, values, true);
+    }
+
+    public static DictionaryVector wrap(int[] ids, Vector values)
+    {
+        return new DictionaryVector(ids, values, false);
+    }
+
+    private DictionaryVector(int[] ids, Vector values, boolean copyIds)
+    {
         checkArgument(ids.length >= 0, "ids length is negative");
-        this.ids = Arrays.copyOf(ids, ids.length);
+        this.ids = copyIds ? Arrays.copyOf(ids, ids.length) : ids;
         this.values = values;
         validateIds(ids, values.length());
     }

@@ -25,6 +25,8 @@ import java.util.TreeMap;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
+import static java.util.Objects.requireNonNull;
+
 // TODO: support hierarchical contexts
 public class Allocator
 {
@@ -61,6 +63,12 @@ public class Allocator
         T typedVector = (T) vectorType.cast(vector);
         state.trackVector(typedVector, reused);
         return typedVector;
+    }
+
+    public <T extends Vector> T adopt(Context context, T vector)
+    {
+        state(context).trackVector(requireNonNull(vector, "vector is null"), false);
+        return vector;
     }
 
     public BinaryVector allocateBinary(Context context, int positionCount, int byteCapacity)
