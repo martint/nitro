@@ -67,9 +67,9 @@ public class TestClickBenchHitsRealData
 
             int firstPosition = mask.position(0);
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
-            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOfAny(I32Vector.class, I64Vector.class);
-            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOfAny(I32Vector.class, I64Vector.class);
-            assertThat(batch.output(3).borrow(Stream.VALUES)).isInstanceOfAny(I32Vector.class, I64Vector.class);
+            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+            assertThat(batch.output(3).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
             assertThat(batch.output(4).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
             assertThat(batch.output(5).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
 

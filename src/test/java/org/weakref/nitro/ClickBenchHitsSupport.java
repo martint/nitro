@@ -107,9 +107,9 @@ final class ClickBenchHitsSupport
     {
         MessageType schema = Types.buildMessage()
                 .required(INT32).named("AdvEngineID")
-                .required(INT64).named("ResolutionWidth")
+                .required(INT32).named("ResolutionWidth")
                 .required(INT64).named("UserID")
-                .required(INT64).named("EventDate")
+                .required(INT32).named("EventDate")
                 .required(BINARY).as(stringType()).named("URL")
                 .required(BINARY).as(stringType()).named("SearchPhrase")
                 .named("hits");
@@ -123,9 +123,9 @@ final class ClickBenchHitsSupport
                 HitRow row = templateRows.get(rowIndex % templateRows.size()).vary(rowIndex / templateRows.size());
                 writer.write(groups.newGroup()
                         .append("AdvEngineID", (int) row.advEngineId())
-                        .append("ResolutionWidth", row.resolutionWidth())
+                        .append("ResolutionWidth", (int) row.resolutionWidth())
                         .append("UserID", row.userId())
-                        .append("EventDate", row.eventDate())
+                        .append("EventDate", (int) row.eventDate())
                         .append("URL", row.url())
                         .append("SearchPhrase", row.searchPhrase()));
             }
