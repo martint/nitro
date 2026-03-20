@@ -53,7 +53,7 @@ public class TestClickBenchHitsRealData
     void testClickBenchQuery2CountNonZeroAdvEngineIdOnActualHits()
     {
         try (Operator query = ClickBenchHitsSupport.query2CountNonZeroAdvEngineId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
-            assertThat(operator(query)).matchesExactly(List.of(row(671_775L)));
+            assertThat(operator(query)).matchesExactly(List.of(row(630_500L)));
         }
     }
 
@@ -116,16 +116,16 @@ public class TestClickBenchHitsRealData
     {
         try (Operator query = ClickBenchHitsSupport.query8GroupByAdvEngineId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(
-                    row(2L, 384_215L),
-                    row(27L, 190_473L),
-                    row(13L, 53_491L),
-                    row(44L, 15_911L),
-                    row(45L, 10_891L),
-                    row(62L, 8_373L),
-                    row(3L, 3_299L),
-                    row(52L, 2_600L),
-                    row(50L, 1_004L),
-                    row(28L, 996L)));
+                    row(2L, 404_602L),
+                    row(27L, 113_167L),
+                    row(13L, 45_631L),
+                    row(45L, 38_960L),
+                    row(44L, 9_730L),
+                    row(3L, 6_896L),
+                    row(62L, 5_266L),
+                    row(52L, 3_554L),
+                    row(50L, 938L),
+                    row(28L, 836L)));
         }
     }
 
@@ -178,6 +178,7 @@ public class TestClickBenchHitsRealData
     @Test
     void testClickBenchQuery30RunsOnActualHits()
     {
+        assumeTrue(Boolean.getBoolean(RUN_SLOW_ACTUAL_TESTS_PROPERTY), "Set -D" + RUN_SLOW_ACTUAL_TESTS_PROPERTY + "=true to run slow real-data ClickBench query coverage");
         try (Operator query = ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);

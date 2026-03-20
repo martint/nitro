@@ -1112,6 +1112,36 @@ public class TestOperators
     }
 
     @Test
+    void testProjectAddSupportsI32Inputs()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable three = new Variable(0);
+        Variable sum = new Variable(1);
+        EvaluationPlan evaluationPlan = plan(
+                List.of(
+                        literal(three, 3),
+                        call(sum, "add", values(new Input(0)), values(three))),
+                values(sum));
+
+        assertThat(operator(
+                new ProjectOperator(
+                        allocator,
+                        evaluationPlan,
+                        primitiveRegistry,
+                        new ConstantTableOperator(
+                                allocator,
+                                1,
+                                List.of(
+                                        row(1),
+                                        row(2),
+                                        row(3))))))
+                .matchesExactly(List.of(
+                        row(4L),
+                        row(5L),
+                        row(6L)));
+    }
+
+    @Test
     void testLimit()
     {
         assertThat(operator(
