@@ -174,6 +174,7 @@ public final class TrinoParquetScanOperator
         private final List<ColumnSpec> columns;
 
         private SourcePage nextPage;
+        private boolean exhausted;
         private BatchState currentBatchState;
 
         private SingleFileScan(Path file)
@@ -214,7 +215,6 @@ public final class TrinoParquetScanOperator
                         Optional.empty(),
                         Optional.empty(),
                         metadata.getDecryptionContext());
-                nextPage = loadNextPage();
             }
             catch (IOException exception) {
                 throw new UncheckedIOException("Unable to open Trino Parquet file: " + file, exception);
@@ -223,6 +223,10 @@ public final class TrinoParquetScanOperator
 
         private boolean hasNext()
         {
+            if (!exhausted && nextPage == null) {
+                nextPage = loadNextPage();
+                exhausted = nextPage == null;
+            }
             return nextPage != null;
         }
 
@@ -233,11 +237,12 @@ public final class TrinoParquetScanOperator
             }
 
             SourcePage page = nextPage;
+            nextPage = null;
+            currentBatchState = null;
             Block[] blocks = new Block[columns.size()];
             for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
                 blocks[columnIndex] = page.getBlock(columnIndex);
             }
-            nextPage = loadNextPage();
             BatchState batchState = new BatchState(blocks, allocator.allocateAllMask(ALLOCATION_CONTEXT, page.getPositionCount()));
             currentBatchState = batchState;
 
@@ -277,6 +282,9 @@ public final class TrinoParquetScanOperator
                 throw new UncheckedIOException("Unable to close Trino Parquet reader", exception);
             }
             finally {
+                nextPage = null;
+                currentBatchState = null;
+                exhausted = true;
                 allocator.release(ALLOCATION_CONTEXT);
             }
         }
