@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
@@ -167,6 +168,36 @@ public class TestBatchRuntime
 
         assertThat(second).isSameAs(first);
         assertThat(allocator.totalBytes(context)).isEqualTo(totalBytes);
+    }
+
+    @Test
+    void testAllocatorDoesNotReuseDifferentLogicalVectorLength()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("ExactVectorPool");
+
+        I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        allocator.release(context);
+
+        I64Vector second = allocator.allocate(context, I64Vector.class, 4, I64Vector::new);
+
+        assertThat(second).isNotSameAs(first);
+        assertThat(second.length()).isEqualTo(4);
+    }
+
+    @Test
+    void testAllocatorDoesNotReuseBinaryVectorWithDifferentLogicalLength()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("ExactBinaryVectorPool");
+
+        BinaryVector first = allocator.allocateBinary(context, 8, 32);
+        allocator.release(context);
+
+        BinaryVector second = allocator.allocateBinary(context, 4, 16);
+
+        assertThat(second).isNotSameAs(first);
+        assertThat(second.length()).isEqualTo(4);
     }
 
     @Test

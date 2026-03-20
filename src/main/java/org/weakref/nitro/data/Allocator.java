@@ -936,6 +936,9 @@ public class Allocator
             }
 
             Map.Entry<Integer, ArrayDeque<Vector>> entry = pool.ceilingEntry(size);
+            if (entry != null && entry.getKey() != size) {
+                return null;
+            }
             if (entry == null) {
                 return null;
             }
@@ -953,7 +956,7 @@ public class Allocator
             BinaryVector best = null;
             for (int index = 0; index < binaryVectorPool.size(); index++) {
                 BinaryVector candidate = binaryVectorPool.get(index);
-                if (candidate.length() < positionCount || candidate.byteCapacity() < byteCapacity) {
+                if (candidate.length() != positionCount || candidate.byteCapacity() < byteCapacity) {
                     continue;
                 }
                 if (best == null || candidate.byteCapacity() < best.byteCapacity()) {

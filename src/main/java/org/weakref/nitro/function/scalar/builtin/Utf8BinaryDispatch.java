@@ -61,7 +61,7 @@ public final class Utf8BinaryDispatch
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        checkArgument(left.length() == right.length(), "%s inputs must have the same logical length", functionName);
+        checkArgument(left.length() == right.length(), "%s inputs must have the same logical length: left=%s right=%s", functionName, left.length(), right.length());
         BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
         BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
 

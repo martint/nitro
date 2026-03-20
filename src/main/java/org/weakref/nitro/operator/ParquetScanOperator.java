@@ -13,11 +13,14 @@
  */
 package org.weakref.nitro.operator;
 
+import org.apache.parquet.bytes.BytesInput;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.ColumnReader;
 import org.apache.parquet.column.Dictionary;
 import org.apache.parquet.column.impl.ColumnReadStoreImpl;
 import org.apache.parquet.column.page.DataPage;
+import org.apache.parquet.column.page.DataPageV1;
+import org.apache.parquet.column.page.DataPageV2;
 import org.apache.parquet.column.page.DictionaryPage;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.column.page.PageReader;
@@ -1201,14 +1204,110 @@ public final class ParquetScanOperator
     private static ColumnPages captureColumnPages(PageReadStore rowGroup, ColumnDescriptor descriptor)
     {
         PageReader pageReader = rowGroup.getPageReader(descriptor);
-        DictionaryPage dictionaryPage = pageReader.readDictionaryPage();
+        DictionaryPage dictionaryPage = copyDictionaryPage(pageReader.readDictionaryPage());
         List<DataPage> dataPages = new ArrayList<>();
         boolean dictionaryEncoded = dictionaryPage != null;
         for (DataPage dataPage = pageReader.readPage(); dataPage != null; dataPage = pageReader.readPage()) {
             dictionaryEncoded &= isDictionaryEncoded(dataPage);
-            dataPages.add(dataPage);
+            dataPages.add(copyDataPage(dataPage));
         }
         return new ColumnPages(descriptor, dictionaryPage, dataPages, pageReader.getTotalValueCount(), dictionaryEncoded);
+    }
+
+    private static DictionaryPage copyDictionaryPage(DictionaryPage dictionaryPage)
+    {
+        if (dictionaryPage == null) {
+            return null;
+        }
+        try {
+            return dictionaryPage.copy();
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to copy Parquet dictionary page", exception);
+        }
+    }
+
+    private static DataPage copyDataPage(DataPage dataPage)
+    {
+        return dataPage.accept(new DataPage.Visitor<>()
+        {
+            @Override
+            public DataPage visit(DataPageV1 dataPageV1)
+            {
+                try {
+                    BytesInput bytes = BytesInput.copy(dataPageV1.getBytes());
+                    if (dataPageV1.getFirstRowIndex().isPresent() && dataPageV1.getIndexRowCount().isPresent()) {
+                        return new DataPageV1(
+                                bytes,
+                                dataPageV1.getValueCount(),
+                                dataPageV1.getUncompressedSize(),
+                                dataPageV1.getFirstRowIndex().orElseThrow(),
+                                dataPageV1.getIndexRowCount().orElseThrow(),
+                                dataPageV1.getStatistics(),
+                                dataPageV1.getRlEncoding(),
+                                dataPageV1.getDlEncoding(),
+                                dataPageV1.getValueEncoding());
+                    }
+                    return new DataPageV1(
+                            bytes,
+                            dataPageV1.getValueCount(),
+                            dataPageV1.getUncompressedSize(),
+                            dataPageV1.getStatistics(),
+                            dataPageV1.getRlEncoding(),
+                            dataPageV1.getDlEncoding(),
+                            dataPageV1.getValueEncoding());
+                }
+                catch (IOException exception) {
+                    throw new UncheckedIOException("Unable to copy Parquet data page", exception);
+                }
+            }
+
+            @Override
+            public DataPage visit(DataPageV2 dataPageV2)
+            {
+                try {
+                    BytesInput repetitionLevels = BytesInput.copy(dataPageV2.getRepetitionLevels());
+                    BytesInput definitionLevels = BytesInput.copy(dataPageV2.getDefinitionLevels());
+                    BytesInput data = BytesInput.copy(dataPageV2.getData());
+                    if (dataPageV2.isCompressed()) {
+                        return DataPageV2.compressed(
+                                dataPageV2.getRowCount(),
+                                dataPageV2.getNullCount(),
+                                dataPageV2.getValueCount(),
+                                repetitionLevels,
+                                definitionLevels,
+                                dataPageV2.getDataEncoding(),
+                                data,
+                                dataPageV2.getUncompressedSize(),
+                                dataPageV2.getStatistics());
+                    }
+                    if (dataPageV2.getFirstRowIndex().isPresent()) {
+                        return DataPageV2.uncompressed(
+                                dataPageV2.getRowCount(),
+                                dataPageV2.getNullCount(),
+                                dataPageV2.getValueCount(),
+                                dataPageV2.getFirstRowIndex().orElseThrow(),
+                                repetitionLevels,
+                                definitionLevels,
+                                dataPageV2.getDataEncoding(),
+                                data,
+                                dataPageV2.getStatistics());
+                    }
+                    return DataPageV2.uncompressed(
+                            dataPageV2.getRowCount(),
+                            dataPageV2.getNullCount(),
+                            dataPageV2.getValueCount(),
+                            repetitionLevels,
+                            definitionLevels,
+                            dataPageV2.getDataEncoding(),
+                            data,
+                            dataPageV2.getStatistics());
+                }
+                catch (IOException exception) {
+                    throw new UncheckedIOException("Unable to copy Parquet data page", exception);
+                }
+            }
+        });
     }
 
     private static boolean isDictionaryEncoded(DataPage page)
@@ -1390,7 +1489,7 @@ public final class ParquetScanOperator
                 return null;
             }
             dictionaryRead = true;
-            return column.dictionaryPage();
+            return copyDictionaryPage(column.dictionaryPage());
         }
 
         @Override
@@ -1405,7 +1504,7 @@ public final class ParquetScanOperator
             if (pageIndex >= column.dataPages().size()) {
                 return null;
             }
-            return column.dataPages().get(pageIndex++);
+            return copyDataPage(column.dataPages().get(pageIndex++));
         }
     }
 }

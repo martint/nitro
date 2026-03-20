@@ -19,6 +19,7 @@ import org.apache.parquet.example.data.simple.SimpleGroupFactory;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.example.ExampleParquetWriter;
+import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.LocalOutputFile;
@@ -278,6 +279,38 @@ public class TestParquetOperator
             assertThat(dictionaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
             assertThat(dictionaryValues.utf8Value(names.ids()[0])).isEqualTo("alpha");
             assertThat(dictionaryValues.utf8Value(names.ids()[1])).isEqualTo("beta");
+        }
+    }
+
+    @Test
+    void testParquetScanFiltersCompressedDictionaryStrings()
+            throws IOException
+    {
+        java.nio.file.Path file = writeBinaryParquetFile("compressed-dictionary-strings.parquet", true, CompressionCodecName.SNAPPY, List.of(
+                new BinaryParquetRow("alpha", bytes(1)),
+                new BinaryParquetRow("beta", bytes(2)),
+                new BinaryParquetRow("alphabet", bytes(3)),
+                new BinaryParquetRow("gamma", bytes(4))));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable literal = new Variable(0);
+        Variable contains = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new org.weakref.nitro.operator.evaluator.ir.Literal("alp"), AllMask.ALL),
+                new Assignment(contains, new Call("contains_utf8", List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+
+        try (FilterOperator operator = new FilterOperator(
+                new ParquetScanOperator(new Allocator(), file, List.of("name")),
+                plan,
+                primitiveRegistry,
+                new ReferenceMask(new Reference(contains, Stream.VALUES)),
+                new Allocator())) {
+            assertThat(operator(operator))
+                    .matchesExactly(List.of(
+                            Row.row("alpha"),
+                            Row.row("alphabet")));
         }
     }
 
@@ -1683,6 +1716,12 @@ public class TestParquetOperator
     private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, List<BinaryParquetRow> rows)
             throws IOException
     {
+        return writeBinaryParquetFile(name, dictionaryEnabled, CompressionCodecName.UNCOMPRESSED, rows);
+    }
+
+    private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, CompressionCodecName compressionCodecName, List<BinaryParquetRow> rows)
+            throws IOException
+    {
         java.nio.file.Path file = tempDirectory.resolve(name);
         MessageType schema = Types.buildMessage()
                 .required(BINARY).as(stringType()).named("name")
@@ -1693,6 +1732,7 @@ public class TestParquetOperator
         try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
                 .withType(schema)
                 .withDictionaryEncoding(dictionaryEnabled)
+                .withCompressionCodec(compressionCodecName)
                 .build()) {
             for (BinaryParquetRow row : rows) {
                 Group group = groups.newGroup()
