@@ -16,8 +16,13 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -46,6 +51,34 @@ public class TestClickBenchHitsRealData
     {
         try (Operator query = ClickBenchHitsSupport.query1CountAll(new Allocator(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(99_997_497L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery0SelectAllOnActualHits()
+    {
+        try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), actualHitsDirectory())) {
+            assertThat(query.outputCount()).isEqualTo(6);
+            assertThat(query.hasNext()).isTrue();
+
+            Batch batch = query.next();
+            var mask = batch.borrowMask();
+            assertThat(mask.none()).isFalse();
+
+            int firstPosition = mask.position(0);
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
+            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOfAny(I32Vector.class, I64Vector.class);
+            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOfAny(I32Vector.class, I64Vector.class);
+            assertThat(batch.output(3).borrow(Stream.VALUES)).isInstanceOfAny(I32Vector.class, I64Vector.class);
+            assertThat(batch.output(4).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+            assertThat(batch.output(5).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+
+            integerValue(batch.output(0).borrow(Stream.VALUES), firstPosition);
+            integerValue(batch.output(1).borrow(Stream.VALUES), firstPosition);
+            integerValue(batch.output(2).borrow(Stream.VALUES), firstPosition);
+            assertThat(integerValue(batch.output(3).borrow(Stream.VALUES), firstPosition)).isPositive();
+            assertThat(((BinaryVector) batch.output(4).borrow(Stream.VALUES)).utf8Value(firstPosition)).isNotNull();
+            assertThat(((BinaryVector) batch.output(5).borrow(Stream.VALUES)).utf8Value(firstPosition)).isNotNull();
         }
     }
 
@@ -226,5 +259,14 @@ public class TestClickBenchHitsRealData
             assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
             assertThat((Long) rows.getFirst().values()[0]).isPositive();
         }
+    }
+
+    private static long integerValue(Object vector, int position)
+    {
+        return switch (vector) {
+            case I32Vector typed -> typed.values()[position];
+            case I64Vector typed -> typed.values()[position];
+            default -> throw new AssertionError("Expected integer vector but got " + vector.getClass().getSimpleName());
+        };
     }
 }
