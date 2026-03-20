@@ -291,6 +291,9 @@ The exact API can vary, but the semantics should stay consistent.
 - A component may mutate only buffers it owns.
 - Borrowed buffers are read-only from the borrower's point of view even if the
   underlying object is physically mutable.
+- Borrowed buffers also need an explicit lifetime boundary. If ownership is not
+  transferred with `take(...)`, the batch or operator that owns the buffer must
+  release it when that batch ends.
 - Reusing an existing output buffer is preferred over allocating a new one.
 - Capacity growth should happen through allocator-mediated grow or replace
   operations.
@@ -303,6 +306,16 @@ The exact API can vary, but the semantics should stay consistent.
   leaves the operator.
 - Operators may transfer ownership of buffers downstream when doing so avoids a
   copy and the upstream operator no longer needs the buffer.
+- Recycling pools should behave as hot caches, not unbounded retention
+  structures. Buffers that are not reused frequently enough should be dropped
+  rather than retained indefinitely.
+- Releasing a wrapper or nested vector is transitive. Dictionary, RLE, array,
+  map, and struct outputs must release their reachable child buffers too unless
+  those children were explicitly transferred elsewhere.
+- Zero-copy adoption of foreign buffers is valuable, but it does not weaken the
+  ownership contract. Adopted buffers must obey the same transfer and release
+  rules as Nitro-native allocations, and prompt release matters even more when
+  the adopted backing arrays are large.
 
 ## Target Allocator Contract
 
@@ -324,6 +337,11 @@ Ownership transfer should be object-based rather than context-name-based. If a
 buffer was allocated under one context and later transferred by another
 component, the allocator must detach it from the context that actually owns it
 before any pool can reuse it.
+
+Pooling should also be bounded. The allocator may keep a small number of hot
+buffers per bucket, but it should not retain every released vector or mask just
+because reuse is possible in principle. Otherwise "reuse" turns into steady
+heap growth under realistic scans and benchmarks.
 
 ### Conceptual shape
 
@@ -834,6 +852,12 @@ interface Output
 This is illustrative rather than prescriptive. Equivalent designs are fine if
 they preserve the same semantics.
 
+`Batch` and `Output` should also have an explicit end-of-life hook, typically
+`close()`, so borrowed masks and streams can be released promptly when the
+caller is done with that batch. Without that hook, `borrow()`-only consumers
+force buffers to remain live until operator shutdown, which defeats allocator
+reuse and can look like a leak in long-running scans.
+
 What matters is that callers can request `NULLS` or `ERRORS` without pretending
 they are ordinary value columns, and that ownership is explicit at the batch
 boundary.
@@ -850,8 +874,12 @@ not use `null` output placeholders.
 
 - `Batch` represents one current batch of output from the operator.
 - Borrowed masks and streams are valid only for that batch.
+- Borrowed masks and streams should be released when the batch closes if they
+  were not explicitly transferred with `take(...)`.
 - Previously borrowed masks and streams are invalidated after the next call to
   `next()`.
+- Non-retained operators should therefore close the previous batch before
+  advancing to the next one.
 - `constrain(mask)` narrows the rows of interest for the current batch only.
 - Operators may use `constrain(mask)` to avoid materializing streams that are no
   longer needed.
@@ -896,6 +924,10 @@ not use `null` output placeholders.
 - `takeMask()` and `take(stream)` transfer ownership to the caller.
 - After ownership transfer, the batch no longer exposes the transferred buffer
   for that batch.
+- Consumers that fully drain a batch should still close it promptly rather than
+  relying on later operator shutdown. Tests and benchmarks need to follow the
+  same lifetime contract as production execution if they want memory behavior
+  to be representative.
 
 Even when a batch has zero active rows or an operator finishes without
 producing any surviving rows, the result should preserve any output schema that
