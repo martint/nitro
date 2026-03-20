@@ -79,18 +79,23 @@ final class ClickBenchHitsSupport
     {
         String configuredPath = System.getProperty(CLICKBENCH_HITS_PATH_PROPERTY);
         if (configuredPath != null && !configuredPath.isBlank()) {
-            Path file = Path.of(configuredPath);
-            return Files.isRegularFile(file) ? Optional.of(file) : Optional.empty();
+            Path path = Path.of(configuredPath);
+            return isUsableActualHitsPath(path) ? Optional.of(path) : Optional.empty();
+        }
+
+        Path splitDirectory = Path.of(System.getProperty("user.home"), "tmp", "clickbench", "hits_split");
+        if (isUsableActualHitsPath(splitDirectory)) {
+            return Optional.of(splitDirectory);
         }
 
         Path defaultFile = Path.of(System.getProperty("user.home"), "tmp", "clickbench", "hits.parquet");
-        return Files.isRegularFile(defaultFile) ? Optional.of(defaultFile) : Optional.empty();
+        return isUsableActualHitsPath(defaultFile) ? Optional.of(defaultFile) : Optional.empty();
     }
 
     public static Path requiredActualHitsFile()
     {
         return actualHitsFileIfPresent()
-                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/hits.parquet or place the file at ~/tmp/clickbench/hits.parquet"));
+                .orElseThrow(() -> new IllegalStateException("Set -D" + CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/hits.parquet or /path/to/hits_split, or place the data at ~/tmp/clickbench/hits_split or ~/tmp/clickbench/hits.parquet"));
     }
 
     public static Path writeHitsFixture(Path file, int rowCount)
@@ -267,6 +272,9 @@ final class ClickBenchHitsSupport
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
     {
         try {
+            if (Files.isDirectory(file)) {
+                return new HardwoodParquetScanOperator(allocator, parquetFiles(file), List.of(columns));
+            }
             if (Files.size(file) <= Integer.MAX_VALUE) {
                 return new HardwoodParquetScanOperator(allocator, file, List.of(columns));
             }
@@ -275,6 +283,34 @@ final class ClickBenchHitsSupport
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
         }
         return new ParquetScanOperator(allocator, file, List.of(columns));
+    }
+
+    private static boolean isUsableActualHitsPath(Path path)
+    {
+        if (Files.isRegularFile(path)) {
+            return true;
+        }
+        if (!Files.isDirectory(path)) {
+            return false;
+        }
+        try (var files = Files.list(path)) {
+            return files.anyMatch(file -> Files.isRegularFile(file) && file.getFileName().toString().endsWith(".parquet"));
+        }
+        catch (IOException exception) {
+            return false;
+        }
+    }
+
+    private static List<Path> parquetFiles(Path directory)
+            throws IOException
+    {
+        try (var files = Files.list(directory)) {
+            return files
+                    .filter(Files::isRegularFile)
+                    .filter(file -> file.getFileName().toString().endsWith(".parquet"))
+                    .sorted()
+                    .toList();
+        }
     }
 
     private static Operator countDistinct(Allocator allocator, Operator source)

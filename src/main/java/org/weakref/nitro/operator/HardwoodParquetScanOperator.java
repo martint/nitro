@@ -13,10 +13,14 @@
  */
 package org.weakref.nitro.operator;
 
+import dev.hardwood.Hardwood;
 import dev.hardwood.metadata.LogicalType;
 import dev.hardwood.metadata.RepetitionType;
 import dev.hardwood.reader.ColumnReader;
+import dev.hardwood.reader.MultiFileColumnReaders;
+import dev.hardwood.reader.MultiFileParquetReader;
 import dev.hardwood.reader.ParquetFileReader;
+import dev.hardwood.schema.ColumnProjection;
 import dev.hardwood.schema.SchemaNode;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -29,6 +33,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -54,7 +59,7 @@ public final class HardwoodParquetScanOperator
     private static final int MAX_BATCH_ROWS = 512;
 
     private final Allocator allocator;
-    private final ParquetFileReader reader;
+    private final AutoCloseable[] closeables;
     private final List<ColumnSpec> columns;
     private final ColumnCursor[] cursors;
     private final int totalRows;
@@ -64,22 +69,50 @@ public final class HardwoodParquetScanOperator
 
     public HardwoodParquetScanOperator(Allocator allocator, Path file, List<String> columns)
     {
+        this(allocator, List.of(file), columns);
+    }
+
+    public HardwoodParquetScanOperator(Allocator allocator, List<Path> files, List<String> columns)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
-        requireNonNull(file, "file is null");
+        requireNonNull(files, "files is null");
         requireNonNull(columns, "columns is null");
+        checkArgument(!files.isEmpty(), "files is empty");
 
         try {
-            reader = ParquetFileReader.open(file);
+            if (files.size() == 1 && Files.isRegularFile(files.getFirst())) {
+                ParquetFileReader reader = ParquetFileReader.open(files.getFirst());
+                this.columns = columns.stream()
+                        .map(name -> resolveColumn(reader.getFileSchema().getField(name), name))
+                        .toList();
+                cursors = this.columns.stream()
+                        .map(spec -> new ColumnCursor(spec, reader.createColumnReader(spec.name())))
+                        .toArray(ColumnCursor[]::new);
+                totalRows = toIntExact(reader.getFileMetaData().numRows());
+                closeables = new AutoCloseable[] {reader};
+                return;
+            }
+
+            Hardwood hardwood = Hardwood.create();
+            MultiFileParquetReader parquet = hardwood.openAll(files);
             this.columns = columns.stream()
-                    .map(this::resolveColumn)
+                    .map(name -> resolveColumn(parquet.getFileSchema().getField(name), name))
                     .toList();
+            totalRows = totalRows(hardwood, files);
+            if (this.columns.isEmpty()) {
+                cursors = new ColumnCursor[0];
+                closeables = new AutoCloseable[] {parquet, hardwood};
+                return;
+            }
+
+            MultiFileColumnReaders columnReaders = parquet.createColumnReaders(ColumnProjection.columns(columns.toArray(String[]::new)));
             cursors = this.columns.stream()
-                    .map(spec -> new ColumnCursor(spec, reader.createColumnReader(spec.name())))
+                    .map(spec -> new ColumnCursor(spec, columnReaders.getColumnReader(spec.name())))
                     .toArray(ColumnCursor[]::new);
-            totalRows = toIntExact(reader.getFileMetaData().numRows());
+            closeables = new AutoCloseable[] {columnReaders, parquet, hardwood};
         }
         catch (IOException exception) {
-            throw new UncheckedIOException("Unable to open Parquet file: " + file, exception);
+            throw new UncheckedIOException("Unable to open Parquet files: " + files, exception);
         }
     }
 
@@ -149,10 +182,15 @@ public final class HardwoodParquetScanOperator
             for (ColumnCursor cursor : cursors) {
                 cursor.close();
             }
-            reader.close();
+            for (AutoCloseable closeable : closeables) {
+                closeable.close();
+            }
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to close Hardwood Parquet reader", exception);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to close Hardwood Parquet reader", exception);
         }
         finally {
             allocator.release(ALLOCATION_CONTEXT);
@@ -171,9 +209,8 @@ public final class HardwoodParquetScanOperator
         return buffer;
     }
 
-    private ColumnSpec resolveColumn(String name)
+    private ColumnSpec resolveColumn(SchemaNode field, String name)
     {
-        SchemaNode field = reader.getFileSchema().getField(name);
         checkArgument(field != null, "Unknown Parquet column: %s", name);
         checkArgument(field instanceof SchemaNode.PrimitiveNode, "Only flat primitive Parquet columns are supported by HardwoodParquetScanOperator: %s", name);
 
@@ -189,6 +226,18 @@ public final class HardwoodParquetScanOperator
                 },
                 primitive.repetitionType() != RepetitionType.REQUIRED,
                 binaryTraits(primitive.logicalType()));
+    }
+
+    private static int totalRows(Hardwood hardwood, List<Path> files)
+            throws IOException
+    {
+        long totalRows = 0;
+        for (Path file : files) {
+            try (ParquetFileReader reader = hardwood.open(file)) {
+                totalRows += reader.getFileMetaData().numRows();
+            }
+        }
+        return toIntExact(totalRows);
     }
 
     private static Set<BinaryVector.Trait> binaryTraits(LogicalType logicalType)

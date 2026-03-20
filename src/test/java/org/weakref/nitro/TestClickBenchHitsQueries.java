@@ -38,6 +38,16 @@ public class TestClickBenchHitsQueries
         return ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("clickbench-hits.parquet"), ClickBenchHitsSupport.DEFAULT_ROW_COUNT);
     }
 
+    private Path writeSplitHitsFixture()
+            throws IOException
+    {
+        Path splitDirectory = tempDirectory.resolve("clickbench-hits-split");
+        java.nio.file.Files.createDirectories(splitDirectory);
+        ClickBenchHitsSupport.writeHitsFixture(splitDirectory.resolve("hits-part-000.parquet"), ClickBenchHitsSupport.DEFAULT_ROW_COUNT);
+        ClickBenchHitsSupport.writeHitsFixture(splitDirectory.resolve("hits-part-001.parquet"), ClickBenchHitsSupport.DEFAULT_ROW_COUNT);
+        return splitDirectory;
+    }
+
     @Test
     void testClickBenchQuery1CountAll()
             throws IOException
@@ -207,6 +217,26 @@ public class TestClickBenchHitsQueries
     {
         try (Operator query = ClickBenchHitsSupport.query21CountUrlsContainingGoogle(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(4L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery1CountAllOnSplitHitsDirectory()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query1CountAll(new Allocator(), writeSplitHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(16L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery34TopUrlsOnSplitHitsDirectory()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query34TopUrls(new Allocator(), writeSplitHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(7);
+            assertThat(rows.getFirst()).isEqualTo(row("https://google.com/search", 4L));
         }
     }
 }
