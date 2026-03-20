@@ -567,6 +567,11 @@ public class Allocator
         releaseVectorTree(context, vector);
     }
 
+    public void discard(Context context, Vector vector)
+    {
+        discardVector(context, vector);
+    }
+
     public void releaseIfPresent(Context context)
     {
         ContextState state = states.get(context);
@@ -953,6 +958,7 @@ public class Allocator
     {
         return switch (vector) {
             case AvgStateVector values -> (long) values.sums().length * Long.BYTES * 2;
+            case CountStateVector values -> values.bytes();
             case I32Vector values -> (long) values.values().length * Integer.BYTES;
             case I64Vector values -> (long) values.values().length * Long.BYTES;
             case BooleanVector values -> values.values().length;
@@ -1097,7 +1103,7 @@ public class Allocator
             }
 
             stats.releaseBytes(vectorBytes(vector));
-            if (vector instanceof DictionaryVector || vector instanceof RleVector) {
+            if (vector instanceof DictionaryVector || vector instanceof RleVector || vector instanceof CountStateVector) {
                 return;
             }
             if (vector instanceof BinaryVector binaryVector) {
@@ -1176,7 +1182,7 @@ public class Allocator
         public void release()
         {
             for (Vector vector : inUseVectors) {
-                if (vector instanceof DictionaryVector || vector instanceof RleVector) {
+                if (vector instanceof DictionaryVector || vector instanceof RleVector || vector instanceof CountStateVector) {
                     continue;
                 }
                 if (vector instanceof BinaryVector binaryVector) {
