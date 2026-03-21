@@ -14,7 +14,6 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -29,7 +28,6 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -39,7 +37,6 @@ import static org.weakref.nitro.data.Row.row;
 public class TestClickBenchHitsRealData
 {
     private static final String RUN_ACTUAL_TESTS_PROPERTY = "nitro.clickbench.runActualDataTests";
-    private static final String RUN_SLOW_ACTUAL_TESTS_PROPERTY = "nitro.clickbench.runSlowActualTests";
 
     private Path actualHitsDirectory()
     {
@@ -231,7 +228,6 @@ public class TestClickBenchHitsRealData
     @Test
     void testClickBenchQuery30RunsOnActualHits()
     {
-        assumeTrue(Boolean.getBoolean(RUN_SLOW_ACTUAL_TESTS_PROPERTY), "Set -D" + RUN_SLOW_ACTUAL_TESTS_PROPERTY + "=true to run slow real-data ClickBench query coverage");
         try (Operator query = ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
@@ -268,10 +264,8 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    @Timeout(value = 10, unit = TimeUnit.MINUTES)
     void testClickBenchQuery21RunsOnActualHits()
     {
-        assumeTrue(Boolean.getBoolean(RUN_SLOW_ACTUAL_TESTS_PROPERTY), "Set -D" + RUN_SLOW_ACTUAL_TESTS_PROPERTY + "=true to run slow real-data ClickBench query coverage");
         try (Operator query = ClickBenchHitsSupport.query21CountUrlsContainingGoogle(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
