@@ -154,7 +154,7 @@ public final class ElementAtI64Utf8
             default -> position;
         };
         for (int entryIndex = maps.startOffset(mapPosition); entryIndex < maps.endOffset(mapPosition); entryIndex++) {
-            if (ascii ? binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition) : mapKeys.utf8Value(entryIndex).equals(lookupKeys.utf8Value(lookupPosition))) {
+            if (binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition)) {
                 boolean nullValue = mapValueNulls != null && mapValueNulls.values()[entryIndex];
                 return new LookupResult(nullValue ? 0 : mapValues.values()[entryIndex], nullValue);
             }

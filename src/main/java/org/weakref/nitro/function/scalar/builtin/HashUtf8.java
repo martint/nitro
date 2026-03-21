@@ -153,7 +153,7 @@ public final class HashUtf8
         if (ascii) {
             return asciiHash(vector, position);
         }
-        return vector.utf8Value(position).hashCode();
+        return Utf8Support.javaStringHash(vector, position);
     }
 
     private static long asciiHash(BinaryVector vector, int position)

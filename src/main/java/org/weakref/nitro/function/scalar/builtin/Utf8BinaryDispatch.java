@@ -201,7 +201,7 @@ public final class Utf8BinaryDispatch
     private static boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
     {
         requireUtf8Traits(functionName, left, right);
-        return ascii ? binaryCompare(left, leftPosition, right, rightPosition) < 0 : left.utf8Value(leftPosition).compareTo(right.utf8Value(rightPosition)) < 0;
+        return binaryCompare(left, leftPosition, right, rightPosition) < 0;
     }
 
     private static boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)

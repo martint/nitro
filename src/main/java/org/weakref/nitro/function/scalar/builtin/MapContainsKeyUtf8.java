@@ -126,7 +126,7 @@ public final class MapContainsKeyUtf8
             default -> position;
         };
         for (int entryIndex = maps.startOffset(mapPosition); entryIndex < maps.endOffset(mapPosition); entryIndex++) {
-            if (ascii ? binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition) : mapKeys.utf8Value(entryIndex).equals(lookupKeys.utf8Value(lookupPosition))) {
+            if (binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition)) {
                 return true;
             }
         }
