@@ -38,6 +38,7 @@ final class GroupingState
     private long nullGroup = -1;
     private GroupKind groupKind;
     private Set<BinaryVector.Trait> binaryTraits = Set.of();
+    private Vector cachedDictionaryValues;
     private long[] dictionaryGroupsById = new long[0];
     private int[] dictionaryGenerations = new int[0];
     private int dictionaryGeneration;
@@ -68,9 +69,10 @@ final class GroupingState
     private void assignDictionaryGroups(DictionaryVector dictionary, BooleanVector nullVector, Mask mask, I64Vector result)
     {
         int[] ids = dictionary.ids();
-        int dictionaryLength = dictionary.values().length();
+        Vector dictionaryValues = dictionary.values();
+        int dictionaryLength = dictionaryValues.length();
         ensureDictionaryCacheCapacity(dictionaryLength);
-        int generation = nextDictionaryGeneration();
+        int generation = currentDictionaryGeneration(dictionaryValues);
 
         for (int position : mask) {
             if (OperatorVectorSupport.isNull(nullVector, position)) {
@@ -80,7 +82,7 @@ final class GroupingState
 
             int dictionaryId = ids[position];
             if (dictionaryGenerations[dictionaryId] != generation) {
-                dictionaryGroupsById[dictionaryId] = groupForKey(OperatorKeySemantics.probeKey(dictionary.values(), null, dictionaryId, reusableProbeKey));
+                dictionaryGroupsById[dictionaryId] = groupForKey(OperatorKeySemantics.probeKey(dictionaryValues, null, dictionaryId, reusableProbeKey));
                 dictionaryGenerations[dictionaryId] = generation;
             }
             result.values()[position] = dictionaryGroupsById[dictionaryId];
@@ -104,6 +106,15 @@ final class GroupingState
             dictionaryGeneration = 0;
         }
         return ++dictionaryGeneration;
+    }
+
+    private int currentDictionaryGeneration(Vector dictionaryValues)
+    {
+        if (cachedDictionaryValues != dictionaryValues) {
+            cachedDictionaryValues = dictionaryValues;
+            return nextDictionaryGeneration();
+        }
+        return dictionaryGeneration;
     }
 
     public Streams groupedValues(Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)

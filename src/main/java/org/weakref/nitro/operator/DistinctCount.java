@@ -30,6 +30,9 @@ public class DistinctCount
         implements Accumulator
 {
     private final int inputColumn;
+    private Vector cachedDictionaryValues;
+    private int[] dictionaryGenerations = new int[0];
+    private int dictionaryGeneration;
 
     public DistinctCount(int inputColumn)
     {
@@ -81,9 +84,11 @@ public class DistinctCount
         }
     }
 
-    private static void accumulateDictionary(DistinctCountStateVector stateVector, DictionaryVector dictionary, BooleanVector nulls, Mask mask, OperatorKeySemantics.Key reusableProbeKey)
+    private void accumulateDictionary(DistinctCountStateVector stateVector, DictionaryVector dictionary, BooleanVector nulls, Mask mask, OperatorKeySemantics.Key reusableProbeKey)
     {
-        boolean[] processedIds = new boolean[dictionary.values().length()];
+        Vector dictionaryValues = dictionary.values();
+        ensureDictionaryCacheCapacity(dictionaryValues.length());
+        int generation = currentDictionaryGeneration(dictionaryValues);
         int[] ids = dictionary.ids();
         for (int position : mask) {
             if (OperatorVectorSupport.isNull(nulls, position)) {
@@ -91,16 +96,38 @@ public class DistinctCount
             }
 
             int dictionaryId = ids[position];
-            if (processedIds[dictionaryId]) {
+            if (dictionaryGenerations[dictionaryId] == generation) {
                 continue;
             }
-            processedIds[dictionaryId] = true;
+            dictionaryGenerations[dictionaryId] = generation;
 
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(dictionary.values(), null, dictionaryId, reusableProbeKey);
+            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(dictionaryValues, null, dictionaryId, reusableProbeKey);
             if (!stateVector.keys().contains(key)) {
                 stateVector.keys().add(OperatorKeySemantics.ownedKey(key));
             }
         }
+    }
+
+    private void ensureDictionaryCacheCapacity(int size)
+    {
+        if (dictionaryGenerations.length >= size) {
+            return;
+        }
+        int newSize = Math.max(size, Math.max(16, dictionaryGenerations.length * 2));
+        dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, newSize);
+    }
+
+    private int currentDictionaryGeneration(Vector dictionaryValues)
+    {
+        if (cachedDictionaryValues != dictionaryValues) {
+            cachedDictionaryValues = dictionaryValues;
+            if (dictionaryGeneration == Integer.MAX_VALUE) {
+                Arrays.fill(dictionaryGenerations, 0);
+                dictionaryGeneration = 0;
+            }
+            return ++dictionaryGeneration;
+        }
+        return dictionaryGeneration;
     }
 
     @Override
