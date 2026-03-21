@@ -38,6 +38,9 @@ final class GroupingState
     private long nullGroup = -1;
     private GroupKind groupKind;
     private Set<BinaryVector.Trait> binaryTraits = Set.of();
+    private long[] dictionaryGroupsById = new long[0];
+    private int[] dictionaryGenerations = new int[0];
+    private int dictionaryGeneration;
 
     GroupingState()
     {
@@ -65,8 +68,9 @@ final class GroupingState
     private void assignDictionaryGroups(DictionaryVector dictionary, BooleanVector nullVector, Mask mask, I64Vector result)
     {
         int[] ids = dictionary.ids();
-        int[] groupsByDictionaryId = new int[dictionary.values().length()];
-        Arrays.fill(groupsByDictionaryId, -1);
+        int dictionaryLength = dictionary.values().length();
+        ensureDictionaryCacheCapacity(dictionaryLength);
+        int generation = nextDictionaryGeneration();
 
         for (int position : mask) {
             if (OperatorVectorSupport.isNull(nullVector, position)) {
@@ -75,13 +79,31 @@ final class GroupingState
             }
 
             int dictionaryId = ids[position];
-            int group = groupsByDictionaryId[dictionaryId];
-            if (group == -1) {
-                group = (int) groupForKey(OperatorKeySemantics.probeKey(dictionary.values(), null, dictionaryId, reusableProbeKey));
-                groupsByDictionaryId[dictionaryId] = group;
+            if (dictionaryGenerations[dictionaryId] != generation) {
+                dictionaryGroupsById[dictionaryId] = groupForKey(OperatorKeySemantics.probeKey(dictionary.values(), null, dictionaryId, reusableProbeKey));
+                dictionaryGenerations[dictionaryId] = generation;
             }
-            result.values()[position] = group;
+            result.values()[position] = dictionaryGroupsById[dictionaryId];
         }
+    }
+
+    private void ensureDictionaryCacheCapacity(int size)
+    {
+        if (dictionaryGroupsById.length >= size) {
+            return;
+        }
+        int newSize = Math.max(size, Math.max(16, dictionaryGroupsById.length * 2));
+        dictionaryGroupsById = Arrays.copyOf(dictionaryGroupsById, newSize);
+        dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, newSize);
+    }
+
+    private int nextDictionaryGeneration()
+    {
+        if (dictionaryGeneration == Integer.MAX_VALUE) {
+            Arrays.fill(dictionaryGenerations, 0);
+            dictionaryGeneration = 0;
+        }
+        return ++dictionaryGeneration;
     }
 
     public Streams groupedValues(Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)

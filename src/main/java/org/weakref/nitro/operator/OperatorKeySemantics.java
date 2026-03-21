@@ -281,11 +281,11 @@ final class OperatorKeySemantics
     {
         private Vector values;
         private int position;
+        private int hash;
 
         public BinaryProbeKey(Vector values, int position)
         {
-            this.values = values;
-            this.position = position;
+            set(values, position);
         }
 
         public Vector values()
@@ -302,6 +302,7 @@ final class OperatorKeySemantics
         {
             this.values = values;
             this.position = position;
+            this.hash = values == null ? 0 : OperatorVectorSupport.binaryHash(values, position);
         }
 
         @Override
@@ -317,7 +318,7 @@ final class OperatorKeySemantics
         @Override
         public int hashCode()
         {
-            return OperatorVectorSupport.binaryHash(values, position);
+            return hash;
         }
     }
 
