@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -1294,8 +1295,46 @@ public class TestOperators
                                         row(2L, null, 20L),
                                         row(null, null, 30L),
                                         row(4L, null, 40L),
-                                        row(5L, null, 50L))))))
+                                row(5L, null, 50L))))))
                 .matchesExactly(List.of(row(4L, 0L, 5L)));
+    }
+
+    @Test
+    void testDistinctCountForIntegers()
+    {
+        assertThat(operator(
+                new AggregationOperator(
+                        allocator,
+                        List.of(new DistinctCount(0)),
+                        new ConstantTableOperator(
+                                allocator,
+                                1,
+                                List.of(
+                                        row((Object) 10L),
+                                        row((Object) 10L),
+                                        row((Object) 20L),
+                                        row((Object) null),
+                                        row((Object) 30L))))))
+                .matchesExactly(List.of(row(3L)));
+    }
+
+    @Test
+    void testDistinctCountForUtf8()
+    {
+        assertThat(operator(
+                new AggregationOperator(
+                        allocator,
+                        List.of(new DistinctCount(0)),
+                        new ConstantTableOperator(
+                                allocator,
+                                1,
+                                List.of(
+                                        row((Object) "alpha"),
+                                        row((Object) "alpha"),
+                                        row((Object) "beta"),
+                                        row((Object) null),
+                                        row((Object) "gamma"))))))
+                .matchesExactly(List.of(row(3L)));
     }
 
     @Test

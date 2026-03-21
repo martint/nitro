@@ -23,6 +23,7 @@ import org.apache.parquet.schema.Types;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -343,13 +344,7 @@ final class ClickBenchHitsSupport
 
     private static Operator countDistinct(Allocator allocator, Operator source)
     {
-        Operator grouped = new GroupOperator(allocator, 0, source);
-        Operator aggregated = new GroupedAggregationOperator(
-                allocator,
-                0,
-                List.of(new CountAll()),
-                grouped);
-        return new AggregationOperator(allocator, List.of(new CountAll()), aggregated);
+        return new AggregationOperator(allocator, List.of(new DistinctCount(0)), source);
     }
 
     private static Operator topIntegerCounts(Allocator allocator, Path file, String column)
