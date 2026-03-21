@@ -242,9 +242,23 @@ final class OperatorKeySemantics
         }
     }
 
-    public record BinaryKey(byte[] bytes)
+    public static final class BinaryKey
             implements Key
     {
+        private final byte[] bytes;
+        private final int hash;
+
+        public BinaryKey(byte[] bytes)
+        {
+            this.bytes = bytes;
+            this.hash = Arrays.hashCode(bytes);
+        }
+
+        public byte[] bytes()
+        {
+            return bytes;
+        }
+
         @Override
         public boolean equals(Object object)
         {
@@ -258,7 +272,7 @@ final class OperatorKeySemantics
         @Override
         public int hashCode()
         {
-            return Arrays.hashCode(bytes);
+            return hash;
         }
     }
 

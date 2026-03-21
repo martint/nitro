@@ -33,8 +33,8 @@ public class GroupedAggregationOperator
     private final Allocator allocator;
 
     private final int groupColumn;
-    private final List<Integer> groupedColumns;
-    private final List<Accumulator> aggregations;
+    private final int[] groupedColumns;
+    private final Accumulator[] aggregations;
     private final Operator source;
     private final Streams[] groupedResults;
     private final Streams[] result;
@@ -53,18 +53,20 @@ public class GroupedAggregationOperator
         }
         this.allocator = allocator;
         this.groupColumn = groupColumn;
-        this.groupedColumns = groupedColumns;
-        this.aggregations = aggregations;
+        this.groupedColumns = groupedColumns.stream()
+                .mapToInt(Integer::intValue)
+                .toArray();
+        this.aggregations = aggregations.toArray(Accumulator[]::new);
         this.source = source;
 
-        groupedResults = new Streams[groupedColumns.size()];
-        result = new Streams[aggregations.size()];
+        groupedResults = new Streams[this.groupedColumns.length];
+        result = new Streams[this.aggregations.length];
     }
 
     @Override
     public int outputCount()
     {
-        return groupedColumns.size() + aggregations.size();
+        return groupedColumns.length + aggregations.length;
     }
 
     @Override
@@ -75,7 +77,7 @@ public class GroupedAggregationOperator
 
     private Mask computeResults()
     {
-        Streams[] states = new Streams[aggregations.size()];
+        Streams[] states = new Streams[aggregations.length];
 
         long maxGroup = -1;
         while (source.hasNext()) {
@@ -99,23 +101,24 @@ public class GroupedAggregationOperator
             }
 
             int newCapacity = Allocator.computeCapacity(toIntExact(maxGroup + 1));
-            for (int i = 0; i < aggregations.size(); i++) {
-                Accumulator accumulator = aggregations.get(i);
+            var streamAccessor = StreamAccessors.forBatch(batch);
+            for (int i = 0; i < aggregations.length; i++) {
+                Accumulator accumulator = aggregations[i];
 
                 states[i] = states[i] == null
                         ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
                         : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[i], newCapacity);
                 accumulator.initialize(states[i], toIntExact(previousMaxGroup + 1), toIntExact(maxGroup - previousMaxGroup));
-                accumulator.accumulate(states[i], group, mask, StreamAccessors.forBatch(batch));
+                accumulator.accumulate(states[i], group, mask, streamAccessor);
             }
         }
 
         for (int i = 0; i < result.length; i++) {
-            result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i], allocator, ALLOCATION_CONTEXT);
+            result[i] = aggregations[i].result(toIntExact(maxGroup), states[i], result[i], allocator, ALLOCATION_CONTEXT);
         }
-        if (!groupedColumns.isEmpty()) {
+        if (groupedColumns.length > 0) {
             groupedKeySource = (GroupedKeySource) source;
-            for (int i = 0; i < groupedColumns.size(); i++) {
+            for (int i = 0; i < groupedColumns.length; i++) {
                 groupedResults[i] = null;
             }
         }
@@ -169,7 +172,7 @@ public class GroupedAggregationOperator
         if (streams != null && batchState.mask.equals(batchState.materializedMask[output])) {
             return streams;
         }
-        streams = groupedKeySource.groupedKeyOutput(groupedColumns.get(output), batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+        streams = groupedKeySource.groupedKeyOutput(groupedColumns[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
         groupedResults[output] = streams;
         batchState.materializedMask[output] = batchState.mask;
         return streams;
@@ -183,7 +186,7 @@ public class GroupedAggregationOperator
     private final class BatchState
     {
         private Mask mask;
-        private final Mask[] materializedMask = new Mask[groupedColumns.size()];
+        private final Mask[] materializedMask = new Mask[groupedColumns.length];
 
         private BatchState(Mask mask)
         {

@@ -13,8 +13,6 @@
  */
 package org.weakref.nitro.data;
 
-import java.util.Arrays;
-
 public final class CountStateVector
         implements FlatVector
 {
@@ -32,31 +30,33 @@ public final class CountStateVector
         this.chunks = new long[chunkCount(length)][];
         long retainedBytes = 0;
         for (int index = 0; index < chunks.length; index++) {
-            chunks[index] = new long[chunkLength(index, length)];
+            chunks[index] = new long[CHUNK_SIZE];
             retainedBytes += (long) chunks[index].length * Long.BYTES;
         }
         this.retainedBytes = retainedBytes;
     }
 
-    public CountStateVector(CountStateVector previous, int length)
+    private CountStateVector(int length, long[][] chunks, long retainedBytes)
     {
         this.length = length;
-        this.chunks = new long[chunkCount(length)][];
-        long retainedBytes = 0;
-        for (int index = 0; index < chunks.length; index++) {
-            int requiredLength = chunkLength(index, length);
-            if (index < previous.chunks.length) {
-                long[] previousChunk = previous.chunks[index];
-                chunks[index] = previousChunk.length == requiredLength
-                        ? previousChunk
-                        : Arrays.copyOf(previousChunk, requiredLength);
-                retainedBytes += (long) chunks[index].length * Long.BYTES;
-                continue;
-            }
-            chunks[index] = new long[requiredLength];
-            retainedBytes += (long) chunks[index].length * Long.BYTES;
-        }
+        this.chunks = chunks;
         this.retainedBytes = retainedBytes;
+    }
+
+    public static CountStateVector grow(CountStateVector previous, int length)
+    {
+        int requiredChunkCount = chunkCount(length);
+        if (requiredChunkCount <= previous.chunks.length) {
+            return new CountStateVector(length, previous.chunks, previous.retainedBytes);
+        }
+
+        long[][] chunks = java.util.Arrays.copyOf(previous.chunks, requiredChunkCount);
+        long retainedBytes = previous.retainedBytes;
+        for (int index = previous.chunks.length; index < chunks.length; index++) {
+            chunks[index] = new long[CHUNK_SIZE];
+            retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+        }
+        return new CountStateVector(length, chunks, retainedBytes);
     }
 
     @Override
@@ -74,7 +74,13 @@ public final class CountStateVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        return allocator.adopt(allocationContext, new CountStateVector(this, length));
+        long[][] chunks = new long[this.chunks.length][];
+        long retainedBytes = 0;
+        for (int index = 0; index < chunks.length; index++) {
+            chunks[index] = java.util.Arrays.copyOf(this.chunks[index], this.chunks[index].length);
+            retainedBytes += (long) chunks[index].length * Long.BYTES;
+        }
+        return allocator.adopt(allocationContext, new CountStateVector(length, chunks, retainedBytes));
     }
 
     @Override
@@ -102,8 +108,12 @@ public final class CountStateVector
         long[] values = output.values();
         int offset = 0;
         for (long[] chunk : chunks) {
-            System.arraycopy(chunk, 0, values, offset, chunk.length);
-            offset += chunk.length;
+            int copyLength = Math.min(chunk.length, length - offset);
+            if (copyLength <= 0) {
+                break;
+            }
+            System.arraycopy(chunk, 0, values, offset, copyLength);
+            offset += copyLength;
         }
     }
 
@@ -115,11 +125,5 @@ public final class CountStateVector
     private static int chunkCount(int length)
     {
         return (length + CHUNK_MASK) >> CHUNK_SHIFT;
-    }
-
-    private static int chunkLength(int chunkIndex, int length)
-    {
-        int remaining = length - (chunkIndex << CHUNK_SHIFT);
-        return Math.min(CHUNK_SIZE, remaining);
     }
 }
