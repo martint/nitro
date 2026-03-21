@@ -25,6 +25,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Set;
 
 final class GroupingState
@@ -56,22 +57,22 @@ final class GroupingState
         }
     }
 
-    public Streams groupedValues(int maxGroup, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    public Streams groupedValues(Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
-        int size = Math.max(0, maxGroup + 1);
+        int size = mask.none() ? 0 : mask.maxPosition() + 1;
         return switch (groupKind) {
             case LONG -> Streams.ofValuesAndNulls(
-                    materializeLongValues(size, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeLongValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
             case BOOLEAN -> Streams.ofValuesAndNulls(
-                    materializeBooleanValues(size, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeBooleanValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
             case DOUBLE -> Streams.ofValuesAndNulls(
-                    materializeDoubleValues(size, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeDoubleValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
             case BINARY -> Streams.ofValuesAndNulls(
-                    materializeBinaryValues(size, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeBinaryValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         };
     }
 
@@ -97,10 +98,11 @@ final class GroupingState
         return nullGroup;
     }
 
-    private I64Vector materializeLongValues(int size, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private I64Vector materializeLongValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
-        for (int index = 0; index < size; index++) {
+        Arrays.fill(result.values(), 0);
+        for (int index : mask) {
             OperatorKeySemantics.Key key = keysByGroup.get(index);
             if (key instanceof OperatorKeySemantics.LongKey value) {
                 result.values()[index] = value.value();
@@ -109,10 +111,11 @@ final class GroupingState
         return result;
     }
 
-    private BooleanVector materializeBooleanValues(int size, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BooleanVector materializeBooleanValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
-        for (int index = 0; index < size; index++) {
+        Arrays.fill(result.values(), false);
+        for (int index : mask) {
             OperatorKeySemantics.Key key = keysByGroup.get(index);
             if (key instanceof OperatorKeySemantics.BooleanKey value) {
                 result.values()[index] = value.value();
@@ -121,10 +124,11 @@ final class GroupingState
         return result;
     }
 
-    private F64Vector materializeDoubleValues(int size, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private F64Vector materializeDoubleValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         F64Vector result = allocator.allocateOrGrow(allocationContext, (F64Vector) output, F64Vector.class, size, F64Vector::new);
-        for (int index = 0; index < size; index++) {
+        Arrays.fill(result.values(), 0);
+        for (int index : mask) {
             OperatorKeySemantics.Key key = keysByGroup.get(index);
             if (key instanceof OperatorKeySemantics.DoubleKey value) {
                 result.values()[index] = Double.longBitsToDouble(value.bits());
@@ -133,35 +137,37 @@ final class GroupingState
         return result;
     }
 
-    private BinaryVector materializeBinaryValues(int size, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BinaryVector materializeBinaryValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
-        int totalBytes = 0;
-        for (int index = 0; index < size; index++) {
+        long totalBytes = 0;
+        for (int index : mask) {
             OperatorKeySemantics.Key key = keysByGroup.get(index);
             if (key instanceof OperatorKeySemantics.BinaryKey value) {
                 totalBytes += value.bytes().length;
             }
         }
+        if (totalBytes > Integer.MAX_VALUE) {
+            throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
+        }
 
-        BinaryVector result = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) output, size, totalBytes);
+        BinaryVector result = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) output, size, (int) totalBytes);
+        Arrays.fill(result.offsets(), 0);
         result.clearTraits();
         result.addTraits(binaryTraits);
-        for (int index = 0; index < size; index++) {
+        for (int index : mask) {
             OperatorKeySemantics.Key key = keysByGroup.get(index);
             if (key instanceof OperatorKeySemantics.BinaryKey value) {
                 result.setBytes(index, value.bytes());
-            }
-            else {
-                result.setNull(index);
             }
         }
         return result;
     }
 
-    private BooleanVector materializeNulls(int size, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BooleanVector materializeNulls(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
-        for (int index = 0; index < size; index++) {
+        Arrays.fill(result.values(), true);
+        for (int index : mask) {
             result.values()[index] = keysByGroup.get(index) == null;
         }
         return result;

@@ -20,6 +20,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -223,6 +224,34 @@ public class TestOperatorBatches
         assertThat(keys.utf8Value(0)).isEqualTo("alpha");
         assertThat(keys.utf8Value(1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
+    }
+
+    @Test
+    void testGroupedAggregationOperatorMaterializesOnlyConstrainedBinaryKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new CountAll()),
+                new GroupOperator(
+                        allocator,
+                        0,
+                        new ConstantTableOperator(allocator, 1, List.of(
+                                row("alpha"),
+                                row("alpha"),
+                                row("beta")))));
+
+        Batch batch = operator.next();
+        batch.constrain(Mask.sparse(new int[] {1}, 2));
+
+        BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+
+        assertThat(nulls.values()).containsExactly(true, false);
+        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(keys.endOffset(1)).isEqualTo("beta".length());
     }
 
     @Test

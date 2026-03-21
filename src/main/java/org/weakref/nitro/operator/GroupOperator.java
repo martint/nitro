@@ -116,12 +116,12 @@ public class GroupOperator
     }
 
     @Override
-    public Streams groupedKeyOutput(int outputIndex, int maxGroup, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    public Streams groupedKeyOutput(int outputIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         if (outputIndex != groupByColumn + 1) {
             throw new IllegalArgumentException("Output " + outputIndex + " is not the grouping key output");
         }
-        return groupingState.groupedValues(maxGroup, output, allocator, allocationContext);
+        return groupingState.groupedValues(mask, output, allocator, allocationContext);
     }
 
     private static final class BatchState

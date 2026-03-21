@@ -15,10 +15,13 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -159,6 +162,7 @@ final class TopNState
         if (outputIndex == orderingColumn) {
             return;
         }
+        constrainPendingBatches();
         for (int slot : orderedSlots) {
             Batch batch = pendingBatches[slot];
             if (batch == null) {
@@ -168,6 +172,26 @@ final class TopNState
             if (schema[outputIndex] == null) {
                 schema[outputIndex] = slotColumns[outputIndex][slot];
             }
+        }
+    }
+
+    private void constrainPendingBatches()
+    {
+        IdentityHashMap<Batch, List<Integer>> retainedPositionsByBatch = new IdentityHashMap<>();
+        for (int slot : orderedSlots) {
+            Batch batch = pendingBatches[slot];
+            if (batch == null) {
+                continue;
+            }
+            retainedPositionsByBatch.computeIfAbsent(batch, _ -> new ArrayList<>())
+                    .add(pendingPositions[slot]);
+        }
+        for (Map.Entry<Batch, List<Integer>> entry : retainedPositionsByBatch.entrySet()) {
+            int[] positions = entry.getValue().stream()
+                    .mapToInt(Integer::intValue)
+                    .sorted()
+                    .toArray();
+            entry.getKey().constrain(Mask.sparse(positions, entry.getKey().borrowMask().size()));
         }
     }
 

@@ -20,7 +20,9 @@ import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 import static java.lang.Math.toIntExact;
 
@@ -37,6 +39,7 @@ public class GroupedAggregationOperator
     private final Streams[] groupedResults;
     private final Streams[] result;
     private boolean done;
+    private GroupedKeySource groupedKeySource;
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
@@ -111,9 +114,9 @@ public class GroupedAggregationOperator
             result[i] = aggregations.get(i).result(toIntExact(maxGroup), states[i], result[i], allocator, ALLOCATION_CONTEXT);
         }
         if (!groupedColumns.isEmpty()) {
-            GroupedKeySource groupedKeySource = (GroupedKeySource) source;
+            groupedKeySource = (GroupedKeySource) source;
             for (int i = 0; i < groupedColumns.size(); i++) {
-                groupedResults[i] = groupedKeySource.groupedKeyOutput(groupedColumns.get(i), toIntExact(maxGroup), groupedResults[i], allocator, ALLOCATION_CONTEXT);
+                groupedResults[i] = null;
             }
         }
 
@@ -126,12 +129,13 @@ public class GroupedAggregationOperator
     public Batch next()
     {
         Mask batchMask = computeResults();
+        BatchState batchState = new BatchState(batchMask);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
-            outputs[outputIndex] = resultOutput(output);
+            outputs[outputIndex] = resultOutput(output, batchState);
         }
-        return new Batch(batchMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchMask, batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
     }
 
     @Override
@@ -140,10 +144,56 @@ public class GroupedAggregationOperator
         // Nothing to do. All output is already computed
     }
 
-    private Output resultOutput(int output)
+    private Output resultOutput(int output, BatchState batchState)
     {
-        Streams streams = output < groupedResults.length ? groupedResults[output] : result[output - groupedResults.length];
-        return new Output(streams.asMap().keySet(), streams::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+        if (output < groupedResults.length) {
+            int groupedOutput = output;
+            return new Output(
+                    groupedKeyStreams(),
+                    stream -> groupedKeyOutput(groupedOutput, batchState).get(stream),
+                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
+                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+        }
+
+        Streams streams = result[output - groupedResults.length];
+        return new Output(
+                streams.asMap().keySet(),
+                streams::get,
+                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
+                (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+    }
+
+    private Streams groupedKeyOutput(int output, BatchState batchState)
+    {
+        Streams streams = groupedResults[output];
+        if (streams != null && batchState.mask.equals(batchState.materializedMask[output])) {
+            return streams;
+        }
+        streams = groupedKeySource.groupedKeyOutput(groupedColumns.get(output), batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+        groupedResults[output] = streams;
+        batchState.materializedMask[output] = batchState.mask;
+        return streams;
+    }
+
+    private Set<Stream> groupedKeyStreams()
+    {
+        return EnumSet.of(Stream.VALUES, Stream.NULLS);
+    }
+
+    private final class BatchState
+    {
+        private Mask mask;
+        private final Mask[] materializedMask = new Mask[groupedColumns.size()];
+
+        private BatchState(Mask mask)
+        {
+            this.mask = mask;
+        }
+
+        private void constrain(Mask mask)
+        {
+            this.mask = mask;
+        }
     }
 
     @Override

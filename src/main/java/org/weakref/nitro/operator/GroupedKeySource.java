@@ -17,5 +17,5 @@ import org.weakref.nitro.data.Allocator;
 
 interface GroupedKeySource
 {
-    Streams groupedKeyOutput(int outputIndex, int maxGroup, Streams output, Allocator allocator, Allocator.Context allocationContext);
+    Streams groupedKeyOutput(int outputIndex, org.weakref.nitro.data.Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext);
 }
