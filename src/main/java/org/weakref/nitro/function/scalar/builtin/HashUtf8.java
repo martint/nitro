@@ -44,6 +44,12 @@ public final class HashUtf8
     }
 
     @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 1, "Unexpected argument count for hash_utf8");

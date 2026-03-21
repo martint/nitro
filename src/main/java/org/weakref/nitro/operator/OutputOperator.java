@@ -52,16 +52,17 @@ public class OutputOperator
         done = true;
 
         while (source.hasNext()) {
-            Batch batch = source.next();
-            Mask mask = batch.borrowMask();
+            try (Batch batch = source.next()) {
+                Mask mask = batch.borrowMask();
 
-            List<Output> columns = new ArrayList<>();
-            for (int i = 0; i < source.outputCount(); i++) {
-                columns.add(batch.output(i));
-            }
+                List<Output> columns = new ArrayList<>();
+                for (int i = 0; i < source.outputCount(); i++) {
+                    columns.add(batch.output(i));
+                }
 
-            for (int position : mask) {
-                outputRow(columns, position);
+                for (int position : mask) {
+                    outputRow(columns, position);
+                }
             }
         }
 

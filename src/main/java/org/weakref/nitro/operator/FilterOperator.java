@@ -81,7 +81,18 @@ public class FilterOperator
             Output sourceOutput = sourceBatch.output(outputIndex);
             outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
         }
-        return new Batch(batchMask, batchState::constrain, Function.identity(), outputs);
+        return new Batch(
+                batchMask,
+                batchState::constrain,
+                Function.identity(),
+                _ -> {},
+                () -> {
+                    if (currentBatchState == batchState) {
+                        currentBatchState = null;
+                    }
+                    sourceBatch.close();
+                },
+                outputs);
     }
 
     @Override
@@ -102,6 +113,10 @@ public class FilterOperator
     @Override
     public void close()
     {
+        if (currentBatchState != null) {
+            currentBatchState.sourceBatch().close();
+            currentBatchState = null;
+        }
         source.close();
         planEvaluator.reset();
         allocator.release(ALLOCATION_CONTEXT);

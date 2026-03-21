@@ -70,6 +70,13 @@ public class LimitOperator
                     sourceBatch.constrain(mask);
                 },
                 takenMask -> takenMask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                _ -> {},
+                () -> {
+                    if (currentBatch == sourceBatch) {
+                        currentBatch = null;
+                    }
+                    sourceBatch.close();
+                },
                 outputs);
     }
 
@@ -92,6 +99,10 @@ public class LimitOperator
     @Override
     public void close()
     {
+        if (currentBatch != null) {
+            currentBatch.close();
+            currentBatch = null;
+        }
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
     }

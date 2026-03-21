@@ -37,6 +37,12 @@ public final class ContainsUtf8
     }
 
     @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return Utf8BinaryDispatch.applyContains("contains_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);

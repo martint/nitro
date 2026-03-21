@@ -22,7 +22,6 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,7 +36,6 @@ public class ProjectOperator
     private final EvaluationPlan evaluationPlan;
     private final PrimitiveRegistry primitiveRegistry;
     private final List<Reference> outputReferences;
-    private final List<PlanEvaluator> evaluators = new ArrayList<>();
 
     private final Operator source;
     private BatchState currentBatchState;
@@ -69,7 +67,6 @@ public class ProjectOperator
         Batch sourceBatch = source.next();
         BatchState batchState = new BatchState(sourceBatch);
         currentBatchState = batchState;
-        evaluators.add(batchState.planEvaluator());
 
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
@@ -79,7 +76,18 @@ public class ProjectOperator
                     stream -> evaluateOutput(batchState, outputReference, stream),
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(batchState.mask(), batchState::constrain, ignored -> sourceBatch.takeMask(), outputs);
+        return new Batch(
+                batchState.mask(),
+                batchState::constrain,
+                ignored -> sourceBatch.takeMask(),
+                _ -> {},
+                () -> {
+                    if (currentBatchState == batchState) {
+                        currentBatchState = null;
+                    }
+                    batchState.close();
+                },
+                outputs);
     }
 
     @Override
@@ -109,8 +117,11 @@ public class ProjectOperator
     @Override
     public void close()
     {
+        if (currentBatchState != null) {
+            currentBatchState.close();
+            currentBatchState = null;
+        }
         source.close();
-        evaluators.forEach(PlanEvaluator::reset);
         allocator.release(ALLOCATION_CONTEXT);
     }
 
@@ -156,6 +167,13 @@ public class ProjectOperator
             evaluatedOutputBundles.clear();
             this.mask = mask;
             sourceBatch.constrain(mask);
+        }
+
+        private void close()
+        {
+            planEvaluator.reset();
+            evaluatedOutputBundles.clear();
+            sourceBatch.close();
         }
     }
 }

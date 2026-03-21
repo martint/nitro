@@ -18,6 +18,7 @@ import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -51,9 +52,35 @@ final class GroupingState
             groupKind = GroupKind.forVector(values);
             binaryTraits = OperatorVectorSupport.binaryTraits(values);
         }
+        if (values instanceof DictionaryVector dictionary) {
+            assignDictionaryGroups(dictionary, nullVector, mask, result);
+            return;
+        }
         for (int position : mask) {
             OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nullVector, position, reusableProbeKey);
             result.values()[position] = key == null ? nullGroup() : groupForKey(key);
+        }
+    }
+
+    private void assignDictionaryGroups(DictionaryVector dictionary, BooleanVector nullVector, Mask mask, I64Vector result)
+    {
+        int[] ids = dictionary.ids();
+        int[] groupsByDictionaryId = new int[dictionary.values().length()];
+        Arrays.fill(groupsByDictionaryId, -1);
+
+        for (int position : mask) {
+            if (OperatorVectorSupport.isNull(nullVector, position)) {
+                result.values()[position] = nullGroup();
+                continue;
+            }
+
+            int dictionaryId = ids[position];
+            int group = groupsByDictionaryId[dictionaryId];
+            if (group == -1) {
+                group = (int) groupForKey(OperatorKeySemantics.probeKey(dictionary.values(), null, dictionaryId, reusableProbeKey));
+                groupsByDictionaryId[dictionaryId] = group;
+            }
+            result.values()[position] = group;
         }
     }
 

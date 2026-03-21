@@ -105,13 +105,14 @@ public class AggregationOperator
             }
 
             while (source.hasNext()) {
-                Batch batch = source.next();
-                Mask mask = batch.borrowMask();
-                for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
-                    Accumulator accumulator = aggregations.get(aggregation);
-                    accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
-                    reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
-                    batchState.results[aggregation] = reusableResults[aggregation];
+                try (Batch batch = source.next()) {
+                    Mask mask = batch.borrowMask();
+                    for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
+                        Accumulator accumulator = aggregations.get(aggregation);
+                        accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
+                        reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
+                        batchState.results[aggregation] = reusableResults[aggregation];
+                    }
                 }
             }
         }

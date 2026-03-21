@@ -181,7 +181,7 @@ public final class PlanEvaluator
         if (requestedStreams.contains(Stream.VALUES)) {
             int length = mask.maxPosition() + 1;
             result = switch (literal.value()) {
-                case Long value -> Streams.ofValues(fillLong(value, length));
+                case Long value -> Streams.ofValues(fillLongRle(value, length));
                 case Boolean value -> Streams.of(Stream.VALUES, fillBoolean(value, length));
                 case String value -> Streams.of(Stream.VALUES, fillUtf8(value, length));
                 default -> throw new IllegalArgumentException("Unsupported literal value: " + literal.value());
@@ -193,9 +193,11 @@ public final class PlanEvaluator
     private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)
     {
         PrimitiveFunction function = primitiveRegistry.get(call.name());
-        List<Streams> inputs = call.arguments().stream()
-                .map(argument -> evaluateArgument(argument, mask))
-                .toList();
+        List<Streams> inputs = new ArrayList<>(call.arguments().size());
+        boolean requiresInputCompanionStreams = function.requiresInputCompanionStreams();
+        for (Reference argument : call.arguments()) {
+            inputs.add(requiresInputCompanionStreams ? evaluateArgument(argument, mask) : evaluate(argument, mask));
+        }
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
         return completeRequestedStreams(requestedStreams, result, mask);
@@ -490,13 +492,11 @@ public final class PlanEvaluator
         return target;
     }
 
-    private Vector fillLong(long value, int length)
+    private Vector fillLongRle(long value, int length)
     {
-        I64Vector result = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, length, I64Vector::new);
-        for (int position = 0; position < length; position++) {
-            result.values()[position] = value;
-        }
-        return result;
+        I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 1, I64Vector::new);
+        values.values()[0] = value;
+        return allocator.allocateRle(ALLOCATION_CONTEXT, new int[] {length}, values);
     }
 
     private Vector fillBoolean(boolean value, int length)

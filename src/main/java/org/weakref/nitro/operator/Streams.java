@@ -25,6 +25,8 @@ import static java.util.Objects.requireNonNull;
 
 public final class Streams
 {
+    private static final Streams EMPTY = new Streams(new EnumMap<>(Stream.class), false);
+
     private final EnumMap<Stream, Vector> vectors;
     private final Map<Stream, Vector> view;
 
@@ -41,7 +43,7 @@ public final class Streams
 
     public static Streams empty()
     {
-        return new Streams(new EnumMap<>(Stream.class));
+        return EMPTY;
     }
 
     public static Builder builder()
@@ -133,7 +135,7 @@ public final class Streams
         public Streams build()
         {
             if (vectors.isEmpty()) {
-                return Streams.empty();
+                return EMPTY;
             }
             return new Streams(vectors);
         }

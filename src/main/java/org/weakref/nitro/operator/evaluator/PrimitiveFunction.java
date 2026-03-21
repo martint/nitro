@@ -32,6 +32,11 @@ public interface PrimitiveFunction
 {
     Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context);
 
+    default boolean requiresInputCompanionStreams()
+    {
+        return false;
+    }
+
     default Set<Allocator.Context> allocationContexts()
     {
         return Set.of();

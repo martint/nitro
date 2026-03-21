@@ -207,13 +207,13 @@ public final class Utf8BinaryDispatch
     private static boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
     {
         requireUtf8Traits(functionName, left, right);
-        return ascii ? binaryStartsWith(left, leftPosition, right, rightPosition) : left.utf8Value(leftPosition).startsWith(right.utf8Value(rightPosition));
+        return binaryStartsWith(left, leftPosition, right, rightPosition);
     }
 
     private static boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
     {
         requireUtf8Traits(functionName, left, right);
-        return ascii ? binaryContains(left, leftPosition, right, rightPosition) : left.utf8Value(leftPosition).contains(right.utf8Value(rightPosition));
+        return binaryContains(left, leftPosition, right, rightPosition);
     }
 
     private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)

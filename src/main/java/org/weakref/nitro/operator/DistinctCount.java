@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -64,11 +65,38 @@ public class DistinctCount
         BooleanVector nulls = streams.nulls(inputColumn);
         OperatorKeySemantics.Key reusableProbeKey = reusableProbeKey(stateVector, values);
 
+        if (values instanceof DictionaryVector dictionary) {
+            accumulateDictionary(stateVector, dictionary, nulls, mask, reusableProbeKey);
+            return;
+        }
+
         for (int position : mask) {
             OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKey);
             if (key == null) {
                 continue;
             }
+            if (!stateVector.keys().contains(key)) {
+                stateVector.keys().add(OperatorKeySemantics.ownedKey(key));
+            }
+        }
+    }
+
+    private static void accumulateDictionary(DistinctCountStateVector stateVector, DictionaryVector dictionary, BooleanVector nulls, Mask mask, OperatorKeySemantics.Key reusableProbeKey)
+    {
+        boolean[] processedIds = new boolean[dictionary.values().length()];
+        int[] ids = dictionary.ids();
+        for (int position : mask) {
+            if (OperatorVectorSupport.isNull(nulls, position)) {
+                continue;
+            }
+
+            int dictionaryId = ids[position];
+            if (processedIds[dictionaryId]) {
+                continue;
+            }
+            processedIds[dictionaryId] = true;
+
+            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(dictionary.values(), null, dictionaryId, reusableProbeKey);
             if (!stateVector.keys().contains(key)) {
                 stateVector.keys().add(OperatorKeySemantics.ownedKey(key));
             }

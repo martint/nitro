@@ -70,7 +70,18 @@ public class GroupOperator
                 outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
             }
         }
-        return new Batch(batchState.mask, batchState::constrain, ignored -> sourceBatch.takeMask(), outputs);
+        return new Batch(
+                batchState.mask,
+                batchState::constrain,
+                ignored -> sourceBatch.takeMask(),
+                _ -> {},
+                () -> {
+                    if (currentBatchState == batchState) {
+                        currentBatchState = null;
+                    }
+                    sourceBatch.close();
+                },
+                outputs);
     }
 
     @Override
@@ -111,6 +122,10 @@ public class GroupOperator
     @Override
     public void close()
     {
+        if (currentBatchState != null) {
+            currentBatchState.sourceBatch.close();
+            currentBatchState = null;
+        }
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
     }
