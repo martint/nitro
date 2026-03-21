@@ -52,7 +52,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery1CountAllOnActualHits()
+    void testQuery01()
     {
         try (Operator query = ClickBenchHitsSupport.query1CountAll(new Allocator(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(99_997_497L)));
@@ -60,7 +60,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery0SelectAllOnActualHits()
+    void testQuery00()
     {
         try (Operator query = ClickBenchHitsSupport.query0SelectAll(new Allocator(), actualHitsDirectory())) {
             assertThat(query.outputCount()).isEqualTo(6);
@@ -100,7 +100,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery2CountNonZeroAdvEngineIdOnActualHits()
+    void testQuery02()
     {
         try (Operator query = ClickBenchHitsSupport.query2CountNonZeroAdvEngineId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(630_500L)));
@@ -108,7 +108,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery7MinAndMaxEventDateOnActualHits()
+    void testQuery07()
     {
         try (Operator query = ClickBenchHitsSupport.query7MinAndMaxEventDate(new Allocator(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(15_888L, 15_917L)));
@@ -116,7 +116,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery3RunsOnActualHits()
+    void testQuery03()
     {
         try (Operator query = ClickBenchHitsSupport.query3SumAdvEngineAndAvgResolutionWidth(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -129,7 +129,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery4RunsOnActualHits()
+    void testQuery04()
     {
         try (Operator query = ClickBenchHitsSupport.query4AvgUserId(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -140,7 +140,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery5RunsOnActualHits()
+    void testQuery05()
     {
         try (Operator query = ClickBenchHitsSupport.query5CountDistinctUserId(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -151,7 +151,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery6RunsOnActualHits()
+    void testQuery06()
     {
         try (Operator query = ClickBenchHitsSupport.query6CountDistinctSearchPhrase(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -162,7 +162,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery8GroupByAdvEngineIdOnActualHits()
+    void testQuery08()
     {
         try (Operator query = ClickBenchHitsSupport.query8GroupByAdvEngineId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(
@@ -180,7 +180,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery13RunsOnActualHits()
+    void testQuery13()
     {
         try (Operator query = ClickBenchHitsSupport.query13TopSearchPhrases(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -192,7 +192,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery16RunsOnActualHits()
+    void testQuery16()
     {
         try (Operator query = ClickBenchHitsSupport.query16TopUserIds(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -204,7 +204,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery20RunsOnActualHits()
+    void testQuery20()
     {
         try (Operator query = ClickBenchHitsSupport.query20SearchPhrasesForUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -215,7 +215,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery26RunsOnActualHits()
+    void testQuery26()
     {
         try (Operator query = ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -226,7 +226,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery30RunsOnActualHits()
+    void testQuery30()
     {
         try (Operator query = ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -239,7 +239,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery34RunsOnActualHits()
+    void testQuery34()
     {
         try (Operator query = ClickBenchHitsSupport.query34TopUrls(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -251,7 +251,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery35RunsOnActualHits()
+    void testQuery35()
     {
         try (Operator query = ClickBenchHitsSupport.query35ConstantAndTopUrls(new Allocator(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
@@ -264,7 +264,7 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
-    void testClickBenchQuery21RunsOnActualHits()
+    void testQuery21()
     {
         try (Operator query = ClickBenchHitsSupport.query21CountUrlsContainingGoogle(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
