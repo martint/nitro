@@ -16,11 +16,12 @@ package org.weakref.nitro.data;
 import org.weakref.nitro.operator.Streams;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
@@ -735,8 +736,8 @@ public class Allocator
         private final Map<Object, TreeMap<Integer, ArrayDeque<Vector>>> vectorPool = new HashMap<>();
         private final Map<Object, ArrayDeque<Vector>> vectorPoolOrder = new HashMap<>();
         private final TreeMap<Integer, ArrayDeque<Mask>> maskPool = new TreeMap<>();
-        private final List<Vector> inUseVectors = new ArrayList<>();
-        private final List<Mask> inUseMasks = new ArrayList<>();
+        private final Set<Vector> inUseVectors = Collections.newSetFromMap(new IdentityHashMap<>());
+        private final Set<Mask> inUseMasks = Collections.newSetFromMap(new IdentityHashMap<>());
 
         public Stats stats()
         {

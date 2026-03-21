@@ -24,20 +24,25 @@ public final class CountStateVector
 
     private final int length;
     private final long[][] chunks;
+    private final long retainedBytes;
 
     public CountStateVector(int length)
     {
         this.length = length;
         this.chunks = new long[chunkCount(length)][];
+        long retainedBytes = 0;
         for (int index = 0; index < chunks.length; index++) {
             chunks[index] = new long[chunkLength(index, length)];
+            retainedBytes += (long) chunks[index].length * Long.BYTES;
         }
+        this.retainedBytes = retainedBytes;
     }
 
     public CountStateVector(CountStateVector previous, int length)
     {
         this.length = length;
         this.chunks = new long[chunkCount(length)][];
+        long retainedBytes = 0;
         for (int index = 0; index < chunks.length; index++) {
             int requiredLength = chunkLength(index, length);
             if (index < previous.chunks.length) {
@@ -45,10 +50,13 @@ public final class CountStateVector
                 chunks[index] = previousChunk.length == requiredLength
                         ? previousChunk
                         : Arrays.copyOf(previousChunk, requiredLength);
+                retainedBytes += (long) chunks[index].length * Long.BYTES;
                 continue;
             }
             chunks[index] = new long[requiredLength];
+            retainedBytes += (long) chunks[index].length * Long.BYTES;
         }
+        this.retainedBytes = retainedBytes;
     }
 
     @Override
@@ -60,7 +68,7 @@ public final class CountStateVector
     @Override
     public long retainedBytes()
     {
-        return bytes();
+        return retainedBytes;
     }
 
     @Override
@@ -101,11 +109,7 @@ public final class CountStateVector
 
     public long bytes()
     {
-        long bytes = 0;
-        for (long[] chunk : chunks) {
-            bytes += (long) chunk.length * Long.BYTES;
-        }
-        return bytes;
+        return retainedBytes;
     }
 
     private static int chunkCount(int length)
