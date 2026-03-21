@@ -43,7 +43,7 @@ public class TestClickBenchHitsRealData
 
     private Path actualHitsDirectory()
     {
-        assumeTrue(Boolean.getBoolean(RUN_ACTUAL_TESTS_PROPERTY), "Set -D" + RUN_ACTUAL_TESTS_PROPERTY + "=true to run ClickBench tests against the split real hits parquet data");
+//        assumeTrue(Boolean.getBoolean(RUN_ACTUAL_TESTS_PROPERTY), "Set -D" + RUN_ACTUAL_TESTS_PROPERTY + "=true to run ClickBench tests against the split real hits parquet data");
         var directory = ClickBenchHitsSupport.actualHitsDirectoryIfPresent();
         assumeTrue(directory.isPresent(), "Set -D" + ClickBenchHitsSupport.CLICKBENCH_HITS_PATH_PROPERTY + "=/path/to/clickbench or place the split files at ~/tmp/clickbench");
         return directory.orElseThrow();
