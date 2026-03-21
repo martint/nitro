@@ -26,6 +26,8 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 
+import static java.lang.Math.toIntExact;
+
 public class DistinctCount
         implements Accumulator
 {
@@ -42,12 +44,15 @@ public class DistinctCount
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return Streams.ofValues(allocator.adopt(allocationContext, new DistinctCountStateVector()));
+        DistinctCountStateVector stateVector = new DistinctCountStateVector();
+        stateVector.ensureGroupCapacity(size);
+        return Streams.ofValues(allocator.adopt(allocationContext, stateVector));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
+        ((DistinctCountStateVector) state.values()).ensureGroupCapacity(size);
         return state;
     }
 
@@ -78,8 +83,8 @@ public class DistinctCount
             if (key == null) {
                 continue;
             }
-            if (!stateVector.keys().contains(key)) {
-                stateVector.keys().add(OperatorKeySemantics.ownedKey(key));
+            if (!stateVector.keys(group).contains(key)) {
+                stateVector.keys(group).add(OperatorKeySemantics.ownedKey(key));
             }
         }
     }
@@ -102,8 +107,8 @@ public class DistinctCount
             dictionaryGenerations[dictionaryId] = generation;
 
             OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(dictionaryValues, null, dictionaryId, reusableProbeKey);
-            if (!stateVector.keys().contains(key)) {
-                stateVector.keys().add(OperatorKeySemantics.ownedKey(key));
+            if (!stateVector.keys(0).contains(key)) {
+                stateVector.keys(0).add(OperatorKeySemantics.ownedKey(key));
             }
         }
     }
@@ -133,7 +138,22 @@ public class DistinctCount
     @Override
     public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
-        throw new UnsupportedOperationException("DistinctCount does not support grouped accumulation");
+        DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
+        Vector values = streams.values(inputColumn);
+        BooleanVector nulls = streams.nulls(inputColumn);
+        I64Vector groupVector = (I64Vector) groups;
+        OperatorKeySemantics.Key reusableProbeKey = reusableProbeKey(stateVector, values);
+
+        for (int position : mask) {
+            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKey);
+            if (key == null) {
+                continue;
+            }
+            int group = toIntExact(groupVector.values()[position]);
+            if (!stateVector.keys(group).contains(key)) {
+                stateVector.keys(group).add(OperatorKeySemantics.ownedKey(key));
+            }
+        }
     }
 
     @Override
@@ -144,17 +164,19 @@ public class DistinctCount
                 allocationContext,
                 output == null ? null : (I64Vector) output.values(),
                 I64Vector.class,
-                1,
+                maxGroup + 1,
                 I64Vector::new);
-        values.values()[0] = stateVector.keys().size();
+        for (int group = 0; group <= maxGroup; group++) {
+            values.values()[group] = stateVector.distinctCount(group);
+        }
 
         BooleanVector nulls = allocator.allocateOrGrow(
                 allocationContext,
                 output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
                 BooleanVector.class,
-                1,
+                maxGroup + 1,
                 BooleanVector::new);
-        Arrays.fill(nulls.values(), false);
+        Arrays.fill(nulls.values(), 0, maxGroup + 1, false);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 

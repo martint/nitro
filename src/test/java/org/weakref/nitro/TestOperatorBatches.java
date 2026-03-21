@@ -227,6 +227,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorCanExposeMultipleGroupingKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1, 2),
+                List.of(new CountAll()),
+                new GroupOperator(
+                        allocator,
+                        new int[] {0, 1},
+                        new ConstantTableOperator(allocator, 2, List.of(
+                                row(10L, "alpha"),
+                                row(10L, "alpha"),
+                                row(10L, "beta"),
+                                row(20L, "alpha")))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        I64Vector leftKeys = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector rightKeys = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(leftKeys.values(), rowCount)).containsExactly(10L, 10L, 20L);
+        assertThat(rightKeys.utf8Value(0)).isEqualTo("alpha");
+        assertThat(rightKeys.utf8Value(1)).isEqualTo("beta");
+        assertThat(rightKeys.utf8Value(2)).isEqualTo("alpha");
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L, 1L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorMaterializesOnlyConstrainedBinaryKeys()
     {
         Allocator allocator = new Allocator();
@@ -449,6 +480,35 @@ public class TestOperatorBatches
 
         assertThat(Arrays.copyOf(values.values(), batch.borrowMask().count())).containsExactly(3.25, 2.5);
         assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(20L, 30L);
+    }
+
+    @Test
+    void testTopNOperatorSupportsMultiKeyOrdering()
+    {
+        Operator operator = new TopNOperator(
+                new Allocator(),
+                3,
+                new int[] {0, 1},
+                new boolean[] {false, false},
+                new ConstantTableOperator(
+                        new Allocator(),
+                        3,
+                        List.of(
+                                row(20L, "pear", 1L),
+                                row(10L, "pear", 2L),
+                                row(10L, "apple", 3L),
+                                row(10L, "banana", 4L))));
+
+        Batch batch = operator.next();
+        I64Vector first = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector second = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector payload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(first.values(), batch.borrowMask().count())).containsExactly(10L, 10L, 10L);
+        assertThat(second.utf8Value(0)).isEqualTo("apple");
+        assertThat(second.utf8Value(1)).isEqualTo("banana");
+        assertThat(second.utf8Value(2)).isEqualTo("pear");
+        assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(3L, 4L, 2L);
     }
 
     @Test

@@ -107,9 +107,45 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query9TopRegionsByDistinctUsers()
+    {
+        consume(ClickBenchHitsSupport.query9TopRegionsByDistinctUsers(allocator, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query10RegionAggregates()
+    {
+        consume(ClickBenchHitsSupport.query10RegionAggregates(allocator, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query11TopMobilePhoneModelsByDistinctUsers()
+    {
+        consume(ClickBenchHitsSupport.query11TopMobilePhoneModelsByDistinctUsers(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query12TopMobilePhonesAndModelsByDistinctUsers()
+    {
+        consume(ClickBenchHitsSupport.query12TopMobilePhonesAndModelsByDistinctUsers(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
     public void query13TopSearchPhrases()
     {
         consume(ClickBenchHitsSupport.query13TopSearchPhrases(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query14TopSearchPhrasesByDistinctUsers()
+    {
+        consume(ClickBenchHitsSupport.query14TopSearchPhrasesByDistinctUsers(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query15TopSearchEngineAndPhrasePairs()
+    {
+        consume(ClickBenchHitsSupport.query15TopSearchEngineAndPhrasePairs(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
@@ -119,9 +155,33 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query17TopUserIdAndSearchPhrasePairs()
+    {
+        consume(ClickBenchHitsSupport.query17TopUserIdAndSearchPhrasePairs(allocator, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query18FirstUserIdAndSearchPhrasePairs()
+    {
+        consume(ClickBenchHitsSupport.query18FirstUserIdAndSearchPhrasePairs(allocator, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query19TopUserIdMinuteAndSearchPhraseTriples()
+    {
+        consume(ClickBenchHitsSupport.query19TopUserIdMinuteAndSearchPhraseTriples(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
     public void query20SearchPhrasesForUserId()
     {
         consume(ClickBenchHitsSupport.query20SearchPhrasesForUserId(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query25SearchPhrasesOrderedByEventTime()
+    {
+        consume(ClickBenchHitsSupport.query25SearchPhrasesOrderedByEventTime(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
@@ -134,6 +194,12 @@ public class BenchmarkClickBenchHits
     public void query26SearchPhrasesOrderedAscending()
     {
         consume(ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query27SearchPhrasesOrderedByEventTimeThenPhrase()
+    {
+        consume(ClickBenchHitsSupport.query27SearchPhrasesOrderedByEventTimeThenPhrase(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark

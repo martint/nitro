@@ -27,8 +27,6 @@ public class TopNOperator
     private final Allocator allocator;
 
     private final int n;
-    private final int column;
-    private final boolean descending;
     private final Operator source;
     private final TopNState state;
 
@@ -36,17 +34,26 @@ public class TopNOperator
 
     public TopNOperator(Allocator allocator, int n, int column, Operator source)
     {
-        this(allocator, n, column, true, source);
+        this(allocator, n, new int[] {column}, new boolean[] {true}, source);
     }
 
     public TopNOperator(Allocator allocator, int n, int column, boolean descending, Operator source)
     {
+        this(allocator, n, new int[] {column}, new boolean[] {descending}, source);
+    }
+
+    public TopNOperator(Allocator allocator, int n, int[] columns, boolean[] descending, Operator source)
+    {
+        if (columns.length == 0) {
+            throw new IllegalArgumentException("TopN requires at least one ordering column");
+        }
+        if (columns.length != descending.length) {
+            throw new IllegalArgumentException("TopN ordering columns and directions must have the same length");
+        }
         this.allocator = allocator;
         this.n = n;
-        this.column = column;
-        this.descending = descending;
         this.source = source;
-        state = new TopNState(column, descending, allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
+        state = new TopNState(columns, descending, allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
     }
 
     @Override
@@ -79,7 +86,7 @@ public class TopNOperator
                 }
                 else {
                     Entry head = queue.peek();
-                    if (state.compareOrderingValue(batch.output(column), position, head.position()) > 0) {
+                    if (state.compareOrderingValue(batch, position, head.position()) > 0) {
                         queue.poll();
                         state.copyRow(batch, position, head.position());
                         queue.add(new Entry(head.position()));

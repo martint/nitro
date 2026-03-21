@@ -25,7 +25,7 @@ public class GroupOperator
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
     private final Allocator allocator;
 
-    private final int groupByColumn;
+    private final int[] groupByColumns;
     private final Operator source;
     private final GroupingState groupingState = new GroupingState();
     private BatchState currentBatchState;
@@ -33,8 +33,13 @@ public class GroupOperator
 
     public GroupOperator(Allocator allocator, int groupByColumn, Operator source)
     {
+        this(allocator, new int[] {groupByColumn}, source);
+    }
+
+    public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source)
+    {
         this.allocator = allocator;
-        this.groupByColumn = groupByColumn;
+        this.groupByColumns = groupByColumns.clone();
         this.source = source;
     }
 
@@ -111,11 +116,24 @@ public class GroupOperator
             batchState.filled = true;
             reusableResult = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, reusableResult, I64Vector.class, batchState.mask.maxPosition() + 1, I64Vector::new);
             batchState.result = reusableResult;
-            groupingState.assignGroups(
-                    batchState.sourceBatch.output(groupByColumn).borrow(Stream.VALUES),
-                    batchState.sourceBatch.output(groupByColumn).borrowOrNull(Stream.NULLS),
-                    batchState.mask,
-                    batchState.result);
+            if (groupByColumns.length == 1) {
+                int groupByColumn = groupByColumns[0];
+                groupingState.assignGroups(
+                        batchState.sourceBatch.output(groupByColumn).borrow(Stream.VALUES),
+                        batchState.sourceBatch.output(groupByColumn).borrowOrNull(Stream.NULLS),
+                        batchState.mask,
+                        batchState.result);
+            }
+            else {
+                Vector[] values = new Vector[groupByColumns.length];
+                org.weakref.nitro.data.BooleanVector[] nulls = new org.weakref.nitro.data.BooleanVector[groupByColumns.length];
+                for (int index = 0; index < groupByColumns.length; index++) {
+                    Output output = batchState.sourceBatch.output(groupByColumns[index]);
+                    values[index] = output.borrow(Stream.VALUES);
+                    nulls[index] = (org.weakref.nitro.data.BooleanVector) output.borrowOrNull(Stream.NULLS);
+                }
+                groupingState.assignGroups(values, nulls, batchState.mask, batchState.result);
+            }
         }
     }
 
@@ -133,10 +151,17 @@ public class GroupOperator
     @Override
     public Streams groupedKeyOutput(int outputIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
-        if (outputIndex != groupByColumn + 1) {
-            throw new IllegalArgumentException("Output " + outputIndex + " is not the grouping key output");
+        int groupedKeyIndex = -1;
+        for (int index = 0; index < groupByColumns.length; index++) {
+            if (outputIndex == groupByColumns[index] + 1) {
+                groupedKeyIndex = index;
+                break;
+            }
         }
-        return groupingState.groupedValues(mask, output, allocator, allocationContext);
+        if (groupedKeyIndex == -1) {
+            throw new IllegalArgumentException("Output " + outputIndex + " is not a grouping key output");
+        }
+        return groupingState.groupedValues(groupedKeyIndex, mask, output, allocator, allocationContext);
     }
 
     private static final class BatchState

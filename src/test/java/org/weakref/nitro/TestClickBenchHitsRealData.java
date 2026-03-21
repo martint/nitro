@@ -180,6 +180,58 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
+    void testQuery09()
+    {
+        try (Operator query = ClickBenchHitsSupport.query9TopRegionsByDistinctUsers(new Allocator(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery10()
+    {
+        try (Operator query = ClickBenchHitsSupport.query10RegionAggregates(new Allocator(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[3]).isInstanceOf(Double.class);
+            assertThat(rows.getFirst().values()[4]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery11()
+    {
+        try (Operator query = ClickBenchHitsSupport.query11TopMobilePhoneModelsByDistinctUsers(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery12()
+    {
+        try (Operator query = ClickBenchHitsSupport.query12TopMobilePhonesAndModelsByDistinctUsers(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
     void testQuery13()
     {
         try (Operator query = ClickBenchHitsSupport.query13TopSearchPhrases(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
@@ -188,6 +240,31 @@ public class TestClickBenchHitsRealData
             assertThat(rows.getFirst().values()).hasSize(2);
             assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
             assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery14()
+    {
+        try (Operator query = ClickBenchHitsSupport.query14TopSearchPhrasesByDistinctUsers(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery15()
+    {
+        try (Operator query = ClickBenchHitsSupport.query15TopSearchEngineAndPhrasePairs(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(Long.class);
         }
     }
 
@@ -204,6 +281,46 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
+    void testQuery17()
+    {
+        try (Operator query = ClickBenchHitsSupport.query17TopUserIdAndSearchPhrasePairs(new Allocator(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery18()
+    {
+        try (Operator query = ClickBenchHitsSupport.query18FirstUserIdAndSearchPhrasePairs(new Allocator(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testQuery19()
+    {
+        try (Operator query = ClickBenchHitsSupport.query19TopUserIdMinuteAndSearchPhraseTriples(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(4);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[3]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
     void testQuery20()
     {
         try (Operator query = ClickBenchHitsSupport.query20SearchPhrasesForUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
@@ -215,9 +332,31 @@ public class TestClickBenchHitsRealData
     }
 
     @Test
+    void testQuery25()
+    {
+        try (Operator query = ClickBenchHitsSupport.query25SearchPhrasesOrderedByEventTime(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(1);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
+        }
+    }
+
+    @Test
     void testQuery26()
     {
         try (Operator query = ClickBenchHitsSupport.query26SearchPhrasesOrderedAscending(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(1);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
+        }
+    }
+
+    @Test
+    void testQuery27()
+    {
+        try (Operator query = ClickBenchHitsSupport.query27SearchPhrasesOrderedByEventTimeThenPhrase(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(1);

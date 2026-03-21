@@ -114,6 +114,11 @@ final class ClickBenchHitsSupport
                 .required(INT32).named("ResolutionWidth")
                 .required(INT64).named("UserID")
                 .required(INT32).named("EventDate")
+                .required(INT32).named("RegionID")
+                .required(INT32).named("MobilePhone")
+                .required(BINARY).as(stringType()).named("MobilePhoneModel")
+                .required(INT32).named("SearchEngineID")
+                .required(INT64).named("EventTime")
                 .required(BINARY).as(stringType()).named("URL")
                 .required(BINARY).as(stringType()).named("SearchPhrase")
                 .named("hits");
@@ -130,6 +135,11 @@ final class ClickBenchHitsSupport
                         .append("ResolutionWidth", (int) row.resolutionWidth())
                         .append("UserID", row.userId())
                         .append("EventDate", (int) row.eventDate())
+                        .append("RegionID", (int) row.regionId())
+                        .append("MobilePhone", (int) row.mobilePhone())
+                        .append("MobilePhoneModel", row.mobilePhoneModel())
+                        .append("SearchEngineID", (int) row.searchEngineId())
+                        .append("EventTime", row.eventTime())
                         .append("URL", row.url())
                         .append("SearchPhrase", row.searchPhrase()));
             }
@@ -212,6 +222,56 @@ final class ClickBenchHitsSupport
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
 
+    public static Operator query9TopRegionsByDistinctUsers(Allocator allocator, Path file)
+    {
+        Operator grouped = new GroupOperator(allocator, 0, clickBenchScan(allocator, file, "RegionID", "UserID"));
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new DistinctCount(2)),
+                grouped);
+        return new TopNOperator(allocator, 10, 1, aggregated);
+    }
+
+    public static Operator query10RegionAggregates(Allocator allocator, Path file)
+    {
+        Operator grouped = new GroupOperator(allocator, 0, clickBenchScan(allocator, file, "RegionID", "AdvEngineID", "ResolutionWidth", "UserID"));
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new Sum(2), new CountAll(), new Avg(3), new DistinctCount(4)),
+                grouped);
+        return new TopNOperator(allocator, 10, 2, aggregated);
+    }
+
+    public static Operator query11TopMobilePhoneModelsByDistinctUsers(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhoneModel", "UserID"), notEqualUtf8(0, ""));
+        Operator grouped = new GroupOperator(allocator, 0, filtered);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new DistinctCount(2)),
+                grouped);
+        return new TopNOperator(allocator, 10, 1, aggregated);
+    }
+
+    public static Operator query12TopMobilePhonesAndModelsByDistinctUsers(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhone", "MobilePhoneModel", "UserID"), notEqualUtf8(1, ""));
+        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, filtered);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1, 2),
+                List.of(new DistinctCount(3)),
+                grouped);
+        return new TopNOperator(allocator, 10, 2, aggregated);
+    }
+
     public static Operator query21CountUrlsContainingGoogle(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         return new AggregationOperator(
@@ -225,9 +285,73 @@ final class ClickBenchHitsSupport
         return topUtf8Counts(allocator, primitiveRegistry, file, "SearchPhrase", true);
     }
 
+    public static Operator query14TopSearchPhrasesByDistinctUsers(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchPhrase", "UserID"), notEqualUtf8(0, ""));
+        Operator grouped = new GroupOperator(allocator, 0, filtered);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new DistinctCount(2)),
+                grouped);
+        return new TopNOperator(allocator, 10, 1, aggregated);
+    }
+
+    public static Operator query15TopSearchEngineAndPhrasePairs(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchEngineID", "SearchPhrase"), notEqualUtf8(1, ""));
+        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, filtered);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1, 2),
+                List.of(new CountAll()),
+                grouped);
+        return new TopNOperator(allocator, 10, 2, aggregated);
+    }
+
     public static Operator query16TopUserIds(Allocator allocator, Path file)
     {
         return topIntegerCounts(allocator, file, "UserID");
+    }
+
+    public static Operator query17TopUserIdAndSearchPhrasePairs(Allocator allocator, Path file)
+    {
+        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, clickBenchScan(allocator, file, "UserID", "SearchPhrase"));
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1, 2),
+                List.of(new CountAll()),
+                grouped);
+        return new TopNOperator(allocator, 10, 2, aggregated);
+    }
+
+    public static Operator query18FirstUserIdAndSearchPhrasePairs(Allocator allocator, Path file)
+    {
+        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, clickBenchScan(allocator, file, "UserID", "SearchPhrase"));
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1, 2),
+                List.of(new CountAll()),
+                grouped);
+        return new LimitOperator(allocator, 10, aggregated);
+    }
+
+    public static Operator query19TopUserIdMinuteAndSearchPhraseTriples(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator source = clickBenchScan(allocator, file, "UserID", "EventTime", "SearchPhrase");
+        Operator projected = projectEventTimeMinute(allocator, primitiveRegistry, source);
+        Operator grouped = new GroupOperator(allocator, new int[] {0, 1, 2}, projected);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1, 2, 3),
+                List.of(new CountAll()),
+                grouped);
+        return new TopNOperator(allocator, 10, 3, aggregated);
     }
 
     public static Operator query20SearchPhrasesForUserId(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -241,6 +365,20 @@ final class ClickBenchHitsSupport
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchPhrase"), notEqualUtf8(0, ""));
         return new TopNOperator(allocator, 10, 0, false, filtered);
+    }
+
+    public static Operator query25SearchPhrasesOrderedByEventTime(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("EventTime", "SearchPhrase"), notEqualUtf8(1, ""));
+        Operator ordered = new TopNOperator(allocator, 10, 0, false, filtered);
+        return projectInputs(allocator, new PrimitiveRegistry(), ordered, 1);
+    }
+
+    public static Operator query27SearchPhrasesOrderedByEventTimeThenPhrase(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    {
+        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("EventTime", "SearchPhrase"), notEqualUtf8(1, ""));
+        Operator ordered = new TopNOperator(allocator, 10, new int[] {0, 1}, new boolean[] {false, false}, filtered);
+        return projectInputs(allocator, new PrimitiveRegistry(), ordered, 1);
     }
 
     public static Operator query30SumResolutionWidthPlusOffsets(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -417,6 +555,27 @@ final class ClickBenchHitsSupport
         return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
     }
 
+    private static Operator projectEventTimeMinute(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable sixty = new Variable(0);
+        Variable totalMinutes = new Variable(1);
+        Variable minute = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(sixty, new Literal(60L), AllMask.ALL),
+                        new Assignment(totalMinutes, new Call("divide", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(sixty, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(minute, new Call("modulo", List.of(
+                                new Reference(totalMinutes, Stream.VALUES),
+                                new Reference(sixty, Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(minute, Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES)));
+        return new ProjectOperator(allocator, plan, primitiveRegistry, source);
+    }
+
     private static FilterSpec notEqualI64(int inputIndex, long constant)
     {
         Variable literal = new Variable(0);
@@ -468,17 +627,28 @@ final class ClickBenchHitsSupport
     private static List<HitRow> templateRows()
     {
         return List.of(
-                new HitRow(0, 1000, 1, 20130701, "https://google.com", ""),
-                new HitRow(10, 1200, 2, 20130702, "https://example.com", ""),
-                new HitRow(10, 900, 2, 20130703, "https://example.com/page", "phone"),
-                new HitRow(20, 800, 1, 20130701, "https://google.com/maps", "map"),
-                new HitRow(20, 700, 2, 20130731, "https://yandex.ru", "weather"),
-                new HitRow(0, 640, 4, 20130801, "", ""),
-                new HitRow(20, 600, 5, 20130715, "https://google.com/search", "news"),
-                new HitRow(0, 500, QUERY20_USER_ID, 20130716, "https://google.com/search", "news"));
+                new HitRow(0, 1000, 1, 20130701, 7, 0, "", 0, 1_372_636_800L, "https://google.com", ""),
+                new HitRow(10, 1200, 2, 20130702, 7, 0, "", 0, 1_372_723_200L, "https://example.com", ""),
+                new HitRow(10, 900, 2, 20130703, 8, 1, "iphone", 1, 1_372_809_600L, "https://example.com/page", "phone"),
+                new HitRow(20, 800, 1, 20130701, 7, 1, "iphone", 1, 1_372_641_600L, "https://google.com/maps", "map"),
+                new HitRow(20, 700, 2, 20130731, 9, 3, "pixel", 2, 1_375_228_800L, "https://yandex.ru", "weather"),
+                new HitRow(0, 640, 4, 20130801, 9, 0, "", 0, 1_375_315_200L, "", ""),
+                new HitRow(20, 600, 5, 20130715, 9, 3, "pixel", 3, 1_373_846_400L, "https://google.com/search", "news"),
+                new HitRow(0, 500, QUERY20_USER_ID, 20130716, 9, 3, "pixel", 3, 1_373_932_800L, "https://google.com/search", "news"));
     }
 
-    private record HitRow(long advEngineId, long resolutionWidth, long userId, long eventDate, String url, String searchPhrase)
+    private record HitRow(
+            long advEngineId,
+            long resolutionWidth,
+            long userId,
+            long eventDate,
+            long regionId,
+            long mobilePhone,
+            String mobilePhoneModel,
+            long searchEngineId,
+            long eventTime,
+            String url,
+            String searchPhrase)
     {
         private HitRow vary(int repeat)
         {
@@ -487,6 +657,11 @@ final class ClickBenchHitsSupport
                     resolutionWidth + repeat,
                     userId + (repeat * 10L),
                     eventDate,
+                    regionId,
+                    mobilePhone,
+                    mobilePhoneModel,
+                    searchEngineId,
+                    eventTime + (repeat * 60L),
                     url,
                     searchPhrase);
         }

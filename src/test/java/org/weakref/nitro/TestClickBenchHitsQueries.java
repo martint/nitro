@@ -175,6 +175,52 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery9TopRegionsByDistinctUsers()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query9TopRegionsByDistinctUsers(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(9L, 4L),
+                    row(7L, 2L),
+                    row(8L, 1L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery10RegionAggregates()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query10RegionAggregates(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(9L, 40L, 4L, 610.0, 4L),
+                    row(7L, 30L, 3L, 1000.0, 2L),
+                    row(8L, 10L, 1L, 900.0, 1L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery11TopMobilePhoneModelsByDistinctUsers()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query11TopMobilePhoneModelsByDistinctUsers(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row("pixel", 3L),
+                    row("iphone", 2L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery12TopMobilePhonesAndModelsByDistinctUsers()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query12TopMobilePhonesAndModelsByDistinctUsers(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(3L, "pixel", 3L),
+                    row(1L, "iphone", 2L)));
+        }
+    }
+
+    @Test
     void testClickBenchQuery13TopSearchPhrases()
             throws IOException
     {
@@ -198,6 +244,32 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery14TopSearchPhrasesByDistinctUsers()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query14TopSearchPhrasesByDistinctUsers(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row("news", 2L),
+                    row("phone", 1L),
+                    row("map", 1L),
+                    row("weather", 1L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery15TopSearchEngineAndPhrasePairs()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query15TopSearchEngineAndPhrasePairs(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(3L, "news", 2L),
+                    row(1L, "phone", 1L),
+                    row(1L, "map", 1L),
+                    row(2L, "weather", 1L)));
+        }
+    }
+
+    @Test
     void testClickBenchQuery16TopUserIds()
             throws IOException
     {
@@ -206,6 +278,52 @@ public class TestClickBenchHitsQueries
             assertThat(rows).hasSize(5);
             assertThat(rows.getFirst()).isEqualTo(row(2L, 3L));
             assertThat(rows.get(1)).isEqualTo(row(1L, 2L));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery17TopUserIdAndSearchPhrasePairs()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query17TopUserIdAndSearchPhrasePairs(new Allocator(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(8);
+            assertThat(rows.getFirst().values()).hasSize(3);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(Long.class);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery18FirstUserIdAndSearchPhrasePairs()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query18FirstUserIdAndSearchPhrasePairs(new Allocator(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row(1L, "", 1L),
+                    row(2L, "", 1L),
+                    row(2L, "phone", 1L),
+                    row(1L, "map", 1L),
+                    row(2L, "weather", 1L),
+                    row(4L, "", 1L),
+                    row(5L, "news", 1L),
+                    row(ClickBenchHitsSupport.QUERY20_USER_ID, "news", 1L)));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery19TopUserIdMinuteAndSearchPhraseTriples()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query19TopUserIdMinuteAndSearchPhraseTriples(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(8);
+            assertThat(rows.getFirst().values()).hasSize(4);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[1]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[2]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[3]).isInstanceOf(Long.class);
         }
     }
 
@@ -219,6 +337,20 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery25SearchPhrasesOrderedByEventTime()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query25SearchPhrasesOrderedByEventTime(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row("map"),
+                    row("phone"),
+                    row("news"),
+                    row("news"),
+                    row("weather")));
+        }
+    }
+
+    @Test
     void testClickBenchQuery26SearchPhrasesOrderedAscending()
             throws IOException
     {
@@ -228,6 +360,20 @@ public class TestClickBenchHitsQueries
                     row("news"),
                     row("news"),
                     row("phone"),
+                    row("weather")));
+        }
+    }
+
+    @Test
+    void testClickBenchQuery27SearchPhrasesOrderedByEventTimeThenPhrase()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query27SearchPhrasesOrderedByEventTimeThenPhrase(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(
+                    row("map"),
+                    row("phone"),
+                    row("news"),
+                    row("news"),
                     row("weather")));
         }
     }

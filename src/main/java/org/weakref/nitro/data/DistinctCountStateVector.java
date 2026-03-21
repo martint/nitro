@@ -15,16 +15,18 @@ package org.weakref.nitro.data;
 
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 
+import java.util.ArrayList;
+
 public final class DistinctCountStateVector
         implements FlatVector
 {
-    private final ObjectOpenHashSet<Object> keys = new ObjectOpenHashSet<>();
+    private final ArrayList<ObjectOpenHashSet<Object>> keysByGroup = new ArrayList<>();
     private Object reusableProbeKey;
 
     @Override
     public int length()
     {
-        return 1;
+        return keysByGroup.size();
     }
 
     @Override
@@ -37,7 +39,9 @@ public final class DistinctCountStateVector
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         DistinctCountStateVector copy = new DistinctCountStateVector();
-        copy.keys.addAll(keys);
+        for (ObjectOpenHashSet<Object> keys : keysByGroup) {
+            copy.keysByGroup.add(keys == null ? null : new ObjectOpenHashSet<>(keys));
+        }
         copy.reusableProbeKey = reusableProbeKey;
         return allocator.adopt(allocationContext, copy);
     }
@@ -48,9 +52,31 @@ public final class DistinctCountStateVector
         throw new UnsupportedOperationException("DistinctCountStateVector does not support positional copy");
     }
 
-    public ObjectOpenHashSet<Object> keys()
+    public void ensureGroupCapacity(int size)
     {
+        while (keysByGroup.size() < size) {
+            keysByGroup.add(null);
+        }
+    }
+
+    public ObjectOpenHashSet<Object> keys(int group)
+    {
+        ensureGroupCapacity(group + 1);
+        ObjectOpenHashSet<Object> keys = keysByGroup.get(group);
+        if (keys == null) {
+            keys = new ObjectOpenHashSet<>();
+            keysByGroup.set(group, keys);
+        }
         return keys;
+    }
+
+    public long distinctCount(int group)
+    {
+        if (group >= keysByGroup.size()) {
+            return 0;
+        }
+        ObjectOpenHashSet<Object> keys = keysByGroup.get(group);
+        return keys == null ? 0 : keys.size();
     }
 
     public Object reusableProbeKey()

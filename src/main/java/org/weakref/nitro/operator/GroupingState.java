@@ -27,21 +27,23 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 final class GroupingState
 {
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
-    private final ArrayList<OperatorKeySemantics.Key> keysByGroup = new ArrayList<>();
-    private OperatorKeySemantics.Key reusableProbeKey;
-    private long nextGroupId;
-    private long nullGroup = -1;
-    private GroupKind groupKind;
-    private Set<BinaryVector.Trait> binaryTraits = Set.of();
+    private final ArrayList<ArrayList<OperatorKeySemantics.Key>> keysByGroupColumns = new ArrayList<>();
+    private OperatorKeySemantics.Key[] reusableProbeKeys;
+    private OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey;
+    private GroupKind[] groupKinds;
+    private Set<BinaryVector.Trait>[] binaryTraits;
     private Vector cachedDictionaryValues;
     private long[] dictionaryGroupsById = new long[0];
     private int[] dictionaryGenerations = new int[0];
     private int dictionaryGeneration;
+    private long nextGroupId;
+    private long nullGroup = -1;
 
     GroupingState()
     {
@@ -50,19 +52,50 @@ final class GroupingState
 
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
     {
-        BooleanVector nullVector = (BooleanVector) nulls;
-        if (reusableProbeKey == null) {
-            reusableProbeKey = OperatorKeySemantics.reusableProbeKey(values);
-            groupKind = GroupKind.forVector(values);
-            binaryTraits = OperatorVectorSupport.binaryTraits(values);
-        }
-        if (values instanceof DictionaryVector dictionary) {
-            assignDictionaryGroups(dictionary, nullVector, mask, result);
+        assignGroups(new Vector[] {values}, new BooleanVector[] {(BooleanVector) nulls}, mask, result);
+    }
+
+    @SuppressWarnings("unchecked")
+    public void assignGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    {
+        initializeIfNecessary(values);
+        if (values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
+            assignDictionaryGroups(dictionary, nulls[0], mask, result);
             return;
         }
+
+        OperatorKeySemantics.Key[] probeKeys = new OperatorKeySemantics.Key[values.length];
         for (int position : mask) {
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nullVector, position, reusableProbeKey);
-            result.values()[position] = key == null ? nullGroup() : groupForKey(key);
+            boolean hasNull = false;
+            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
+                if (key == null) {
+                    hasNull = true;
+                    break;
+                }
+                probeKeys[keyIndex] = key;
+            }
+            result.values()[position] = hasNull ? nullGroup() : groupForKeys(probeKeys);
+        }
+    }
+
+    private void initializeIfNecessary(Vector[] values)
+    {
+        if (reusableProbeKeys != null) {
+            return;
+        }
+
+        reusableProbeKeys = new OperatorKeySemantics.Key[values.length];
+        groupKinds = new GroupKind[values.length];
+        binaryTraits = (Set<BinaryVector.Trait>[]) new Set<?>[values.length];
+        for (int index = 0; index < values.length; index++) {
+            reusableProbeKeys[index] = OperatorKeySemantics.reusableProbeKey(values[index]);
+            groupKinds[index] = GroupKind.forVector(values[index]);
+            binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
+            keysByGroupColumns.add(new ArrayList<>());
+        }
+        if (values.length > 1) {
+            reusableCompositeProbeKey = OperatorKeySemantics.reusableCompositeProbeKey(values.length);
         }
     }
 
@@ -70,8 +103,7 @@ final class GroupingState
     {
         int[] ids = dictionary.ids();
         Vector dictionaryValues = dictionary.values();
-        int dictionaryLength = dictionaryValues.length();
-        ensureDictionaryCacheCapacity(dictionaryLength);
+        ensureDictionaryCacheCapacity(dictionaryValues.length());
         int generation = currentDictionaryGeneration(dictionaryValues);
 
         for (int position : mask) {
@@ -82,7 +114,8 @@ final class GroupingState
 
             int dictionaryId = ids[position];
             if (dictionaryGenerations[dictionaryId] != generation) {
-                dictionaryGroupsById[dictionaryId] = groupForKey(OperatorKeySemantics.probeKey(dictionaryValues, null, dictionaryId, reusableProbeKey));
+                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(dictionaryValues, null, dictionaryId, reusableProbeKeys[0]);
+                dictionaryGroupsById[dictionaryId] = groupForSingleKey(key);
                 dictionaryGenerations[dictionaryId] = generation;
             }
             result.values()[position] = dictionaryGroupsById[dictionaryId];
@@ -99,44 +132,61 @@ final class GroupingState
         dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, newSize);
     }
 
-    private int nextDictionaryGeneration()
-    {
-        if (dictionaryGeneration == Integer.MAX_VALUE) {
-            Arrays.fill(dictionaryGenerations, 0);
-            dictionaryGeneration = 0;
-        }
-        return ++dictionaryGeneration;
-    }
-
     private int currentDictionaryGeneration(Vector dictionaryValues)
     {
         if (cachedDictionaryValues != dictionaryValues) {
             cachedDictionaryValues = dictionaryValues;
-            return nextDictionaryGeneration();
+            if (dictionaryGeneration == Integer.MAX_VALUE) {
+                Arrays.fill(dictionaryGenerations, 0);
+                dictionaryGeneration = 0;
+            }
+            return ++dictionaryGeneration;
         }
         return dictionaryGeneration;
     }
 
-    public Streams groupedValues(Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    public Streams groupedValues(int groupedColumnIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
-        return switch (groupKind) {
+        List<OperatorKeySemantics.Key> keysByGroup = keysByGroupColumns.get(groupedColumnIndex);
+        return switch (groupKinds[groupedColumnIndex]) {
             case LONG -> Streams.ofValuesAndNulls(
-                    materializeLongValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeLongValues(size, mask, keysByGroup, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, keysByGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
             case BOOLEAN -> Streams.ofValuesAndNulls(
-                    materializeBooleanValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeBooleanValues(size, mask, keysByGroup, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, keysByGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
             case DOUBLE -> Streams.ofValuesAndNulls(
-                    materializeDoubleValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeDoubleValues(size, mask, keysByGroup, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, keysByGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
             case BINARY -> Streams.ofValuesAndNulls(
-                    materializeBinaryValues(size, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeBinaryValues(size, mask, groupedColumnIndex, keysByGroup, output == null ? null : output.values(), allocator, allocationContext),
+                    materializeNulls(size, mask, keysByGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         };
     }
 
-    private long groupForKey(OperatorKeySemantics.Key key)
+    private long groupForKeys(OperatorKeySemantics.Key[] probeKeys)
+    {
+        if (probeKeys.length == 1) {
+            return groupForSingleKey(probeKeys[0]);
+        }
+
+        OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(probeKeys, reusableCompositeProbeKey);
+        long group = groups.getLong(compositeKey);
+        if (group != -1) {
+            return group;
+        }
+
+        OperatorKeySemantics.Key[] ownedKeys = new OperatorKeySemantics.Key[probeKeys.length];
+        for (int index = 0; index < probeKeys.length; index++) {
+            ownedKeys[index] = OperatorKeySemantics.ownedKey(probeKeys[index]);
+            keysByGroupColumns.get(index).add(ownedKeys[index]);
+        }
+        groups.put(new OperatorKeySemantics.CompositeKey(ownedKeys), nextGroupId);
+        return nextGroupId++;
+    }
+
+    private long groupForSingleKey(OperatorKeySemantics.Key key)
     {
         long group = groups.getLong(key);
         if (group != -1) {
@@ -145,20 +195,22 @@ final class GroupingState
 
         OperatorKeySemantics.Key ownedKey = OperatorKeySemantics.ownedKey(key);
         groups.put(ownedKey, nextGroupId);
-        keysByGroup.add(ownedKey);
+        keysByGroupColumns.get(0).add(ownedKey);
         return nextGroupId++;
     }
 
     private long nullGroup()
     {
         if (nullGroup == -1) {
-            keysByGroup.add(null);
+            for (ArrayList<OperatorKeySemantics.Key> keysByGroup : keysByGroupColumns) {
+                keysByGroup.add(null);
+            }
             nullGroup = nextGroupId++;
         }
         return nullGroup;
     }
 
-    private I64Vector materializeLongValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private I64Vector materializeLongValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
         Arrays.fill(result.values(), 0);
@@ -171,7 +223,7 @@ final class GroupingState
         return result;
     }
 
-    private BooleanVector materializeBooleanValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BooleanVector materializeBooleanValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
         Arrays.fill(result.values(), false);
@@ -184,7 +236,7 @@ final class GroupingState
         return result;
     }
 
-    private F64Vector materializeDoubleValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private F64Vector materializeDoubleValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         F64Vector result = allocator.allocateOrGrow(allocationContext, (F64Vector) output, F64Vector.class, size, F64Vector::new);
         Arrays.fill(result.values(), 0);
@@ -197,7 +249,7 @@ final class GroupingState
         return result;
     }
 
-    private BinaryVector materializeBinaryValues(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BinaryVector materializeBinaryValues(int size, Mask mask, int groupedColumnIndex, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         long totalBytes = 0;
         for (int index : mask) {
@@ -213,7 +265,7 @@ final class GroupingState
         BinaryVector result = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) output, size, (int) totalBytes);
         Arrays.fill(result.offsets(), 0);
         result.clearTraits();
-        result.addTraits(binaryTraits);
+        result.addTraits(binaryTraits[groupedColumnIndex]);
         for (int index : mask) {
             OperatorKeySemantics.Key key = keysByGroup.get(index);
             if (key instanceof OperatorKeySemantics.BinaryKey value) {
@@ -223,7 +275,7 @@ final class GroupingState
         return result;
     }
 
-    private BooleanVector materializeNulls(int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BooleanVector materializeNulls(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
         Arrays.fill(result.values(), true);

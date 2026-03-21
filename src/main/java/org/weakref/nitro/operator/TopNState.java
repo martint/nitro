@@ -28,8 +28,9 @@ import java.util.Set;
 
 final class TopNState
 {
-    private final int orderingColumn;
-    private final boolean descending;
+    private final int[] orderingColumns;
+    private final boolean[] descendingByColumn;
+    private final boolean[] orderingColumnFlags;
     private final Streams[][] slotColumns;
     private final Streams[] schema;
     private final Set<Stream>[] exposedStreams;
@@ -41,10 +42,14 @@ final class TopNState
     private Batch fallbackBatch;
 
     @SuppressWarnings("unchecked")
-    TopNState(int orderingColumn, boolean descending, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
+    TopNState(int[] orderingColumns, boolean[] descendingByColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
     {
-        this.orderingColumn = orderingColumn;
-        this.descending = descending;
+        this.orderingColumns = orderingColumns.clone();
+        this.descendingByColumn = descendingByColumn.clone();
+        this.orderingColumnFlags = new boolean[outputCount];
+        for (int orderingColumn : orderingColumns) {
+            orderingColumnFlags[orderingColumn] = true;
+        }
         this.slotColumns = new Streams[outputCount][capacity];
         this.schema = new Streams[outputCount];
         this.exposedStreams = (Set<Stream>[]) new Set<?>[outputCount];
@@ -63,38 +68,55 @@ final class TopNState
         }
     }
 
-    public int compareOrderingValue(Output output, int position, int slot)
+    public int compareOrderingValue(Batch batch, int position, int slot)
     {
-        Streams slotOrdering = slotColumns[orderingColumn][slot];
-        int comparison = OperatorOrderingSemantics.compare(
-                output.borrow(Stream.VALUES),
-                (BooleanVector) output.borrowOrNull(Stream.NULLS),
-                position,
-                slotOrdering.values(),
-                (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
-                0);
-        return descending ? comparison : -comparison;
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int orderingColumn = orderingColumns[orderingIndex];
+            Output output = batch.output(orderingColumn);
+            Streams slotOrdering = slotColumns[orderingColumn][slot];
+            int comparison = OperatorOrderingSemantics.compare(
+                    output.borrow(Stream.VALUES),
+                    (BooleanVector) output.borrowOrNull(Stream.NULLS),
+                    position,
+                    slotOrdering.values(),
+                    (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
+                    0);
+            comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
     }
 
     public int compareSlots(int leftSlot, int rightSlot)
     {
-        Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
-        Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
-        int comparison = OperatorOrderingSemantics.compare(
-                leftOrdering.values(),
-                (BooleanVector) leftOrdering.getOrNull(Stream.NULLS),
-                0,
-                rightOrdering.values(),
-                (BooleanVector) rightOrdering.getOrNull(Stream.NULLS),
-                0);
-        return descending ? comparison : -comparison;
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int orderingColumn = orderingColumns[orderingIndex];
+            Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
+            Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
+            int comparison = OperatorOrderingSemantics.compare(
+                    leftOrdering.values(),
+                    (BooleanVector) leftOrdering.getOrNull(Stream.NULLS),
+                    0,
+                    rightOrdering.values(),
+                    (BooleanVector) rightOrdering.getOrNull(Stream.NULLS),
+                    0);
+            comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
     }
 
     public void copyRow(Batch batch, int position, int slot)
     {
-        slotColumns[orderingColumn][slot] = buffers.copyPosition(batch.output(orderingColumn), slotColumns[orderingColumn][slot], position);
+        for (int orderingColumn : orderingColumns) {
+            slotColumns[orderingColumn][slot] = buffers.copyPosition(batch.output(orderingColumn), slotColumns[orderingColumn][slot], position);
+        }
         for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
-            if (outputIndex == orderingColumn) {
+            if (isOrderingColumn(outputIndex)) {
                 continue;
             }
             slotColumns[outputIndex][slot] = null;
@@ -110,7 +132,7 @@ final class TopNState
                 continue;
             }
             for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
-                if (outputIndex == orderingColumn) {
+                if (isOrderingColumn(outputIndex)) {
                     continue;
                 }
                 slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
@@ -159,7 +181,7 @@ final class TopNState
 
     private void ensurePendingOutputMaterialized(int outputIndex)
     {
-        if (outputIndex == orderingColumn) {
+        if (isOrderingColumn(outputIndex)) {
             return;
         }
         constrainPendingBatches();
@@ -233,5 +255,10 @@ final class TopNState
             result.put(entry.getKey(), buffers.materializeStream(entry.getValue(), rows));
         }
         return result.build();
+    }
+
+    private boolean isOrderingColumn(int outputIndex)
+    {
+        return orderingColumnFlags[outputIndex];
     }
 }
