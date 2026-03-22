@@ -163,6 +163,41 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testContainsUtf8HandlesVectorCandidatesAcrossBoundaries()
+    {
+        Variable needle = new Variable(0);
+        Variable contains = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(needle, new Literal("aaab"), AllMask.ALL),
+                        new Assignment(
+                                contains,
+                                new Call("contains_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(needle, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(contains, Stream.VALUES)),
+                Map.of(new Reference(contains, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
+
+        BinaryVector input = new BinaryVector(4, 512);
+        input.addTrait(BinaryVector.Trait.UTF8_STRING);
+        input.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        input.setBytes(0, ("x".repeat(31) + "aaab" + "tail").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        input.setBytes(1, ("x".repeat(63) + "aaab").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        input.setBytes(2, ("a".repeat(96) + "b").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        input.setBytes(3, ("a".repeat(95) + "c").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(4));
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(true, true, true, false);
+    }
+
+    @Test
     void testStructFieldCombinesParentAndChildNulls()
     {
         Variable name = new Variable(0);

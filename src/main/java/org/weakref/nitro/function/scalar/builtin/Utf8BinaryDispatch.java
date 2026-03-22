@@ -32,6 +32,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 public final class Utf8BinaryDispatch
 {
+    private static final jdk.incubator.vector.VectorSpecies<Byte> CONTAINS_SPECIES = jdk.incubator.vector.ByteVector.SPECIES_PREFERRED.length() <= Long.SIZE ? jdk.incubator.vector.ByteVector.SPECIES_PREFERRED : jdk.incubator.vector.ByteVector.SPECIES_512;
+
     private Utf8BinaryDispatch() {}
 
     public static Streams applyEquals(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
@@ -500,41 +502,76 @@ public final class Utf8BinaryDispatch
         byte[] needleData = right.data();
         int haystackStart = left.startOffset(leftPosition);
         int needleStart = right.startOffset(rightPosition);
-        byte firstByte = needleData[needleStart];
-        int lastStart = haystackLength - needleLength;
-
         if (needleLength == 1) {
-            for (int offset = 0; offset <= lastStart; offset++) {
-                if (haystackData[haystackStart + offset] == firstByte) {
-                    return true;
-                }
-            }
-            return false;
+            return binaryContainsSingleByte(haystackData, haystackStart, haystackLength, needleData[needleStart]);
         }
+        return binaryContainsVectorized(haystackData, haystackStart, haystackLength, needleData, needleStart, needleLength);
+    }
 
-        byte lastByte = needleData[needleStart + needleLength - 1];
+    private static boolean binaryContainsSingleByte(byte[] haystackData, int haystackStart, int haystackLength, byte needleByte)
+    {
         int offset = 0;
-        while (offset <= lastStart) {
-            while (offset <= lastStart && haystackData[haystackStart + offset] != firstByte) {
-                offset++;
-            }
-            if (offset > lastStart) {
-                return false;
-            }
-
-            if (haystackData[haystackStart + offset + needleLength - 1] == lastByte &&
-                    Arrays.mismatch(
-                            haystackData,
-                            haystackStart + offset + 1,
-                            haystackStart + offset + needleLength - 1,
-                            needleData,
-                            needleStart + 1,
-                            needleStart + needleLength - 1) < 0) {
+        while (offset < haystackLength) {
+            jdk.incubator.vector.VectorMask<Byte> laneMask = CONTAINS_SPECIES.indexInRange(offset, haystackLength);
+            jdk.incubator.vector.ByteVector haystack = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset, laneMask);
+            if (haystack.compare(jdk.incubator.vector.VectorOperators.EQ, needleByte, laneMask).anyTrue()) {
                 return true;
             }
-            offset++;
+            offset += CONTAINS_SPECIES.length();
         }
         return false;
+    }
+
+    private static boolean binaryContainsVectorized(byte[] haystackData, int haystackStart, int haystackLength, byte[] needleData, int needleStart, int needleLength)
+    {
+        int firstProbeOffset = 0;
+        int secondProbeOffset = selectSecondProbeOffset(needleData, needleStart, needleLength);
+        byte firstProbeByte = needleData[needleStart + firstProbeOffset];
+        byte secondProbeByte = needleData[needleStart + secondProbeOffset];
+        int lastStart = haystackLength - needleLength;
+
+        for (int offset = 0; offset <= lastStart; offset += CONTAINS_SPECIES.length()) {
+            jdk.incubator.vector.VectorMask<Byte> laneMask = CONTAINS_SPECIES.indexInRange(offset, lastStart + 1);
+            jdk.incubator.vector.ByteVector firstProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + firstProbeOffset, laneMask);
+            jdk.incubator.vector.ByteVector secondProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + secondProbeOffset, laneMask);
+            jdk.incubator.vector.VectorMask<Byte> candidateMask = firstProbe.compare(jdk.incubator.vector.VectorOperators.EQ, firstProbeByte, laneMask)
+                    .and(secondProbe.compare(jdk.incubator.vector.VectorOperators.EQ, secondProbeByte, laneMask));
+            if (!candidateMask.anyTrue()) {
+                continue;
+            }
+
+            long candidateBits = candidateMask.toLong();
+            while (candidateBits != 0) {
+                int lane = Long.numberOfTrailingZeros(candidateBits);
+                if (binaryMatchesAt(haystackData, haystackStart + offset + lane, needleData, needleStart, needleLength)) {
+                    return true;
+                }
+                candidateBits &= candidateBits - 1;
+            }
+        }
+        return false;
+    }
+
+    private static int selectSecondProbeOffset(byte[] needleData, int needleStart, int needleLength)
+    {
+        byte firstByte = needleData[needleStart];
+        for (int offset = needleLength - 1; offset > 0; offset--) {
+            if (needleData[needleStart + offset] != firstByte) {
+                return offset;
+            }
+        }
+        return needleLength - 1;
+    }
+
+    private static boolean binaryMatchesAt(byte[] haystackData, int haystackStart, byte[] needleData, int needleStart, int needleLength)
+    {
+        return Arrays.mismatch(
+                haystackData,
+                haystackStart,
+                haystackStart + needleLength,
+                needleData,
+                needleStart,
+                needleStart + needleLength) < 0;
     }
 
     private enum Operation
