@@ -47,6 +47,9 @@ public class OffsetOperator
     @Override
     public boolean hasNext()
     {
+        if (currentBatch != null) {
+            return true;
+        }
         return skipped < offset ? skipFullyConsumedBatches() : source.hasNext();
     }
 
@@ -54,7 +57,8 @@ public class OffsetOperator
     public Batch next()
     {
         while (true) {
-            Batch sourceBatch = source.next();
+            Batch sourceBatch = currentBatch != null ? currentBatch : source.next();
+            currentBatch = null;
             Mask sourceMask = sourceBatch.borrowMask();
             long remainingSkip = Math.max(0, offset - skipped);
             if (remainingSkip >= sourceMask.selectedCount()) {

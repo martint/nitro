@@ -32,6 +32,7 @@ import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -622,6 +623,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testOffsetOperatorReusesPrefetchedTopNBatch()
+    {
+        CountingNextOperator source = new CountingNextOperator(new TopNOperator(
+                new Allocator(),
+                3,
+                0,
+                new ConstantTableOperator(
+                        new Allocator(),
+                        1,
+                        List.of(
+                                row(5L),
+                                row(4L),
+                                row(3L),
+                                row(2L)))));
+
+        Operator operator = new OffsetOperator(new Allocator(), 1, source);
+
+        assertThat(operator.hasNext()).isTrue();
+        Batch batch = operator.next();
+        Mask mask = batch.borrowMask();
+        I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+
+        assertThat(source.nextCount()).isEqualTo(1);
+        assertThat(mask.selectedCount()).isEqualTo(2);
+        assertThat(mask.position(0)).isEqualTo(1);
+        assertThat(mask.position(1)).isEqualTo(2);
+        assertThat(values.values()[mask.position(0)]).isEqualTo(4L);
+        assertThat(values.values()[mask.position(1)]).isEqualTo(3L);
+    }
+
+    @Test
     void testNestedLoopJoinOperatorProducesJoinBatch()
     {
         Allocator allocator = new Allocator();
@@ -1006,6 +1038,60 @@ public class TestOperatorBatches
         private int borrowCount(int output)
         {
             return borrowCounts[output];
+        }
+    }
+
+    private static final class CountingNextOperator
+            implements Operator
+    {
+        private final Operator delegate;
+        private int nextCount;
+
+        private CountingNextOperator(Operator delegate)
+        {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return delegate.outputCount();
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return delegate.hasNext();
+        }
+
+        @Override
+        public Batch next()
+        {
+            nextCount++;
+            return delegate.next();
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            delegate.constrain(mask);
+        }
+
+        @Override
+        public boolean supportsRetainedBatches()
+        {
+            return delegate.supportsRetainedBatches();
+        }
+
+        @Override
+        public void close()
+        {
+            delegate.close();
+        }
+
+        private int nextCount()
+        {
+            return nextCount;
         }
     }
 }
