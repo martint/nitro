@@ -876,6 +876,9 @@ not use `null` output placeholders.
 - Borrowed masks and streams are valid only for that batch.
 - Borrowed masks and streams should be released when the batch closes if they
   were not explicitly transferred with `take(...)`.
+- `hasNext()` must not create observable duplicate work. If an operator
+  prefetches or stages a batch during `hasNext()`, the following `next()` must
+  return that same staged batch rather than pulling again from upstream.
 - Previously borrowed masks and streams are invalidated after the next call to
   `next()`.
 - Non-retained operators should therefore close the previous batch before
@@ -928,6 +931,11 @@ not use `null` output placeholders.
   relying on later operator shutdown. Tests and benchmarks need to follow the
   same lifetime contract as production execution if they want memory behavior
   to be representative.
+- Batch consumers are part of the runtime contract surface. Helper code such as
+  assertions, benchmarks, or adapters must close each batch after reading it;
+  otherwise operators that retain current-batch state may appear to leak memory
+  or may keep reporting the same prefetched batch through repeated
+  `hasNext()`/`next()` cycles.
 
 Even when a batch has zero active rows or an operator finishes without
 producing any surviving rows, the result should preserve any output schema that
