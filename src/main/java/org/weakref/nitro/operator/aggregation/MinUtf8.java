@@ -92,12 +92,26 @@ public class MinUtf8
     @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
+        return result(maxGroup, state, Mask.all(maxGroup + 1), output, allocator, allocationContext);
+    }
+
+    @Override
+    public Streams result(int maxGroup, Streams state, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    {
         MinUtf8StateVector values = (MinUtf8StateVector) state.values();
         int size = maxGroup + 1;
         int totalBytes = 0;
-        for (int group = 0; group < size; group++) {
-            byte[] value = values.value(group);
-            totalBytes += value == null ? 0 : value.length;
+        if (mask.all()) {
+            for (int group = 0; group < size; group++) {
+                byte[] value = values.value(group);
+                totalBytes += value == null ? 0 : value.length;
+            }
+        }
+        else {
+            for (int group : mask) {
+                byte[] value = values.value(group);
+                totalBytes += value == null ? 0 : value.length;
+            }
         }
 
         BinaryVector outputValues = allocator.allocateOrGrowBinary(
@@ -105,6 +119,8 @@ public class MinUtf8
                 output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                 size,
                 totalBytes);
+        Arrays.fill(outputValues.offsets(), 0);
+        outputValues.clearTraits();
         outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
 
         BooleanVector outputNulls = allocator.allocateOrGrow(
@@ -115,14 +131,36 @@ public class MinUtf8
                 BooleanVector::new);
         Arrays.fill(outputNulls.values(), 0, size, false);
 
-        for (int group = 0; group < size; group++) {
-            byte[] value = values.value(group);
-            if (value == null) {
-                outputValues.setNull(group);
-                outputNulls.values()[group] = true;
+        if (mask.all()) {
+            for (int group = 0; group < size; group++) {
+                byte[] value = values.value(group);
+                if (value == null) {
+                    outputValues.setNull(group);
+                    outputNulls.values()[group] = true;
+                }
+                else {
+                    outputValues.setBytes(group, value);
+                }
             }
-            else {
-                outputValues.setBytes(group, value);
+        }
+        else {
+            int previousGroup = 0;
+            for (int group : mask) {
+                while (previousGroup < group) {
+                    outputValues.setNull(previousGroup++);
+                }
+                byte[] value = values.value(group);
+                if (value == null) {
+                    outputValues.setNull(group);
+                    outputNulls.values()[group] = true;
+                }
+                else {
+                    outputValues.setBytes(group, value);
+                }
+                previousGroup = group + 1;
+            }
+            while (previousGroup < size) {
+                outputValues.setNull(previousGroup++);
             }
         }
         return Streams.ofValuesAndNulls(outputValues, outputNulls);

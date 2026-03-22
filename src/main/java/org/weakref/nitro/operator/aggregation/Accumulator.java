@@ -30,5 +30,10 @@ public interface Accumulator
 
     void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams);
 
+    default Streams result(int maxGroup, Streams state, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return result(maxGroup, state, output, allocator, allocationContext);
+    }
+
     Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext);
 }
