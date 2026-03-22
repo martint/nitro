@@ -122,6 +122,61 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testReferenceMaskOptimizesSimpleLongComparisonsWithoutPrimitiveCalls()
+    {
+        Variable sixtyTwo = new Variable(0);
+        Variable refreshZero = new Variable(1);
+        Variable julyStart = new Variable(2);
+        Variable augustStart = new Variable(3);
+        Variable counterEquals = new Variable(4);
+        Variable refreshEquals = new Variable(5);
+        Variable afterStart = new Variable(6);
+        Variable beforeEnd = new Variable(7);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(sixtyTwo, new Literal(62L), AllMask.ALL),
+                        new Assignment(refreshZero, new Literal(0L), AllMask.ALL),
+                        new Assignment(julyStart, new Literal(1_372_636_800L), AllMask.ALL),
+                        new Assignment(augustStart, new Literal(1_375_315_200L), AllMask.ALL),
+                        new Assignment(counterEquals, new Call("eq", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(sixtyTwo, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(refreshEquals, new Call("eq", List.of(
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(refreshZero, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(afterStart, new Call("lt", List.of(
+                                new Reference(julyStart, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(beforeEnd, new Call("lt", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(augustStart, Stream.VALUES))), AllMask.ALL)),
+                List.of(),
+                Map.of(),
+                Map.of());
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {62, 62, 63, 62}),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1_372_636_800L, 1_373_000_000L, 1_373_000_000L, 1_375_315_200L}),
+                        new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {0, 0, 0, 1}),
+                        new Reference(new Input(2), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, true}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(
+                new AndMask(List.of(
+                        new ReferenceMask(new Reference(counterEquals, Stream.VALUES)),
+                        new ReferenceMask(new Reference(refreshEquals, Stream.VALUES)),
+                        new ReferenceMask(new Reference(afterStart, Stream.VALUES)),
+                        new ReferenceMask(new Reference(beforeEnd, Stream.VALUES)))),
+                Mask.all(4));
+
+        assertThat(result.selectedCount()).isEqualTo(1);
+        assertThat(result.position(0)).isEqualTo(1);
+    }
+
+    @Test
     void testUtf8LiteralUsesRleAndContainsSupportsIt()
     {
         Variable needle = new Variable(0);

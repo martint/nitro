@@ -88,6 +88,13 @@ The evaluator is responsible for:
 Any operator that needs scalar computation over rows should delegate to the
 evaluator rather than embedding its own expression scheduler.
 
+Performance problems in common scalar shapes should usually be treated as
+evaluator/runtime optimization work, not as evidence that those shapes deserve
+dedicated operators. For example, conjunctions of simple numeric predicates
+should become faster because the evaluator recognizes and specializes them
+while preserving the ordinary batch and stream contract, not because those
+filters are peeled out into one-off operator types.
+
 ### Streams are semantic outputs
 
 For any logical expression or logical column, Nitro should model separate

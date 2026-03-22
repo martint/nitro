@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -637,6 +638,11 @@ public final class PlanEvaluator
             return evaluateMaskOutcome(resolved, mask);
         }
 
+        MaskOutcome optimized = tryEvaluateLongComparisonMask(reference, mask);
+        if (optimized != null) {
+            return optimized;
+        }
+
         BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
@@ -653,6 +659,112 @@ public final class PlanEvaluator
         Mask presentMask = nullMask.none() ? remainingAfterErrors : allocator.differenceMask(ALLOCATION_CONTEXT, remainingAfterErrors, nullMask);
         Mask trueMask = allocator.intersectMask(ALLOCATION_CONTEXT, presentMask, values);
         return new MaskOutcome(trueMask, nullMask, errorMask);
+    }
+
+    private MaskOutcome tryEvaluateLongComparisonMask(Reference reference, Mask mask)
+    {
+        LongComparison comparison = resolveLongComparison(reference);
+        if (comparison == null) {
+            return null;
+        }
+
+        Vector leftValues = comparison.left().inputIndex() >= 0
+                ? input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.left().inputIndex()), Stream.VALUES), mask)
+                : null;
+        Vector rightValues = comparison.right().inputIndex() >= 0
+                ? input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.VALUES), mask)
+                : null;
+
+        BooleanVector leftNulls = comparison.left().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.left().inputIndex()), Stream.NULLS), mask)
+                : null;
+        BooleanVector rightNulls = comparison.right().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.NULLS), mask)
+                : null;
+        BooleanVector leftErrors = comparison.left().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.left().inputIndex()), Stream.ERRORS), mask)
+                : null;
+        BooleanVector rightErrors = comparison.right().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.ERRORS), mask)
+                : null;
+
+        int[] truePositions = new int[mask.selectedCount()];
+        int[] nullPositions = new int[mask.selectedCount()];
+        int[] errorPositions = new int[mask.selectedCount()];
+        int trueCount = 0;
+        int nullCount = 0;
+        int errorCount = 0;
+
+        for (int position : mask) {
+            if ((leftErrors != null && leftErrors.values()[position]) || (rightErrors != null && rightErrors.values()[position])) {
+                errorPositions[errorCount++] = position;
+                continue;
+            }
+            if ((leftNulls != null && leftNulls.values()[position]) || (rightNulls != null && rightNulls.values()[position])) {
+                nullPositions[nullCount++] = position;
+                continue;
+            }
+
+            long left = comparison.left().inputIndex() >= 0 ? readLong(leftValues, position) : comparison.left().literal();
+            long right = comparison.right().inputIndex() >= 0 ? readLong(rightValues, position) : comparison.right().literal();
+            if (comparison.functionName().equals("eq") ? left == right : left < right) {
+                truePositions[trueCount++] = position;
+            }
+        }
+
+        return new MaskOutcome(
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, Arrays.copyOf(truePositions, trueCount), mask.size()),
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, Arrays.copyOf(nullPositions, nullCount), mask.size()),
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, Arrays.copyOf(errorPositions, errorCount), mask.size()));
+    }
+
+    private LongComparison resolveLongComparison(Reference reference)
+    {
+        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
+            return null;
+        }
+        Assignment assignment = assignments.get(variable);
+        if (assignment == null || !(assignment.operation() instanceof Call call) || call.arguments().size() != 2) {
+            return null;
+        }
+        if (!call.name().equals("eq") && !call.name().equals("lt")) {
+            return null;
+        }
+
+        LongOperand left = resolveLongOperand(call.arguments().get(0));
+        LongOperand right = resolveLongOperand(call.arguments().get(1));
+        if (left == null || right == null) {
+            return null;
+        }
+        return new LongComparison(call.name(), left, right);
+    }
+
+    private LongOperand resolveLongOperand(Reference reference)
+    {
+        if (reference.stream() != Stream.VALUES) {
+            return null;
+        }
+        return switch (reference.producer()) {
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> new LongOperand(index, 0);
+            case Variable variable -> {
+                Assignment assignment = assignments.get(variable);
+                if (assignment != null && assignment.operation() instanceof Literal(Long literal)) {
+                    yield new LongOperand(-1, literal);
+                }
+                yield null;
+            }
+        };
+    }
+
+    private static long readLong(Vector vector, int position)
+    {
+        return switch (vector) {
+            case I64Vector values -> values.values()[position];
+            case I32Vector values -> values.values()[position];
+            case DictionaryVector values -> readLong(values.values(), values.ids()[position]);
+            case RleVector values -> readLong(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
+        };
     }
 
     private BooleanVector optionalBooleanStream(org.weakref.nitro.operator.evaluator.ir.Producer producer, Stream stream, Mask mask)
@@ -874,6 +986,10 @@ public final class PlanEvaluator
     }
 
     private record IndexedTerm(int index, MaskExpression term) {}
+
+    private record LongOperand(int inputIndex, long literal) {}
+
+    private record LongComparison(String functionName, LongOperand left, LongOperand right) {}
 
     private record KeyAccess(BinaryVector values, boolean dictionary, int[] ids)
     {

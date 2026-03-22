@@ -22,6 +22,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
 import java.util.Set;
 
 final class OperatorVectorSupport
@@ -196,12 +197,13 @@ final class OperatorVectorSupport
 
     private static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
     {
-        for (int index = 0; index < length; index++) {
-            if (left[leftOffset + index] != right[rightOffset + index]) {
-                return false;
-            }
-        }
-        return true;
+        return Arrays.mismatch(left, leftOffset, leftOffset + length, right, rightOffset, rightOffset + length) == -1;
+//        for (int index = 0; index < length; index++) {
+//            if (left[leftOffset + index] != right[rightOffset + index]) {
+//                return false;
+//            }
+//        }
+//        return true;
     }
 
     private static int binaryCompare(byte[] left, int leftOffset, int leftLength, byte[] right, int rightOffset, int rightLength)
