@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
+import org.weakref.nitro.data.AvgStateVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -257,6 +258,24 @@ public class TestBatchRuntime
 
         MinUtf8StateVector grown = MinUtf8StateVector.grow(state, 8);
         assertThat(grown.retainedBytes()).isEqualTo(8);
+    }
+
+    @Test
+    void testAvgStateVectorGrowPreservesValuesWithoutFlatCopy()
+    {
+        AvgStateVector state = new AvgStateVector(4);
+        state.increment(0, 10, 1);
+        state.increment(3, 40, 2);
+
+        AvgStateVector grown = AvgStateVector.grow(state, 8);
+
+        assertThat(grown.length()).isEqualTo(8);
+        assertThat(grown.sum(0)).isEqualTo(10);
+        assertThat(grown.count(0)).isEqualTo(1);
+        assertThat(grown.sum(3)).isEqualTo(40);
+        assertThat(grown.count(3)).isEqualTo(2);
+        assertThat(grown.sum(7)).isZero();
+        assertThat(grown.count(7)).isZero();
     }
 
     @Test

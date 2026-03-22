@@ -25,8 +25,6 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.Arrays;
-
 import static java.lang.Math.toIntExact;
 
 public class Avg
@@ -48,16 +46,20 @@ public class Avg
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        AvgStateVector values = allocator.allocateOrGrow(allocationContext, (AvgStateVector) state.values(), AvgStateVector.class, size, AvgStateVector::new);
-        return Streams.ofValues(values);
+        AvgStateVector values = (AvgStateVector) state.values();
+        if (values.length() >= size) {
+            return state;
+        }
+        AvgStateVector grown = allocator.adopt(allocationContext, AvgStateVector.grow(values, size));
+        allocator.discard(allocationContext, values);
+        return Streams.ofValues(grown);
     }
 
     @Override
     public void initialize(Streams state, int offset, int length)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
-        Arrays.fill(stateVector.sums(), offset, offset + length, 0);
-        Arrays.fill(stateVector.counts(), offset, offset + length, 0);
+        stateVector.initialize(offset, length);
     }
 
     @Override
@@ -112,9 +114,9 @@ public class Avg
         nulls = allocator.allocateOrGrow(allocationContext, nulls, org.weakref.nitro.data.BooleanVector.class, stateVector.length(), org.weakref.nitro.data.BooleanVector::new);
 
         for (int index = 0; index < stateVector.length(); index++) {
-            boolean isNull = stateVector.counts()[index] == 0;
+            boolean isNull = stateVector.count(index) == 0;
             nulls.values()[index] = isNull;
-            values.values()[index] = isNull ? 0 : ((double) stateVector.sums()[index] / stateVector.counts()[index]);
+            values.values()[index] = isNull ? 0 : ((double) stateVector.sum(index) / stateVector.count(index));
         }
 
         return Streams.ofValuesAndNulls(values, nulls);
@@ -125,8 +127,7 @@ public class Avg
         if (isNull(inputNulls, position)) {
             return;
         }
-        stateVector.sums()[group] += value(inputValues, position);
-        stateVector.counts()[group] += 1;
+        stateVector.increment(group, value(inputValues, position), 1);
     }
 
     private static long value(Vector vector, int position)

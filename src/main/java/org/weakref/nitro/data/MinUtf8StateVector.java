@@ -13,47 +13,52 @@
  */
 package org.weakref.nitro.data;
 
-import java.util.Arrays;
-
 public final class MinUtf8StateVector
         implements FlatVector
 {
-    private byte[][] values;
-    private boolean[] nulls;
+    private static final int CHUNK_SHIFT = 12;
+    private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
+    private static final int CHUNK_MASK = CHUNK_SIZE - 1;
+
+    private final int length;
+    private final byte[][][] chunks;
     private long retainedBytes;
 
-    public MinUtf8StateVector(int size)
+    public MinUtf8StateVector(int length)
     {
-        this.values = new byte[size][];
-        this.nulls = new boolean[size];
-        Arrays.fill(this.nulls, true);
-        this.retainedBytes = this.nulls.length;
+        this.length = length;
+        this.chunks = new byte[chunkCount(length)][][];
+        for (int index = 0; index < chunks.length; index++) {
+            chunks[index] = new byte[CHUNK_SIZE][];
+        }
+        this.retainedBytes = 0;
     }
 
-    private MinUtf8StateVector(byte[][] values, boolean[] nulls, long retainedBytes)
+    private MinUtf8StateVector(int length, byte[][][] chunks, long retainedBytes)
     {
-        this.values = values;
-        this.nulls = nulls;
+        this.length = length;
+        this.chunks = chunks;
         this.retainedBytes = retainedBytes;
     }
 
-    public static MinUtf8StateVector grow(MinUtf8StateVector source, int size)
+    public static MinUtf8StateVector grow(MinUtf8StateVector source, int length)
     {
-        if (source.length() >= size) {
-            return source;
+        int requiredChunkCount = chunkCount(length);
+        if (requiredChunkCount <= source.chunks.length) {
+            return new MinUtf8StateVector(length, source.chunks, source.retainedBytes);
         }
 
-        byte[][] values = Arrays.copyOf(source.values, size);
-        boolean[] nulls = Arrays.copyOf(source.nulls, size);
-        Arrays.fill(nulls, source.nulls.length, nulls.length, true);
-        long retainedBytes = source.retainedBytes - source.nulls.length + nulls.length;
-        return new MinUtf8StateVector(values, nulls, retainedBytes);
+        byte[][][] chunks = java.util.Arrays.copyOf(source.chunks, requiredChunkCount);
+        for (int index = source.chunks.length; index < requiredChunkCount; index++) {
+            chunks[index] = new byte[CHUNK_SIZE][];
+        }
+        return new MinUtf8StateVector(length, chunks, source.retainedBytes);
     }
 
     @Override
     public int length()
     {
-        return values.length;
+        return length;
     }
 
     @Override
@@ -65,14 +70,17 @@ public final class MinUtf8StateVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        byte[][] values = new byte[this.values.length][];
-        boolean[] nulls = Arrays.copyOf(this.nulls, this.nulls.length);
-        long retainedBytes = nulls.length;
-        for (int index = 0; index < values.length; index++) {
-            values[index] = this.values[index] == null ? null : Arrays.copyOf(this.values[index], this.values[index].length);
-            retainedBytes += values[index] == null ? 0 : values[index].length;
+        byte[][][] chunks = new byte[this.chunks.length][][];
+        long retainedBytes = 0;
+        for (int chunkIndex = 0; chunkIndex < this.chunks.length; chunkIndex++) {
+            chunks[chunkIndex] = new byte[CHUNK_SIZE][];
+            for (int index = 0; index < CHUNK_SIZE; index++) {
+                byte[] value = this.chunks[chunkIndex][index];
+                chunks[chunkIndex][index] = value == null ? null : java.util.Arrays.copyOf(value, value.length);
+                retainedBytes += value == null ? 0 : value.length;
+            }
         }
-        return allocator.adopt(allocationContext, new MinUtf8StateVector(values, nulls, retainedBytes));
+        return allocator.adopt(allocationContext, new MinUtf8StateVector(length, chunks, retainedBytes));
     }
 
     @Override
@@ -83,30 +91,33 @@ public final class MinUtf8StateVector
 
     public boolean isNull(int group)
     {
-        return nulls[group];
+        return value(group) == null;
     }
 
     public byte[] value(int group)
     {
-        return values[group];
+        return chunks[group >> CHUNK_SHIFT][group & CHUNK_MASK];
     }
 
     public void setValue(int group, byte[] value)
     {
-        byte[] previous = values[group];
-        retainedBytes -= previous == null ? 0 : previous.length;
-        values[group] = value;
-        retainedBytes += value == null ? 0 : value.length;
-        nulls[group] = value == null;
+        byte[][] chunk = chunks[group >> CHUNK_SHIFT];
+        int offset = group & CHUNK_MASK;
+        byte[] previous = chunk[offset];
+        chunk[offset] = value;
+        retainedBytes += (value == null ? 0 : value.length) - (previous == null ? 0 : previous.length);
     }
 
     public void initialize(int offset, int length)
     {
-        for (int index = offset; index < offset + length; index++) {
-            byte[] value = values[index];
-            retainedBytes -= value == null ? 0 : value.length;
+        int end = offset + length;
+        for (int position = offset; position < end; position++) {
+            setValue(position, null);
         }
-        Arrays.fill(nulls, offset, offset + length, true);
-        Arrays.fill(values, offset, offset + length, null);
+    }
+
+    private static int chunkCount(int length)
+    {
+        return (length + CHUNK_MASK) >> CHUNK_SHIFT;
     }
 }

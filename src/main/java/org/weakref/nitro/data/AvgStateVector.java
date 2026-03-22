@@ -16,75 +16,141 @@ package org.weakref.nitro.data;
 public final class AvgStateVector
         implements FlatVector
 {
-    private final long[] sums;
-    private final long[] counts;
+    private static final int CHUNK_SHIFT = 12;
+    private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
+    private static final int CHUNK_MASK = CHUNK_SIZE - 1;
 
-    public AvgStateVector(int size)
+    private final int length;
+    private final long[][] sumChunks;
+    private final long[][] countChunks;
+    private final long retainedBytes;
+
+    public AvgStateVector(int length)
     {
-        this.sums = new long[size];
-        this.counts = new long[size];
+        this.length = length;
+        this.sumChunks = new long[chunkCount(length)][];
+        this.countChunks = new long[chunkCount(length)][];
+        long retainedBytes = 0;
+        for (int index = 0; index < sumChunks.length; index++) {
+            sumChunks[index] = new long[CHUNK_SIZE];
+            countChunks[index] = new long[CHUNK_SIZE];
+            retainedBytes += (long) CHUNK_SIZE * Long.BYTES * 2;
+        }
+        this.retainedBytes = retainedBytes;
     }
 
-    public long[] sums()
+    private AvgStateVector(int length, long[][] sumChunks, long[][] countChunks, long retainedBytes)
     {
-        return sums;
+        this.length = length;
+        this.sumChunks = sumChunks;
+        this.countChunks = countChunks;
+        this.retainedBytes = retainedBytes;
     }
 
-    public long[] counts()
+    public static AvgStateVector grow(AvgStateVector previous, int length)
     {
-        return counts;
+        int requiredChunkCount = chunkCount(length);
+        if (requiredChunkCount <= previous.sumChunks.length) {
+            return new AvgStateVector(length, previous.sumChunks, previous.countChunks, previous.retainedBytes);
+        }
+
+        long[][] sumChunks = java.util.Arrays.copyOf(previous.sumChunks, requiredChunkCount);
+        long[][] countChunks = java.util.Arrays.copyOf(previous.countChunks, requiredChunkCount);
+        long retainedBytes = previous.retainedBytes;
+        for (int index = previous.sumChunks.length; index < requiredChunkCount; index++) {
+            sumChunks[index] = new long[CHUNK_SIZE];
+            countChunks[index] = new long[CHUNK_SIZE];
+            retainedBytes += (long) CHUNK_SIZE * Long.BYTES * 2;
+        }
+        return new AvgStateVector(length, sumChunks, countChunks, retainedBytes);
     }
 
     @Override
     public int length()
     {
-        return sums.length;
+        return length;
     }
 
     @Override
     public long retainedBytes()
     {
-        return (long) sums.length * Long.BYTES * 2;
+        return retainedBytes;
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        AvgStateVector copy = allocator.allocate(allocationContext, AvgStateVector.class, sums.length, AvgStateVector::new);
-        copyInto(copy);
-        return copy;
+        long[][] sumChunks = new long[this.sumChunks.length][];
+        long[][] countChunks = new long[this.countChunks.length][];
+        long retainedBytes = 0;
+        for (int index = 0; index < sumChunks.length; index++) {
+            sumChunks[index] = java.util.Arrays.copyOf(this.sumChunks[index], this.sumChunks[index].length);
+            countChunks[index] = java.util.Arrays.copyOf(this.countChunks[index], this.countChunks[index].length);
+            retainedBytes += (long) this.sumChunks[index].length * Long.BYTES * 2;
+        }
+        return allocator.adopt(allocationContext, new AvgStateVector(length, sumChunks, countChunks, retainedBytes));
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
     {
-        AvgStateVector copy = allocator.allocate(allocationContext, AvgStateVector.class, positions.length, AvgStateVector::new);
+        AvgStateVector copy = new AvgStateVector(positions.length);
         for (int index = 0; index < positions.length; index++) {
             int position = positions[index];
-            copy.sums()[index] = sums[position];
-            copy.counts()[index] = counts[position];
+            copy.increment(index, sum(position), count(position));
         }
-        return copy;
-    }
-
-    @Override
-    public void copyInto(Vector target)
-    {
-        AvgStateVector avgTarget = (AvgStateVector) target;
-        System.arraycopy(sums, 0, avgTarget.sums(), 0, sums.length);
-        System.arraycopy(counts, 0, avgTarget.counts(), 0, counts.length);
+        return allocator.adopt(allocationContext, copy);
     }
 
     @Override
     public void clearForReuse()
     {
-        java.util.Arrays.fill(sums, 0);
-        java.util.Arrays.fill(counts, 0);
+        for (long[] chunk : sumChunks) {
+            java.util.Arrays.fill(chunk, 0);
+        }
+        for (long[] chunk : countChunks) {
+            java.util.Arrays.fill(chunk, 0);
+        }
     }
 
     @Override
     public PoolSlot poolSlot()
     {
         return new PoolSlot(AvgStateVector.class, length(), 2);
+    }
+
+    public void increment(int index, long sum, long count)
+    {
+        sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += sum;
+        countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+    }
+
+    public long sum(int index)
+    {
+        return sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
+    }
+
+    public long count(int index)
+    {
+        return countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
+    }
+
+    public void initialize(int offset, int length)
+    {
+        int end = offset + length;
+        int position = offset;
+        while (position < end) {
+            int chunkIndex = position >> CHUNK_SHIFT;
+            int chunkOffset = position & CHUNK_MASK;
+            int copyLength = Math.min(end - position, CHUNK_SIZE - chunkOffset);
+            java.util.Arrays.fill(sumChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
+            java.util.Arrays.fill(countChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
+            position += copyLength;
+        }
+    }
+
+    private static int chunkCount(int length)
+    {
+        return (length + CHUNK_MASK) >> CHUNK_SHIFT;
     }
 }
