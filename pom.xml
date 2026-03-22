@@ -26,6 +26,7 @@
         <benchmark.include>org\.weakref\.nitro\.BenchmarkClickBenchHits\..*</benchmark.include>
         <benchmark.options />
         <nitro.clickbench.hits.path />
+        <air.test.jvm.additional-arguments>--add-modules=jdk.incubator.vector</air.test.jvm.additional-arguments>
     </properties>
 
     <dependencyManagement>
@@ -167,6 +168,13 @@
         </dependency>
 
         <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-common</artifactId>
             <version>3.4.1</version>
@@ -203,7 +211,6 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
@@ -240,6 +247,10 @@
                             <goal>testCompile</goal>
                         </goals>
                         <configuration>
+                            <compilerArgs combine.self="merge">
+                                <arg>--add-modules=jdk.incubator.vector</arg>
+                            </compilerArgs>
+
                             <annotationProcessorPaths>
                                 <path>
                                     <groupId>org.openjdk.jmh</groupId>
