@@ -179,6 +179,24 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query22SearchPhrasesWithGoogleUrls()
+    {
+        consume(ClickBenchHitsSupport.query22SearchPhrasesWithGoogleUrls(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query23GoogleTitlesNonGoogleUrls()
+    {
+        consume(ClickBenchHitsSupport.query23GoogleTitlesNonGoogleUrls(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query24SelectAllGoogleUrlsOrderedByEventTime()
+    {
+        consume(ClickBenchHitsSupport.query24SelectAllGoogleUrlsOrderedByEventTime(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
     public void query25SearchPhrasesOrderedByEventTime()
     {
         consume(ClickBenchHitsSupport.query25SearchPhrasesOrderedByEventTime(allocator, primitiveRegistry, clickBenchHitsDirectory));
@@ -203,9 +221,39 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
+    public void query28CounterAverageUrlLength()
+    {
+        consume(ClickBenchHitsSupport.query28CounterAverageUrlLength(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query29RefererHosts()
+    {
+        consume(ClickBenchHitsSupport.query29RefererHosts(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
     public void query30SumResolutionWidthPlusOffsets()
     {
         consume(ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query31SearchEngineAndClientIp()
+    {
+        consume(ClickBenchHitsSupport.query31SearchEngineAndClientIp(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query32WatchIdAndClientIpWithSearchPhrase()
+    {
+        consume(ClickBenchHitsSupport.query32WatchIdAndClientIpWithSearchPhrase(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query33WatchIdAndClientIp()
+    {
+        consume(ClickBenchHitsSupport.query33WatchIdAndClientIp(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
@@ -218,6 +266,54 @@ public class BenchmarkClickBenchHits
     public void query35ConstantAndTopUrls()
     {
         consume(ClickBenchHitsSupport.query35ConstantAndTopUrls(allocator, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query36ClientIpArithmeticGroups()
+    {
+        consume(ClickBenchHitsSupport.query36ClientIpArithmeticGroups(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query37TopUrlsForCounter62()
+    {
+        consume(ClickBenchHitsSupport.query37TopUrlsForCounter62(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query38TopTitlesForCounter62()
+    {
+        consume(ClickBenchHitsSupport.query38TopTitlesForCounter62(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query39TopUrlsOffset()
+    {
+        consume(ClickBenchHitsSupport.query39TopUrlsOffset(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query40TrafficSourceGroups()
+    {
+        consume(ClickBenchHitsSupport.query40TrafficSourceGroups(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query41UrlHashByEventDate()
+    {
+        consume(ClickBenchHitsSupport.query41UrlHashByEventDate(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query42WindowClientSizes()
+    {
+        consume(ClickBenchHitsSupport.query42WindowClientSizes(allocator, primitiveRegistry, clickBenchHitsDirectory));
+    }
+
+    @Benchmark
+    public void query43PageViewsByMinute()
+    {
+        consume(ClickBenchHitsSupport.query43PageViewsByMinute(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     private static void consume(Operator operator)

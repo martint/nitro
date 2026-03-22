@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayContainsI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
@@ -27,7 +28,10 @@ import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
 import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
+import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
+import org.weakref.nitro.function.scalar.builtin.IfUtf8;
+import org.weakref.nitro.function.scalar.builtin.LengthUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapContainsKeyUtf8;
@@ -58,13 +62,16 @@ public final class TestPrimitiveFunctions
                 ArraySumI64.class,
                 Cardinality.class,
                 ContainsUtf8.class,
+                ExtractHostUtf8.class,
                 ElementAtI64Utf8.class,
                 ElementAtUtf8Utf8.class,
                 EqualI64.class,
                 EqualUtf8.class,
                 HashUtf8.class,
+                IfUtf8.class,
                 LessThanI64.class,
                 LessThanUtf8.class,
+                LengthUtf8.class,
                 MapContainsKeyUtf8.class,
                 MapKeys.class,
                 MapValues.class,
@@ -73,6 +80,7 @@ public final class TestPrimitiveFunctions
                 MultiplyI64.class,
                 DivideI64.class,
                 ModuloI64.class,
+                AndBoolean.class,
                 OrBoolean.class,
                 StartsWithUtf8.class)) {
             primitiveRegistry.register(scalarRegistry.register(functionClass));

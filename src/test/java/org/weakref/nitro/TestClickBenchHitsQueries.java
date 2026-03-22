@@ -429,6 +429,168 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
+    void testClickBenchQuery22SearchPhrasesWithGoogleUrls()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query22SearchPhrasesWithGoogleUrls(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery23GoogleTitlesNonGoogleUrls()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query23GoogleTitlesNonGoogleUrls(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery24SelectAllGoogleUrlsOrderedByEventTime()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query24SelectAllGoogleUrlsOrderedByEventTime(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values().length).isGreaterThan(20);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery28CounterAverageUrlLength()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query28CounterAverageUrlLength(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
+    void testClickBenchQuery29RefererHosts()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query29RefererHosts(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
+    void testClickBenchQuery31SearchEngineAndClientIp()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query31SearchEngineAndClientIp(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery32WatchIdAndClientIpWithSearchPhrase()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query32WatchIdAndClientIpWithSearchPhrase(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery33WatchIdAndClientIp()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query33WatchIdAndClientIp(new Allocator(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery36ClientIpArithmeticGroups()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query36ClientIpArithmeticGroups(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery37TopUrlsForCounter62()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query37TopUrlsForCounter62(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery38TopTitlesForCounter62()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query38TopTitlesForCounter62(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+        }
+    }
+
+    @Test
+    void testClickBenchQuery39TopUrlsOffset()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query39TopUrlsOffset(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
+    void testClickBenchQuery40TrafficSourceGroups()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query40TrafficSourceGroups(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
+    void testClickBenchQuery41UrlHashByEventDate()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query41UrlHashByEventDate(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
+    void testClickBenchQuery42WindowClientSizes()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query42WindowClientSizes(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
+    void testClickBenchQuery43PageViewsByMinute()
+            throws IOException
+    {
+        try (Operator query = ClickBenchHitsSupport.query43PageViewsByMinute(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
+        }
+    }
+
+    @Test
     void testClickBenchQuery1CountAllOnSplitHitsDirectory()
             throws IOException
     {

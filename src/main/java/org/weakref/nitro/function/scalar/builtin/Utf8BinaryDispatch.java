@@ -65,18 +65,20 @@ public final class Utf8BinaryDispatch
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        checkArgument(left.length() == right.length(), "%s inputs must have the same logical length: left=%s right=%s", functionName, left.length(), right.length());
+        int requiredLength = mask.none() ? 0 : mask.maxPosition() + 1;
+        checkArgument(left.length() >= requiredLength, "%s left input length is too small for mask: left=%s required=%s", functionName, left.length(), requiredLength);
+        checkArgument(right.length() >= requiredLength, "%s right input length is too small for mask: right=%s required=%s", functionName, right.length(), requiredLength);
         BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
         BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
 
         Streams result = Streams.empty();
-        int requiredLength = Math.max(mask.maxPosition() + 1, left.length());
+        int outputLength = Math.max(requiredLength, Math.max(left.length(), right.length()));
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = context.allocator().allocateOrGrow(
                     allocationContext,
                     output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
                     BooleanVector.class,
-                    requiredLength,
+                    outputLength,
                     BooleanVector::new);
             applyNulls(leftNulls, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
@@ -86,7 +88,7 @@ public final class Utf8BinaryDispatch
                     allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof BooleanVector vector ? vector : null,
                     BooleanVector.class,
-                    requiredLength,
+                    outputLength,
                     BooleanVector::new);
             applyValues(functionName, operation, left, right, leftNulls, rightNulls, mask, outputValues);
             result = result.with(Stream.VALUES, outputValues);

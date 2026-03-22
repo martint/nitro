@@ -414,6 +414,166 @@ public class TestClickBenchHitsRealData
         }
     }
 
+    @Test
+    void testQuery22()
+    {
+        try (Operator query = ClickBenchHitsSupport.query22SearchPhrasesWithGoogleUrls(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+        }
+    }
+
+    @Test
+    void testQuery23()
+    {
+        try (Operator query = ClickBenchHitsSupport.query23GoogleTitlesNonGoogleUrls(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testQuery24()
+    {
+        try (Operator query = ClickBenchHitsSupport.query24SelectAllGoogleUrlsOrderedByEventTime(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).hasSize(10);
+            assertThat(rows.getFirst().values().length).isGreaterThan(20);
+        }
+    }
+
+    @Test
+    void testQuery28()
+    {
+        try (Operator query = ClickBenchHitsSupport.query28CounterAverageUrlLength(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+        }
+    }
+
+    @Test
+    void testQuery29()
+    {
+        try (Operator query = ClickBenchHitsSupport.query29RefererHosts(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(4);
+        }
+    }
+
+    @Test
+    void testQuery31()
+    {
+        try (Operator query = ClickBenchHitsSupport.query31SearchEngineAndClientIp(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testQuery32()
+    {
+        try (Operator query = ClickBenchHitsSupport.query32WatchIdAndClientIpWithSearchPhrase(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testQuery33()
+    {
+        try (Operator query = ClickBenchHitsSupport.query33WatchIdAndClientIp(new Allocator(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testQuery36()
+    {
+        try (Operator query = ClickBenchHitsSupport.query36ClientIpArithmeticGroups(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testQuery37()
+    {
+        try (Operator query = ClickBenchHitsSupport.query37TopUrlsForCounter62(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+        }
+    }
+
+    @Test
+    void testQuery38()
+    {
+        try (Operator query = ClickBenchHitsSupport.query38TopTitlesForCounter62(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+        }
+    }
+
+    @Test
+    void testQuery39()
+    {
+        try (Operator query = ClickBenchHitsSupport.query39TopUrlsOffset(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+        }
+    }
+
+    @Test
+    void testQuery40()
+    {
+        try (Operator query = ClickBenchHitsSupport.query40TrafficSourceGroups(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(6);
+        }
+    }
+
+    @Test
+    void testQuery41()
+    {
+        try (Operator query = ClickBenchHitsSupport.query41UrlHashByEventDate(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+        }
+    }
+
+    @Test
+    void testQuery42()
+    {
+        try (Operator query = ClickBenchHitsSupport.query42WindowClientSizes(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(3);
+        }
+    }
+
+    @Test
+    void testQuery43()
+    {
+        try (Operator query = ClickBenchHitsSupport.query43PageViewsByMinute(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
+            assertThat(rows).isNotEmpty();
+            assertThat(rows.getFirst().values()).hasSize(2);
+        }
+    }
+
     private static long integerValue(Object vector, int position)
     {
         return switch (vector) {
