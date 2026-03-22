@@ -198,6 +198,50 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testExtractHostUtf8PreservesDictionaryEncoding()
+    {
+        Variable host = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        host,
+                        new Call("extract_host_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(host, Stream.VALUES),
+                        new Reference(host, Stream.NULLS)));
+
+        BinaryVector dictionaryValues = new BinaryVector(3, 128);
+        dictionaryValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionaryValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionaryValues.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(2, "https://www.google.com/maps".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 0}, dictionaryValues);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), input,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(4));
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+
+        DictionaryVector hosts = (DictionaryVector) result.values();
+        assertThat(hosts.ids()).containsExactly(0, 1, 2, 0);
+        BinaryVector extractedValues = (BinaryVector) hosts.values();
+        assertThat(extractedValues.utf8Value(0)).isEqualTo("google.com");
+        assertThat(extractedValues.utf8Value(1)).isEqualTo("news.ycombinator.com");
+        assertThat(extractedValues.utf8Value(2)).isEqualTo("google.com");
+        assertThat(extractedValues.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+        assertThat(extractedValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isTrue();
+    }
+
+    @Test
     void testStructFieldCombinesParentAndChildNulls()
     {
         Variable name = new Variable(0);

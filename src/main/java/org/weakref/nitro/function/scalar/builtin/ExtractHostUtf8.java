@@ -26,6 +26,8 @@ import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
@@ -36,6 +38,9 @@ public final class ExtractHostUtf8
         implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ExtractHostUtf8");
+    private static final byte[] HTTP_PREFIX = "http://".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] HTTPS_PREFIX = "https://".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] WWW_PREFIX = "www.".getBytes(StandardCharsets.UTF_8);
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -59,7 +64,10 @@ public final class ExtractHostUtf8
         int requiredLength = Math.max(mask.maxPosition() + 1, values.length());
 
         int totalBytes = 0;
-        if (requestedStreams.contains(Stream.VALUES)) {
+        if (requestedStreams.contains(Stream.VALUES) && values instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector binaryValues) {
+            totalBytes = dictionaryTotalBytes(binaryValues);
+        }
+        else if (requestedStreams.contains(Stream.VALUES)) {
             for (int position : mask) {
                 if (!isNull(inputNulls, position)) {
                     totalBytes += extractLength(values, position);
@@ -79,19 +87,32 @@ public final class ExtractHostUtf8
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            BinaryVector outputValues = context.allocator().allocateOrGrowBinary(
-                    ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
-                    requiredLength,
-                    totalBytes);
-            outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
-            applyValues(values, inputNulls, mask, outputValues);
-            result = result.with(Stream.VALUES, outputValues);
+            result = result.with(Stream.VALUES, applyValues(values, inputNulls, mask, totalBytes, requiredLength, output, context));
         }
         return result;
     }
 
-    private static void applyValues(Vector values, BooleanVector inputNulls, Mask mask, BinaryVector output)
+    private static Vector applyValues(Vector values, BooleanVector inputNulls, Mask mask, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
+    {
+        if (values instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector dictionaryValues) {
+            return applyDictionary(dictionary, dictionaryValues, totalBytes, requiredLength, output, context);
+        }
+
+        BinaryVector outputValues = context.allocator().allocateOrGrowBinary(
+                ALLOCATION_CONTEXT,
+                output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
+                requiredLength,
+                totalBytes);
+        outputValues.clearTraits();
+        outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        if (values instanceof BinaryVector binaryValues && binaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)) {
+            outputValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        }
+        applyFlatValues(values, inputNulls, mask, outputValues);
+        return outputValues;
+    }
+
+    private static void applyFlatValues(Vector values, BooleanVector inputNulls, Mask mask, BinaryVector output)
     {
         for (int position : mask) {
             if (isNull(inputNulls, position)) {
@@ -102,10 +123,40 @@ public final class ExtractHostUtf8
         }
     }
 
+    private static DictionaryVector applyDictionary(DictionaryVector dictionary, BinaryVector dictionaryValues, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
+    {
+        BinaryVector existingDictionaryValues = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector existingDictionary && existingDictionary.values() instanceof BinaryVector vector
+                ? vector
+                : null;
+        BinaryVector extractedValues = context.allocator().allocateOrGrowBinary(
+                ALLOCATION_CONTEXT,
+                existingDictionaryValues,
+                dictionaryValues.length(),
+                totalBytes);
+        extractedValues.clearTraits();
+        extractedValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        if (dictionaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)) {
+            extractedValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        }
+        for (int position = 0; position < dictionaryValues.length(); position++) {
+            writeExtracted(dictionaryValues, position, extractedValues, position);
+        }
+        return context.allocator().adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(Arrays.copyOf(dictionary.ids(), requiredLength), extractedValues));
+    }
+
+    private static int dictionaryTotalBytes(BinaryVector dictionaryValues)
+    {
+        int totalBytes = 0;
+        for (int position = 0; position < dictionaryValues.length(); position++) {
+            totalBytes += extractLength(dictionaryValues, position);
+        }
+        return totalBytes;
+    }
+
     private static int extractLength(Vector values, int position)
     {
         return switch (values) {
-            case BinaryVector vector -> extractRange(vector.data(), vector.startOffset(position), vector.endOffset(position))[1];
+            case BinaryVector vector -> rangeLength(extractRange(vector.data(), vector.startOffset(position), vector.endOffset(position)));
             case DictionaryVector vector -> extractLength(vector.values(), vector.ids()[position]);
             case RleVector vector -> extractLength(vector.values(), vector.runIndex(position));
             default -> throw new IllegalArgumentException("Unsupported extract_host_utf8 vector type: " + values.getClass().getSimpleName());
@@ -116,8 +167,8 @@ public final class ExtractHostUtf8
     {
         switch (values) {
             case BinaryVector vector -> {
-                int[] range = extractRange(vector.data(), vector.startOffset(inputPosition), vector.endOffset(inputPosition));
-                output.setBytes(outputPosition, vector.data(), range[0], range[1]);
+                long range = extractRange(vector.data(), vector.startOffset(inputPosition), vector.endOffset(inputPosition));
+                output.setBytes(outputPosition, vector.data(), rangeStart(range), rangeLength(range));
             }
             case DictionaryVector vector -> writeExtracted(vector.values(), vector.ids()[inputPosition], output, outputPosition);
             case RleVector vector -> writeExtracted(vector.values(), vector.runIndex(inputPosition), output, outputPosition);
@@ -125,37 +176,51 @@ public final class ExtractHostUtf8
         }
     }
 
-    private static int[] extractRange(byte[] data, int start, int end)
+    private static long extractRange(byte[] data, int start, int end)
     {
         int hostStart = start;
-        if (startsWith(data, start, end, "http://")) {
-            hostStart += 7;
+        if (startsWith(data, start, end, HTTP_PREFIX)) {
+            hostStart += HTTP_PREFIX.length;
         }
-        else if (startsWith(data, start, end, "https://")) {
-            hostStart += 8;
+        else if (startsWith(data, start, end, HTTPS_PREFIX)) {
+            hostStart += HTTPS_PREFIX.length;
         }
-        if (startsWith(data, hostStart, end, "www.")) {
-            hostStart += 4;
+        if (startsWith(data, hostStart, end, WWW_PREFIX)) {
+            hostStart += WWW_PREFIX.length;
         }
         int hostEnd = hostStart;
         while (hostEnd < end && data[hostEnd] != '/') {
             hostEnd++;
         }
-        return new int[] {hostStart, hostEnd - hostStart};
+        return packRange(hostStart, hostEnd - hostStart);
     }
 
-    private static boolean startsWith(byte[] data, int start, int end, String prefix)
+    private static boolean startsWith(byte[] data, int start, int end, byte[] prefix)
     {
-        byte[] prefixBytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        if (start + prefixBytes.length > end) {
+        if (start + prefix.length > end) {
             return false;
         }
-        for (int index = 0; index < prefixBytes.length; index++) {
-            if (data[start + index] != prefixBytes[index]) {
+        for (int index = 0; index < prefix.length; index++) {
+            if (data[start + index] != prefix[index]) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static long packRange(int start, int length)
+    {
+        return (((long) start) << 32) | (length & 0xFFFF_FFFFL);
+    }
+
+    private static int rangeStart(long range)
+    {
+        return (int) (range >>> 32);
+    }
+
+    private static int rangeLength(long range)
+    {
+        return (int) range;
     }
 
     private static void copyNulls(BooleanVector inputNulls, Mask mask, BooleanVector output)
