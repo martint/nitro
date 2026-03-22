@@ -18,6 +18,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -100,12 +101,32 @@ public final class Utf8BinaryDispatch
             applyFlatDictionary(functionName, operation, leftValues, rightDictionary, leftNulls, rightNulls, mask, output);
             return;
         }
+        if (left instanceof BinaryVector leftValues && right instanceof RleVector rightRle) {
+            applyFlatRle(functionName, operation, leftValues, rightRle, leftNulls, rightNulls, mask, output);
+            return;
+        }
         if (left instanceof DictionaryVector leftDictionary && right instanceof BinaryVector rightValues) {
             applyDictionaryFlat(functionName, operation, leftDictionary, rightValues, leftNulls, rightNulls, mask, output);
             return;
         }
         if (left instanceof DictionaryVector leftDictionary && right instanceof DictionaryVector rightDictionary) {
             applyDictionaryDictionary(functionName, operation, leftDictionary, rightDictionary, leftNulls, rightNulls, mask, output);
+            return;
+        }
+        if (left instanceof DictionaryVector leftDictionary && right instanceof RleVector rightRle) {
+            applyDictionaryRle(functionName, operation, leftDictionary, rightRle, leftNulls, rightNulls, mask, output);
+            return;
+        }
+        if (left instanceof RleVector leftRle && right instanceof BinaryVector rightValues) {
+            applyRleFlat(functionName, operation, leftRle, rightValues, leftNulls, rightNulls, mask, output);
+            return;
+        }
+        if (left instanceof RleVector leftRle && right instanceof DictionaryVector rightDictionary) {
+            applyRleDictionary(functionName, operation, leftRle, rightDictionary, leftNulls, rightNulls, mask, output);
+            return;
+        }
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle) {
+            applyRleRle(functionName, operation, leftRle, rightRle, leftNulls, rightNulls, mask, output);
             return;
         }
         throw new IllegalArgumentException("Unsupported " + functionName + " vector types: " + left.getClass().getSimpleName() + ", " + right.getClass().getSimpleName());
@@ -179,6 +200,151 @@ public final class Utf8BinaryDispatch
         }
     }
 
+    private static void applyFlatRle(String functionName, Operation operation, BinaryVector left, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        boolean ascii = useAsciiFastPath(left, right);
+        boolean[] outputValues = output.values();
+        int runIndex = 0;
+        int runEnd = rightRle.counts()[0];
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                while (position >= runEnd) {
+                    runIndex++;
+                    runEnd += rightRle.counts()[runIndex];
+                }
+                outputValues[position] = evaluate(functionName, operation, left, position, right, runIndex, leftNulls, rightNulls, position, ascii);
+            }
+            return;
+        }
+        for (int position : mask) {
+            while (position >= runEnd) {
+                runIndex++;
+                runEnd += rightRle.counts()[runIndex];
+            }
+            outputValues[position] = evaluate(functionName, operation, left, position, right, runIndex, leftNulls, rightNulls, position, ascii);
+        }
+    }
+
+    private static void applyDictionaryRle(String functionName, Operation operation, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        boolean ascii = useAsciiFastPath(left, right);
+        int[] leftIds = leftDictionary.ids();
+        boolean[] outputValues = output.values();
+        int runIndex = 0;
+        int runEnd = rightRle.counts()[0];
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                while (position >= runEnd) {
+                    runIndex++;
+                    runEnd += rightRle.counts()[runIndex];
+                }
+                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, runIndex, leftNulls, rightNulls, position, ascii);
+            }
+            return;
+        }
+        for (int position : mask) {
+            while (position >= runEnd) {
+                runIndex++;
+                runEnd += rightRle.counts()[runIndex];
+            }
+            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, runIndex, leftNulls, rightNulls, position, ascii);
+        }
+    }
+
+    private static void applyRleFlat(String functionName, Operation operation, RleVector leftRle, BinaryVector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryRle(functionName, leftRle);
+        boolean ascii = useAsciiFastPath(left, right);
+        boolean[] outputValues = output.values();
+        int runIndex = 0;
+        int runEnd = leftRle.counts()[0];
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                while (position >= runEnd) {
+                    runIndex++;
+                    runEnd += leftRle.counts()[runIndex];
+                }
+                outputValues[position] = evaluate(functionName, operation, left, runIndex, right, position, leftNulls, rightNulls, position, ascii);
+            }
+            return;
+        }
+        for (int position : mask) {
+            while (position >= runEnd) {
+                runIndex++;
+                runEnd += leftRle.counts()[runIndex];
+            }
+            outputValues[position] = evaluate(functionName, operation, left, runIndex, right, position, leftNulls, rightNulls, position, ascii);
+        }
+    }
+
+    private static void applyRleDictionary(String functionName, Operation operation, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryRle(functionName, leftRle);
+        BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
+        boolean ascii = useAsciiFastPath(left, right);
+        int[] rightIds = rightDictionary.ids();
+        boolean[] outputValues = output.values();
+        int runIndex = 0;
+        int runEnd = leftRle.counts()[0];
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                while (position >= runEnd) {
+                    runIndex++;
+                    runEnd += leftRle.counts()[runIndex];
+                }
+                outputValues[position] = evaluate(functionName, operation, left, runIndex, right, rightIds[position], leftNulls, rightNulls, position, ascii);
+            }
+            return;
+        }
+        for (int position : mask) {
+            while (position >= runEnd) {
+                runIndex++;
+                runEnd += leftRle.counts()[runIndex];
+            }
+            outputValues[position] = evaluate(functionName, operation, left, runIndex, right, rightIds[position], leftNulls, rightNulls, position, ascii);
+        }
+    }
+
+    private static void applyRleRle(String functionName, Operation operation, RleVector leftRle, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryRle(functionName, leftRle);
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        boolean ascii = useAsciiFastPath(left, right);
+        boolean[] outputValues = output.values();
+        int leftRunIndex = 0;
+        int leftRunEnd = leftRle.counts()[0];
+        int rightRunIndex = 0;
+        int rightRunEnd = rightRle.counts()[0];
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                while (position >= leftRunEnd) {
+                    leftRunIndex++;
+                    leftRunEnd += leftRle.counts()[leftRunIndex];
+                }
+                while (position >= rightRunEnd) {
+                    rightRunIndex++;
+                    rightRunEnd += rightRle.counts()[rightRunIndex];
+                }
+                outputValues[position] = evaluate(functionName, operation, left, leftRunIndex, right, rightRunIndex, leftNulls, rightNulls, position, ascii);
+            }
+            return;
+        }
+        for (int position : mask) {
+            while (position >= leftRunEnd) {
+                leftRunIndex++;
+                leftRunEnd += leftRle.counts()[leftRunIndex];
+            }
+            while (position >= rightRunEnd) {
+                rightRunIndex++;
+                rightRunEnd += rightRle.counts()[rightRunIndex];
+            }
+            outputValues[position] = evaluate(functionName, operation, left, leftRunIndex, right, rightRunIndex, leftNulls, rightNulls, position, ascii);
+        }
+    }
+
     private static boolean evaluate(String functionName, Operation operation, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, BooleanVector leftNulls, BooleanVector rightNulls, int nullPosition, boolean ascii)
     {
         if (isNull(leftNulls, nullPosition) || isNull(rightNulls, nullPosition)) {
@@ -233,6 +399,12 @@ public final class Utf8BinaryDispatch
     private static BinaryVector requireBinaryDictionary(String functionName, DictionaryVector vector)
     {
         checkArgument(vector.values() instanceof BinaryVector, "%s requires BinaryVector dictionary values", functionName);
+        return (BinaryVector) vector.values();
+    }
+
+    private static BinaryVector requireBinaryRle(String functionName, RleVector vector)
+    {
+        checkArgument(vector.values() instanceof BinaryVector, "%s requires BinaryVector RLE values", functionName);
         return (BinaryVector) vector.values();
     }
 

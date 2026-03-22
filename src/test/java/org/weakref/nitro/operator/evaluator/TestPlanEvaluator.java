@@ -35,6 +35,7 @@ import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -118,6 +119,47 @@ public class TestPlanEvaluator
         assertThat(result.count()).isEqualTo(2);
         assertThat(result.position(0)).isEqualTo(0);
         assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
+    void testUtf8LiteralUsesRleAndContainsSupportsIt()
+    {
+        Variable needle = new Variable(0);
+        Variable contains = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(needle, new Literal("go"), AllMask.ALL),
+                        new Assignment(
+                                contains,
+                                new Call("contains_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(needle, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(
+                        new Reference(needle, Stream.VALUES),
+                        new Reference(contains, Stream.VALUES)),
+                Map.of(
+                        new Reference(needle, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE),
+                        new Reference(contains, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
+
+        BinaryVector input = new BinaryVector(3, 16);
+        input.addTrait(BinaryVector.Trait.UTF8_STRING);
+        input.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        input.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        input.setBytes(1, "bing".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        input.setBytes(2, "golang".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
+                new Allocator());
+
+        Streams literal = evaluator.evaluate(new Reference(needle, Stream.VALUES), Mask.all(3));
+        assertThat(literal.values()).isInstanceOf(RleVector.class);
+
+        Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(3));
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(true, false, true);
     }
 
     @Test

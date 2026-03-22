@@ -434,6 +434,7 @@ public final class PlanEvaluator
         return switch (source.values()) {
             case I64Vector values -> copyLongRleVector(source.counts(), values.values(), existing, mask, source.length());
             case BooleanVector values -> copyBooleanRleVector(source.counts(), values.values(), existing, mask, source.length());
+            case BinaryVector values -> copyBinaryRleVector(source.counts(), values, existing, mask, source.length());
             default -> throw new IllegalArgumentException("Unsupported RLE value type for copy: " + source.values().getClass().getSimpleName());
         };
     }
@@ -486,6 +487,40 @@ public final class PlanEvaluator
         return target;
     }
 
+    private Vector copyBinaryRleVector(int[] counts, BinaryVector values, Vector existing, Mask mask, int length)
+    {
+        int totalBytes = 0;
+        int runIndex = 0;
+        int runEnd = counts[0];
+        for (int position : mask) {
+            while (position >= runEnd) {
+                runIndex++;
+                runEnd += counts[runIndex];
+            }
+            totalBytes += values.length(runIndex);
+        }
+
+        BinaryVector target = allocator.allocateOrGrowBinary(ALLOCATION_CONTEXT, (BinaryVector) existing, length, totalBytes);
+        target.addTraits(values.traits());
+
+        runIndex = 0;
+        runEnd = counts[0];
+        for (int position : mask) {
+            while (position >= runEnd) {
+                runIndex++;
+                runEnd += counts[runIndex];
+            }
+            int valueLength = values.length(runIndex);
+            if (valueLength == 0) {
+                target.setNull(position);
+            }
+            else {
+                target.setBytes(position, values.data(), values.startOffset(runIndex), valueLength);
+            }
+        }
+        return target;
+    }
+
     private Vector fillLongRle(long value, int length)
     {
         I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, 1, I64Vector::new);
@@ -505,15 +540,13 @@ public final class PlanEvaluator
     private Vector fillUtf8(String value, int length)
     {
         byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        BinaryVector result = allocator.allocateBinary(ALLOCATION_CONTEXT, length, bytes.length * length);
-        result.addTrait(BinaryVector.Trait.UTF8_STRING);
+        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, 1, bytes.length);
+        values.addTrait(BinaryVector.Trait.UTF8_STRING);
         if (bytes.length == value.length()) {
-            result.addTrait(BinaryVector.Trait.ASCII_ONLY);
+            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
         }
-        for (int position = 0; position < length; position++) {
-            result.setBytes(position, bytes);
-        }
-        return result;
+        values.setBytes(0, bytes);
+        return allocator.allocateRle(ALLOCATION_CONTEXT, new int[] {length}, values);
     }
 
     private static Map<Variable, Assignment> indexAssignments(List<Assignment> assignments)
