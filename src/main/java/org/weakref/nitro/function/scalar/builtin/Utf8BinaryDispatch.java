@@ -510,14 +510,21 @@ public final class Utf8BinaryDispatch
 
     private static boolean binaryContainsSingleByte(byte[] haystackData, int haystackStart, int haystackLength, byte needleByte)
     {
+        int fullLength = CONTAINS_SPECIES.loopBound(haystackLength);
         int offset = 0;
-        while (offset < haystackLength) {
+        while (offset < fullLength) {
+            jdk.incubator.vector.ByteVector haystack = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset);
+            if (haystack.compare(jdk.incubator.vector.VectorOperators.EQ, needleByte).anyTrue()) {
+                return true;
+            }
+            offset += CONTAINS_SPECIES.length();
+        }
+        if (offset < haystackLength) {
             jdk.incubator.vector.VectorMask<Byte> laneMask = CONTAINS_SPECIES.indexInRange(offset, haystackLength);
             jdk.incubator.vector.ByteVector haystack = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset, laneMask);
             if (haystack.compare(jdk.incubator.vector.VectorOperators.EQ, needleByte, laneMask).anyTrue()) {
                 return true;
             }
-            offset += CONTAINS_SPECIES.length();
         }
         return false;
     }
@@ -529,25 +536,64 @@ public final class Utf8BinaryDispatch
         byte firstProbeByte = needleData[needleStart + firstProbeOffset];
         byte secondProbeByte = needleData[needleStart + secondProbeOffset];
         int lastStart = haystackLength - needleLength;
+        int candidateCount = lastStart + 1;
+        int fullLength = CONTAINS_SPECIES.loopBound(candidateCount);
 
-        for (int offset = 0; offset <= lastStart; offset += CONTAINS_SPECIES.length()) {
-            jdk.incubator.vector.VectorMask<Byte> laneMask = CONTAINS_SPECIES.indexInRange(offset, lastStart + 1);
-            jdk.incubator.vector.ByteVector firstProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + firstProbeOffset, laneMask);
-            jdk.incubator.vector.ByteVector secondProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + secondProbeOffset, laneMask);
-            jdk.incubator.vector.VectorMask<Byte> candidateMask = firstProbe.compare(jdk.incubator.vector.VectorOperators.EQ, firstProbeByte, laneMask)
+        int offset = 0;
+        while (offset < fullLength) {
+            if (binaryContainsVectorizedChunk(haystackData, haystackStart, needleData, needleStart, needleLength, firstProbeOffset, secondProbeOffset, firstProbeByte, secondProbeByte, offset, null)) {
+                return true;
+            }
+            offset += CONTAINS_SPECIES.length();
+        }
+        if (offset < candidateCount) {
+            jdk.incubator.vector.VectorMask<Byte> laneMask = CONTAINS_SPECIES.indexInRange(offset, candidateCount);
+            if (binaryContainsVectorizedChunk(haystackData, haystackStart, needleData, needleStart, needleLength, firstProbeOffset, secondProbeOffset, firstProbeByte, secondProbeByte, offset, laneMask)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean binaryContainsVectorizedChunk(
+            byte[] haystackData,
+            int haystackStart,
+            byte[] needleData,
+            int needleStart,
+            int needleLength,
+            int firstProbeOffset,
+            int secondProbeOffset,
+            byte firstProbeByte,
+            byte secondProbeByte,
+            int offset,
+            jdk.incubator.vector.VectorMask<Byte> laneMask)
+    {
+        jdk.incubator.vector.ByteVector firstProbe;
+        jdk.incubator.vector.ByteVector secondProbe;
+        jdk.incubator.vector.VectorMask<Byte> candidateMask;
+        if (laneMask == null) {
+            firstProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + firstProbeOffset);
+            secondProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + secondProbeOffset);
+            candidateMask = firstProbe.compare(jdk.incubator.vector.VectorOperators.EQ, firstProbeByte)
+                    .and(secondProbe.compare(jdk.incubator.vector.VectorOperators.EQ, secondProbeByte));
+        }
+        else {
+            firstProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + firstProbeOffset, laneMask);
+            secondProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + secondProbeOffset, laneMask);
+            candidateMask = firstProbe.compare(jdk.incubator.vector.VectorOperators.EQ, firstProbeByte, laneMask)
                     .and(secondProbe.compare(jdk.incubator.vector.VectorOperators.EQ, secondProbeByte, laneMask));
-            if (!candidateMask.anyTrue()) {
-                continue;
-            }
+        }
+        if (!candidateMask.anyTrue()) {
+            return false;
+        }
 
-            long candidateBits = candidateMask.toLong();
-            while (candidateBits != 0) {
-                int lane = Long.numberOfTrailingZeros(candidateBits);
-                if (binaryMatchesAt(haystackData, haystackStart + offset + lane, needleData, needleStart, needleLength)) {
-                    return true;
-                }
-                candidateBits &= candidateBits - 1;
+        long candidateBits = candidateMask.toLong();
+        while (candidateBits != 0) {
+            int lane = Long.numberOfTrailingZeros(candidateBits);
+            if (binaryMatchesAt(haystackData, haystackStart + offset + lane, needleData, needleStart, needleLength)) {
+                return true;
             }
+            candidateBits &= candidateBits - 1;
         }
         return false;
     }
