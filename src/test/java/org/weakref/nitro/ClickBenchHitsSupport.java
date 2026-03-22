@@ -30,6 +30,7 @@ import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
+import org.weakref.nitro.operator.LongConjunctionFilterOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
@@ -619,15 +620,23 @@ final class ClickBenchHitsSupport
 
     public static Operator query39TopUrlsOffset(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator filtered = filter(
+        Operator filtered = new LongConjunctionFilterOperator(
+                clickBenchScan(
+                        allocator,
+                        file,
+                        "URL",
+                        "CounterID",
+                        "EventTime",
+                        "IsRefresh",
+                        "IsLink",
+                        "IsDownload"),
                 allocator,
-                primitiveRegistry,
-                file,
-                List.of("URL", "CounterID", "EventTime", "IsRefresh", "IsLink", "IsDownload"),
-                and(
-                        counterAndJulyFilter(1, 2, 3),
-                        notEqualTo(4, 0),
-                        equalTo(5, 0)));
+                new LongConjunctionFilterOperator.Condition(1, value -> value == 62),
+                new LongConjunctionFilterOperator.Condition(3, value -> value == 0),
+                new LongConjunctionFilterOperator.Condition(2, value -> value >= JULY_1_2013_UTC),
+                new LongConjunctionFilterOperator.Condition(2, value -> value < AUGUST_1_2013_UTC),
+                new LongConjunctionFilterOperator.Condition(4, value -> value != 0),
+                new LongConjunctionFilterOperator.Condition(5, value -> value == 0));
         Operator grouped = new GroupOperator(allocator, 0, filtered);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,

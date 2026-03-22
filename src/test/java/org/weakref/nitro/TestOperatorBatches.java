@@ -587,6 +587,41 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOperatorMaterializesOnlyConstrainedPayloadRows()
+    {
+        BinaryVector payloads = new BinaryVector(3, 16);
+        payloads.addTrait(BinaryVector.Trait.UTF8_STRING);
+        payloads.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        payloads.setBytes(0, "ccc".getBytes(UTF_8));
+        payloads.setBytes(1, "bb".getBytes(UTF_8));
+        payloads.setBytes(2, "a".getBytes(UTF_8));
+
+        Operator operator = new TopNOperator(
+                new Allocator(),
+                3,
+                0,
+                new TableOperator(
+                        2,
+                        List.of(TableOperator.Page.values(
+                                3,
+                                new Vector[] {
+                                        new I64Vector(new long[] {3L, 2L, 1L}),
+                                        payloads,
+                                },
+                                org.weakref.nitro.data.Mask.all(3)))));
+
+        Batch batch = operator.next();
+        batch.constrain(Mask.sparse(new int[] {2}, 3));
+
+        BinaryVector payload = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(payload.length()).isEqualTo(3);
+        assertThat(payload.length(0)).isZero();
+        assertThat(payload.length(1)).isZero();
+        assertThat(payload.utf8Value(2)).isEqualTo("a");
+    }
+
+    @Test
     void testNestedLoopJoinOperatorProducesJoinBatch()
     {
         Allocator allocator = new Allocator();

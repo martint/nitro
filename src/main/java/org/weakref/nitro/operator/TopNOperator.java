@@ -123,7 +123,11 @@ public class TopNOperator
                     stream -> state.output(output).get(stream),
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
-        return new Batch(batchMask, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(
+                batchMask,
+                state::constrain,
+                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                outputs);
     }
 
     private List<Integer> orderedSlots(PriorityQueue<Entry> queue)
@@ -139,6 +143,12 @@ public class TopNOperator
     public void constrain(Mask mask)
     {
         // Nothing to do. All output is already computed
+    }
+
+    @Override
+    public boolean supportsRetainedBatches()
+    {
+        return true;
     }
 
     @Override

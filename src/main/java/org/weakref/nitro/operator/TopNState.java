@@ -38,6 +38,7 @@ final class TopNState
     private final Batch[] pendingBatches;
     private final int[] pendingPositions;
     private List<Integer> orderedSlots = List.of();
+    private Mask outputMask;
     private Streams[] materialized;
     private Batch fallbackBatch;
 
@@ -147,7 +148,14 @@ final class TopNState
     public void setOrderedSlots(List<Integer> orderedSlots)
     {
         this.orderedSlots = orderedSlots;
+        this.outputMask = Mask.all(orderedSlots.size());
         this.materialized = new Streams[schema.length];
+    }
+
+    public void constrain(Mask mask)
+    {
+        outputMask = mask;
+        materialized = new Streams[schema.length];
     }
 
     public Streams output(int index)
@@ -164,7 +172,7 @@ final class TopNState
         else {
             ensurePendingOutputMaterialized(index);
             Streams columnSchema = ensureMaterializedSchema(index);
-            output = materializeColumn(columnSchema, index, orderedSlots);
+            output = materializeColumn(columnSchema, index);
         }
         materialized[index] = output;
         return output;
@@ -236,7 +244,8 @@ final class TopNState
         if (columnSchema != null) {
             return columnSchema;
         }
-        columnSchema = slotColumns[outputIndex][orderedSlots.getFirst()];
+        int firstOutputPosition = outputMask == null || outputMask.none() ? 0 : outputMask.position(0);
+        columnSchema = slotColumns[outputIndex][orderedSlots.get(firstOutputPosition)];
         if (columnSchema == null) {
             throw new IllegalStateException("TopN output column was not materialized: " + outputIndex);
         }
@@ -244,7 +253,26 @@ final class TopNState
         return columnSchema;
     }
 
-    private Streams materializeColumn(Streams columnSchema, int outputIndex, List<Integer> orderedSlots)
+    private Streams materializeColumn(Streams columnSchema, int outputIndex)
+    {
+        if (outputMask == null || outputMask.all()) {
+            return materializeDenseColumn(columnSchema, outputIndex, orderedSlots);
+        }
+
+        Streams result = null;
+        for (int outputPosition : outputMask) {
+            int slot = orderedSlots.get(outputPosition);
+            result = buffers.copySinglePosition(
+                    result,
+                    slotColumns[outputIndex][slot],
+                    outputMask.size(),
+                    outputPosition,
+                    0);
+        }
+        return result == null ? buffers.emptyLike(columnSchema) : result;
+    }
+
+    private Streams materializeDenseColumn(Streams columnSchema, int outputIndex, List<Integer> orderedSlots)
     {
         Streams.Builder result = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : columnSchema.asMap().entrySet()) {
