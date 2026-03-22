@@ -40,9 +40,7 @@ public final class Output
 
     public static Output of(Streams streams)
     {
-        var streamsByKind = streams.asMap();
-        EnumSet<Stream> exposedStreams = streamsByKind.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(streamsByKind.keySet());
-        return new Output(exposedStreams, streams::get);
+        return new Output(streams.streams(), streams::get);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)

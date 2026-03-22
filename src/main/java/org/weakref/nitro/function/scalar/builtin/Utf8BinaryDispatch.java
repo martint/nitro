@@ -24,6 +24,7 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
@@ -499,18 +500,39 @@ public final class Utf8BinaryDispatch
         byte[] needleData = right.data();
         int haystackStart = left.startOffset(leftPosition);
         int needleStart = right.startOffset(rightPosition);
+        byte firstByte = needleData[needleStart];
         int lastStart = haystackLength - needleLength;
-        for (int offset = 0; offset <= lastStart; offset++) {
-            boolean match = true;
-            for (int index = 0; index < needleLength; index++) {
-                if (haystackData[haystackStart + offset + index] != needleData[needleStart + index]) {
-                    match = false;
-                    break;
+
+        if (needleLength == 1) {
+            for (int offset = 0; offset <= lastStart; offset++) {
+                if (haystackData[haystackStart + offset] == firstByte) {
+                    return true;
                 }
             }
-            if (match) {
+            return false;
+        }
+
+        byte lastByte = needleData[needleStart + needleLength - 1];
+        int offset = 0;
+        while (offset <= lastStart) {
+            while (offset <= lastStart && haystackData[haystackStart + offset] != firstByte) {
+                offset++;
+            }
+            if (offset > lastStart) {
+                return false;
+            }
+
+            if (haystackData[haystackStart + offset + needleLength - 1] == lastByte &&
+                    Arrays.mismatch(
+                            haystackData,
+                            haystackStart + offset + 1,
+                            haystackStart + offset + needleLength - 1,
+                            needleData,
+                            needleStart + 1,
+                            needleStart + needleLength - 1) < 0) {
                 return true;
             }
+            offset++;
         }
         return false;
     }

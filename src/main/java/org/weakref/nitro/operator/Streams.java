@@ -19,26 +19,51 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Map;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
 public final class Streams
 {
-    private static final Streams EMPTY = new Streams(new EnumMap<>(Stream.class), false);
+    private static final int VALUES_FLAG = 1;
+    private static final int NULLS_FLAG = 1 << 1;
+    private static final int ERRORS_FLAG = 1 << 2;
 
-    private final EnumMap<Stream, Vector> vectors;
-    private final Map<Stream, Vector> view;
+    @SuppressWarnings("unchecked")
+    private static final Set<Stream>[] STREAM_SETS = new Set[8];
 
-    private Streams(EnumMap<Stream, Vector> vectors)
-    {
-        this(vectors, true);
+    static {
+        for (int flags = 0; flags < STREAM_SETS.length; flags++) {
+            EnumSet<Stream> streams = EnumSet.noneOf(Stream.class);
+            if ((flags & VALUES_FLAG) != 0) {
+                streams.add(Stream.VALUES);
+            }
+            if ((flags & NULLS_FLAG) != 0) {
+                streams.add(Stream.NULLS);
+            }
+            if ((flags & ERRORS_FLAG) != 0) {
+                streams.add(Stream.ERRORS);
+            }
+            STREAM_SETS[flags] = Collections.unmodifiableSet(streams);
+        }
     }
 
-    private Streams(EnumMap<Stream, Vector> vectors, boolean copy)
+    private static final Streams EMPTY = new Streams(null, null, null);
+
+    private final Vector values;
+    private final Vector nulls;
+    private final Vector errors;
+    private final int flags;
+    private Map<Stream, Vector> view;
+
+    private Streams(Vector values, Vector nulls, Vector errors)
     {
-        this.vectors = copy ? new EnumMap<>(vectors) : vectors;
-        this.view = Collections.unmodifiableMap(this.vectors);
+        this.values = values;
+        this.nulls = nulls;
+        this.errors = errors;
+        this.flags = flags(values, nulls, errors);
     }
 
     public static Streams empty()
@@ -60,15 +85,12 @@ public final class Streams
 
     public static Streams ofValues(Vector values)
     {
-        return of(Stream.VALUES, values);
+        return new Streams(values, null, null);
     }
 
     public static Streams ofValuesAndNulls(Vector values, BooleanVector nulls)
     {
-        return builder()
-                .put(Stream.VALUES, values)
-                .put(Stream.NULLS, nulls)
-                .build();
+        return new Streams(values, nulls, null);
     }
 
     public Streams with(Stream stream, Vector vector)
@@ -76,20 +98,26 @@ public final class Streams
         requireNonNull(stream, "stream is null");
         requireNonNull(vector, "vector is null");
 
-        EnumMap<Stream, Vector> updated = new EnumMap<>(vectors);
-        updated.put(stream, vector);
-        return new Streams(updated, false);
+        return switch (stream) {
+            case VALUES -> values == vector ? this : new Streams(vector, nulls, errors);
+            case NULLS -> nulls == vector ? this : new Streams(values, vector, errors);
+            case ERRORS -> errors == vector ? this : new Streams(values, nulls, vector);
+        };
     }
 
     public boolean has(Stream stream)
     {
-        return vectors.containsKey(stream);
+        requireNonNull(stream, "stream is null");
+        return switch (stream) {
+            case VALUES -> values != null;
+            case NULLS -> nulls != null;
+            case ERRORS -> errors != null;
+        };
     }
 
     public Vector get(Stream stream)
     {
-        requireNonNull(stream, "stream is null");
-        Vector vector = vectors.get(stream);
+        Vector vector = getOrNull(stream);
         if (vector == null) {
             throw new IllegalArgumentException("Stream not present: " + stream);
         }
@@ -99,7 +127,11 @@ public final class Streams
     public Vector getOrNull(Stream stream)
     {
         requireNonNull(stream, "stream is null");
-        return vectors.get(stream);
+        return switch (stream) {
+            case VALUES -> values;
+            case NULLS -> nulls;
+            case ERRORS -> errors;
+        };
     }
 
     public Vector values()
@@ -107,14 +139,42 @@ public final class Streams
         return get(Stream.VALUES);
     }
 
+    public Set<Stream> streams()
+    {
+        return STREAM_SETS[flags];
+    }
+
     public Map<Stream, Vector> asMap()
     {
+        Map<Stream, Vector> existing = view;
+        if (existing != null) {
+            return existing;
+        }
+
+        if (flags == 0) {
+            view = Map.of();
+            return view;
+        }
+
+        EnumMap<Stream, Vector> vectors = new EnumMap<>(Stream.class);
+        if (values != null) {
+            vectors.put(Stream.VALUES, values);
+        }
+        if (nulls != null) {
+            vectors.put(Stream.NULLS, nulls);
+        }
+        if (errors != null) {
+            vectors.put(Stream.ERRORS, errors);
+        }
+        view = Collections.unmodifiableMap(vectors);
         return view;
     }
 
     public static final class Builder
     {
-        private final EnumMap<Stream, Vector> vectors = new EnumMap<>(Stream.class);
+        private Vector values;
+        private Vector nulls;
+        private Vector errors;
 
         private Builder() {}
 
@@ -122,22 +182,49 @@ public final class Streams
         {
             requireNonNull(stream, "stream is null");
             requireNonNull(vector, "vector is null");
-            vectors.put(stream, vector);
+            switch (stream) {
+                case VALUES -> values = vector;
+                case NULLS -> nulls = vector;
+                case ERRORS -> errors = vector;
+            }
             return this;
         }
 
         public Builder putAll(Streams streams)
         {
-            vectors.putAll(streams.vectors);
+            if (streams.values != null) {
+                values = streams.values;
+            }
+            if (streams.nulls != null) {
+                nulls = streams.nulls;
+            }
+            if (streams.errors != null) {
+                errors = streams.errors;
+            }
             return this;
         }
 
         public Streams build()
         {
-            if (vectors.isEmpty()) {
+            if (values == null && nulls == null && errors == null) {
                 return EMPTY;
             }
-            return new Streams(vectors);
+            return new Streams(values, nulls, errors);
         }
+    }
+
+    private static int flags(Vector values, Vector nulls, Vector errors)
+    {
+        int flags = 0;
+        if (values != null) {
+            flags |= VALUES_FLAG;
+        }
+        if (nulls != null) {
+            flags |= NULLS_FLAG;
+        }
+        if (errors != null) {
+            flags |= ERRORS_FLAG;
+        }
+        return flags;
     }
 }

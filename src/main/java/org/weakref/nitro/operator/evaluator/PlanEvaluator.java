@@ -58,6 +58,9 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class PlanEvaluator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("PlanEvaluator");
+    private static final Set<Stream> VALUES_ONLY = java.util.EnumSet.of(Stream.VALUES);
+    private static final Set<Stream> NULLS_ONLY = java.util.EnumSet.of(Stream.NULLS);
+    private static final Set<Stream> ERRORS_ONLY = java.util.EnumSet.of(Stream.ERRORS);
 
     private final EvaluationPlan plan;
     private final PrimitiveRegistry primitiveRegistry;
@@ -152,7 +155,7 @@ public final class PlanEvaluator
         Vector inputVector = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), reference.stream()), mask);
         checkArgument(inputVector != null || reference.stream() != Stream.VALUES, "Missing VALUES stream for input %s", reference);
         Streams result = inputVector == null ? Streams.empty() : Streams.of(reference.stream(), inputVector);
-        return completeRequestedStreams(Set.of(reference.stream()), result, mask);
+        return completeRequestedStreams(requestedStreams(reference.stream()), result, mask);
     }
 
     private Streams evaluateVariable(Reference reference, Variable variable, Mask mask, Streams output)
@@ -205,14 +208,18 @@ public final class PlanEvaluator
         }
 
         Streams.Builder builder = null;
-        for (Stream siblingStream : List.of(Stream.NULLS, Stream.ERRORS)) {
-            Streams siblingBundle = evaluate(new Reference(argument.producer(), siblingStream), mask);
-            if (siblingBundle.has(siblingStream)) {
-                if (builder == null) {
-                    builder = Streams.builder().putAll(bundle);
-                }
-                builder.put(siblingStream, siblingBundle.get(siblingStream));
+        Streams nullBundle = evaluate(new Reference(argument.producer(), Stream.NULLS), mask);
+        if (nullBundle.has(Stream.NULLS)) {
+            builder = Streams.builder().putAll(bundle);
+            builder.put(Stream.NULLS, nullBundle.get(Stream.NULLS));
+        }
+
+        Streams errorBundle = evaluate(new Reference(argument.producer(), Stream.ERRORS), mask);
+        if (errorBundle.has(Stream.ERRORS)) {
+            if (builder == null) {
+                builder = Streams.builder().putAll(bundle);
             }
+            builder.put(Stream.ERRORS, errorBundle.get(Stream.ERRORS));
         }
         return builder == null ? bundle : builder.build();
     }
@@ -231,7 +238,7 @@ public final class PlanEvaluator
                 }
             }
         }
-        return Set.copyOf(requested);
+        return requested;
     }
 
     private Streams copy(Set<Stream> requestedStreams, Reference source, Mask mask, Streams output)
@@ -591,7 +598,7 @@ public final class PlanEvaluator
             return;
         }
 
-        for (Stream stream : streams.asMap().keySet()) {
+        for (Stream stream : streams.streams()) {
             Reference streamReference = new Reference(reference.producer(), stream);
             if (isMemoized(streamReference)) {
                 memoizedStreams.put(streamReference, streams);
@@ -655,18 +662,37 @@ public final class PlanEvaluator
 
     private Streams completeRequestedStreams(Set<Stream> requestedStreams, Streams streams, Mask mask)
     {
+        boolean wantsValues = requestedStreams.contains(Stream.VALUES);
+        boolean wantsNulls = requestedStreams.contains(Stream.NULLS);
+        boolean wantsErrors = requestedStreams.contains(Stream.ERRORS);
+
+        if ((!wantsValues || streams.has(Stream.VALUES)) &&
+                (!wantsNulls || streams.has(Stream.NULLS)) &&
+                (!wantsErrors || streams.has(Stream.ERRORS))) {
+            return streams;
+        }
+
         Streams completed = streams;
         int length = mask.maxPosition() + 1;
-        for (Stream stream : requestedStreams) {
-            if (completed.has(stream)) {
-                continue;
-            }
-            switch (stream) {
-                case NULLS, ERRORS -> completed = completed.with(stream, fillFalseBoolean(null, mask, length));
-                case VALUES -> throw new IllegalArgumentException("VALUES stream not produced for request");
-            }
+        if (wantsValues && !completed.has(Stream.VALUES)) {
+            throw new IllegalArgumentException("VALUES stream not produced for request");
+        }
+        if (wantsNulls && !completed.has(Stream.NULLS)) {
+            completed = completed.with(Stream.NULLS, fillFalseBoolean(null, mask, length));
+        }
+        if (wantsErrors && !completed.has(Stream.ERRORS)) {
+            completed = completed.with(Stream.ERRORS, fillFalseBoolean(null, mask, length));
         }
         return completed;
+    }
+
+    private static Set<Stream> requestedStreams(Stream stream)
+    {
+        return switch (stream) {
+            case VALUES -> VALUES_ONLY;
+            case NULLS -> NULLS_ONLY;
+            case ERRORS -> ERRORS_ONLY;
+        };
     }
 
     private static boolean isNull(BooleanVector nulls, int position)
