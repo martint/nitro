@@ -31,7 +31,7 @@ public final class MinUtf8StateVector
         for (int index = 0; index < chunks.length; index++) {
             chunks[index] = new byte[CHUNK_SIZE][];
         }
-        this.retainedBytes = 0;
+        this.retainedBytes = length;
     }
 
     private MinUtf8StateVector(int length, byte[][][] chunks, long retainedBytes)
@@ -45,14 +45,14 @@ public final class MinUtf8StateVector
     {
         int requiredChunkCount = chunkCount(length);
         if (requiredChunkCount <= source.chunks.length) {
-            return new MinUtf8StateVector(length, source.chunks, source.retainedBytes);
+            return new MinUtf8StateVector(length, source.chunks, source.retainedBytes - source.length + length);
         }
 
         byte[][][] chunks = java.util.Arrays.copyOf(source.chunks, requiredChunkCount);
         for (int index = source.chunks.length; index < requiredChunkCount; index++) {
             chunks[index] = new byte[CHUNK_SIZE][];
         }
-        return new MinUtf8StateVector(length, chunks, source.retainedBytes);
+        return new MinUtf8StateVector(length, chunks, source.retainedBytes - source.length + length);
     }
 
     @Override
@@ -71,7 +71,7 @@ public final class MinUtf8StateVector
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         byte[][][] chunks = new byte[this.chunks.length][][];
-        long retainedBytes = 0;
+        long retainedBytes = length;
         for (int chunkIndex = 0; chunkIndex < this.chunks.length; chunkIndex++) {
             chunks[chunkIndex] = new byte[CHUNK_SIZE][];
             for (int index = 0; index < CHUNK_SIZE; index++) {

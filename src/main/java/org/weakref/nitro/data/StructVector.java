@@ -121,9 +121,21 @@ public final class StructVector
     }
 
     @Override
-    public PoolSlot poolSlot()
+    public Object poolFamily()
     {
-        return new PoolSlot(StructVector.class, length(), 2);
+        return StructVector.class;
+    }
+
+    @Override
+    public int poolCapacity()
+    {
+        return length();
+    }
+
+    @Override
+    public int poolMaxRetained()
+    {
+        return 2;
     }
 
     @Override

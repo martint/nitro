@@ -199,9 +199,21 @@ public final class BinaryVector
     }
 
     @Override
-    public PoolSlot poolSlot()
+    public Object poolFamily()
     {
-        return new PoolSlot(poolFamily(length()), byteCapacity(), 2);
+        return poolFamily(length());
+    }
+
+    @Override
+    public int poolCapacity()
+    {
+        return byteCapacity();
+    }
+
+    @Override
+    public int poolMaxRetained()
+    {
+        return 2;
     }
 
     @Override

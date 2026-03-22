@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.data;
 
-public final class AvgStateVector
+public final class SumStateVector
         implements FlatVector
 {
     private static final int CHUNK_SHIFT = 12;
@@ -22,47 +22,51 @@ public final class AvgStateVector
 
     private final int length;
     private final long[][] sumChunks;
-    private final long[][] countChunks;
+    private final boolean[][] nullChunks;
     private final long retainedBytes;
 
-    public AvgStateVector(int length)
+    public SumStateVector(int length)
     {
         this.length = length;
         this.sumChunks = new long[chunkCount(length)][];
-        this.countChunks = new long[chunkCount(length)][];
+        this.nullChunks = new boolean[chunkCount(length)][];
         long retainedBytes = 0;
         for (int index = 0; index < sumChunks.length; index++) {
             sumChunks[index] = new long[CHUNK_SIZE];
-            countChunks[index] = new long[CHUNK_SIZE];
-            retainedBytes += (long) CHUNK_SIZE * Long.BYTES * 2;
+            nullChunks[index] = new boolean[CHUNK_SIZE];
+            java.util.Arrays.fill(nullChunks[index], true);
+            retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+            retainedBytes += CHUNK_SIZE;
         }
         this.retainedBytes = retainedBytes;
     }
 
-    private AvgStateVector(int length, long[][] sumChunks, long[][] countChunks, long retainedBytes)
+    private SumStateVector(int length, long[][] sumChunks, boolean[][] nullChunks, long retainedBytes)
     {
         this.length = length;
         this.sumChunks = sumChunks;
-        this.countChunks = countChunks;
+        this.nullChunks = nullChunks;
         this.retainedBytes = retainedBytes;
     }
 
-    public static AvgStateVector grow(AvgStateVector previous, int length)
+    public static SumStateVector grow(SumStateVector previous, int length)
     {
         int requiredChunkCount = chunkCount(length);
         if (requiredChunkCount <= previous.sumChunks.length) {
-            return new AvgStateVector(length, previous.sumChunks, previous.countChunks, previous.retainedBytes);
+            return new SumStateVector(length, previous.sumChunks, previous.nullChunks, previous.retainedBytes);
         }
 
         long[][] sumChunks = java.util.Arrays.copyOf(previous.sumChunks, requiredChunkCount);
-        long[][] countChunks = java.util.Arrays.copyOf(previous.countChunks, requiredChunkCount);
+        boolean[][] nullChunks = java.util.Arrays.copyOf(previous.nullChunks, requiredChunkCount);
         long retainedBytes = previous.retainedBytes;
         for (int index = previous.sumChunks.length; index < requiredChunkCount; index++) {
             sumChunks[index] = new long[CHUNK_SIZE];
-            countChunks[index] = new long[CHUNK_SIZE];
-            retainedBytes += (long) CHUNK_SIZE * Long.BYTES * 2;
+            nullChunks[index] = new boolean[CHUNK_SIZE];
+            java.util.Arrays.fill(nullChunks[index], true);
+            retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+            retainedBytes += CHUNK_SIZE;
         }
-        return new AvgStateVector(length, sumChunks, countChunks, retainedBytes);
+        return new SumStateVector(length, sumChunks, nullChunks, retainedBytes);
     }
 
     @Override
@@ -81,23 +85,25 @@ public final class AvgStateVector
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         long[][] sumChunks = new long[this.sumChunks.length][];
-        long[][] countChunks = new long[this.countChunks.length][];
+        boolean[][] nullChunks = new boolean[this.nullChunks.length][];
         long retainedBytes = 0;
         for (int index = 0; index < sumChunks.length; index++) {
             sumChunks[index] = java.util.Arrays.copyOf(this.sumChunks[index], this.sumChunks[index].length);
-            countChunks[index] = java.util.Arrays.copyOf(this.countChunks[index], this.countChunks[index].length);
-            retainedBytes += (long) this.sumChunks[index].length * Long.BYTES * 2;
+            nullChunks[index] = java.util.Arrays.copyOf(this.nullChunks[index], this.nullChunks[index].length);
+            retainedBytes += (long) this.sumChunks[index].length * Long.BYTES;
+            retainedBytes += this.nullChunks[index].length;
         }
-        return allocator.adopt(allocationContext, new AvgStateVector(length, sumChunks, countChunks, retainedBytes));
+        return allocator.adopt(allocationContext, new SumStateVector(length, sumChunks, nullChunks, retainedBytes));
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
     {
-        AvgStateVector copy = new AvgStateVector(positions.length);
+        SumStateVector copy = new SumStateVector(positions.length);
         for (int index = 0; index < positions.length; index++) {
             int position = positions[index];
-            copy.increment(index, sum(position), count(position));
+            copy.sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] = sum(position);
+            copy.nullChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] = isNull(position);
         }
         return allocator.adopt(allocationContext, copy);
     }
@@ -108,15 +114,15 @@ public final class AvgStateVector
         for (long[] chunk : sumChunks) {
             java.util.Arrays.fill(chunk, 0);
         }
-        for (long[] chunk : countChunks) {
-            java.util.Arrays.fill(chunk, 0);
+        for (boolean[] chunk : nullChunks) {
+            java.util.Arrays.fill(chunk, true);
         }
     }
 
     @Override
     public Object poolFamily()
     {
-        return AvgStateVector.class;
+        return SumStateVector.class;
     }
 
     @Override
@@ -131,10 +137,10 @@ public final class AvgStateVector
         return 2;
     }
 
-    public void increment(int index, long sum, long count)
+    public void increment(int index, long value)
     {
-        sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += sum;
-        countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+        sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += value;
+        nullChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] = false;
     }
 
     public long sum(int index)
@@ -142,9 +148,9 @@ public final class AvgStateVector
         return sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
     }
 
-    public long count(int index)
+    public boolean isNull(int index)
     {
-        return countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
+        return nullChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
     }
 
     public void initialize(int offset, int length)
@@ -156,8 +162,36 @@ public final class AvgStateVector
             int chunkOffset = position & CHUNK_MASK;
             int copyLength = Math.min(end - position, CHUNK_SIZE - chunkOffset);
             java.util.Arrays.fill(sumChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
-            java.util.Arrays.fill(countChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
+            java.util.Arrays.fill(nullChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, true);
             position += copyLength;
+        }
+    }
+
+    public void copySumsTo(I64Vector output)
+    {
+        long[] values = output.values();
+        int offset = 0;
+        for (long[] chunk : sumChunks) {
+            int copyLength = Math.min(chunk.length, length - offset);
+            if (copyLength <= 0) {
+                break;
+            }
+            System.arraycopy(chunk, 0, values, offset, copyLength);
+            offset += copyLength;
+        }
+    }
+
+    public void copyNullsTo(BooleanVector output)
+    {
+        boolean[] values = output.values();
+        int offset = 0;
+        for (boolean[] chunk : nullChunks) {
+            int copyLength = Math.min(chunk.length, length - offset);
+            if (copyLength <= 0) {
+                break;
+            }
+            System.arraycopy(chunk, 0, values, offset, copyLength);
+            offset += copyLength;
         }
     }
 

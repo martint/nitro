@@ -20,11 +20,10 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
-
-import java.util.Arrays;
 
 import static java.lang.Math.toIntExact;
 
@@ -41,30 +40,32 @@ public class Sum
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return Streams.ofValuesAndNulls(
-                allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
-                allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
+        return Streams.ofValues(
+                allocator.allocate(allocationContext, SumStateVector.class, size, SumStateVector::new));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
-        I64Vector values = allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
-        return Streams.ofValuesAndNulls(values, nulls);
+        SumStateVector values = (SumStateVector) state.values();
+        if (values.length() >= size) {
+            return state;
+        }
+        SumStateVector grown = allocator.adopt(allocationContext, SumStateVector.grow(values, size));
+        allocator.discard(allocationContext, values);
+        return Streams.ofValues(grown);
     }
 
     @Override
     public void initialize(Streams state, int offset, int length)
     {
-        Arrays.fill(((BooleanVector) state.get(Stream.NULLS)).values(), offset, offset + length, true);
+        ((SumStateVector) state.values()).initialize(offset, length);
     }
 
     @Override
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
-        I64Vector stateVector = (I64Vector) state.values();
-        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
+        SumStateVector stateVector = (SumStateVector) state.values();
         Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
@@ -81,15 +82,13 @@ public class Sum
             }
         }
 
-        stateNulls.values()[group] = false;
-        stateVector.values()[group] += sum;
+        stateVector.increment(group, sum);
     }
 
     @Override
     public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
-        I64Vector stateVector = (I64Vector) state.values();
-        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
+        SumStateVector stateVector = (SumStateVector) state.values();
         I64Vector groupVector = (I64Vector) groups;
         Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
@@ -97,15 +96,13 @@ public class Sum
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
-                stateNulls.values()[group] = false;
-                stateVector.values()[group] += isNull(inputNulls, position) ? 0 : value(inputValues, position);
+                stateVector.increment(group, isNull(inputNulls, position) ? 0 : value(inputValues, position));
             }
         }
         else {
             for (int position : mask) {
                 int group = toIntExact(groupVector.values()[position]);
-                stateNulls.values()[group] = false;
-                stateVector.values()[group] += isNull(inputNulls, position) ? 0 : value(inputValues, position);
+                stateVector.increment(group, isNull(inputNulls, position) ? 0 : value(inputValues, position));
             }
         }
     }
@@ -113,7 +110,22 @@ public class Sum
     @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
-        return state;
+        SumStateVector stateVector = (SumStateVector) state.values();
+        I64Vector values = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (I64Vector) output.values(),
+                I64Vector.class,
+                stateVector.length(),
+                I64Vector::new);
+        stateVector.copySumsTo(values);
+        BooleanVector nulls = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
+                BooleanVector.class,
+                stateVector.length(),
+                BooleanVector::new);
+        stateVector.copyNullsTo(nulls);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     private static long value(Vector v, int position)

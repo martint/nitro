@@ -78,9 +78,21 @@ public class BooleanVector
     }
 
     @Override
-    public PoolSlot poolSlot()
+    public Object poolFamily()
     {
-        return new PoolSlot(BooleanVector.class, length(), 2);
+        return BooleanVector.class;
+    }
+
+    @Override
+    public int poolCapacity()
+    {
+        return length();
+    }
+
+    @Override
+    public int poolMaxRetained()
+    {
+        return 2;
     }
 
     @Override

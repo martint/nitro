@@ -24,13 +24,11 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
 import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.Set;
 import java.util.function.LongSupplier;
 
 import static java.lang.Math.max;
+import static java.lang.Math.toIntExact;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
 
 final class FlatGroupingTable
@@ -150,10 +148,10 @@ final class FlatGroupingTable
     private void addNewGroup(int index, Vector[] values, int position, long hash, long groupId)
     {
         setControl(index, (byte) (hash & 0x7F | 0x80));
-        groupIdsByHash[index] = Math.toIntExact(groupId);
+        groupIdsByHash[index] = toIntExact(groupId);
         int recordIndex = nextRecordIndex++;
-        ensureGroupIdCapacity(Math.toIntExact(groupId));
-        recordIndexByGroupId[Math.toIntExact(groupId)] = recordIndex;
+        ensureGroupIdCapacity(toIntExact(groupId));
+        recordIndexByGroupId[toIntExact(groupId)] = recordIndex;
 
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);

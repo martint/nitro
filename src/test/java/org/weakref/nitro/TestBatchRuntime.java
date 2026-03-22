@@ -23,6 +23,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
+import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -276,6 +277,24 @@ public class TestBatchRuntime
         assertThat(grown.count(3)).isEqualTo(2);
         assertThat(grown.sum(7)).isZero();
         assertThat(grown.count(7)).isZero();
+    }
+
+    @Test
+    void testSumStateVectorGrowPreservesValuesWithoutFlatCopy()
+    {
+        SumStateVector state = new SumStateVector(4);
+        state.increment(0, 10);
+        state.increment(3, 40);
+
+        SumStateVector grown = SumStateVector.grow(state, 8);
+
+        assertThat(grown.length()).isEqualTo(8);
+        assertThat(grown.sum(0)).isEqualTo(10);
+        assertThat(grown.isNull(0)).isFalse();
+        assertThat(grown.sum(3)).isEqualTo(40);
+        assertThat(grown.isNull(3)).isFalse();
+        assertThat(grown.sum(7)).isZero();
+        assertThat(grown.isNull(7)).isTrue();
     }
 
     @Test

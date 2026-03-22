@@ -78,9 +78,21 @@ public class F64Vector
     }
 
     @Override
-    public PoolSlot poolSlot()
+    public Object poolFamily()
     {
-        return new PoolSlot(F64Vector.class, length(), 2);
+        return F64Vector.class;
+    }
+
+    @Override
+    public int poolCapacity()
+    {
+        return length();
+    }
+
+    @Override
+    public int poolMaxRetained()
+    {
+        return 2;
     }
 
     @Override

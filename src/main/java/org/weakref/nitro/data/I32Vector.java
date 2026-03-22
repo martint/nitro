@@ -78,9 +78,21 @@ public class I32Vector
     }
 
     @Override
-    public PoolSlot poolSlot()
+    public Object poolFamily()
     {
-        return new PoolSlot(I32Vector.class, length(), 2);
+        return I32Vector.class;
+    }
+
+    @Override
+    public int poolCapacity()
+    {
+        return length();
+    }
+
+    @Override
+    public int poolMaxRetained()
+    {
+        return 2;
     }
 
     @Override

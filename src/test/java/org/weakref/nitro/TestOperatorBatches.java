@@ -957,6 +957,12 @@ public class TestOperatorBatches
         }
 
         @Override
+        public boolean supportsRetainedBatches()
+        {
+            return delegate.supportsRetainedBatches();
+        }
+
+        @Override
         public void close()
         {
             delegate.close();

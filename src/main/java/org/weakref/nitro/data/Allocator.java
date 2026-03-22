@@ -53,7 +53,7 @@ public class Allocator
     public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
     {
         ContextState state = state(context);
-        Vector vector = state.borrowVector(new Vector.PoolRequest(vectorType, size, true), vectorType);
+        Vector vector = state.borrowVector(vectorType, size, true, vectorType);
         boolean reused = vector != null;
         if (!reused) {
             vector = allocator.apply(size);
@@ -77,7 +77,7 @@ public class Allocator
     public BinaryVector allocateBinary(Context context, int positionCount, int byteCapacity)
     {
         ContextState state = state(context);
-        BinaryVector vector = state.borrowVector(new Vector.PoolRequest(BinaryVector.poolFamily(positionCount), byteCapacity, false), BinaryVector.class);
+        BinaryVector vector = state.borrowVector(BinaryVector.poolFamily(positionCount), byteCapacity, false, BinaryVector.class);
         boolean reused = vector != null;
         if (!reused) {
             vector = new BinaryVector(positionCount, byteCapacity);
@@ -744,18 +744,18 @@ public class Allocator
             return stats;
         }
 
-        public <T extends Vector> T borrowVector(Vector.PoolRequest request, Class<T> vectorType)
+        public <T extends Vector> T borrowVector(Object family, int minimumCapacity, boolean exactCapacityMatch, Class<T> vectorType)
         {
-            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(request.family());
+            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(family);
             if (pool == null) {
                 return null;
             }
 
-            Map.Entry<Integer, ArrayDeque<Vector>> entry = pool.ceilingEntry(request.minimumCapacity());
+            Map.Entry<Integer, ArrayDeque<Vector>> entry = pool.ceilingEntry(minimumCapacity);
             if (entry == null) {
                 return null;
             }
-            if (request.exactCapacityMatch() && entry.getKey() != request.minimumCapacity()) {
+            if (exactCapacityMatch && entry.getKey() != minimumCapacity) {
                 return null;
             }
 
@@ -763,15 +763,15 @@ public class Allocator
             if (entry.getValue().isEmpty()) {
                 pool.remove(entry.getKey());
             }
-            ArrayDeque<Vector> order = vectorPoolOrder.get(request.family());
+            ArrayDeque<Vector> order = vectorPoolOrder.get(family);
             if (order != null) {
                 order.remove(vector);
                 if (order.isEmpty()) {
-                    vectorPoolOrder.remove(request.family());
+                    vectorPoolOrder.remove(family);
                 }
             }
             if (pool.isEmpty()) {
-                vectorPool.remove(request.family());
+                vectorPool.remove(family);
             }
             return vector;
         }
@@ -789,11 +789,11 @@ public class Allocator
             }
 
             stats.releaseBytes(vector.retainedBytes());
-            Vector.PoolSlot slot = vector.poolSlot();
-            if (slot == null) {
+            Object family = vector.poolFamily();
+            if (family == null) {
                 return;
             }
-            addVectorToPool(slot, vector);
+            addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
         }
 
         public void discardVector(Vector vector)
@@ -859,9 +859,9 @@ public class Allocator
         public void release()
         {
             for (Vector vector : inUseVectors) {
-                Vector.PoolSlot slot = vector.poolSlot();
-                if (slot != null) {
-                    addVectorToPool(slot, vector);
+                Object family = vector.poolFamily();
+                if (family != null) {
+                    addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
                 }
             }
             for (Mask mask : inUseMasks) {
@@ -877,38 +877,38 @@ public class Allocator
             stats.release();
         }
 
-        private void addVectorToPool(Vector.PoolSlot slot, Vector vector)
+        private void addVectorToPool(Object family, int capacity, int maxRetained, Vector vector)
         {
             vectorPool
-                    .computeIfAbsent(slot.family(), _ -> new TreeMap<>())
-                    .computeIfAbsent(slot.capacity(), _ -> new ArrayDeque<>())
+                    .computeIfAbsent(family, _ -> new TreeMap<>())
+                    .computeIfAbsent(capacity, _ -> new ArrayDeque<>())
                     .addLast(vector);
-            ArrayDeque<Vector> order = vectorPoolOrder.computeIfAbsent(slot.family(), _ -> new ArrayDeque<>());
+            ArrayDeque<Vector> order = vectorPoolOrder.computeIfAbsent(family, _ -> new ArrayDeque<>());
             order.addLast(vector);
-            while (order.size() > slot.maxRetained()) {
+            while (order.size() > maxRetained) {
                 Vector discarded = order.removeFirst();
-                removeVectorFromPool(requireNonNull(discarded.poolSlot(), "discarded vector has no pool slot"), discarded);
+                removeVectorFromPool(requireNonNull(discarded.poolFamily(), "discarded vector has no pool family"), discarded.poolCapacity(), discarded);
             }
         }
 
-        private void removeVectorFromPool(Vector.PoolSlot slot, Vector vector)
+        private void removeVectorFromPool(Object family, int capacity, Vector vector)
         {
-            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(slot.family());
+            TreeMap<Integer, ArrayDeque<Vector>> pool = vectorPool.get(family);
             if (pool == null) {
                 return;
             }
 
-            ArrayDeque<Vector> bucket = pool.get(slot.capacity());
+            ArrayDeque<Vector> bucket = pool.get(capacity);
             if (bucket == null) {
                 return;
             }
 
             bucket.remove(vector);
             if (bucket.isEmpty()) {
-                pool.remove(slot.capacity());
+                pool.remove(capacity);
             }
             if (pool.isEmpty()) {
-                vectorPool.remove(slot.family());
+                vectorPool.remove(family);
             }
         }
     }

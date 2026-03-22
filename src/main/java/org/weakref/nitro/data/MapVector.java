@@ -153,9 +153,21 @@ public final class MapVector
     }
 
     @Override
-    public PoolSlot poolSlot()
+    public Object poolFamily()
     {
-        return new PoolSlot(MapVector.class, length(), 2);
+        return MapVector.class;
+    }
+
+    @Override
+    public int poolCapacity()
+    {
+        return length();
+    }
+
+    @Override
+    public int poolMaxRetained()
+    {
+        return 2;
     }
 
     @Override

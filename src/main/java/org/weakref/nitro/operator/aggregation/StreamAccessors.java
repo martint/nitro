@@ -29,14 +29,6 @@ public final class StreamAccessors
 
     public static Vector read(Output output, Stream stream)
     {
-        try {
-            return output.borrow(stream);
-        }
-        catch (IllegalArgumentException exception) {
-            if (stream != Stream.NULLS) {
-                throw exception;
-            }
-            return null;
-        }
+        return stream == Stream.NULLS ? output.borrowOrNull(stream) : output.borrow(stream);
     }
 }
