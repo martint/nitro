@@ -36,6 +36,7 @@ final class GroupingState
     private final ArrayList<ArrayList<OperatorKeySemantics.Key>> keysByGroupColumns = new ArrayList<>();
     private OperatorKeySemantics.Key[] reusableProbeKeys;
     private OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey;
+    private FlatGroupingTable flatGroupingTable;
     private GroupKind[] groupKinds;
     private Set<BinaryVector.Trait>[] binaryTraits;
     private Vector cachedDictionaryValues;
@@ -44,6 +45,8 @@ final class GroupingState
     private int dictionaryGeneration;
     private long nextGroupId;
     private long nullGroup = -1;
+    private boolean useFlatGrouping;
+    private boolean initialized;
 
     GroupingState()
     {
@@ -59,6 +62,10 @@ final class GroupingState
     public void assignGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
     {
         initializeIfNecessary(values);
+        if (useFlatGrouping) {
+            assignFlatGroups(values, nulls, mask, result);
+            return;
+        }
         if (values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
             assignDictionaryGroups(dictionary, nulls[0], mask, result);
             return;
@@ -81,21 +88,44 @@ final class GroupingState
 
     private void initializeIfNecessary(Vector[] values)
     {
-        if (reusableProbeKeys != null) {
+        if (initialized) {
+            return;
+        }
+        initialized = true;
+
+        groupKinds = new GroupKind[values.length];
+        binaryTraits = (Set<BinaryVector.Trait>[]) new Set<?>[values.length];
+        for (int index = 0; index < values.length; index++) {
+            groupKinds[index] = GroupKind.forVector(values[index]);
+            binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
+        }
+
+        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values);
+        if (flatKeyLayout != null) {
+            useFlatGrouping = true;
+            flatGroupingTable = new FlatGroupingTable(flatKeyLayout, 16);
             return;
         }
 
         reusableProbeKeys = new OperatorKeySemantics.Key[values.length];
-        groupKinds = new GroupKind[values.length];
-        binaryTraits = (Set<BinaryVector.Trait>[]) new Set<?>[values.length];
         for (int index = 0; index < values.length; index++) {
             reusableProbeKeys[index] = OperatorKeySemantics.reusableProbeKey(values[index]);
-            groupKinds[index] = GroupKind.forVector(values[index]);
-            binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
             keysByGroupColumns.add(new ArrayList<>());
         }
         if (values.length > 1) {
             reusableCompositeProbeKey = OperatorKeySemantics.reusableCompositeProbeKey(values.length);
+        }
+    }
+
+    private void assignFlatGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    {
+        for (int position : mask) {
+            if (hasNull(nulls, position)) {
+                result.values()[position] = nullGroup();
+            }
+            else {
+                result.values()[position] = flatGroupingTable.assignGroup(values, position, () -> nextGroupId++);
+            }
         }
     }
 
@@ -147,6 +177,9 @@ final class GroupingState
 
     public Streams groupedValues(int groupedColumnIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
+        if (useFlatGrouping) {
+            return flatGroupingTable.groupedValues(groupedColumnIndex, mask, nullGroup, output, allocator, allocationContext);
+        }
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         List<OperatorKeySemantics.Key> keysByGroup = keysByGroupColumns.get(groupedColumnIndex);
         return switch (groupKinds[groupedColumnIndex]) {
@@ -202,12 +235,24 @@ final class GroupingState
     private long nullGroup()
     {
         if (nullGroup == -1) {
-            for (ArrayList<OperatorKeySemantics.Key> keysByGroup : keysByGroupColumns) {
-                keysByGroup.add(null);
+            if (!useFlatGrouping) {
+                for (ArrayList<OperatorKeySemantics.Key> keysByGroup : keysByGroupColumns) {
+                    keysByGroup.add(null);
+                }
             }
             nullGroup = nextGroupId++;
         }
         return nullGroup;
+    }
+
+    private static boolean hasNull(BooleanVector[] nulls, int position)
+    {
+        for (BooleanVector nullVector : nulls) {
+            if (OperatorVectorSupport.isNull(nullVector, position)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private I64Vector materializeLongValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)

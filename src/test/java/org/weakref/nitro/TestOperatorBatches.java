@@ -227,6 +227,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorPreservesEmptyUtf8GroupingKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(1),
+                List.of(new CountAll()),
+                new GroupOperator(
+                        allocator,
+                        0,
+                        new ConstantTableOperator(allocator, 1, List.of(
+                                row(""),
+                                row(""),
+                                row("alpha")))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+        I64Vector counts = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(2);
+        assertThat(nulls.values()).containsExactly(false, false);
+        assertThat(keys.utf8Value(0)).isEqualTo("");
+        assertThat(keys.endOffset(0)).isZero();
+        assertThat(keys.utf8Value(1)).isEqualTo("alpha");
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorCanExposeMultipleGroupingKeys()
     {
         Allocator allocator = new Allocator();
