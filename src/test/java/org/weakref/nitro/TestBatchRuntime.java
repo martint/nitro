@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -235,6 +236,27 @@ public class TestBatchRuntime
 
         assertThat(second).isNotSameAs(first);
         assertThat(second.length()).isEqualTo(4);
+    }
+
+    @Test
+    void testMinUtf8StateVectorRetainedBytesAreCachedIncrementally()
+    {
+        MinUtf8StateVector state = new MinUtf8StateVector(4);
+
+        assertThat(state.retainedBytes()).isEqualTo(4);
+
+        state.setValue(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        state.setValue(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(state.retainedBytes()).isEqualTo(4 + "alpha".length() + "beta".length());
+
+        state.setValue(0, "z".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(state.retainedBytes()).isEqualTo(4 + 1 + "beta".length());
+
+        state.initialize(0, 2);
+        assertThat(state.retainedBytes()).isEqualTo(4);
+
+        MinUtf8StateVector grown = MinUtf8StateVector.grow(state, 8);
+        assertThat(grown.retainedBytes()).isEqualTo(8);
     }
 
     @Test

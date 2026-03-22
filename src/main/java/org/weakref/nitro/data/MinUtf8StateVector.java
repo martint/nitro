@@ -20,12 +20,21 @@ public final class MinUtf8StateVector
 {
     private byte[][] values;
     private boolean[] nulls;
+    private long retainedBytes;
 
     public MinUtf8StateVector(int size)
     {
         this.values = new byte[size][];
         this.nulls = new boolean[size];
         Arrays.fill(this.nulls, true);
+        this.retainedBytes = this.nulls.length;
+    }
+
+    private MinUtf8StateVector(byte[][] values, boolean[] nulls, long retainedBytes)
+    {
+        this.values = values;
+        this.nulls = nulls;
+        this.retainedBytes = retainedBytes;
     }
 
     public static MinUtf8StateVector grow(MinUtf8StateVector source, int size)
@@ -34,10 +43,11 @@ public final class MinUtf8StateVector
             return source;
         }
 
-        MinUtf8StateVector grown = new MinUtf8StateVector(size);
-        System.arraycopy(source.values, 0, grown.values, 0, source.values.length);
-        System.arraycopy(source.nulls, 0, grown.nulls, 0, source.nulls.length);
-        return grown;
+        byte[][] values = Arrays.copyOf(source.values, size);
+        boolean[] nulls = Arrays.copyOf(source.nulls, size);
+        Arrays.fill(nulls, source.nulls.length, nulls.length, true);
+        long retainedBytes = source.retainedBytes - source.nulls.length + nulls.length;
+        return new MinUtf8StateVector(values, nulls, retainedBytes);
     }
 
     @Override
@@ -49,22 +59,20 @@ public final class MinUtf8StateVector
     @Override
     public long retainedBytes()
     {
-        long retained = (long) nulls.length;
-        for (byte[] value : values) {
-            retained += value == null ? 0 : value.length;
-        }
-        return retained;
+        return retainedBytes;
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        MinUtf8StateVector copy = new MinUtf8StateVector(length());
-        System.arraycopy(nulls, 0, copy.nulls, 0, nulls.length);
+        byte[][] values = new byte[this.values.length][];
+        boolean[] nulls = Arrays.copyOf(this.nulls, this.nulls.length);
+        long retainedBytes = nulls.length;
         for (int index = 0; index < values.length; index++) {
-            copy.values[index] = values[index] == null ? null : Arrays.copyOf(values[index], values[index].length);
+            values[index] = this.values[index] == null ? null : Arrays.copyOf(this.values[index], this.values[index].length);
+            retainedBytes += values[index] == null ? 0 : values[index].length;
         }
-        return allocator.adopt(allocationContext, copy);
+        return allocator.adopt(allocationContext, new MinUtf8StateVector(values, nulls, retainedBytes));
     }
 
     @Override
@@ -85,12 +93,19 @@ public final class MinUtf8StateVector
 
     public void setValue(int group, byte[] value)
     {
+        byte[] previous = values[group];
+        retainedBytes -= previous == null ? 0 : previous.length;
         values[group] = value;
+        retainedBytes += value == null ? 0 : value.length;
         nulls[group] = value == null;
     }
 
     public void initialize(int offset, int length)
     {
+        for (int index = offset; index < offset + length; index++) {
+            byte[] value = values[index];
+            retainedBytes -= value == null ? 0 : value.length;
+        }
         Arrays.fill(nulls, offset, offset + length, true);
         Arrays.fill(values, offset, offset + length, null);
     }
