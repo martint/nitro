@@ -88,26 +88,31 @@ public class OperatorAssertions
             List<Row> result = new ArrayList<>();
             while (operator.hasNext()) {
                 Batch batch = operator.next();
-                var mask = batch.borrowMask();
-                if (mask.none()) {
-                    continue;
-                }
-
-                List<Output> columns = new ArrayList<>();
-                for (int i = 0; i < operator.outputCount(); i++) {
-                    columns.add(batch.output(i));
-                }
-
-                for (int position : mask) {
-                    Object[] row = new Object[columns.size()];
-                    for (int i = 0; i < columns.size(); i++) {
-                        Output output = columns.get(i);
-                        Vector values = output.borrow(Stream.VALUES);
-                        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
-                        row[i] = decodeValue(values, nulls, position);
+                try {
+                    var mask = batch.borrowMask();
+                    if (mask.none()) {
+                        continue;
                     }
 
-                    result.add(new Row(row));
+                    List<Output> columns = new ArrayList<>();
+                    for (int i = 0; i < operator.outputCount(); i++) {
+                        columns.add(batch.output(i));
+                    }
+
+                    for (int position : mask) {
+                        Object[] row = new Object[columns.size()];
+                        for (int i = 0; i < columns.size(); i++) {
+                            Output output = columns.get(i);
+                            Vector values = output.borrow(Stream.VALUES);
+                            BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+                            row[i] = decodeValue(values, nulls, position);
+                        }
+
+                        result.add(new Row(row));
+                    }
+                }
+                finally {
+                    batch.close();
                 }
             }
             operator.close();

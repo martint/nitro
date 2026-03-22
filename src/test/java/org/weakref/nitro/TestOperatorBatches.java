@@ -654,6 +654,29 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testOperatorAssertionsToRowsClosesOffsetBatches()
+    {
+        Operator operator = new OffsetOperator(
+                new Allocator(),
+                1,
+                new TopNOperator(
+                        new Allocator(),
+                        3,
+                        0,
+                        new ConstantTableOperator(
+                                new Allocator(),
+                                1,
+                                List.of(
+                                        row(5L),
+                                        row(4L),
+                                        row(3L),
+                                        row(2L)))));
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                .containsExactly(row(4L), row(3L));
+    }
+
+    @Test
     void testNestedLoopJoinOperatorProducesJoinBatch()
     {
         Allocator allocator = new Allocator();
