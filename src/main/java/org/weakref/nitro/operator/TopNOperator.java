@@ -94,7 +94,10 @@ public class TopNOperator
                 }
             }
 
-            if (source.hasNext()) {
+            // Non-retained sources may invalidate the current batch as soon as the
+            // caller probes for the next one, so materialize any deferred payload
+            // columns before the next hasNext()/next() cycle can advance upstream.
+            if (!source.supportsRetainedBatches()) {
                 state.flushPendingBatch(batch, queue.stream()
                         .map(Entry::position)
                         .toList());

@@ -229,7 +229,7 @@ final class ClickBenchHitsSupport
         List<String> columns = allHitsColumns(file);
         int eventTimeIndex = columns.indexOf("EventTime");
         int urlIndex = columns.indexOf("URL");
-        Operator filtered = filter(allocator, primitiveRegistry, clickBenchApacheScan(allocator, file, columns.toArray(String[]::new)), containsUtf8(urlIndex, "google"));
+        Operator filtered = filter(allocator, primitiveRegistry, clickBenchScan(allocator, file, columns.toArray(String[]::new)), containsUtf8(urlIndex, "google"));
         return new TopNOperator(allocator, 10, eventTimeIndex, false, filtered);
     }
 
@@ -746,20 +746,6 @@ final class ClickBenchHitsSupport
             case APACHE -> path -> new ParquetScanOperator(allocator, path, List.of(columns));
             case TRINO -> path -> new TrinoParquetScanOperator(allocator, path, List.of(columns));
         };
-        try {
-            if (Files.isDirectory(file)) {
-                return new MultiFileScanOperator(parquetFiles(file), columns.length, operatorFactory);
-            }
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
-        }
-        return operatorFactory.apply(file);
-    }
-
-    private static Operator clickBenchApacheScan(Allocator allocator, Path file, String... columns)
-    {
-        Function<Path, Operator> operatorFactory = path -> new ParquetScanOperator(allocator, path, List.of(columns));
         try {
             if (Files.isDirectory(file)) {
                 return new MultiFileScanOperator(parquetFiles(file), columns.length, operatorFactory);
