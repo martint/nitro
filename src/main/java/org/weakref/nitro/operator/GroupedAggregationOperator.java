@@ -147,6 +147,12 @@ public class GroupedAggregationOperator
         // Nothing to do. All output is already computed
     }
 
+    @Override
+    public boolean supportsRetainedBatches()
+    {
+        return true;
+    }
+
     private Output resultOutput(int output, BatchState batchState)
     {
         if (output < groupedResults.length) {

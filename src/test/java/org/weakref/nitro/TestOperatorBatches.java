@@ -286,6 +286,25 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorSupportsRetainedBatchesForTopNPayloadDeferral()
+    {
+        Operator operator = new GroupedAggregationOperator(
+                new Allocator(),
+                0,
+                List.of(1),
+                List.of(new CountAll()),
+                new GroupOperator(
+                        new Allocator(),
+                        0,
+                        new ConstantTableOperator(new Allocator(), 1, List.of(
+                                row("alpha"),
+                                row("alpha"),
+                                row("beta")))));
+
+        assertThat(operator.supportsRetainedBatches()).isTrue();
+    }
+
+    @Test
     void testLimitOperatorProducesLimitedBatch()
     {
         Allocator allocator = new Allocator();
