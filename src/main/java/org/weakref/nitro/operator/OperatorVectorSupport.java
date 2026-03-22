@@ -197,13 +197,15 @@ final class OperatorVectorSupport
 
     private static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
     {
-        return Arrays.mismatch(left, leftOffset, leftOffset + length, right, rightOffset, rightOffset + length) == -1;
-//        for (int index = 0; index < length; index++) {
-//            if (left[leftOffset + index] != right[rightOffset + index]) {
-//                return false;
-//            }
-//        }
-//        return true;
+        if (length >= 16) {
+            return Arrays.mismatch(left, leftOffset, leftOffset + length, right, rightOffset, rightOffset + length) == -1;
+        }
+        for (int index = 0; index < length; index++) {
+            if (left[leftOffset + index] != right[rightOffset + index]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int binaryCompare(byte[] left, int leftOffset, int leftLength, byte[] right, int rightOffset, int rightLength)
