@@ -15,7 +15,6 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.AvgStateVector;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
@@ -43,46 +42,40 @@ public class Avg
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
-        return Streams.ofValuesAndNulls(
-                allocator.allocate(allocationContext, AvgStateVector.class, size, AvgStateVector::new),
-                allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
+        return Streams.ofValues(allocator.allocate(allocationContext, AvgStateVector.class, size, AvgStateVector::new));
     }
 
     @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
         AvgStateVector values = allocator.allocateOrGrow(allocationContext, (AvgStateVector) state.values(), AvgStateVector.class, size, AvgStateVector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.ofValues(values);
     }
 
     @Override
     public void initialize(Streams state, int offset, int length)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
-        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         Arrays.fill(stateVector.sums(), offset, offset + length, 0);
         Arrays.fill(stateVector.counts(), offset, offset + length, 0);
-        Arrays.fill(stateNulls.values(), offset, offset + length, true);
     }
 
     @Override
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
-        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                accumulate(stateVector, stateNulls, group, inputValues, inputNulls, position);
+                accumulate(stateVector, group, inputValues, inputNulls, position);
             }
         }
         else {
             for (int position : mask) {
-                accumulate(stateVector, stateNulls, group, inputValues, inputNulls, position);
+                accumulate(stateVector, group, inputValues, inputNulls, position);
             }
         }
     }
@@ -91,7 +84,6 @@ public class Avg
     public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
-        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
         Vector inputValues = streams.values(inputColumn);
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
@@ -99,13 +91,13 @@ public class Avg
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
-                accumulate(stateVector, stateNulls, group, inputValues, inputNulls, position);
+                accumulate(stateVector, group, inputValues, inputNulls, position);
             }
         }
         else {
             for (int position : mask) {
                 int group = toIntExact(groupVector.values()[position]);
-                accumulate(stateVector, stateNulls, group, inputValues, inputNulls, position);
+                accumulate(stateVector, group, inputValues, inputNulls, position);
             }
         }
     }
@@ -114,26 +106,25 @@ public class Avg
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
-        BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         F64Vector values = output == null ? null : (F64Vector) output.getOrNull(Stream.VALUES);
-        BooleanVector nulls = output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS);
         values = allocator.allocateOrGrow(allocationContext, values, F64Vector.class, stateVector.length(), F64Vector::new);
-        nulls = allocator.allocateOrGrow(allocationContext, nulls, BooleanVector.class, stateVector.length(), BooleanVector::new);
+        org.weakref.nitro.data.BooleanVector nulls = output == null ? null : (org.weakref.nitro.data.BooleanVector) output.getOrNull(Stream.NULLS);
+        nulls = allocator.allocateOrGrow(allocationContext, nulls, org.weakref.nitro.data.BooleanVector.class, stateVector.length(), org.weakref.nitro.data.BooleanVector::new);
 
         for (int index = 0; index < stateVector.length(); index++) {
-            nulls.values()[index] = stateNulls.values()[index];
-            values.values()[index] = stateNulls.values()[index] ? 0 : ((double) stateVector.sums()[index] / stateVector.counts()[index]);
+            boolean isNull = stateVector.counts()[index] == 0;
+            nulls.values()[index] = isNull;
+            values.values()[index] = isNull ? 0 : ((double) stateVector.sums()[index] / stateVector.counts()[index]);
         }
 
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static void accumulate(AvgStateVector stateVector, BooleanVector stateNulls, int group, Vector inputValues, boolean[] inputNulls, int position)
+    private static void accumulate(AvgStateVector stateVector, int group, Vector inputValues, boolean[] inputNulls, int position)
     {
         if (isNull(inputNulls, position)) {
             return;
         }
-        stateNulls.values()[group] = false;
         stateVector.sums()[group] += value(inputValues, position);
         stateVector.counts()[group] += 1;
     }
@@ -151,7 +142,7 @@ public class Avg
 
     private static boolean[] nulls(Vector vector)
     {
-        return vector == null ? null : ((BooleanVector) vector).values();
+        return vector == null ? null : ((org.weakref.nitro.data.BooleanVector) vector).values();
     }
 
     private static boolean isNull(boolean[] nulls, int position)
