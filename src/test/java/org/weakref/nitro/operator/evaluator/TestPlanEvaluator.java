@@ -102,6 +102,25 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testReferenceMaskTreatsMissingOptionalInputStreamsAsAbsent()
+    {
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(),
+                List.of(new Reference(new Input(0), Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(new Input(0), Stream.VALUES)), Mask.all(3));
+        assertThat(result.count()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
     void testStructFieldCombinesParentAndChildNulls()
     {
         Variable name = new Variable(0);
@@ -1192,7 +1211,7 @@ public class TestPlanEvaluator
             if (reference.equals(new Reference(new Input(3), Stream.VALUES))) {
                 return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
             }
-            throw new IllegalArgumentException("Unexpected input " + reference);
+            return null;
         }, new Allocator());
 
         evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
@@ -1243,7 +1262,7 @@ public class TestPlanEvaluator
             if (reference.equals(new Reference(new Input(3), Stream.VALUES))) {
                 return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
             }
-            throw new IllegalArgumentException("Unexpected input " + reference);
+            return null;
         }, new Allocator());
 
         evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
@@ -1345,13 +1364,7 @@ public class TestPlanEvaluator
 
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
-        return (reference, mask) -> {
-            org.weakref.nitro.data.Vector vector = inputs.get(reference);
-            if (vector == null) {
-                throw new IllegalArgumentException("Unexpected input " + reference);
-            }
-            return vector;
-        };
+        return (reference, mask) -> inputs.get(reference);
     }
 
     private static PrimitiveRegistry builtinPrimitiveRegistry()

@@ -46,7 +46,7 @@ public class FilterOperator
         this.source = source;
         this.allocator = allocator;
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (reference, currentMask) -> switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatchState.sourceBatch().output(index).borrow(reference.stream());
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatchState.sourceBatch().output(index).borrowOrNull(reference.stream());
             default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
         }, allocator);
         this.predicateMask = predicateMask;
