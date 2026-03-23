@@ -41,10 +41,6 @@ public class HashJoinOperator
     private final JoinBufferSupport buffers;
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
-    private final OperatorKeySemantics.Key[] outerProbeKeys;
-    private final OperatorKeySemantics.Key[] innerProbeKeys;
-    private final OperatorKeySemantics.CompositeProbeKey outerCompositeProbeKey;
-    private final OperatorKeySemantics.CompositeProbeKey innerCompositeProbeKey;
     private final Vector[] currentOuterJoinValues;
     private final BooleanVector[] currentOuterJoinNulls;
     private final int[] outputOuterPositions = new int[BATCH_SIZE];
@@ -53,8 +49,7 @@ public class HashJoinOperator
     private final int[] retainedInnerPositionsScratch = new int[BATCH_SIZE];
     private final int[] retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
     private final Streams[] currentOutputs;
-
-    private final Map<OperatorKeySemantics.Key, LongArrayList> innerIndex = new HashMap<>();
+    private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
     private Batch currentOuterBatch;
@@ -92,10 +87,6 @@ public class HashJoinOperator
         this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
-        this.outerProbeKeys = new OperatorKeySemantics.Key[outerJoinColumns.length];
-        this.innerProbeKeys = new OperatorKeySemantics.Key[innerJoinColumns.length];
-        this.outerCompositeProbeKey = outerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length) : null;
-        this.innerCompositeProbeKey = innerJoinColumns.length > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(innerJoinColumns.length) : null;
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
         this.currentOuterJoinNulls = new BooleanVector[outerJoinColumns.length];
         this.currentOutputs = new Streams[outputCount()];
@@ -133,7 +124,7 @@ public class HashJoinOperator
     private Mask produceBatch()
     {
         loadInnerIfNecessary();
-        if (innerIndex.isEmpty()) {
+        if (joinIndex == null || joinIndex.isEmpty()) {
             captureOuterSchemaIfAvailable();
             done = true;
             currentOutputCount = 0;
@@ -204,31 +195,10 @@ public class HashJoinOperator
 
     private LongList matchesForOuterPosition()
     {
-        OperatorKeySemantics.Key key = keyForOuterPosition();
-        if (key == null) {
+        if (joinIndex == null) {
             return LongLists.emptyList();
         }
-        LongArrayList matches = innerIndex.get(key);
-        return matches == null ? LongLists.emptyList() : matches;
-    }
-
-    private OperatorKeySemantics.Key keyForOuterPosition()
-    {
-        for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
-            if (outerProbeKeys[keyIndex] == null) {
-                outerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(currentOuterJoinValues[keyIndex]);
-            }
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
-                    currentOuterJoinValues[keyIndex],
-                    currentOuterJoinNulls[keyIndex],
-                    currentOuterPosition,
-                    outerProbeKeys[keyIndex]);
-            if (key == null) {
-                return null;
-            }
-            outerProbeKeys[keyIndex] = key;
-        }
-        return OperatorKeySemantics.probeCompositeKey(outerProbeKeys, outerCompositeProbeKey);
+        return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, currentOuterPosition);
     }
 
     private void loadInnerIfNecessary()
@@ -257,37 +227,14 @@ public class HashJoinOperator
                 joinValues[keyIndex] = streams.values();
                 joinNulls[keyIndex] = (BooleanVector) streams.getOrNull(Stream.NULLS);
             }
-            if (innerProbeKeys[keyIndex] == null) {
-                innerProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(joinValues[keyIndex]);
-            }
+        }
+        if (joinIndex == null) {
+            joinIndex = createJoinIndex(joinValues);
         }
 
         for (int position = startPosition; position < startPosition + length; position++) {
             int sourcePosition = batch.sourcePosition(position);
-            boolean hasNull = false;
-            for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
-                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
-                        joinValues[keyIndex],
-                        joinNulls[keyIndex],
-                        sourcePosition,
-                        innerProbeKeys[keyIndex]);
-                if (key == null) {
-                    hasNull = true;
-                    break;
-                }
-                innerProbeKeys[keyIndex] = key;
-            }
-            if (hasNull) {
-                continue;
-            }
-            OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(innerProbeKeys, innerCompositeProbeKey);
-            LongArrayList rows = innerIndex.get(compositeKey);
-            if (rows == null) {
-                OperatorKeySemantics.Key ownedKey = OperatorKeySemantics.ownedKey(compositeKey);
-                rows = new LongArrayList();
-                innerIndex.put(ownedKey, rows);
-            }
-            rows.add(packRowReference(batchIndex, position));
+            joinIndex.add(joinValues, joinNulls, sourcePosition, packRowReference(batchIndex, position));
         }
     }
 
@@ -305,6 +252,15 @@ public class HashJoinOperator
         while (outer.hasNext()) {
             outputBuffer.captureOuterSchema(outer.next());
         }
+    }
+
+    private JoinIndex createJoinIndex(Vector[] joinValues)
+    {
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues);
+        if (layout != null) {
+            return new FlatJoinIndex(layout);
+        }
+        return new ObjectJoinIndex(joinValues.length);
     }
 
     @Override
@@ -519,5 +475,147 @@ public class HashJoinOperator
     private static int rowPosition(long rowReference)
     {
         return (int) rowReference;
+    }
+
+    private interface JoinIndex
+    {
+        boolean isEmpty();
+
+        void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference);
+
+        LongList matches(Vector[] values, BooleanVector[] nulls, int position);
+    }
+
+    private static final class FlatJoinIndex
+            implements JoinIndex
+    {
+        private final FlatGroupingTable table;
+        private LongArrayList[] rowsByGroup = new LongArrayList[16];
+        private long nextGroupId;
+
+        private FlatJoinIndex(FlatKeyLayout layout)
+        {
+            this.table = new FlatGroupingTable(layout, 1024);
+        }
+
+        @Override
+        public boolean isEmpty()
+        {
+            return nextGroupId == 0;
+        }
+
+        @Override
+        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        {
+            if (hasNull(nulls, position)) {
+                return;
+            }
+            long newGroupId = nextGroupId;
+            long groupId = table.assignGroup(values, position, newGroupId);
+            if (groupId == newGroupId) {
+                ensureGroupCapacity((int) groupId);
+                nextGroupId++;
+            }
+            rowsByGroup[(int) groupId].add(rowReference);
+        }
+
+        @Override
+        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            if (hasNull(nulls, position)) {
+                return LongLists.emptyList();
+            }
+            long groupId = table.findGroup(values, position);
+            if (groupId < 0 || groupId >= nextGroupId) {
+                return LongLists.emptyList();
+            }
+            LongArrayList rows = rowsByGroup[(int) groupId];
+            return rows == null ? LongLists.emptyList() : rows;
+        }
+
+        private void ensureGroupCapacity(int groupId)
+        {
+            if (groupId >= rowsByGroup.length) {
+                rowsByGroup = Arrays.copyOf(rowsByGroup, Math.max(groupId + 1, rowsByGroup.length * 2));
+            }
+            if (rowsByGroup[groupId] == null) {
+                rowsByGroup[groupId] = new LongArrayList();
+            }
+        }
+
+        private static boolean hasNull(BooleanVector[] nulls, int position)
+        {
+            for (BooleanVector nullsVector : nulls) {
+                if (OperatorVectorSupport.isNull(nullsVector, position)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private static final class ObjectJoinIndex
+            implements JoinIndex
+    {
+        private final Map<OperatorKeySemantics.Key, LongArrayList> rowsByKey = new HashMap<>();
+        private final OperatorKeySemantics.Key[] innerProbeKeys;
+        private final OperatorKeySemantics.Key[] outerProbeKeys;
+        private final OperatorKeySemantics.CompositeProbeKey innerCompositeProbeKey;
+        private final OperatorKeySemantics.CompositeProbeKey outerCompositeProbeKey;
+
+        private ObjectJoinIndex(int keyCount)
+        {
+            this.innerProbeKeys = new OperatorKeySemantics.Key[keyCount];
+            this.outerProbeKeys = new OperatorKeySemantics.Key[keyCount];
+            this.innerCompositeProbeKey = keyCount > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(keyCount) : null;
+            this.outerCompositeProbeKey = keyCount > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(keyCount) : null;
+        }
+
+        @Override
+        public boolean isEmpty()
+        {
+            return rowsByKey.isEmpty();
+        }
+
+        @Override
+        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        {
+            OperatorKeySemantics.Key key = keyForPosition(values, nulls, position, innerProbeKeys, innerCompositeProbeKey);
+            if (key == null) {
+                return;
+            }
+            LongArrayList rows = rowsByKey.get(key);
+            if (rows == null) {
+                rows = new LongArrayList();
+                rowsByKey.put(OperatorKeySemantics.ownedKey(key), rows);
+            }
+            rows.add(rowReference);
+        }
+
+        @Override
+        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            OperatorKeySemantics.Key key = keyForPosition(values, nulls, position, outerProbeKeys, outerCompositeProbeKey);
+            if (key == null) {
+                return LongLists.emptyList();
+            }
+            LongArrayList rows = rowsByKey.get(key);
+            return rows == null ? LongLists.emptyList() : rows;
+        }
+
+        private static OperatorKeySemantics.Key keyForPosition(Vector[] values, BooleanVector[] nulls, int position, OperatorKeySemantics.Key[] reusableProbeKeys, OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey)
+        {
+            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                if (reusableProbeKeys[keyIndex] == null) {
+                    reusableProbeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(values[keyIndex]);
+                }
+                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
+                if (key == null) {
+                    return null;
+                }
+                reusableProbeKeys[keyIndex] = key;
+            }
+            return OperatorKeySemantics.probeCompositeKey(reusableProbeKeys, reusableCompositeProbeKey);
+        }
     }
 }

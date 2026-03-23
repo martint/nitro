@@ -82,6 +82,16 @@ final class FlatGroupingTable
         return newGroupId;
     }
 
+    public long findGroup(Vector[] values, int position)
+    {
+        long hash = layout.hash(values, position);
+        int index = getIndex(values, position, hash);
+        if (index < 0) {
+            return -1;
+        }
+        return groupIdsByHash[index];
+    }
+
     public Streams groupedValues(int groupedColumnIndex, Mask mask, long nullGroup, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
