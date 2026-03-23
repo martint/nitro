@@ -84,7 +84,7 @@ public final class TrinoClickBenchSupport
     private static final String TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY = "nitro.clickbench.trino.blockedWaitTimeoutSeconds";
     private static final String TRINO_QUERY_MAX_MEMORY_PROPERTY = "nitro.clickbench.trino.queryMaxMemoryGigabytes";
     private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 5;
-    private static final int DEFAULT_TRINO_QUERY_MAX_MEMORY_GIGABYTES = 4;
+    private static final int DEFAULT_TRINO_QUERY_MAX_MEMORY_GIGABYTES = 8;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", ImmutableList.of());
     private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
