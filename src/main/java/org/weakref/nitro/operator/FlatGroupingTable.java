@@ -25,7 +25,6 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Arrays;
-import java.util.function.LongSupplier;
 
 import static java.lang.Math.max;
 import static java.lang.Math.toIntExact;
@@ -71,7 +70,7 @@ final class FlatGroupingTable
         Arrays.fill(recordIndexByGroupId, -1);
     }
 
-    public long assignGroup(Vector[] values, int position, LongSupplier nextGroupIdSupplier)
+    public long assignGroup(Vector[] values, int position, long newGroupId)
     {
         long hash = layout.hash(values, position);
         int index = getIndex(values, position, hash);
@@ -79,12 +78,11 @@ final class FlatGroupingTable
             return groupIdsByHash[index];
         }
 
-        long groupId = nextGroupIdSupplier.getAsLong();
-        addNewGroup(-index - 1, values, position, hash, groupId);
+        addNewGroup(-index - 1, values, position, hash, newGroupId);
         if (nextRecordIndex >= maxFill) {
             rehash();
         }
-        return groupId;
+        return newGroupId;
     }
 
     public Streams groupedValues(int groupedColumnIndex, Mask mask, long nullGroup, Streams output, Allocator allocator, Allocator.Context allocationContext)

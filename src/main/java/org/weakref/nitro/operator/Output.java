@@ -16,9 +16,6 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.Collections;
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -29,13 +26,26 @@ import static java.util.Objects.requireNonNull;
 public final class Output
         implements AutoCloseable
 {
-    private final EnumSet<Stream> exposedStreams;
-    private final Set<Stream> exposedStreamsView;
+    private static final int VALUES_FLAG = 1;
+    private static final int NULLS_FLAG = 1 << 1;
+    private static final int ERRORS_FLAG = 1 << 2;
+
+    @SuppressWarnings("unchecked")
+    private static final Set<Stream>[] STREAM_SETS = new Set[8];
+
+    static {
+        for (int flags = 0; flags < STREAM_SETS.length; flags++) {
+            STREAM_SETS[flags] = Streams.streamSet(flags);
+        }
+    }
+
+    private final int exposedFlags;
     private final Function<Stream, Vector> resolver;
     private final BiFunction<Stream, Vector, Vector> takeResolver;
     private final BiConsumer<Stream, Vector> releaseResolver;
-    private final EnumMap<Stream, Vector> resolvedStreams = new EnumMap<>(Stream.class);
-    private final EnumSet<Stream> takenStreams = EnumSet.noneOf(Stream.class);
+    private final Vector[] resolvedStreams = new Vector[Stream.values().length];
+    private int resolvedFlags;
+    private int takenFlags;
     private boolean closed;
 
     public static Output of(Streams streams)
@@ -56,8 +66,7 @@ public final class Output
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
-        this.exposedStreams = exposedStreams.isEmpty() ? EnumSet.noneOf(Stream.class) : EnumSet.copyOf(exposedStreams);
-        this.exposedStreamsView = Collections.unmodifiableSet(this.exposedStreams);
+        this.exposedFlags = streamFlags(exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
         this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
         this.releaseResolver = requireNonNull(releaseResolver, "releaseResolver is null");
@@ -67,20 +76,29 @@ public final class Output
     {
         checkOpen();
         requireNonNull(stream, "stream is null");
-        if (takenStreams.contains(stream)) {
+        int flag = streamFlag(stream);
+        int index = streamIndex(stream);
+        if ((takenFlags & flag) != 0) {
             throw new IllegalStateException("Stream already taken: " + stream);
         }
-        if (!exposedStreams.contains(stream)) {
+        if ((exposedFlags & flag) == 0) {
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
         }
-        return resolvedStreams.computeIfAbsent(stream, key -> requireNonNull(resolver.apply(key), "resolver returned null"));
+        Vector resolved = resolvedStreams[index];
+        if (resolved != null) {
+            return resolved;
+        }
+        resolved = requireNonNull(resolver.apply(stream), "resolver returned null");
+        resolvedStreams[index] = resolved;
+        resolvedFlags |= flag;
+        return resolved;
     }
 
     public Vector borrowOrNull(Stream stream)
     {
         checkOpen();
         requireNonNull(stream, "stream is null");
-        if (!exposedStreams.contains(stream)) {
+        if ((exposedFlags & streamFlag(stream)) == 0) {
             return null;
         }
         return borrow(stream);
@@ -90,13 +108,13 @@ public final class Output
     {
         checkOpen();
         Vector vector = requireNonNull(takeResolver.apply(stream, borrow(stream)), "takeResolver returned null");
-        takenStreams.add(stream);
+        takenFlags |= streamFlag(stream);
         return vector;
     }
 
     public Set<Stream> streams()
     {
-        return exposedStreamsView;
+        return STREAM_SETS[exposedFlags];
     }
 
     @Override
@@ -106,13 +124,55 @@ public final class Output
             return;
         }
         closed = true;
-        for (var entry : resolvedStreams.entrySet()) {
-            if (!takenStreams.contains(entry.getKey())) {
-                releaseResolver.accept(entry.getKey(), entry.getValue());
-            }
+        int flags = resolvedFlags & ~takenFlags;
+        while (flags != 0) {
+            int flag = Integer.lowestOneBit(flags);
+            Stream stream = stream(flag);
+            releaseResolver.accept(stream, resolvedStreams[streamIndex(stream)]);
+            flags &= ~flag;
         }
-        resolvedStreams.clear();
-        takenStreams.clear();
+        for (int index = 0; index < resolvedStreams.length; index++) {
+            resolvedStreams[index] = null;
+        }
+        resolvedFlags = 0;
+        takenFlags = 0;
+    }
+
+    private static int streamFlags(Set<Stream> streams)
+    {
+        int flags = 0;
+        for (Stream stream : streams) {
+            flags |= streamFlag(stream);
+        }
+        return flags;
+    }
+
+    private static int streamFlag(Stream stream)
+    {
+        return switch (stream) {
+            case VALUES -> VALUES_FLAG;
+            case NULLS -> NULLS_FLAG;
+            case ERRORS -> ERRORS_FLAG;
+        };
+    }
+
+    private static int streamIndex(Stream stream)
+    {
+        return switch (stream) {
+            case VALUES -> 0;
+            case NULLS -> 1;
+            case ERRORS -> 2;
+        };
+    }
+
+    private static Stream stream(int flag)
+    {
+        return switch (flag) {
+            case VALUES_FLAG -> Stream.VALUES;
+            case NULLS_FLAG -> Stream.NULLS;
+            case ERRORS_FLAG -> Stream.ERRORS;
+            default -> throw new IllegalArgumentException("Unknown stream flag: " + flag);
+        };
     }
 
     private void checkOpen()

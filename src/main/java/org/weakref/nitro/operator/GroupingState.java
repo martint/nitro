@@ -124,7 +124,12 @@ final class GroupingState
                 result.values()[position] = nullGroup();
             }
             else {
-                result.values()[position] = flatGroupingTable.assignGroup(values, position, () -> nextGroupId++);
+                long newGroupId = nextGroupId;
+                long groupId = flatGroupingTable.assignGroup(values, position, newGroupId);
+                if (groupId == newGroupId) {
+                    nextGroupId++;
+                }
+                result.values()[position] = groupId;
             }
         }
     }

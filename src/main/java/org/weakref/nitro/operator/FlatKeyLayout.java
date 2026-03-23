@@ -21,12 +21,18 @@ import java.util.Set;
 final class FlatKeyLayout
 {
     private final Field[] fields;
+    private final int[] inputChannels;
+    private final FlatTypeHandler[] handlers;
+    private final int[] fixedOffsets;
     private final int fixedRecordSize;
     private final boolean anyVariableWidth;
 
-    private FlatKeyLayout(Field[] fields, int fixedRecordSize, boolean anyVariableWidth)
+    private FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int fixedRecordSize, boolean anyVariableWidth)
     {
         this.fields = fields;
+        this.inputChannels = inputChannels;
+        this.handlers = handlers;
+        this.fixedOffsets = fixedOffsets;
         this.fixedRecordSize = fixedRecordSize;
         this.anyVariableWidth = anyVariableWidth;
     }
@@ -34,6 +40,9 @@ final class FlatKeyLayout
     public static FlatKeyLayout tryCreate(Vector[] values)
     {
         Field[] fields = new Field[values.length];
+        int[] inputChannels = new int[values.length];
+        FlatTypeHandler[] handlers = new FlatTypeHandler[values.length];
+        int[] fixedOffsets = new int[values.length];
         int fixedOffset = 0;
         boolean anyVariableWidth = false;
         for (int index = 0; index < values.length; index++) {
@@ -42,10 +51,13 @@ final class FlatKeyLayout
                 return null;
             }
             fields[index] = new Field(index, handler, fixedOffset, OperatorVectorSupport.binaryTraits(values[index]));
+            inputChannels[index] = index;
+            handlers[index] = handler;
+            fixedOffsets[index] = fixedOffset;
             fixedOffset += handler.fixedSize();
             anyVariableWidth |= handler.variableWidth();
         }
-        return new FlatKeyLayout(fields, fixedOffset, anyVariableWidth);
+        return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, fixedOffset, anyVariableWidth);
     }
 
     public int fieldCount()
@@ -71,23 +83,23 @@ final class FlatKeyLayout
     public long hash(Vector[] values, int position)
     {
         long result = 1;
-        for (Field field : fields) {
-            result = 31 * result + field.handler().hashInput(values[field.inputChannel()], position);
+        for (int index = 0; index < handlers.length; index++) {
+            result = 31 * result + handlers[index].hashInput(values[inputChannels[index]], position);
         }
         return result;
     }
 
     public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, int position)
     {
-        for (Field field : fields) {
-            field.handler().writeFlat(values[field.inputChannel()], position, fixedChunk, fixedOffset + field.fixedOffset(), variableWidthArena);
+        for (int index = 0; index < handlers.length; index++) {
+            handlers[index].writeFlat(values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
         }
     }
 
     public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, int position)
     {
-        for (Field field : fields) {
-            if (!field.handler().identicalFlatToInput(fixedChunk, fixedOffset + field.fixedOffset(), variableWidthArena, values[field.inputChannel()], position)) {
+        for (int index = 0; index < handlers.length; index++) {
+            if (!handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
             }
         }

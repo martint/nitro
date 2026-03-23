@@ -144,6 +144,11 @@ public final class Streams
         return STREAM_SETS[flags];
     }
 
+    static Set<Stream> streamSet(int flags)
+    {
+        return STREAM_SETS[flags];
+    }
+
     public Map<Stream, Vector> asMap()
     {
         Map<Stream, Vector> existing = view;
