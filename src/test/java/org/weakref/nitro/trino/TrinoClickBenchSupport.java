@@ -73,6 +73,7 @@ import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
+import static io.trino.type.JoniRegexpType.JONI_REGEXP;
 import static java.lang.Math.toIntExact;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
@@ -1211,9 +1212,12 @@ public final class TrinoClickBenchSupport
 
     private static RowExpression regexpReplace(RowExpression expression, String pattern, String replacement)
     {
+        RowExpression compiledPattern = new CallExpression(
+                FUNCTION_RESOLUTION.getCoercion(VARCHAR, JONI_REGEXP),
+                List.of(constant(Slices.utf8Slice(pattern), VARCHAR)));
         return new CallExpression(
-                FUNCTION_RESOLUTION.resolveFunction("regexp_replace", fromTypes(VARCHAR, VARCHAR, VARCHAR)),
-                List.of(expression, constant(Slices.utf8Slice(pattern), VARCHAR), constant(Slices.utf8Slice(replacement), VARCHAR)));
+                FUNCTION_RESOLUTION.resolveFunction("regexp_replace", fromTypes(VARCHAR, JONI_REGEXP, VARCHAR)),
+                List.of(expression, compiledPattern, constant(Slices.utf8Slice(replacement), VARCHAR)));
     }
 
     private static RowExpression minuteOfHour(RowExpression eventTime)

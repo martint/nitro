@@ -103,4 +103,14 @@ public class TestTrinoClickBenchQueries
             assertThat(result.getMaterializedRows().getFirst().getFields()).isEqualTo(List.of("https://google.com/search", 2L));
         }
     }
+
+    @Test
+    void testTrinoQuery29RefererHosts()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query29RefererHosts(writeHitsFixture());
+            assertThat(result.getRowCount()).isZero();
+        }
+    }
 }
