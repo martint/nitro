@@ -18,6 +18,9 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
+import java.util.List;
+import java.util.Set;
+
 interface FlatTypeHandler
 {
     enum Kind
@@ -66,6 +69,26 @@ interface FlatTypeHandler
     }
 
     default Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default OperatorKeySemantics.Key reusableProbeKey()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default OperatorKeySemantics.Key probeKey(Vector values, int position, OperatorKeySemantics.Key reusable)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default OperatorKeySemantics.Key ownedKey(OperatorKeySemantics.Key key)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default Streams materializeFallbackValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
     {
         throw new UnsupportedOperationException();
     }

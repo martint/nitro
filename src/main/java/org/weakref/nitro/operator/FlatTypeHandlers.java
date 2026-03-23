@@ -28,6 +28,8 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
 
 final class FlatTypeHandlers
 {
@@ -94,6 +96,43 @@ final class FlatTypeHandlers
             }
             return result;
         }
+
+        @Override
+        public OperatorKeySemantics.Key reusableProbeKey()
+        {
+            return new OperatorKeySemantics.LongProbeKey(0);
+        }
+
+        @Override
+        public OperatorKeySemantics.Key probeKey(Vector values, int position, OperatorKeySemantics.Key reusable)
+        {
+            OperatorKeySemantics.LongProbeKey key = (OperatorKeySemantics.LongProbeKey) reusable;
+            key.setValue(OperatorVectorSupport.longValue(values, position));
+            return key;
+        }
+
+        @Override
+        public OperatorKeySemantics.Key ownedKey(OperatorKeySemantics.Key key)
+        {
+            if (key == null || key instanceof OperatorKeySemantics.LongKey) {
+                return key;
+            }
+            return new OperatorKeySemantics.LongKey(((OperatorKeySemantics.LongProbeKey) key).value());
+        }
+
+        @Override
+        public Streams materializeFallbackValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
+        {
+            I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+            Arrays.fill(result.values(), 0);
+            for (int index : mask) {
+                OperatorKeySemantics.Key key = keysByGroup.get(index);
+                if (key instanceof OperatorKeySemantics.LongKey value) {
+                    result.values()[index] = value.value();
+                }
+            }
+            return Streams.ofValues(result);
+        }
     };
 
     private static final FlatTypeHandler BOOLEAN = new FlatTypeHandler()
@@ -155,6 +194,43 @@ final class FlatTypeHandlers
                 }
             }
             return result;
+        }
+
+        @Override
+        public OperatorKeySemantics.Key reusableProbeKey()
+        {
+            return new OperatorKeySemantics.BooleanProbeKey(false);
+        }
+
+        @Override
+        public OperatorKeySemantics.Key probeKey(Vector values, int position, OperatorKeySemantics.Key reusable)
+        {
+            OperatorKeySemantics.BooleanProbeKey key = (OperatorKeySemantics.BooleanProbeKey) reusable;
+            key.setValue(OperatorVectorSupport.booleanValue(values, position));
+            return key;
+        }
+
+        @Override
+        public OperatorKeySemantics.Key ownedKey(OperatorKeySemantics.Key key)
+        {
+            if (key == null || key instanceof OperatorKeySemantics.BooleanKey) {
+                return key;
+            }
+            return new OperatorKeySemantics.BooleanKey(((OperatorKeySemantics.BooleanProbeKey) key).value());
+        }
+
+        @Override
+        public Streams materializeFallbackValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
+        {
+            BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
+            Arrays.fill(result.values(), false);
+            for (int index : mask) {
+                OperatorKeySemantics.Key key = keysByGroup.get(index);
+                if (key instanceof OperatorKeySemantics.BooleanKey value) {
+                    result.values()[index] = value.value();
+                }
+            }
+            return Streams.ofValues(result);
         }
     };
 
@@ -218,6 +294,43 @@ final class FlatTypeHandlers
                 }
             }
             return result;
+        }
+
+        @Override
+        public OperatorKeySemantics.Key reusableProbeKey()
+        {
+            return new OperatorKeySemantics.DoubleProbeKey(0);
+        }
+
+        @Override
+        public OperatorKeySemantics.Key probeKey(Vector values, int position, OperatorKeySemantics.Key reusable)
+        {
+            OperatorKeySemantics.DoubleProbeKey key = (OperatorKeySemantics.DoubleProbeKey) reusable;
+            key.setBits(Double.doubleToLongBits(OperatorVectorSupport.doubleValue(values, position)));
+            return key;
+        }
+
+        @Override
+        public OperatorKeySemantics.Key ownedKey(OperatorKeySemantics.Key key)
+        {
+            if (key == null || key instanceof OperatorKeySemantics.DoubleKey) {
+                return key;
+            }
+            return new OperatorKeySemantics.DoubleKey(((OperatorKeySemantics.DoubleProbeKey) key).bits());
+        }
+
+        @Override
+        public Streams materializeFallbackValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
+        {
+            F64Vector result = allocator.allocateOrGrow(allocationContext, (F64Vector) output, F64Vector.class, size, F64Vector::new);
+            Arrays.fill(result.values(), 0);
+            for (int index : mask) {
+                OperatorKeySemantics.Key key = keysByGroup.get(index);
+                if (key instanceof OperatorKeySemantics.DoubleKey value) {
+                    result.values()[index] = Double.longBitsToDouble(value.bits());
+                }
+            }
+            return Streams.ofValues(result);
         }
     };
 
@@ -372,6 +485,57 @@ final class FlatTypeHandlers
             }
             return result;
         }
+
+        @Override
+        public OperatorKeySemantics.Key reusableProbeKey()
+        {
+            return new OperatorKeySemantics.BinaryProbeKey(null, 0);
+        }
+
+        @Override
+        public OperatorKeySemantics.Key probeKey(Vector values, int position, OperatorKeySemantics.Key reusable)
+        {
+            OperatorKeySemantics.BinaryProbeKey key = (OperatorKeySemantics.BinaryProbeKey) reusable;
+            key.set(values, position);
+            return key;
+        }
+
+        @Override
+        public OperatorKeySemantics.Key ownedKey(OperatorKeySemantics.Key key)
+        {
+            if (key == null || key instanceof OperatorKeySemantics.BinaryKey) {
+                return key;
+            }
+            OperatorKeySemantics.BinaryProbeKey probe = (OperatorKeySemantics.BinaryProbeKey) key;
+            return new OperatorKeySemantics.BinaryKey(OperatorKeySemantics.copyBinaryBytes(probe.values(), probe.position()));
+        }
+
+        @Override
+        public Streams materializeFallbackValues(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
+        {
+            long totalBytes = 0;
+            for (int index : mask) {
+                OperatorKeySemantics.Key key = keysByGroup.get(index);
+                if (key instanceof OperatorKeySemantics.BinaryKey value) {
+                    totalBytes += value.bytes().length;
+                }
+            }
+            if (totalBytes > Integer.MAX_VALUE) {
+                throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
+            }
+
+            BinaryVector result = BinaryVector.allocateOrGrow(allocator, allocationContext, (BinaryVector) output, size, (int) totalBytes);
+            Arrays.fill(result.offsets(), 0);
+            result.clearTraits();
+            result.addTraits(binaryTraits);
+            for (int index : mask) {
+                OperatorKeySemantics.Key key = keysByGroup.get(index);
+                if (key instanceof OperatorKeySemantics.BinaryKey value) {
+                    result.setBytes(index, value.bytes());
+                }
+            }
+            return Streams.ofValues(result);
+        }
     };
 
     private FlatTypeHandlers() {}
@@ -383,6 +547,17 @@ final class FlatTypeHandlers
             case BooleanVector _ -> BOOLEAN;
             case F64Vector _ -> DOUBLE;
             case BinaryVector _ -> BINARY;
+            default -> null;
+        };
+    }
+
+    public static FlatTypeHandler forProbeKey(OperatorKeySemantics.Key key)
+    {
+        return switch (key) {
+            case OperatorKeySemantics.LongProbeKey _ -> LONG;
+            case OperatorKeySemantics.BooleanProbeKey _ -> BOOLEAN;
+            case OperatorKeySemantics.DoubleProbeKey _ -> DOUBLE;
+            case OperatorKeySemantics.BinaryProbeKey _ -> BINARY;
             default -> null;
         };
     }
