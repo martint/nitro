@@ -22,11 +22,18 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.Set;
 
 final class OperatorVectorSupport
 {
+    private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+    private static final long HASH_SEED = 0x9E37_79B9_7F4A_7C15L;
+    private static final long HASH_MULTIPLIER = 0x9FB2_1C65_1E98_DF25L;
+
     private OperatorVectorSupport() {}
 
     public static boolean isNull(BooleanVector nulls, int position)
@@ -188,11 +195,26 @@ final class OperatorVectorSupport
 
     static int binaryHash(byte[] bytes, int offset, int length)
     {
-        int result = 1;
-        for (int index = 0; index < length; index++) {
-            result = 31 * result + bytes[offset + index];
+        long hash = HASH_SEED ^ length;
+        int index = offset;
+        int end = offset + length;
+
+        while (index + Long.BYTES <= end) {
+            hash ^= mix64((long) LONG_HANDLE.get(bytes, index));
+            hash = Long.rotateLeft(hash, 27) * HASH_MULTIPLIER + 0x52DC_E729L;
+            index += Long.BYTES;
         }
-        return result;
+
+        long tail = 0;
+        int shift = 0;
+        while (index < end) {
+            tail |= (bytes[index] & 0xFFL) << shift;
+            shift += Byte.SIZE;
+            index++;
+        }
+        hash ^= mix64(tail);
+        hash = fmix64(hash);
+        return (int) (hash ^ (hash >>> Integer.SIZE));
     }
 
     static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
@@ -218,5 +240,22 @@ final class OperatorVectorSupport
             }
         }
         return Integer.compare(leftLength, rightLength);
+    }
+
+    private static long mix64(long value)
+    {
+        long mixed = value * HASH_MULTIPLIER;
+        mixed ^= mixed >>> 33;
+        mixed *= 0xC2B2_AE3D_27D4_EB4FL;
+        return mixed ^ (mixed >>> 29);
+    }
+
+    private static long fmix64(long value)
+    {
+        long mixed = value ^ (value >>> 33);
+        mixed *= 0xFF51_AFD7_ED55_8CCDL;
+        mixed ^= mixed >>> 33;
+        mixed *= 0xC4CE_B9FE_1A85_EC53L;
+        return mixed ^ (mixed >>> 33);
     }
 }
