@@ -134,6 +134,20 @@ final class TrinoClickBenchPageReader
         }
     }
 
+    public static List<io.trino.spi.type.Type> columnTypes(Path input, List<String> columnNames)
+    {
+        Path file = resolveFiles(input).getFirst();
+        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+            MessageType schema = reader.getFileMetaData().getSchema();
+            return columnNames.stream()
+                    .map(name -> parquetType(findField(schema, name).asPrimitiveType()))
+                    .toList();
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to inspect ClickBench schema from " + file, exception);
+        }
+    }
+
     public boolean hasNext()
     {
         advanceIfNecessary();
@@ -321,6 +335,19 @@ final class TrinoClickBenchPageReader
             }
         }
         throw new IllegalArgumentException("Unknown Parquet column: " + name);
+    }
+
+    private static io.trino.spi.type.Type parquetType(PrimitiveType primitive)
+    {
+        return switch (primitive.getPrimitiveTypeName()) {
+            case INT32 -> io.trino.spi.type.IntegerType.INTEGER;
+            case INT64 -> io.trino.spi.type.BigintType.BIGINT;
+            case BOOLEAN -> io.trino.spi.type.BooleanType.BOOLEAN;
+            case BINARY, FIXED_LEN_BYTE_ARRAY -> primitive.getLogicalTypeAnnotation() != null && primitive.getLogicalTypeAnnotation().equals(stringType())
+                    ? io.trino.spi.type.VarcharType.VARCHAR
+                    : io.trino.spi.type.VarbinaryType.VARBINARY;
+            default -> throw new IllegalArgumentException("Unsupported Trino Parquet primitive type: " + primitive.getPrimitiveTypeName());
+        };
     }
 
     private static final class FileParquetDataSource

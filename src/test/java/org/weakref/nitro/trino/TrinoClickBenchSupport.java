@@ -18,11 +18,14 @@ import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
 import io.trino.metadata.TestingFunctionResolution;
 import io.trino.operator.AggregationOperator.AggregationOperatorFactory;
+import io.trino.operator.DistinctLimitOperator.DistinctLimitOperatorFactory;
 import io.trino.operator.Driver;
 import io.trino.operator.DriverContext;
 import io.trino.operator.FilterAndProjectOperator;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
+import io.trino.operator.LimitOperator.LimitOperatorFactory;
+import io.trino.operator.MarkDistinctOperator.MarkDistinctOperatorFactory;
 import io.trino.operator.Operator;
 import io.trino.operator.OperatorFactory;
 import io.trino.operator.TopNOperator;
@@ -37,12 +40,18 @@ import io.trino.sql.planner.plan.AggregationNode.Step;
 import io.trino.sql.planner.plan.PlanNodeId;
 import io.trino.sql.relational.CallExpression;
 import io.trino.sql.relational.RowExpression;
+import io.trino.sql.relational.SpecialForm;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.PageConsumerOperator;
 import io.trino.testing.TestingSession;
 import io.trino.testing.TestingTaskContext;
+import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.io.LocalInputFile;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -58,11 +67,13 @@ import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.spi.connector.SortOrder.DESC_NULLS_LAST;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
+import static java.lang.Math.toIntExact;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 
@@ -77,8 +88,11 @@ public final class TrinoClickBenchSupport
     private static final TestingAggregationFunction COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", ImmutableList.of());
     private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_AVG = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT));
+    private static final TestingAggregationFunction INTEGER_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(INTEGER));
+    private static final TestingAggregationFunction INTEGER_AVG = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(INTEGER));
     private static final TestingAggregationFunction INTEGER_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(INTEGER));
     private static final TestingAggregationFunction INTEGER_MAX = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(INTEGER));
+    private static final TestingAggregationFunction VARCHAR_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(VARCHAR));
 
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("TrinoClickBenchSupport"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoClickBenchSupport-scheduled"));
@@ -95,7 +109,7 @@ public final class TrinoClickBenchSupport
     public void consumeQuery0SelectAll(Path input)
     {
         List<String> columns = TrinoClickBenchPageReader.allColumns(input);
-        consume(input, columns, List.of(), columns.stream().map(TrinoClickBenchSupport::inferType).toList());
+        consume(input, columns, List.of(), TrinoClickBenchPageReader.columnTypes(input, columns));
     }
 
     public MaterializedResult query1CountAll(Path input)
@@ -231,6 +245,736 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
+    public MaterializedResult query2CountNonZeroAdvEngineId(Path input)
+    {
+        return materialize(
+                input,
+                List.of("AdvEngineID"),
+                List.of(
+                        filterAndProjectFactory(1, List.of(INTEGER), Optional.of(notEqual(0, INTEGER, 0L)), List.of(), List.of()),
+                        aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                List.of(BIGINT));
+    }
+
+    public MaterializedResult query4AvgUserId(Path input)
+    {
+        return materialize(
+                input,
+                List.of("UserID"),
+                List.of(aggregationFactory(1, BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()))),
+                List.of(BIGINT_AVG.getFinalType()));
+    }
+
+    public MaterializedResult query5CountDistinctUserId(Path input)
+    {
+        return materialize(
+                input,
+                List.of("UserID"),
+                List.of(
+                        distinctLimitFactory(1, List.of(BIGINT), List.of(0), Long.MAX_VALUE),
+                        aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                List.of(BIGINT));
+    }
+
+    public MaterializedResult query6CountDistinctSearchPhrase(Path input)
+    {
+        return materialize(
+                input,
+                List.of("SearchPhrase"),
+                List.of(
+                        distinctLimitFactory(1, List.of(VARCHAR), List.of(0), Long.MAX_VALUE),
+                        aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                List.of(BIGINT));
+    }
+
+    public MaterializedResult query9TopRegionsByDistinctUsers(Path input)
+    {
+        List<Type> outputTypes = List.of(INTEGER, BIGINT);
+        return materialize(
+                input,
+                List.of("RegionID", "UserID"),
+                List.of(
+                        markDistinctFactory(1, List.of(INTEGER, BIGINT), List.of(0, 1)),
+                        hashAggregationFactory(
+                                2,
+                                List.of(INTEGER),
+                                List.of(0),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(2))),
+                        topNFactory(3, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query10RegionAggregates(Path input)
+    {
+        List<Type> projectedTypes = List.of(INTEGER, BIGINT, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(INTEGER, BIGINT_SUM.getFinalType(), BIGINT, BIGINT_AVG.getFinalType(), BIGINT);
+        return materialize(
+                input,
+                List.of("RegionID", "AdvEngineID", "ResolutionWidth", "UserID"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, INTEGER, INTEGER, BIGINT),
+                                Optional.empty(),
+                                List.of(field(0, INTEGER), castField(1, INTEGER, BIGINT), castField(2, INTEGER, BIGINT), field(3, BIGINT)),
+                                projectedTypes),
+                        markDistinctFactory(2, projectedTypes, List.of(0, 3)),
+                        hashAggregationFactory(
+                                3,
+                                List.of(INTEGER),
+                                List.of(0),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(4))),
+                        topNFactory(4, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query11TopMobilePhoneModelsByDistinctUsers(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("MobilePhoneModel", "UserID"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, BIGINT),
+                                Optional.of(notEqual(0, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, VARCHAR), field(1, BIGINT)),
+                                List.of(VARCHAR, BIGINT)),
+                        markDistinctFactory(2, List.of(VARCHAR, BIGINT), List.of(0, 1)),
+                        hashAggregationFactory(
+                                3,
+                                List.of(VARCHAR),
+                                List.of(0),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(2))),
+                        topNFactory(4, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query12TopMobilePhonesAndModelsByDistinctUsers(Path input)
+    {
+        List<Type> outputTypes = List.of(INTEGER, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("MobilePhone", "MobilePhoneModel", "UserID"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, VARCHAR, BIGINT),
+                                Optional.of(notEqual(1, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, INTEGER), field(1, VARCHAR), field(2, BIGINT)),
+                                List.of(INTEGER, VARCHAR, BIGINT)),
+                        markDistinctFactory(2, List.of(INTEGER, VARCHAR, BIGINT), List.of(0, 1, 2)),
+                        hashAggregationFactory(
+                                3,
+                                List.of(INTEGER, VARCHAR),
+                                List.of(0, 1),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(3))),
+                        topNFactory(4, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query14TopSearchPhrasesByDistinctUsers(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("SearchPhrase", "UserID"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, BIGINT),
+                                Optional.of(notEqual(0, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, VARCHAR), field(1, BIGINT)),
+                                List.of(VARCHAR, BIGINT)),
+                        markDistinctFactory(2, List.of(VARCHAR, BIGINT), List.of(0, 1)),
+                        hashAggregationFactory(
+                                3,
+                                List.of(VARCHAR),
+                                List.of(0),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(2))),
+                        topNFactory(4, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query15TopSearchEngineAndPhrasePairs(Path input)
+    {
+        List<Type> outputTypes = List.of(INTEGER, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("SearchEngineID", "SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, VARCHAR),
+                                Optional.of(notEqual(1, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, INTEGER), field(1, VARCHAR)),
+                                List.of(INTEGER, VARCHAR)),
+                        hashAggregationFactory(
+                                2,
+                                List.of(INTEGER, VARCHAR),
+                                List.of(0, 1),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query16TopUserIds(Path input)
+    {
+        List<Type> outputTypes = List.of(BIGINT, BIGINT);
+        return materialize(
+                input,
+                List.of("UserID"),
+                List.of(
+                        hashAggregationFactory(1, List.of(BIGINT), List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(2, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query17TopUserIdAndSearchPhrasePairs(Path input)
+    {
+        List<Type> outputTypes = List.of(BIGINT, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("UserID", "SearchPhrase"),
+                List.of(
+                        hashAggregationFactory(1, List.of(BIGINT, VARCHAR), List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(2, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query18FirstUserIdAndSearchPhrasePairs(Path input)
+    {
+        List<Type> outputTypes = List.of(BIGINT, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("UserID", "SearchPhrase"),
+                List.of(
+                        hashAggregationFactory(1, List.of(BIGINT, VARCHAR), List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        limitFactory(2, 10)),
+                outputTypes);
+    }
+
+    public MaterializedResult query19TopUserIdMinuteAndSearchPhraseTriples(Path input)
+    {
+        List<Type> projectedTypes = List.of(BIGINT, BIGINT, VARCHAR);
+        List<Type> outputTypes = List.of(BIGINT, BIGINT, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("UserID", "EventTime", "SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(BIGINT, BIGINT, VARCHAR),
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), minuteOfHour(field(1, BIGINT)), field(2, VARCHAR)),
+                                projectedTypes),
+                        hashAggregationFactory(2, projectedTypes, List.of(0, 1, 2), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(3), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query20UserIdsForExactUserId(Path input)
+    {
+        return materialize(
+                input,
+                List.of("UserID"),
+                List.of(filterAndProjectFactory(
+                        1,
+                        List.of(BIGINT),
+                        Optional.of(equal(0, BIGINT, 435_090_932_899_640_449L)),
+                        List.of(field(0, BIGINT)),
+                        List.of(BIGINT))),
+                List.of(BIGINT));
+    }
+
+    public MaterializedResult query21CountUrlsContainingGoogle(Path input)
+    {
+        return materialize(
+                input,
+                List.of("URL"),
+                List.of(
+                        filterAndProjectFactory(1, List.of(VARCHAR), Optional.of(contains(0, "google")), List.of(), List.of()),
+                        aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                List.of(BIGINT));
+    }
+
+    public MaterializedResult query22SearchPhrasesWithGoogleUrls(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR_MIN.getFinalType(), BIGINT);
+        return materialize(
+                input,
+                List.of("SearchPhrase", "URL"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, VARCHAR),
+                                Optional.of(and(notEqual(0, VARCHAR, Slices.utf8Slice("")), contains(1, "google"))),
+                                List.of(field(0, VARCHAR), field(1, VARCHAR)),
+                                List.of(VARCHAR, VARCHAR)),
+                        hashAggregationFactory(
+                                2,
+                                List.of(VARCHAR),
+                                List.of(0),
+                                VARCHAR_MIN.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query23GoogleTitlesNonGoogleUrls(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR_MIN.getFinalType(), VARCHAR_MIN.getFinalType(), BIGINT, BIGINT);
+        return materialize(
+                input,
+                List.of("SearchPhrase", "URL", "Title", "UserID"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT),
+                                Optional.of(and(
+                                        contains(2, "Google"),
+                                        notContains(1, ".google."),
+                                        notEqual(0, VARCHAR, Slices.utf8Slice("")))),
+                                List.of(field(0, VARCHAR), field(1, VARCHAR), field(2, VARCHAR), field(3, BIGINT)),
+                                List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT)),
+                        markDistinctFactory(2, List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT), List.of(0, 3)),
+                        hashAggregationFactory(
+                                3,
+                                List.of(VARCHAR),
+                                List.of(0),
+                                VARCHAR_MIN.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                VARCHAR_MIN.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(4))),
+                        topNFactory(4, outputTypes, 10, List.of(3), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query24SelectAllGoogleUrlsOrderedByEventTime(Path input)
+    {
+        List<String> columns = TrinoClickBenchPageReader.allColumns(input);
+        List<Type> types = TrinoClickBenchPageReader.columnTypes(input, columns);
+        int eventTimeIndex = columns.indexOf("EventTime");
+        int urlIndex = columns.indexOf("URL");
+        return materialize(
+                input,
+                columns,
+                List.of(
+                        filterAndProjectFactory(1, types, Optional.of(contains(urlIndex, "google")), identityProjections(types), types),
+                        topNFactory(2, types, 10, List.of(eventTimeIndex), List.of(ascending()))),
+                types);
+    }
+
+    public MaterializedResult query25SearchPhrasesOrderedByEventTime(Path input)
+    {
+        return materialize(
+                input,
+                List.of("EventTime", "SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(1, List.of(BIGINT, VARCHAR), Optional.of(notEqual(1, VARCHAR, Slices.utf8Slice(""))), identityProjections(List.of(BIGINT, VARCHAR)), List.of(BIGINT, VARCHAR)),
+                        topNFactory(2, List.of(BIGINT, VARCHAR), 10, List.of(0), List.of(ascending())),
+                        filterAndProjectFactory(3, List.of(BIGINT, VARCHAR), Optional.empty(), List.of(field(1, VARCHAR)), List.of(VARCHAR))),
+                List.of(VARCHAR));
+    }
+
+    public MaterializedResult query26SearchPhrasesOrderedAscending(Path input)
+    {
+        return materialize(
+                input,
+                List.of("SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(1, List.of(VARCHAR), Optional.of(notEqual(0, VARCHAR, Slices.utf8Slice(""))), List.of(field(0, VARCHAR)), List.of(VARCHAR)),
+                        topNFactory(2, List.of(VARCHAR), 10, List.of(0), List.of(ascending()))),
+                List.of(VARCHAR));
+    }
+
+    public MaterializedResult query27SearchPhrasesOrderedByEventTimeThenPhrase(Path input)
+    {
+        return materialize(
+                input,
+                List.of("EventTime", "SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(1, List.of(BIGINT, VARCHAR), Optional.of(notEqual(1, VARCHAR, Slices.utf8Slice(""))), identityProjections(List.of(BIGINT, VARCHAR)), List.of(BIGINT, VARCHAR)),
+                        topNFactory(2, List.of(BIGINT, VARCHAR), 10, List.of(0, 1), List.of(ascending(), ascending())),
+                        filterAndProjectFactory(3, List.of(BIGINT, VARCHAR), Optional.empty(), List.of(field(1, VARCHAR)), List.of(VARCHAR))),
+                List.of(VARCHAR));
+    }
+
+    public MaterializedResult query28CounterAverageUrlLength(Path input)
+    {
+        List<Type> outputTypes = List.of(INTEGER, DOUBLE, BIGINT);
+        return materialize(
+                input,
+                List.of("CounterID", "URL"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, VARCHAR),
+                                Optional.of(notEqual(1, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, INTEGER), length(field(1, VARCHAR))),
+                                List.of(INTEGER, BIGINT)),
+                        hashAggregationFactory(
+                                2,
+                                List.of(INTEGER),
+                                List.of(0),
+                                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        filterAndProjectFactory(
+                                3,
+                                outputTypes,
+                                Optional.of(greaterThan(2, BIGINT, 100_000L)),
+                                identityProjections(outputTypes),
+                                outputTypes),
+                        topNFactory(4, outputTypes, 25, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query29RefererHosts(Path input)
+    {
+        List<Type> projectedTypes = List.of(VARCHAR, BIGINT, VARCHAR);
+        List<Type> outputTypes = List.of(VARCHAR, DOUBLE, BIGINT, VARCHAR);
+        return materialize(
+                input,
+                List.of("Referer"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR),
+                                Optional.of(notEqual(0, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(regexpReplace(field(0, VARCHAR), "^https?://(?:www\\.)?([^/]+)/.*$", "\\1"), length(field(0, VARCHAR)), field(0, VARCHAR)),
+                                projectedTypes),
+                        hashAggregationFactory(
+                                2,
+                                List.of(VARCHAR),
+                                List.of(0),
+                                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                                VARCHAR_MIN.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())),
+                        filterAndProjectFactory(
+                                3,
+                                outputTypes,
+                                Optional.of(greaterThan(2, BIGINT, 100_000L)),
+                                identityProjections(outputTypes),
+                                outputTypes),
+                        topNFactory(4, outputTypes, 25, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query30SumResolutionWidthPlusOffsets(Path input)
+    {
+        List<RowExpression> projections = new ArrayList<>();
+        List<Type> projectedTypes = new ArrayList<>();
+        List<io.trino.operator.aggregation.AggregatorFactory> aggregators = new ArrayList<>();
+        for (int offset = 0; offset < 90; offset++) {
+            projections.add(add(castField(0, INTEGER, BIGINT), constant((long) offset, BIGINT), BIGINT));
+            projectedTypes.add(BIGINT);
+            aggregators.add(BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(offset), OptionalInt.empty()));
+        }
+        return materialize(
+                input,
+                List.of("ResolutionWidth"),
+                List.of(
+                        filterAndProjectFactory(1, List.of(INTEGER), Optional.empty(), projections, projectedTypes),
+                        new AggregationOperatorFactory(2, new PlanNodeId("aggregation"), aggregators)),
+                projectedTypes);
+    }
+
+    public MaterializedResult query31SearchEngineAndClientIp(Path input)
+    {
+        List<Type> projectedTypes = List.of(INTEGER, INTEGER, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(INTEGER, INTEGER, BIGINT, BIGINT_SUM.getFinalType(), BIGINT_AVG.getFinalType());
+        return materialize(
+                input,
+                List.of("SearchEngineID", "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, INTEGER, INTEGER, INTEGER, VARCHAR),
+                                Optional.of(notEqual(4, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, INTEGER), field(1, INTEGER), castField(2, INTEGER, BIGINT), castField(3, INTEGER, BIGINT)),
+                                projectedTypes),
+                        hashAggregationFactory(
+                                2,
+                                List.of(INTEGER, INTEGER),
+                                List.of(0, 1),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query32WatchIdAndClientIpWithSearchPhrase(Path input)
+    {
+        List<Type> projectedTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT_SUM.getFinalType(), BIGINT_AVG.getFinalType());
+        return materialize(
+                input,
+                List.of("WatchID", "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER, VARCHAR),
+                                Optional.of(notEqual(4, VARCHAR, Slices.utf8Slice(""))),
+                                List.of(field(0, BIGINT), field(1, INTEGER), castField(2, INTEGER, BIGINT), castField(3, INTEGER, BIGINT)),
+                                projectedTypes),
+                        hashAggregationFactory(
+                                2,
+                                List.of(BIGINT, INTEGER),
+                                List.of(0, 1),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query33WatchIdAndClientIp(Path input)
+    {
+        List<Type> projectedTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT_SUM.getFinalType(), BIGINT_AVG.getFinalType());
+        return materialize(
+                input,
+                List.of("WatchID", "ClientIP", "IsRefresh", "ResolutionWidth"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER),
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(1, INTEGER), castField(2, INTEGER, BIGINT), castField(3, INTEGER, BIGINT)),
+                                projectedTypes),
+                        hashAggregationFactory(
+                                2,
+                                List.of(BIGINT, INTEGER),
+                                List.of(0, 1),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query35ConstantAndTopUrls(Path input)
+    {
+        List<Type> projectedTypes = List.of(BIGINT, VARCHAR);
+        List<Type> outputTypes = List.of(BIGINT, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("URL"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR),
+                                Optional.empty(),
+                                List.of(constant(1L, BIGINT), field(0, VARCHAR)),
+                                projectedTypes),
+                        hashAggregationFactory(2, projectedTypes, List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query36ClientIpArithmeticGroups(Path input)
+    {
+        List<Type> projectedTypes = List.of(BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
+        return materialize(
+                input,
+                List.of("ClientIP"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER),
+                                Optional.empty(),
+                                List.of(
+                                        castField(0, INTEGER, BIGINT),
+                                        subtract(castField(0, INTEGER, BIGINT), constant(1L, BIGINT), BIGINT),
+                                        subtract(castField(0, INTEGER, BIGINT), constant(2L, BIGINT), BIGINT),
+                                        subtract(castField(0, INTEGER, BIGINT), constant(3L, BIGINT), BIGINT)),
+                                projectedTypes),
+                        hashAggregationFactory(2, projectedTypes, List.of(0, 1, 2, 3), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(4), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query37TopUrlsForCounter62(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("URL", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, INTEGER, INTEGER, INTEGER, INTEGER),
+                                Optional.of(and(
+                                        equal(1, INTEGER, 62L),
+                                        equal(3, INTEGER, 0L),
+                                        equal(4, INTEGER, 0L),
+                                        dateRange(input, 2, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1)),
+                                        notEqual(0, VARCHAR, Slices.utf8Slice("")))),
+                                List.of(field(0, VARCHAR)),
+                                List.of(VARCHAR)),
+                        hashAggregationFactory(2, List.of(VARCHAR), List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query38TopTitlesForCounter62(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("Title", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, INTEGER, INTEGER, INTEGER, INTEGER),
+                                Optional.of(and(
+                                        equal(1, INTEGER, 62L),
+                                        equal(3, INTEGER, 0L),
+                                        equal(4, INTEGER, 0L),
+                                        dateRange(input, 2, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1)),
+                                        notEqual(0, VARCHAR, Slices.utf8Slice("")))),
+                                List.of(field(0, VARCHAR)),
+                                List.of(VARCHAR)),
+                        hashAggregationFactory(2, List.of(VARCHAR), List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query39TopUrlsOffset(Path input)
+    {
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("URL", "CounterID", "EventDate", "IsRefresh", "IsLink", "IsDownload"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(VARCHAR, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER),
+                                Optional.of(and(
+                                        equal(1, INTEGER, 62L),
+                                        equal(3, INTEGER, 0L),
+                                        notEqual(4, INTEGER, 0L),
+                                        equal(5, INTEGER, 0L),
+                                        dateRange(input, 2, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1)))),
+                                List.of(field(0, VARCHAR)),
+                                List.of(VARCHAR)),
+                        hashAggregationFactory(2, List.of(VARCHAR), List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 1_010, List.of(1), List.of(DESC_NULLS_LAST)),
+                        offsetFactory(4, 1_000),
+                        limitFactory(5, 10)),
+                outputTypes);
+    }
+
+    public MaterializedResult query40TrafficSourceGroups(Path input)
+    {
+        List<Type> projectedTypes = List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR);
+        List<Type> outputTypes = List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR, BIGINT);
+        return materialize(
+                input,
+                List.of("TraficSourceID", "SearchEngineID", "AdvEngineID", "Referer", "URL", "CounterID", "EventDate", "IsRefresh"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR, INTEGER, INTEGER, INTEGER),
+                                Optional.of(and(
+                                        equal(5, INTEGER, 62L),
+                                        equal(7, INTEGER, 0L),
+                                        dateRange(input, 6, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1)))),
+                                List.of(
+                                        field(0, INTEGER),
+                                        field(1, INTEGER),
+                                        field(2, INTEGER),
+                                        trafficSourceCase(field(1, INTEGER), field(2, INTEGER), field(3, VARCHAR)),
+                                        field(4, VARCHAR)),
+                                projectedTypes),
+                        hashAggregationFactory(2, projectedTypes, List.of(0, 1, 2, 3, 4), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 1_010, List.of(5), List.of(DESC_NULLS_LAST)),
+                        offsetFactory(4, 1_000),
+                        limitFactory(5, 10)),
+                outputTypes);
+    }
+
+    public MaterializedResult query41UrlHashByEventDate(Path input)
+    {
+        List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT);
+        return materialize(
+                input,
+                List.of("URLHash", "EventDate", "CounterID", "IsRefresh", "TraficSourceID", "RefererHash"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER, INTEGER, BIGINT),
+                                Optional.of(and(
+                                        equal(2, INTEGER, 62L),
+                                        equal(3, INTEGER, 0L),
+                                        or(equal(4, INTEGER, -1L), equal(4, INTEGER, 6L)),
+                                        equal(5, BIGINT, 3_594_120_000_172_545_465L),
+                                        dateRange(input, 1, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1)))),
+                                List.of(field(0, BIGINT), field(1, INTEGER)),
+                                List.of(BIGINT, INTEGER)),
+                        hashAggregationFactory(2, List.of(BIGINT, INTEGER), List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 110, List.of(2), List.of(DESC_NULLS_LAST)),
+                        offsetFactory(4, 100),
+                        limitFactory(5, 10)),
+                outputTypes);
+    }
+
+    public MaterializedResult query42WindowClientSizes(Path input)
+    {
+        List<Type> outputTypes = List.of(INTEGER, INTEGER, BIGINT);
+        return materialize(
+                input,
+                List.of("WindowClientWidth", "WindowClientHeight", "CounterID", "EventDate", "IsRefresh", "DontCountHits", "URLHash"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, BIGINT),
+                                Optional.of(and(
+                                        equal(2, INTEGER, 62L),
+                                        equal(4, INTEGER, 0L),
+                                        equal(5, INTEGER, 0L),
+                                        equal(6, BIGINT, 2_868_770_270_353_813_622L),
+                                        dateRange(input, 3, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1)))),
+                                List.of(field(0, INTEGER), field(1, INTEGER)),
+                                List.of(INTEGER, INTEGER)),
+                        hashAggregationFactory(2, List.of(INTEGER, INTEGER), List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 10_010, List.of(2), List.of(DESC_NULLS_LAST)),
+                        offsetFactory(4, 10_000),
+                        limitFactory(5, 10)),
+                outputTypes);
+    }
+
+    public MaterializedResult query43PageViewsByMinute(Path input)
+    {
+        List<Type> projectedTypes = List.of(BIGINT);
+        List<Type> outputTypes = List.of(BIGINT, BIGINT);
+        return materialize(
+                input,
+                List.of("EventTime", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
+                List.of(
+                        filterAndProjectFactory(
+                                1,
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER, INTEGER),
+                                Optional.of(and(
+                                        equal(1, INTEGER, 62L),
+                                        equal(3, INTEGER, 0L),
+                                        equal(4, INTEGER, 0L),
+                                        dateRange(input, 2, LocalDate.of(2013, 7, 14), LocalDate.of(2013, 7, 16)))),
+                                List.of(minuteBucket(field(0, BIGINT))),
+                                projectedTypes),
+                        hashAggregationFactory(2, projectedTypes, List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, outputTypes, 1_010, List.of(0), List.of(ascending())),
+                        offsetFactory(4, 1_000),
+                        limitFactory(5, 10)),
+                outputTypes);
+    }
+
     @Override
     public void close()
     {
@@ -299,6 +1043,28 @@ public final class TrinoClickBenchSupport
         }
     }
 
+    private AggregationOperatorFactory aggregationFactory(int operatorId, io.trino.operator.aggregation.AggregatorFactory... aggregators)
+    {
+        return new AggregationOperatorFactory(operatorId, new PlanNodeId("aggregation-" + operatorId), List.of(aggregators));
+    }
+
+    private HashAggregationOperatorFactory hashAggregationFactory(int operatorId, List<Type> groupTypes, List<Integer> groupChannels, io.trino.operator.aggregation.AggregatorFactory... aggregators)
+    {
+        return new HashAggregationOperatorFactory(
+                operatorId,
+                new PlanNodeId("grouped-aggregation-" + operatorId),
+                groupTypes,
+                groupChannels,
+                List.of(),
+                Step.SINGLE,
+                List.of(aggregators),
+                OptionalInt.empty(),
+                100_000,
+                Optional.of(DataSize.of(16, MEGABYTE)),
+                hashStrategyCompiler,
+                Optional.empty());
+    }
+
     private OperatorFactory topNFactory(int operatorId, List<Type> types, int n, List<Integer> sortChannels, List<SortOrder> sortOrders)
     {
         List<Type> sortTypes = sortChannels.stream()
@@ -312,6 +1078,26 @@ public final class TrinoClickBenchSupport
                 orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders));
     }
 
+    private static OperatorFactory limitFactory(int operatorId, long limit)
+    {
+        return new LimitOperatorFactory(operatorId, new PlanNodeId("limit-" + operatorId), limit);
+    }
+
+    private OperatorFactory markDistinctFactory(int operatorId, List<Type> types, List<Integer> distinctChannels)
+    {
+        return new MarkDistinctOperatorFactory(operatorId, new PlanNodeId("mark-distinct-" + operatorId), types, distinctChannels, hashStrategyCompiler);
+    }
+
+    private OperatorFactory distinctLimitFactory(int operatorId, List<Type> types, List<Integer> channels, long limit)
+    {
+        return new DistinctLimitOperatorFactory(operatorId, new PlanNodeId("distinct-limit-" + operatorId), types, channels, limit, hashStrategyCompiler);
+    }
+
+    private static OperatorFactory offsetFactory(int operatorId, long offset)
+    {
+        return new TrinoOffsetOperator.Factory(operatorId, new PlanNodeId("offset-" + operatorId), offset);
+    }
+
     private OperatorFactory filterAndProjectFactory(int operatorId, List<Type> inputTypes, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
     {
         return FilterAndProjectOperator.createOperatorFactory(
@@ -323,17 +1109,172 @@ public final class TrinoClickBenchSupport
                 1);
     }
 
+    private static List<RowExpression> identityProjections(List<Type> types)
+    {
+        List<RowExpression> projections = new ArrayList<>(types.size());
+        for (int index = 0; index < types.size(); index++) {
+            projections.add(field(index, types.get(index)));
+        }
+        return projections;
+    }
+
     private static RowExpression castField(int inputChannel, Type fromType, Type toType)
     {
         return new CallExpression(FUNCTION_RESOLUTION.getCoercion(fromType, toType), List.of(field(inputChannel, fromType)));
     }
 
-    private static RowExpression notEqual(int inputChannel, Type type, Object constantValue)
+    private static RowExpression equal(int inputChannel, Type type, Object constantValue)
     {
-        RowExpression equals = new CallExpression(
+        return new CallExpression(
                 FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(type, type)),
                 List.of(field(inputChannel, type), constant(constantValue, type)));
-        return new CallExpression(FUNCTION_RESOLUTION.resolveFunction("$not", fromTypes(BOOLEAN)), List.of(equals));
+    }
+
+    private static RowExpression greaterThan(int inputChannel, Type type, Object constantValue)
+    {
+        return lessThan(constant(constantValue, type), field(inputChannel, type), type);
+    }
+
+    private static RowExpression notEqual(int inputChannel, Type type, Object constantValue)
+    {
+        return not(equal(inputChannel, type, constantValue));
+    }
+
+    private static RowExpression add(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.ADD, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression subtract(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.SUBTRACT, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression divide(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.DIVIDE, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression modulus(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.MODULUS, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression lessThan(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.LESS_THAN, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression and(RowExpression first, RowExpression second, RowExpression... rest)
+    {
+        RowExpression result = new SpecialForm(SpecialForm.Form.AND, BOOLEAN, List.of(first, second), List.of());
+        for (RowExpression expression : rest) {
+            result = new SpecialForm(SpecialForm.Form.AND, BOOLEAN, List.of(result, expression), List.of());
+        }
+        return result;
+    }
+
+    private static RowExpression or(RowExpression first, RowExpression second, RowExpression... rest)
+    {
+        RowExpression result = new SpecialForm(SpecialForm.Form.OR, BOOLEAN, List.of(first, second), List.of());
+        for (RowExpression expression : rest) {
+            result = new SpecialForm(SpecialForm.Form.OR, BOOLEAN, List.of(result, expression), List.of());
+        }
+        return result;
+    }
+
+    private static RowExpression not(RowExpression expression)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveFunction("$not", fromTypes(BOOLEAN)), List.of(expression));
+    }
+
+    private static RowExpression contains(int inputChannel, String needle)
+    {
+        return contains(field(inputChannel, VARCHAR), needle);
+    }
+
+    private static RowExpression contains(RowExpression expression, String needle)
+    {
+        RowExpression strpos = new CallExpression(FUNCTION_RESOLUTION.resolveFunction("strpos", fromTypes(VARCHAR, VARCHAR)), List.of(expression, constant(Slices.utf8Slice(needle), VARCHAR)));
+        return lessThan(constant(0L, BIGINT), strpos, BIGINT);
+    }
+
+    private static RowExpression notContains(int inputChannel, String needle)
+    {
+        return not(contains(inputChannel, needle));
+    }
+
+    private static RowExpression length(RowExpression expression)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveFunction("length", fromTypes(VARCHAR)), List.of(expression));
+    }
+
+    private static RowExpression regexpReplace(RowExpression expression, String pattern, String replacement)
+    {
+        return new CallExpression(
+                FUNCTION_RESOLUTION.resolveFunction("regexp_replace", fromTypes(VARCHAR, VARCHAR, VARCHAR)),
+                List.of(expression, constant(Slices.utf8Slice(pattern), VARCHAR), constant(Slices.utf8Slice(replacement), VARCHAR)));
+    }
+
+    private static RowExpression minuteOfHour(RowExpression eventTime)
+    {
+        RowExpression sixty = constant(60L, BIGINT);
+        return modulus(divide(eventTime, sixty, BIGINT), sixty, BIGINT);
+    }
+
+    private static RowExpression minuteBucket(RowExpression eventTime)
+    {
+        RowExpression sixty = constant(60L, BIGINT);
+        return multiply(divide(eventTime, sixty, BIGINT), sixty, BIGINT);
+    }
+
+    private static RowExpression multiply(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression trafficSourceCase(RowExpression searchEngineId, RowExpression advEngineId, RowExpression referer)
+    {
+        RowExpression bothZero = and(
+                new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(INTEGER, INTEGER)), List.of(searchEngineId, constant(0L, INTEGER))),
+                new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(INTEGER, INTEGER)), List.of(advEngineId, constant(0L, INTEGER))));
+        return new SpecialForm(SpecialForm.Form.IF, VARCHAR, List.of(bothZero, referer, constant(Slices.utf8Slice(""), VARCHAR)), List.of());
+    }
+
+    private static SortOrder ascending()
+    {
+        return SortOrder.ASC_NULLS_LAST;
+    }
+
+    private static RowExpression dateRange(Path file, int inputChannel, LocalDate inclusiveLowerBound, LocalDate exclusiveUpperBound)
+    {
+        int lowerBound = eventDateLiteral(file, inclusiveLowerBound);
+        int upperBound = eventDateLiteral(file, exclusiveUpperBound);
+        return and(
+                not(lessThan(field(inputChannel, INTEGER), constant((long) lowerBound, INTEGER), INTEGER)),
+                lessThan(field(inputChannel, INTEGER), constant((long) upperBound, INTEGER), INTEGER));
+    }
+
+    private static int eventDateLiteral(Path file, LocalDate date)
+    {
+        if (eventDateUsesEpochDays(file)) {
+            return toIntExact(date.toEpochDay());
+        }
+        return (date.getYear() * 10_000) + (date.getMonthValue() * 100) + date.getDayOfMonth();
+    }
+
+    private static boolean eventDateUsesEpochDays(Path file)
+    {
+        Path schemaFile = TrinoClickBenchPageReader.resolveFiles(file).getFirst();
+        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(schemaFile))) {
+            var field = reader.getFooter().getFileMetaData().getSchema().getType("EventDate").asPrimitiveType();
+            return field.getLogicalTypeAnnotation() instanceof org.apache.parquet.schema.LogicalTypeAnnotation.IntLogicalTypeAnnotation logicalType
+                    && !logicalType.isSigned()
+                    && logicalType.getBitWidth() == 16;
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to inspect ClickBench EventDate encoding for " + schemaFile, exception);
+        }
     }
 
     private static Type inferType(String columnName)
