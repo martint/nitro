@@ -119,6 +119,24 @@ final class GroupingState
 
     private void assignFlatGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
     {
+        if (nulls.length == 1) {
+            BooleanVector nullVector = nulls[0];
+            for (int position : mask) {
+                if (OperatorVectorSupport.isNull(nullVector, position)) {
+                    result.values()[position] = nullGroup();
+                }
+                else {
+                    long newGroupId = nextGroupId;
+                    long groupId = flatGroupingTable.assignGroup(values, position, newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    result.values()[position] = groupId;
+                }
+            }
+            return;
+        }
+
         for (int position : mask) {
             if (hasNull(nulls, position)) {
                 result.values()[position] = nullGroup();

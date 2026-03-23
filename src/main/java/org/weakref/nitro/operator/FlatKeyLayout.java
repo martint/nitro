@@ -24,6 +24,10 @@ final class FlatKeyLayout
     private final int[] inputChannels;
     private final FlatTypeHandler[] handlers;
     private final int[] fixedOffsets;
+    private final boolean singleField;
+    private final int singleInputChannel;
+    private final FlatTypeHandler singleHandler;
+    private final int singleFixedOffset;
     private final int fixedRecordSize;
     private final boolean anyVariableWidth;
 
@@ -33,6 +37,10 @@ final class FlatKeyLayout
         this.inputChannels = inputChannels;
         this.handlers = handlers;
         this.fixedOffsets = fixedOffsets;
+        this.singleField = handlers.length == 1;
+        this.singleInputChannel = singleField ? inputChannels[0] : -1;
+        this.singleHandler = singleField ? handlers[0] : null;
+        this.singleFixedOffset = singleField ? fixedOffsets[0] : -1;
         this.fixedRecordSize = fixedRecordSize;
         this.anyVariableWidth = anyVariableWidth;
     }
@@ -82,6 +90,9 @@ final class FlatKeyLayout
 
     public long hash(Vector[] values, int position)
     {
+        if (singleField) {
+            return 31 + singleHandler.hashInput(values[singleInputChannel], position);
+        }
         long result = 1;
         for (int index = 0; index < handlers.length; index++) {
             result = 31 * result + handlers[index].hashInput(values[inputChannels[index]], position);
@@ -91,6 +102,10 @@ final class FlatKeyLayout
 
     public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, int position)
     {
+        if (singleField) {
+            singleHandler.writeFlat(values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena);
+            return;
+        }
         for (int index = 0; index < handlers.length; index++) {
             handlers[index].writeFlat(values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
         }
@@ -98,6 +113,9 @@ final class FlatKeyLayout
 
     public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, int position)
     {
+        if (singleField) {
+            return singleHandler.identicalFlatToInput(fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position);
+        }
         for (int index = 0; index < handlers.length; index++) {
             if (!handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
