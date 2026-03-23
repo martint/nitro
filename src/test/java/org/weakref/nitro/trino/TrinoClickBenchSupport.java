@@ -50,6 +50,8 @@ import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -67,7 +69,9 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 public final class TrinoClickBenchSupport
         implements AutoCloseable
 {
+    private static final String TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY = "nitro.clickbench.trino.blockedWaitTimeoutSeconds";
     private static final String TRINO_QUERY_MAX_MEMORY_PROPERTY = "nitro.clickbench.trino.queryMaxMemoryGigabytes";
+    private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 5;
     private static final int DEFAULT_TRINO_QUERY_MAX_MEMORY_GIGABYTES = 4;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", ImmutableList.of());
@@ -80,6 +84,7 @@ public final class TrinoClickBenchSupport
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoClickBenchSupport-scheduled"));
     private final OrderingCompiler orderingCompiler = new OrderingCompiler(new TypeOperators());
     private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
+    private final int blockedWaitTimeoutSeconds = blockedWaitTimeoutSeconds();
     private final DataSize queryMaxMemory = queryMaxMemory();
 
     public Path requiredActualHitsPath()
@@ -247,7 +252,10 @@ public final class TrinoClickBenchSupport
     {
         List<Page> outputPages = collectOutput ? new ArrayList<>() : null;
         try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(input, columns)) {
-            DriverContext driverContext = TestingTaskContext.createTaskContext(executor, scheduledExecutor, TestingSession.testSessionBuilder().build(), queryMaxMemory)
+            DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
+                    .setQueryMaxMemory(queryMaxMemory)
+                    .setMemoryPoolSize(queryMaxMemory)
+                    .build()
                     .addPipelineContext(0, true, true, false)
                     .addDriverContext();
 
@@ -273,7 +281,7 @@ public final class TrinoClickBenchSupport
                 while (!driver.isFinished()) {
                     var blocked = driver.processUntilBlocked();
                     if (!blocked.isDone()) {
-                        blocked.get();
+                        waitForBlocked(driver, operators, blocked);
                     }
                 }
             }
@@ -359,5 +367,53 @@ public final class TrinoClickBenchSupport
             throw new IllegalArgumentException(TRINO_QUERY_MAX_MEMORY_PROPERTY + " must be positive");
         }
         return DataSize.of(gigabytes, io.airlift.units.DataSize.Unit.GIGABYTE);
+    }
+
+    private static int blockedWaitTimeoutSeconds()
+    {
+        String configured = System.getProperty(TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY);
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS;
+        }
+
+        int seconds = Integer.parseInt(configured);
+        if (seconds <= 0) {
+            throw new IllegalArgumentException(TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY + " must be positive");
+        }
+        return seconds;
+    }
+
+    private void waitForBlocked(Driver driver, List<Operator> operators, com.google.common.util.concurrent.ListenableFuture<Void> blocked)
+            throws Exception
+    {
+        try {
+            blocked.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS);
+        }
+        catch (TimeoutException exception) {
+            throw new IllegalStateException(describeBlockedDriver(driver, operators, blocked), exception);
+        }
+    }
+
+    private static String describeBlockedDriver(Driver driver, List<Operator> operators, com.google.common.util.concurrent.ListenableFuture<Void> blocked)
+    {
+        StringBuilder message = new StringBuilder("Timed out waiting for Trino driver blocked future to complete");
+        message.append(" [driverFinished=").append(driver.isFinished()).append(']');
+        for (int index = 0; index < operators.size(); index++) {
+            Operator operator = operators.get(index);
+            com.google.common.util.concurrent.ListenableFuture<Void> operatorBlocked = operator.isBlocked();
+            com.google.common.util.concurrent.ListenableFuture<Void> waitingForMemory = operator.getOperatorContext().isWaitingForMemory();
+            com.google.common.util.concurrent.ListenableFuture<Void> waitingForRevocableMemory = operator.getOperatorContext().isWaitingForRevocableMemory();
+            message.append(System.lineSeparator())
+                    .append("operator[").append(index).append("]=").append(operator.getClass().getSimpleName())
+                    .append(" finished=").append(operator.isFinished())
+                    .append(" needsInput=").append(operator.needsInput())
+                    .append(" blockedDone=").append(operatorBlocked.isDone())
+                    .append(" matchesDriverBlocked=").append(operatorBlocked == blocked)
+                    .append(" waitingForMemoryDone=").append(waitingForMemory.isDone())
+                    .append(" waitingForRevocableMemoryDone=").append(waitingForRevocableMemory.isDone())
+                    .append(" waitingForMemoryMatchesDriverBlocked=").append(waitingForMemory == blocked)
+                    .append(" waitingForRevocableMatchesDriverBlocked=").append(waitingForRevocableMemory == blocked);
+        }
+        return message.toString();
     }
 }
