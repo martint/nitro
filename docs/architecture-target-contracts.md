@@ -883,6 +883,12 @@ not use `null` output placeholders.
 - Borrowed masks and streams are valid only for that batch.
 - Borrowed masks and streams should be released when the batch closes if they
   were not explicitly transferred with `take(...)`.
+- `borrow(...)` and `take(...)` answer an ownership question for a stream or
+  mask within one batch:
+  - `borrow(...)` means the caller may read the buffer, but the batch/output
+    still owns its eventual release
+  - `take(...)` means ownership moves to the caller, and batch close must no
+    longer release that buffer
 - `hasNext()` must not create observable duplicate work. If an operator
   prefetches or stages a batch during `hasNext()`, the following `next()` must
   return that same staged batch rather than pulling again from upstream.
@@ -890,6 +896,26 @@ not use `null` output placeholders.
   `next()`.
 - Non-retained operators should therefore close the previous batch before
   advancing to the next one.
+- `supportsRetainedBatches()` answers a different question than
+  `borrow(...)`/`take(...)`: it describes whether a previously returned batch
+  remains valid after the operator later advances.
+  - if `supportsRetainedBatches()` is `false`, downstream must finish using or
+    copying all needed data from the current batch before probing upstream for
+    another batch
+  - if `supportsRetainedBatches()` is `true`, an open previously returned batch
+    may remain valid across later `hasNext()`/`next()` calls
+- Retained-batch support does not override ownership transfer rules:
+  - a borrowed stream from a retained batch remains batch-owned and is still
+    released by batch close
+  - `take(...)` is still required when the caller needs the stream to outlive
+    the batch itself
+- Conversely, `take(...)` does not imply retained-batch support. A caller may
+  take or copy specific streams from a non-retained batch, but the batch as a
+  whole may still become invalid as soon as the operator advances.
+- The practical distinction is:
+  - retained batches let downstream defer later borrows/materialization against
+    the still-open batch
+  - `take(...)` lets downstream keep specific buffers after batch close
 - `constrain(mask)` narrows the rows of interest for the current batch only.
 - Operators may use `constrain(mask)` to avoid materializing streams that are no
   longer needed.
@@ -934,6 +960,10 @@ not use `null` output placeholders.
 - `takeMask()` and `take(stream)` transfer ownership to the caller.
 - After ownership transfer, the batch no longer exposes the transferred buffer
   for that batch.
+- Deferred operators such as `TopN`, joins, or grouped outputs should use
+  `supportsRetainedBatches()` to decide whether they may safely keep a batch
+  open and borrow payload later, or whether they must eagerly take/copy any
+  deferred payload before upstream advances.
 - Consumers that fully drain a batch should still close it promptly rather than
   relying on later operator shutdown. Tests and benchmarks need to follow the
   same lifetime contract as production execution if they want memory behavior
