@@ -67,6 +67,8 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 public final class TrinoClickBenchSupport
         implements AutoCloseable
 {
+    private static final String TRINO_QUERY_MAX_MEMORY_PROPERTY = "nitro.clickbench.trino.queryMaxMemoryGigabytes";
+    private static final int DEFAULT_TRINO_QUERY_MAX_MEMORY_GIGABYTES = 4;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", ImmutableList.of());
     private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
@@ -78,6 +80,7 @@ public final class TrinoClickBenchSupport
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoClickBenchSupport-scheduled"));
     private final OrderingCompiler orderingCompiler = new OrderingCompiler(new TypeOperators());
     private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
+    private final DataSize queryMaxMemory = queryMaxMemory();
 
     public Path requiredActualHitsPath()
     {
@@ -244,7 +247,7 @@ public final class TrinoClickBenchSupport
     {
         List<Page> outputPages = collectOutput ? new ArrayList<>() : null;
         try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(input, columns)) {
-            DriverContext driverContext = TestingTaskContext.createTaskContext(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
+            DriverContext driverContext = TestingTaskContext.createTaskContext(executor, scheduledExecutor, TestingSession.testSessionBuilder().build(), queryMaxMemory)
                     .addPipelineContext(0, true, true, false)
                     .addDriverContext();
 
@@ -342,5 +345,19 @@ public final class TrinoClickBenchSupport
             thread.setDaemon(true);
             return thread;
         };
+    }
+
+    private static DataSize queryMaxMemory()
+    {
+        String configured = System.getProperty(TRINO_QUERY_MAX_MEMORY_PROPERTY);
+        if (configured == null || configured.isBlank()) {
+            return DataSize.of(DEFAULT_TRINO_QUERY_MAX_MEMORY_GIGABYTES, io.airlift.units.DataSize.Unit.GIGABYTE);
+        }
+
+        int gigabytes = Integer.parseInt(configured);
+        if (gigabytes <= 0) {
+            throw new IllegalArgumentException(TRINO_QUERY_MAX_MEMORY_PROPERTY + " must be positive");
+        }
+        return DataSize.of(gigabytes, io.airlift.units.DataSize.Unit.GIGABYTE);
     }
 }
