@@ -102,7 +102,7 @@ final class GroupingState
         FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values);
         if (flatKeyLayout != null) {
             useFlatGrouping = true;
-            flatGroupingTable = new FlatGroupingTable(flatKeyLayout, 16);
+            flatGroupingTable = new FlatGroupingTable(flatKeyLayout, Math.max(16, values[0].length()));
             return;
         }
 

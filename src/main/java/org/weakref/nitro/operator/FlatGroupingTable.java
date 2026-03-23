@@ -44,7 +44,7 @@ final class FlatGroupingTable
     private int[] groupIdsByHash;
     private int[] recordIndexesByHash;
     private byte[][] fixedRecordChunks;
-    private int[] recordIndexByGroupId = new int[16];
+    private int[] recordIndexByGroupId;
     private int nextRecordIndex;
     private int capacity;
     private int mask;
@@ -64,6 +64,7 @@ final class FlatGroupingTable
         Arrays.fill(groupIdsByHash, -1);
         Arrays.fill(recordIndexesByHash, -1);
         this.fixedRecordChunks = new byte[recordGroupsRequiredForCapacity(capacity)][];
+        this.recordIndexByGroupId = new int[max(16, expectedSize)];
         Arrays.fill(recordIndexByGroupId, -1);
     }
 
