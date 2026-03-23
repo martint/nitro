@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.data;
 
+/**
+ * Marker interface for vectors whose primary representation is a direct flat layout rather than an
+ * indirection wrapper such as dictionary or run-length encoding.
+ */
 public non-sealed interface FlatVector
         extends Vector
 {

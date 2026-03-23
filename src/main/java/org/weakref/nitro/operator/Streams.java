@@ -25,6 +25,12 @@ import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Immutable tuple of logical streams for one column or state slot.
+ * <p>
+ * Nitro commonly models a value as a VALUES stream plus optional NULLS and ERRORS side streams.
+ * This class is the compact transport container for that trio.
+ */
 public final class Streams
 {
     private static final int VALUES_FLAG = 1;

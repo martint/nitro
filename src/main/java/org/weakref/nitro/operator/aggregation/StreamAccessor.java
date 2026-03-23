@@ -17,16 +17,31 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+/**
+ * Read-only accessor for the input streams seen by an accumulator.
+ */
 @FunctionalInterface
 public interface StreamAccessor
 {
+    /**
+     * Returns the requested stream for {@code column}.
+     * <p>
+     * Optional streams may be absent and are then returned as {@code null}.
+     */
     Vector stream(int column, Stream stream);
 
+    /**
+     * Returns the VALUES stream for {@code column}.
+     */
     default Vector values(int column)
     {
         return stream(column, Stream.VALUES);
     }
 
+    /**
+     * Returns the NULLS stream for {@code column}, or {@code null} if the input has no null side
+     * stream.
+     */
     default BooleanVector nulls(int column)
     {
         return (BooleanVector) stream(column, Stream.NULLS);

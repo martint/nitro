@@ -15,67 +15,155 @@ package org.weakref.nitro.data;
 
 import java.util.function.Consumer;
 
+/**
+ * Base contract for all columnar value containers in Nitro.
+ * <p>
+ * A vector represents one logical stream for a batch. Concrete implementations may store values
+ * directly ({@link FlatVector}), indirectly through wrappers such as dictionary or run-length
+ * encoding, or as nested composite structures.
+ * <p>
+ * The methods on this interface are intentionally split into:
+ * <ul>
+ *     <li>lifecycle and accounting ({@link #retainedBytes()}, pooling hooks)</li>
+ *     <li>structural copy operations used by generic runtime code</li>
+ *     <li>child traversal for recursive release/transfer</li>
+ * </ul>
+ * Generic operators should prefer these hooks over branching on concrete vector classes.
+ */
 public sealed interface Vector
         permits DictionaryVector, FlatVector, RleVector
 {
+    /**
+     * Returns the logical row count represented by this vector.
+     */
     int length();
 
+    /**
+     * Returns the bytes retained directly by this vector instance.
+     * <p>
+     * Child vectors are reported separately through {@link #forEachChildVector(Consumer)} so the
+     * allocator can account for ownership trees without double-counting.
+     */
     long retainedBytes();
 
+    /**
+     * Produces a logical copy of the entire vector in the target allocator context.
+     */
     Vector copy(Allocator allocator, Allocator.Context allocationContext);
 
+    /**
+     * Produces a compact copy containing only the supplied logical positions, reindexed densely
+     * from {@code 0..positions.length-1}.
+     */
     Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions);
 
+    /**
+     * Copies the selected positions into a vector with the same logical length as the source.
+     * <p>
+     * Positions not present in {@code mask} are left unchanged in {@code existing}. Generic merge
+     * paths use this to preserve branch/output indexing while updating only the active rows.
+     */
     default Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
         throw new UnsupportedOperationException("Vector does not support copyMasked: " + getClass().getSimpleName());
     }
 
+    /**
+     * Copies {@code sourceCount} positions from this vector into {@code existing}, starting at
+     * {@code outputStart} in a result vector of logical size {@code size}.
+     * <p>
+     * This is the append/compaction-oriented copy hook used by joins, top-N buffering, and other
+     * operators that build new dense outputs from arbitrary source row selections.
+     */
     default Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         throw new UnsupportedOperationException("Vector does not support copyPositionsInto: " + getClass().getSimpleName());
     }
 
+    /**
+     * Copies one logical position into {@code existing} at {@code outputPosition} in a result
+     * vector of logical size {@code size}.
+     * <p>
+     * This is the fine-grained companion to {@link #copyPositionsInto(Allocator, Allocator.Context, Vector, int[], int, int, int)}.
+     */
     default Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         throw new UnsupportedOperationException("Vector does not support copySinglePositionInto: " + getClass().getSimpleName());
     }
 
+    /**
+     * Creates an empty vector with the same logical type/shape as this vector.
+     * <p>
+     * Traits or nested stream schemas should be preserved, while the returned vector has length
+     * zero and no row data.
+     */
     default Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         throw new UnsupportedOperationException("Vector does not support emptyLike: " + getClass().getSimpleName());
     }
 
+    /**
+     * Materializes a dense vector by concatenating the rows from {@code rows}.
+     * <p>
+     * Each entry in {@code rows} is expected to represent the same logical stream shape as this
+     * vector. This hook lets nested and encoded vectors define their own row assembly semantics.
+     */
     default Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
         throw new UnsupportedOperationException("Vector does not support materializeRows: " + getClass().getSimpleName());
     }
 
+    /**
+     * Copies the entire contents of this vector into {@code target}.
+     * <p>
+     * The caller is responsible for ensuring that {@code target} is compatible and has sufficient
+     * capacity.
+     */
     default void copyInto(Vector target)
     {
         throw new UnsupportedOperationException("Vector does not support copyInto: " + getClass().getSimpleName());
     }
 
+    /**
+     * Clears reusable state before the vector is returned from a pool.
+     */
     default void clearForReuse()
     {
         throw new UnsupportedOperationException("Vector does not support clearForReuse: " + getClass().getSimpleName());
     }
 
+    /**
+     * Returns the pool family key used by the allocator.
+     * <p>
+     * Vectors that are not reusable should return {@code null}.
+     */
     default Object poolFamily()
     {
         return null;
     }
 
+    /**
+     * Returns the capacity used as the allocator pool bucket key for this vector.
+     */
     default int poolCapacity()
     {
         return 0;
     }
 
+    /**
+     * Returns the maximum number of idle vectors of this family/capacity that the allocator should
+     * retain.
+     */
     default int poolMaxRetained()
     {
         return 0;
     }
 
+    /**
+     * Visits directly referenced child vectors, if any.
+     * <p>
+     * The allocator uses this to transfer and release ownership trees recursively.
+     */
     default void forEachChildVector(Consumer<Vector> consumer)
     {
     }

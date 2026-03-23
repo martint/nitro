@@ -23,6 +23,12 @@ import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Lazily-resolved set of streams for one logical output column.
+ * <p>
+ * Streams can be borrowed multiple times, or taken exactly once. Borrowed-but-not-taken streams
+ * are released on {@link #close()}.
+ */
 public final class Output
         implements AutoCloseable
 {

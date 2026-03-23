@@ -22,6 +22,13 @@ import java.util.function.Function;
 import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
+/**
+ * A batch of row selections plus lazily-resolved output streams.
+ * <p>
+ * A batch owns the current output mask and one {@link Output} per operator column. Closing the
+ * batch releases all borrowed-but-not-taken streams and, unless the mask has been taken, releases
+ * the mask as well.
+ */
 public final class Batch
         implements AutoCloseable
 {
