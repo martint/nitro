@@ -107,6 +107,11 @@ final class JoinBufferSupport
 
     public Streams copySinglePosition(Output input, Streams existing, int size, int outputPosition, int sourcePosition)
     {
+        Streams specialized = input.copySinglePosition(existing, sourcePosition, outputPosition, size);
+        if (specialized != null) {
+            return specialized;
+        }
+
         if (isValuesOnly(input)) {
             Vector existingValues = existing != null ? existing.values() : null;
             Vector copied = copyVectorSinglePosition(existingValues, input.borrow(Stream.VALUES), sourcePosition, outputPosition, size);

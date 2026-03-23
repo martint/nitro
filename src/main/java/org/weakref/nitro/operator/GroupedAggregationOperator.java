@@ -174,7 +174,8 @@ public class GroupedAggregationOperator
                 EnumSet.of(Stream.VALUES, Stream.NULLS),
                 stream -> aggregationOutput(output - groupedResults.length, batchState).get(stream),
                 (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
-                (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+                (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector),
+                (existing, sourcePosition, outputPosition, size) -> aggregationCopyPosition(output - groupedResults.length, existing, sourcePosition, outputPosition, size));
     }
 
     private Streams aggregationOutput(int output, BatchState batchState)
@@ -187,6 +188,11 @@ public class GroupedAggregationOperator
         result[output] = streams;
         batchState.aggregationMaterializedMask[output] = batchState.mask;
         return streams;
+    }
+
+    private Streams aggregationCopyPosition(int output, Streams existing, int sourcePosition, int outputPosition, int size)
+    {
+        return aggregations[output].copyResultPosition(sourcePosition, maxGroup, states[output], existing, outputPosition, size, allocator, ALLOCATION_CONTEXT);
     }
 
     private Streams groupedKeyOutput(int output, BatchState batchState)

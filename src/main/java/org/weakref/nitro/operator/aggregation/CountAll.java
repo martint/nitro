@@ -106,4 +106,25 @@ public class CountAll
         Arrays.fill(nulls.values(), 0, values.length(), false);
         return Streams.ofValuesAndNulls(values, nulls);
     }
+
+    @Override
+    public Streams copyResultPosition(int group, int maxGroup, Streams state, Streams output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        CountStateVector stateVector = (CountStateVector) state.values();
+        I64Vector values = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (I64Vector) output.getOrNull(Stream.VALUES),
+                I64Vector.class,
+                size,
+                I64Vector::new);
+        BooleanVector nulls = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
+                BooleanVector.class,
+                size,
+                BooleanVector::new);
+        values.values()[outputPosition] = stateVector.value(group);
+        nulls.values()[outputPosition] = false;
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
 }

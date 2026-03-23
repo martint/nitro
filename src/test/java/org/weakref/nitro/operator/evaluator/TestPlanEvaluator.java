@@ -122,6 +122,24 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testReferenceMaskClassifiesErrorsThenNullsThenTrueValues()
+    {
+        PlanEvaluator evaluator = new PlanEvaluator(
+                new EvaluationPlan(List.of(), List.of()),
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false, true}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false, false}),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {false, false, true, false, false}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(new Input(0), Stream.VALUES)), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(4);
+    }
+
+    @Test
     void testReferenceMaskOptimizesSimpleLongComparisonsWithoutPrimitiveCalls()
     {
         Variable sixtyTwo = new Variable(0);
@@ -1510,6 +1528,29 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDirectAndMaskEvaluationDropsRowsThatAreNotUltimatelyTrue()
+    {
+        PlanEvaluator evaluator = new PlanEvaluator(
+                new EvaluationPlan(List.of(), List.of()),
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
+                        new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, true}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(
+                new AndMask(List.of(
+                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
+                Mask.all(4));
+
+        assertThat(result.selectedCount()).isEqualTo(1);
+        assertThat(result.position(0)).isEqualTo(2);
+    }
+
+    @Test
     void testOrMaskAllowsLaterTrueToSuppressNullAndError()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
@@ -1536,6 +1577,31 @@ public class TestPlanEvaluator
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 1L, 1L, 2L);
+    }
+
+    @Test
+    void testDirectOrMaskEvaluationKeepsRowsThatBecomeTrueLater()
+    {
+        PlanEvaluator evaluator = new PlanEvaluator(
+                new EvaluationPlan(List.of(), List.of()),
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, false, false}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
+                        new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(
+                new OrMask(List.of(
+                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
+                Mask.all(4));
+
+        assertThat(result.selectedCount()).isEqualTo(3);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(1);
+        assertThat(result.position(2)).isEqualTo(2);
     }
 
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)

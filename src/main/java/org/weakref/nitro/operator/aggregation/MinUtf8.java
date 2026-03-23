@@ -96,6 +96,37 @@ public class MinUtf8
     }
 
     @Override
+    public Streams copyResultPosition(int group, int maxGroup, Streams state, Streams output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        MinUtf8StateVector values = (MinUtf8StateVector) state.values();
+        byte[] value = values.value(group);
+        int byteCapacity = value == null ? 0 : value.length;
+
+        BinaryVector outputValues = BinaryVector.allocateOrGrow(
+                allocator,
+                allocationContext,
+                output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
+                size,
+                byteCapacity);
+        BooleanVector outputNulls = allocator.allocateOrGrow(
+                allocationContext,
+                output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
+                BooleanVector.class,
+                size,
+                BooleanVector::new);
+
+        if (value == null) {
+            outputValues.setNull(outputPosition);
+            outputNulls.values()[outputPosition] = true;
+        }
+        else {
+            outputValues.setBytes(outputPosition, value);
+            outputNulls.values()[outputPosition] = false;
+        }
+        return Streams.ofValuesAndNulls(outputValues, outputNulls);
+    }
+
+    @Override
     public Streams result(int maxGroup, Streams state, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         MinUtf8StateVector values = (MinUtf8StateVector) state.values();

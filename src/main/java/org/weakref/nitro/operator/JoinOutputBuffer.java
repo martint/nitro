@@ -215,7 +215,12 @@ final class JoinOutputBuffer
             }
 
             Output sourceOutput = currentOuterBatch.output(outputIndex);
-            return new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
+            return new Output(
+                    sourceOutput.streams(),
+                    sourceOutput::borrow,
+                    (stream, vector) -> sourceOutput.take(stream),
+                    (_, _) -> {},
+                    sourceOutput::copySinglePosition);
         }
 
         int innerIndex = outputIndex - outerColumnCount;

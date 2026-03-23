@@ -133,7 +133,7 @@ public final class PlanEvaluator
         if (mask.none()) {
             return mask;
         }
-        return evaluateMask(expression, mask);
+        return evaluateTrueMask(expression, mask);
     }
 
     public void reset()
@@ -364,9 +364,33 @@ public final class PlanEvaluator
         return target;
     }
 
-    private Mask evaluateMask(MaskExpression expression, Mask mask)
+    private Mask evaluateTrueMask(MaskExpression expression, Mask mask)
     {
-        return evaluateMaskOutcome(expression, mask).trueMask();
+        return switch (expression) {
+            case AllMask _ -> mask;
+            case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
+            case NotMask(MaskExpression source) -> evaluateMaskOutcome(source, mask).falseMask(allocator, ALLOCATION_CONTEXT, mask);
+            case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
+            case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOrTrueMask(terms, mask);
+        };
+    }
+
+    private Mask evaluateTrueReferenceMask(Reference reference, Mask mask)
+    {
+        MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
+        if (!(resolved instanceof ReferenceMask(Reference resolvedReference) && resolvedReference.equals(reference))) {
+            return evaluateTrueMask(resolved, mask);
+        }
+
+        Mask optimized = tryEvaluateLongComparisonTrueMask(reference, mask);
+        if (optimized != null) {
+            return optimized;
+        }
+
+        BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
+        BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
+        BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        return classifyTrueBooleanMask(values, nulls, errors, mask);
     }
 
     private Streams prepareOutput(Streams output)
@@ -536,19 +560,7 @@ public final class PlanEvaluator
         BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
-
-        Mask errorMask = errors != null
-                ? allocator.intersectMask(ALLOCATION_CONTEXT, mask, errors)
-                : emptyMask(mask.size());
-
-        Mask remainingAfterErrors = errorMask.none() ? mask : allocator.differenceMask(ALLOCATION_CONTEXT, mask, errorMask);
-        Mask nullMask = nulls != null
-                ? allocator.intersectMask(ALLOCATION_CONTEXT, remainingAfterErrors, nulls)
-                : emptyMask(mask.size());
-
-        Mask presentMask = nullMask.none() ? remainingAfterErrors : allocator.differenceMask(ALLOCATION_CONTEXT, remainingAfterErrors, nullMask);
-        Mask trueMask = allocator.intersectMask(ALLOCATION_CONTEXT, presentMask, values);
-        return new MaskOutcome(trueMask, nullMask, errorMask);
+        return classifyBooleanMask(values, nulls, errors, mask);
     }
 
     private MaskOutcome tryEvaluateLongComparisonMask(Reference reference, Mask mask)
@@ -578,13 +590,13 @@ public final class PlanEvaluator
                 ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.ERRORS), mask)
                 : null;
 
-        int[] truePositions = new int[mask.selectedCount()];
-        int[] nullPositions = new int[mask.selectedCount()];
-        int[] errorPositions = new int[mask.selectedCount()];
+        ClassificationCounts counts = countLongComparisonOutcomes(comparison, leftValues, rightValues, leftNulls, rightNulls, leftErrors, rightErrors, mask);
+        int[] truePositions = new int[counts.trueCount()];
+        int[] nullPositions = new int[counts.nullCount()];
+        int[] errorPositions = new int[counts.errorCount()];
         int trueCount = 0;
         int nullCount = 0;
         int errorCount = 0;
-
         for (int position : mask) {
             if ((leftErrors != null && leftErrors.values()[position]) || (rightErrors != null && rightErrors.values()[position])) {
                 errorPositions[errorCount++] = position;
@@ -603,9 +615,207 @@ public final class PlanEvaluator
         }
 
         return new MaskOutcome(
-                allocator.allocateSparseMask(ALLOCATION_CONTEXT, Arrays.copyOf(truePositions, trueCount), mask.size()),
-                allocator.allocateSparseMask(ALLOCATION_CONTEXT, Arrays.copyOf(nullPositions, nullCount), mask.size()),
-                allocator.allocateSparseMask(ALLOCATION_CONTEXT, Arrays.copyOf(errorPositions, errorCount), mask.size()));
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, truePositions, trueCount, mask.size()),
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, nullPositions, nullCount, mask.size()),
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, errorPositions, errorCount, mask.size()));
+    }
+
+    private Mask tryEvaluateLongComparisonTrueMask(Reference reference, Mask mask)
+    {
+        LongComparison comparison = resolveLongComparison(reference);
+        if (comparison == null) {
+            return null;
+        }
+
+        Vector leftValues = comparison.left().inputIndex() >= 0
+                ? input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.left().inputIndex()), Stream.VALUES), mask)
+                : null;
+        Vector rightValues = comparison.right().inputIndex() >= 0
+                ? input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.VALUES), mask)
+                : null;
+
+        BooleanVector leftNulls = comparison.left().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.left().inputIndex()), Stream.NULLS), mask)
+                : null;
+        BooleanVector rightNulls = comparison.right().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.NULLS), mask)
+                : null;
+        BooleanVector leftErrors = comparison.left().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.left().inputIndex()), Stream.ERRORS), mask)
+                : null;
+        BooleanVector rightErrors = comparison.right().inputIndex() >= 0
+                ? (BooleanVector) input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(comparison.right().inputIndex()), Stream.ERRORS), mask)
+                : null;
+
+        int trueCount = countLongComparisonTrueRows(comparison, leftValues, rightValues, leftNulls, rightNulls, leftErrors, rightErrors, mask);
+        int[] truePositions = new int[trueCount];
+        int outputIndex = 0;
+        for (int position : mask) {
+            if ((leftErrors != null && leftErrors.values()[position]) || (rightErrors != null && rightErrors.values()[position])) {
+                continue;
+            }
+            if ((leftNulls != null && leftNulls.values()[position]) || (rightNulls != null && rightNulls.values()[position])) {
+                continue;
+            }
+
+            long left = comparison.left().inputIndex() >= 0 ? readLong(leftValues, position) : comparison.left().literal();
+            long right = comparison.right().inputIndex() >= 0 ? readLong(rightValues, position) : comparison.right().literal();
+            if (comparison.functionName().equals("eq") ? left == right : left < right) {
+                truePositions[outputIndex++] = position;
+            }
+        }
+        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, truePositions, outputIndex, mask.size());
+    }
+
+    private MaskOutcome classifyBooleanMask(BooleanVector values, BooleanVector nulls, BooleanVector errors, Mask mask)
+    {
+        boolean[] valueData = values.values();
+        boolean[] nullData = nulls == null ? null : nulls.values();
+        boolean[] errorData = errors == null ? null : errors.values();
+
+        ClassificationCounts counts = countBooleanMaskOutcomes(valueData, nullData, errorData, mask);
+        int[] truePositions = new int[counts.trueCount()];
+        int[] nullPositions = new int[counts.nullCount()];
+        int[] errorPositions = new int[counts.errorCount()];
+        int trueCount = 0;
+        int nullCount = 0;
+        int errorCount = 0;
+
+        for (int position : mask) {
+            if (errorData != null && errorData[position]) {
+                errorPositions[errorCount++] = position;
+            }
+            else if (nullData != null && nullData[position]) {
+                nullPositions[nullCount++] = position;
+            }
+            else if (valueData[position]) {
+                truePositions[trueCount++] = position;
+            }
+        }
+
+        return new MaskOutcome(
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, truePositions, trueCount, mask.size()),
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, nullPositions, nullCount, mask.size()),
+                allocator.allocateSparseMask(ALLOCATION_CONTEXT, errorPositions, errorCount, mask.size()));
+    }
+
+    private Mask classifyTrueBooleanMask(BooleanVector values, BooleanVector nulls, BooleanVector errors, Mask mask)
+    {
+        boolean[] valueData = values.values();
+        boolean[] nullData = nulls == null ? null : nulls.values();
+        boolean[] errorData = errors == null ? null : errors.values();
+
+        int trueCount = countTrueRows(valueData, nullData, errorData, mask);
+        int[] truePositions = new int[trueCount];
+        int outputIndex = 0;
+        for (int position : mask) {
+            if (errorData != null && errorData[position]) {
+                continue;
+            }
+            if (nullData != null && nullData[position]) {
+                continue;
+            }
+            if (valueData[position]) {
+                truePositions[outputIndex++] = position;
+            }
+        }
+
+        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, truePositions, outputIndex, mask.size());
+    }
+
+    private ClassificationCounts countLongComparisonOutcomes(
+            LongComparison comparison,
+            Vector leftValues,
+            Vector rightValues,
+            BooleanVector leftNulls,
+            BooleanVector rightNulls,
+            BooleanVector leftErrors,
+            BooleanVector rightErrors,
+            Mask mask)
+    {
+        int trueCount = 0;
+        int nullCount = 0;
+        int errorCount = 0;
+        for (int position : mask) {
+            if ((leftErrors != null && leftErrors.values()[position]) || (rightErrors != null && rightErrors.values()[position])) {
+                errorCount++;
+            }
+            else if ((leftNulls != null && leftNulls.values()[position]) || (rightNulls != null && rightNulls.values()[position])) {
+                nullCount++;
+            }
+            else {
+                long left = comparison.left().inputIndex() >= 0 ? readLong(leftValues, position) : comparison.left().literal();
+                long right = comparison.right().inputIndex() >= 0 ? readLong(rightValues, position) : comparison.right().literal();
+                if (comparison.functionName().equals("eq") ? left == right : left < right) {
+                    trueCount++;
+                }
+            }
+        }
+        return new ClassificationCounts(trueCount, nullCount, errorCount);
+    }
+
+    private ClassificationCounts countBooleanMaskOutcomes(boolean[] valueData, boolean[] nullData, boolean[] errorData, Mask mask)
+    {
+        int trueCount = 0;
+        int nullCount = 0;
+        int errorCount = 0;
+        for (int position : mask) {
+            if (errorData != null && errorData[position]) {
+                errorCount++;
+            }
+            else if (nullData != null && nullData[position]) {
+                nullCount++;
+            }
+            else if (valueData[position]) {
+                trueCount++;
+            }
+        }
+        return new ClassificationCounts(trueCount, nullCount, errorCount);
+    }
+
+    private int countLongComparisonTrueRows(
+            LongComparison comparison,
+            Vector leftValues,
+            Vector rightValues,
+            BooleanVector leftNulls,
+            BooleanVector rightNulls,
+            BooleanVector leftErrors,
+            BooleanVector rightErrors,
+            Mask mask)
+    {
+        int trueCount = 0;
+        for (int position : mask) {
+            if ((leftErrors != null && leftErrors.values()[position]) || (rightErrors != null && rightErrors.values()[position])) {
+                continue;
+            }
+            if ((leftNulls != null && leftNulls.values()[position]) || (rightNulls != null && rightNulls.values()[position])) {
+                continue;
+            }
+
+            long left = comparison.left().inputIndex() >= 0 ? readLong(leftValues, position) : comparison.left().literal();
+            long right = comparison.right().inputIndex() >= 0 ? readLong(rightValues, position) : comparison.right().literal();
+            if (comparison.functionName().equals("eq") ? left == right : left < right) {
+                trueCount++;
+            }
+        }
+        return trueCount;
+    }
+
+    private int countTrueRows(boolean[] valueData, boolean[] nullData, boolean[] errorData, Mask mask)
+    {
+        int trueCount = 0;
+        for (int position : mask) {
+            if (errorData != null && errorData[position]) {
+                continue;
+            }
+            if (nullData != null && nullData[position]) {
+                continue;
+            }
+            if (valueData[position]) {
+                trueCount++;
+            }
+        }
+        return trueCount;
     }
 
     private LongComparison resolveLongComparison(Reference reference)
@@ -753,6 +963,20 @@ public final class PlanEvaluator
         return new MaskOutcome(trueMask, nullMask, errorMask);
     }
 
+    private Mask evaluateAdaptiveAndTrueMask(List<MaskExpression> terms, Mask mask)
+    {
+        terms = orderTerms(terms, BooleanOperator.AND);
+
+        Mask activeMask = mask;
+        for (MaskExpression term : terms) {
+            activeMask = evaluateMeasuredTrueMask(term, activeMask, BooleanOperator.AND);
+            if (activeMask.none()) {
+                return emptyMask(mask.size());
+            }
+        }
+        return activeMask;
+    }
+
     private MaskOutcome evaluateAdaptiveOr(List<MaskExpression> terms, Mask mask)
     {
         terms = orderTerms(terms, BooleanOperator.OR);
@@ -785,6 +1009,24 @@ public final class PlanEvaluator
         return new MaskOutcome(acceptedMask, nullMask, errorMask);
     }
 
+    private Mask evaluateAdaptiveOrTrueMask(List<MaskExpression> terms, Mask mask)
+    {
+        terms = orderTerms(terms, BooleanOperator.OR);
+
+        Mask acceptedMask = emptyMask(mask.size());
+        Mask remainingMask = mask;
+        for (MaskExpression term : terms) {
+            if (remainingMask.none()) {
+                break;
+            }
+
+            Mask termTrueMask = evaluateMeasuredTrueMask(term, remainingMask, BooleanOperator.OR);
+            acceptedMask = unionMasks(acceptedMask, termTrueMask, mask.size());
+            remainingMask = termTrueMask.none() ? remainingMask : allocator.differenceMask(ALLOCATION_CONTEXT, remainingMask, termTrueMask);
+        }
+        return acceptedMask;
+    }
+
     private MaskOutcome evaluateMeasuredOutcome(MaskExpression term, Mask mask, BooleanOperator operator)
     {
         long start = System.nanoTime();
@@ -793,6 +1035,19 @@ public final class PlanEvaluator
         int decisiveRows = switch (operator) {
             case AND -> result.falseCount(mask);
             case OR -> result.trueMask().selectedCount();
+        };
+        maskTermStats.computeIfAbsent(term, _ -> new MaskTermStats()).record(mask.selectedCount(), decisiveRows, elapsed, operator);
+        return result;
+    }
+
+    private Mask evaluateMeasuredTrueMask(MaskExpression term, Mask mask, BooleanOperator operator)
+    {
+        long start = System.nanoTime();
+        Mask result = evaluateTrueMaskWithoutReordering(term, mask);
+        long elapsed = System.nanoTime() - start;
+        int decisiveRows = switch (operator) {
+            case AND -> mask.selectedCount() - result.selectedCount();
+            case OR -> result.selectedCount();
         };
         maskTermStats.computeIfAbsent(term, _ -> new MaskTermStats()).record(mask.selectedCount(), decisiveRows, elapsed, operator);
         return result;
@@ -812,6 +1067,17 @@ public final class PlanEvaluator
             }
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAnd(terms, mask);
             case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOr(terms, mask);
+        };
+    }
+
+    private Mask evaluateTrueMaskWithoutReordering(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> mask;
+            case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
+            case NotMask(MaskExpression source) -> evaluateMaskOutcome(source, mask).falseMask(allocator, ALLOCATION_CONTEXT, mask);
+            case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
+            case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOrTrueMask(terms, mask);
         };
     }
 
@@ -880,6 +1146,8 @@ public final class PlanEvaluator
     private record LongOperand(int inputIndex, long literal) {}
 
     private record LongComparison(String functionName, LongOperand left, LongOperand right) {}
+
+    private record ClassificationCounts(int trueCount, int nullCount, int errorCount) {}
 
     private record KeyAccess(BinaryVector values, boolean dictionary, int[] ids)
     {

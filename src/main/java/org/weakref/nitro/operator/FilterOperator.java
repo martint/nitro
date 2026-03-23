@@ -79,7 +79,12 @@ public class FilterOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Output sourceOutput = sourceBatch.output(outputIndex);
-            outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
+            outputs[outputIndex] = new Output(
+                    sourceOutput.streams(),
+                    sourceOutput::borrow,
+                    (stream, vector) -> sourceOutput.take(stream),
+                    (_, _) -> {},
+                    sourceOutput::copySinglePosition);
         }
         return new Batch(
                 batchMask,

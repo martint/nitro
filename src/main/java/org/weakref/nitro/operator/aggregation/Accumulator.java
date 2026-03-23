@@ -63,6 +63,19 @@ public interface Accumulator
     }
 
     /**
+     * Copies the aggregate result for one group into a caller-owned output bundle.
+     * <p>
+     * This is used by row-buffering operators such as TopN to avoid materializing dense result
+     * vectors for every group when they only need a handful of rows. Returning {@code null}
+     * indicates that the accumulator does not provide a specialized path and callers should fall
+     * back to normal stream materialization.
+     */
+    default Streams copyResultPosition(int group, int maxGroup, Streams state, Streams output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return null;
+    }
+
+    /**
      * Materializes result streams for groups {@code 0..maxGroup}.
      */
     Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext);

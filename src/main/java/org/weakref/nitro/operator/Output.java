@@ -32,6 +32,12 @@ import static java.util.Objects.requireNonNull;
 public final class Output
         implements AutoCloseable
 {
+    @FunctionalInterface
+    public interface SinglePositionResolver
+    {
+        Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size);
+    }
+
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
@@ -49,6 +55,7 @@ public final class Output
     private final Function<Stream, Vector> resolver;
     private final BiFunction<Stream, Vector, Vector> takeResolver;
     private final BiConsumer<Stream, Vector> releaseResolver;
+    private final SinglePositionResolver singlePositionResolver;
     private final Vector[] resolvedStreams = new Vector[Stream.values().length];
     private int resolvedFlags;
     private int takenFlags;
@@ -61,21 +68,27 @@ public final class Output
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
-        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {});
+        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
     {
-        this(exposedStreams, resolver, takeResolver, (_, _) -> {});
+        this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
+    {
+        this(exposedStreams, resolver, takeResolver, releaseResolver, null);
+    }
+
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, SinglePositionResolver singlePositionResolver)
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedFlags = streamFlags(exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
         this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
         this.releaseResolver = requireNonNull(releaseResolver, "releaseResolver is null");
+        this.singlePositionResolver = singlePositionResolver;
     }
 
     public Vector borrow(Stream stream)
@@ -121,6 +134,12 @@ public final class Output
     public Set<Stream> streams()
     {
         return STREAM_SETS[exposedFlags];
+    }
+
+    public Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size)
+    {
+        checkOpen();
+        return singlePositionResolver == null ? null : singlePositionResolver.copySinglePosition(existing, sourcePosition, outputPosition, size);
     }
 
     @Override

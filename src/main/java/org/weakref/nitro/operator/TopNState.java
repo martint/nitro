@@ -32,6 +32,7 @@ final class TopNState
     private final boolean[] descendingByColumn;
     private final boolean[] orderingColumnFlags;
     private final Streams[][] slotColumns;
+    private final Streams[] comparisonColumns;
     private final Streams[] schema;
     private final Set<Stream>[] exposedStreams;
     private final JoinBufferSupport buffers;
@@ -52,6 +53,7 @@ final class TopNState
             orderingColumnFlags[orderingColumn] = true;
         }
         this.slotColumns = new Streams[outputCount][capacity];
+        this.comparisonColumns = new Streams[outputCount];
         this.schema = new Streams[outputCount];
         this.exposedStreams = (Set<Stream>[]) new Set<?>[outputCount];
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
@@ -74,11 +76,13 @@ final class TopNState
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int orderingColumn = orderingColumns[orderingIndex];
             Output output = batch.output(orderingColumn);
+            comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
+            Streams currentOrdering = comparisonColumns[orderingColumn];
             Streams slotOrdering = slotColumns[orderingColumn][slot];
             int comparison = OperatorOrderingSemantics.compare(
-                    output.borrow(Stream.VALUES),
-                    (BooleanVector) output.borrowOrNull(Stream.NULLS),
-                    position,
+                    currentOrdering.values(),
+                    (BooleanVector) currentOrdering.getOrNull(Stream.NULLS),
+                    0,
                     slotOrdering.values(),
                     (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
                     0);

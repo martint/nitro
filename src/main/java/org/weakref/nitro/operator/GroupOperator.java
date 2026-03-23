@@ -72,7 +72,12 @@ public class GroupOperator
             }
             else {
                 Output sourceOutput = sourceBatch.output(outputIndex - 1);
-                outputs[outputIndex] = new Output(sourceOutput.streams(), sourceOutput::borrow, (stream, vector) -> sourceOutput.take(stream));
+                outputs[outputIndex] = new Output(
+                        sourceOutput.streams(),
+                        sourceOutput::borrow,
+                        (stream, vector) -> sourceOutput.take(stream),
+                        (_, _) -> {},
+                        sourceOutput::copySinglePosition);
             }
         }
         return new Batch(

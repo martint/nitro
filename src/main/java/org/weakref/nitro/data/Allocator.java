@@ -178,19 +178,32 @@ public class Allocator
 
     public Mask allocateSparseMask(Context context, int[] activePositions, int totalPositions)
     {
+        return allocateSparseMask(context, activePositions, activePositions.length, totalPositions);
+    }
+
+    public Mask allocateSparseMask(Context context, int[] activePositions, int selectedCount, int totalPositions)
+    {
         ContextState state = state(context);
-        Mask mask = state.borrowMask(activePositions.length);
+        Mask mask = state.borrowMask(selectedCount);
         boolean reused = mask != null;
         if (!reused) {
-            mask = Mask.sparse(activePositions, totalPositions);
+            if (selectedCount == 0) {
+                mask = Mask.sparse(new int[0], totalPositions);
+            }
+            else if (selectedCount == activePositions.length) {
+                mask = Mask.sparse(activePositions, totalPositions);
+            }
+            else {
+                mask = Mask.sparse(Arrays.copyOf(activePositions, selectedCount), totalPositions);
+            }
         }
-        else if (activePositions.length == totalPositions && isAllPositions(activePositions, totalPositions)) {
+        else if (selectedCount == totalPositions && isAllPositions(activePositions, totalPositions)) {
             mask.selectAll(totalPositions);
         }
         else {
-            int[] positions = mask.positionsArray(activePositions.length);
-            System.arraycopy(activePositions, 0, positions, 0, activePositions.length);
-            mask.setSelection(totalPositions, activePositions.length, false);
+            int[] positions = mask.positionsArray(selectedCount);
+            System.arraycopy(activePositions, 0, positions, 0, selectedCount);
+            mask.setSelection(totalPositions, selectedCount, false);
         }
         state.trackMask(mask, reused);
         return mask;

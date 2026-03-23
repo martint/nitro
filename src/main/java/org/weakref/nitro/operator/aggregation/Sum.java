@@ -128,6 +128,27 @@ public class Sum
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
+    @Override
+    public Streams copyResultPosition(int group, int maxGroup, Streams state, Streams output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        SumStateVector stateVector = (SumStateVector) state.values();
+        I64Vector values = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (I64Vector) output.getOrNull(Stream.VALUES),
+                I64Vector.class,
+                size,
+                I64Vector::new);
+        BooleanVector nulls = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
+                BooleanVector.class,
+                size,
+                BooleanVector::new);
+        values.values()[outputPosition] = stateVector.sum(group);
+        nulls.values()[outputPosition] = stateVector.isNull(group);
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
     private static long value(Vector v, int position)
     {
         return switch (v) {

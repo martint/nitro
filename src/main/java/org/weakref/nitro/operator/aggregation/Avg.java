@@ -122,6 +122,29 @@ public class Avg
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
+    @Override
+    public Streams copyResultPosition(int group, int maxGroup, Streams state, Streams output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        AvgStateVector stateVector = (AvgStateVector) state.values();
+        F64Vector values = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (F64Vector) output.getOrNull(Stream.VALUES),
+                F64Vector.class,
+                size,
+                F64Vector::new);
+        org.weakref.nitro.data.BooleanVector nulls = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (org.weakref.nitro.data.BooleanVector) output.getOrNull(Stream.NULLS),
+                org.weakref.nitro.data.BooleanVector.class,
+                size,
+                org.weakref.nitro.data.BooleanVector::new);
+
+        boolean isNull = stateVector.count(group) == 0;
+        nulls.values()[outputPosition] = isNull;
+        values.values()[outputPosition] = isNull ? 0 : ((double) stateVector.sum(group) / stateVector.count(group));
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
     private static void accumulate(AvgStateVector stateVector, int group, Vector inputValues, boolean[] inputNulls, int position)
     {
         if (isNull(inputNulls, position)) {
