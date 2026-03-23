@@ -72,6 +72,8 @@ public final class PlanEvaluator
     private final Set<Allocator.Context> primitiveAllocationContexts;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
     private final Map<Producer, Set<Stream>> projectedStreamsByProducer;
+    private final Map<Producer, Set<Stream>> memoizedStreamsByProducer;
+    private final Map<Reference, Set<Stream>> requestedStreamsByReference = new HashMap<>();
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
     private final Map<MaskExpression, MaskTermStats> maskTermStats = new HashMap<>();
@@ -96,6 +98,7 @@ public final class PlanEvaluator
                 .map(entry -> entry.getKey().producer())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         this.projectedStreamsByProducer = projectedStreamsByProducer(plan.outputs());
+        this.memoizedStreamsByProducer = memoizedStreamsByProducer(plan.streamPlans());
     }
 
     public Streams evaluate(Reference reference, Mask mask)
@@ -203,43 +206,26 @@ public final class PlanEvaluator
 
     private Streams evaluateArgument(Reference argument, Mask mask)
     {
-        Streams bundle = evaluate(argument, mask);
+        Streams result = evaluate(argument, mask);
         if (argument.stream() != Stream.VALUES) {
-            return bundle;
+            return result;
         }
 
-        Streams.Builder builder = null;
         Streams nullBundle = evaluate(new Reference(argument.producer(), Stream.NULLS), mask);
         if (nullBundle.has(Stream.NULLS)) {
-            builder = Streams.builder().putAll(bundle);
-            builder.put(Stream.NULLS, nullBundle.get(Stream.NULLS));
+            result = result.with(Stream.NULLS, nullBundle.get(Stream.NULLS));
         }
 
         Streams errorBundle = evaluate(new Reference(argument.producer(), Stream.ERRORS), mask);
         if (errorBundle.has(Stream.ERRORS)) {
-            if (builder == null) {
-                builder = Streams.builder().putAll(bundle);
-            }
-            builder.put(Stream.ERRORS, errorBundle.get(Stream.ERRORS));
+            result = result.with(Stream.ERRORS, errorBundle.get(Stream.ERRORS));
         }
-        return builder == null ? bundle : builder.build();
+        return result;
     }
 
     private Set<Stream> requestedStreamsFor(Reference reference)
     {
-        java.util.EnumSet<Stream> requested = java.util.EnumSet.of(reference.stream());
-        Set<Stream> projectedStreams = projectedStreamsByProducer.get(reference.producer());
-        if (projectedStreams != null) {
-            requested.addAll(projectedStreams);
-        }
-        if (memoizedProducers.contains(reference.producer())) {
-            for (Reference plannedReference : plan.streamPlans().keySet()) {
-                if (plannedReference.producer().equals(reference.producer()) && isMemoized(plannedReference)) {
-                    requested.add(plannedReference.stream());
-                }
-            }
-        }
-        return requested;
+        return requestedStreamsByReference.computeIfAbsent(reference, this::computeRequestedStreams);
     }
 
     private Streams copy(Set<Stream> requestedStreams, Reference source, Mask mask, Streams output)
@@ -457,6 +443,22 @@ public final class PlanEvaluator
         return Set.copyOf(contexts);
     }
 
+    private Set<Stream> computeRequestedStreams(Reference reference)
+    {
+        java.util.EnumSet<Stream> streams = java.util.EnumSet.of(reference.stream());
+        Set<Stream> projectedStreams = projectedStreamsByProducer.get(reference.producer());
+        if (projectedStreams != null) {
+            streams.addAll(projectedStreams);
+        }
+        if (memoizedProducers.contains(reference.producer())) {
+            Set<Stream> memoizedStreams = memoizedStreamsByProducer.get(reference.producer());
+            if (memoizedStreams != null) {
+                streams.addAll(memoizedStreams);
+            }
+        }
+        return Set.copyOf(streams);
+    }
+
     private static Map<Producer, Set<Stream>> projectedStreamsByProducer(List<Reference> outputs)
     {
         Map<Producer, java.util.EnumSet<Stream>> projected = new HashMap<>();
@@ -465,6 +467,19 @@ public final class PlanEvaluator
                     .add(output.stream());
         }
         return projected.entrySet().stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Set.copyOf(entry.getValue())));
+    }
+
+    private static Map<Producer, Set<Stream>> memoizedStreamsByProducer(Map<Reference, StreamPlan> streamPlans)
+    {
+        Map<Producer, java.util.EnumSet<Stream>> memoized = new HashMap<>();
+        for (Map.Entry<Reference, StreamPlan> entry : streamPlans.entrySet()) {
+            if (entry.getValue().memoizationPolicy() == MemoizationPolicy.MEMOIZE) {
+                memoized.computeIfAbsent(entry.getKey().producer(), _ -> java.util.EnumSet.noneOf(Stream.class))
+                        .add(entry.getKey().stream());
+            }
+        }
+        return memoized.entrySet().stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Set.copyOf(entry.getValue())));
     }
 
