@@ -15,9 +15,11 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
 import java.lang.invoke.MethodHandles;
@@ -188,17 +190,13 @@ final class FlatTypeHandlers
         @Override
         public long hashInput(Vector vector, int position)
         {
-            return OperatorVectorSupport.binaryHash(vector, position);
+            return hashBinary(vector, position);
         }
 
         @Override
         public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
         {
-            int length = OperatorVectorSupport.binaryLength(vector, position);
-            FlatGroupingTable.FlatVariableWidthArena.Pointer pointer = variableWidthArena.append(vector, position);
-            INT_HANDLE.set(fixedChunk, fixedOffset, pointer.chunkIndex());
-            INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, pointer.chunkOffset());
-            INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, length);
+            writeBinaryFlat(vector, position, fixedChunk, fixedOffset, variableWidthArena);
         }
 
         @Override
@@ -207,7 +205,7 @@ final class FlatTypeHandlers
             int length = binaryLength(fixedChunk, fixedOffset);
             byte[] chunk = variableWidthArena.chunk(readChunkIndex(fixedChunk, fixedOffset));
             int offset = readChunkOffset(fixedChunk, fixedOffset);
-            return OperatorVectorSupport.binaryEquals(vector, position, chunk, offset, length);
+            return binaryEquals(vector, position, chunk, offset, length);
         }
 
         @Override
@@ -233,6 +231,45 @@ final class FlatTypeHandlers
         private int readChunkOffset(byte[] fixedChunk, int fixedOffset)
         {
             return (int) INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES);
+        }
+
+        private long hashBinary(Vector vector, int position)
+        {
+            return switch (vector) {
+                case BinaryVector binary -> OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(position), binary.length(position));
+                case DictionaryVector dictionary -> hashBinary(dictionary.values(), dictionary.ids()[position]);
+                case RleVector rle -> hashBinary(rle.values(), OperatorVectorSupport.runIndex(rle, position));
+                default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
+            };
+        }
+
+        private boolean binaryEquals(Vector vector, int position, byte[] right, int rightOffset, int rightLength)
+        {
+            return switch (vector) {
+                case BinaryVector binary -> binary.length(position) == rightLength &&
+                        OperatorVectorSupport.binaryEquals(binary.data(), binary.startOffset(position), right, rightOffset, rightLength);
+                case DictionaryVector dictionary -> binaryEquals(dictionary.values(), dictionary.ids()[position], right, rightOffset, rightLength);
+                case RleVector rle -> binaryEquals(rle.values(), OperatorVectorSupport.runIndex(rle, position), right, rightOffset, rightLength);
+                default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
+            };
+        }
+
+        private void writeBinaryFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
+        {
+            switch (vector) {
+                case BinaryVector binary -> writeFlat(binary.data(), binary.startOffset(position), binary.length(position), fixedChunk, fixedOffset, variableWidthArena);
+                case DictionaryVector dictionary -> writeBinaryFlat(dictionary.values(), dictionary.ids()[position], fixedChunk, fixedOffset, variableWidthArena);
+                case RleVector rle -> writeBinaryFlat(rle.values(), OperatorVectorSupport.runIndex(rle, position), fixedChunk, fixedOffset, variableWidthArena);
+                default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
+            }
+        }
+
+        private void writeFlat(byte[] source, int sourceOffset, int length, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
+        {
+            long pointer = variableWidthArena.append(source, sourceOffset, length);
+            INT_HANDLE.set(fixedChunk, fixedOffset, FlatGroupingTable.FlatVariableWidthArena.chunkIndex(pointer));
+            INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, FlatGroupingTable.FlatVariableWidthArena.chunkOffset(pointer));
+            INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, length);
         }
     };
 

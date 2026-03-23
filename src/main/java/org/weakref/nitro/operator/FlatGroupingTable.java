@@ -46,6 +46,7 @@ final class FlatGroupingTable
 
     private byte[] control;
     private int[] groupIdsByHash;
+    private int[] recordIndexesByHash;
     private byte[][] fixedRecordChunks;
     private int[] recordIndexByGroupId = new int[16];
     private int nextRecordIndex;
@@ -63,7 +64,9 @@ final class FlatGroupingTable
         this.maxFill = calculateMaxFill(capacity);
         this.control = new byte[capacity + VECTOR_LENGTH];
         this.groupIdsByHash = new int[capacity];
+        this.recordIndexesByHash = new int[capacity];
         Arrays.fill(groupIdsByHash, -1);
+        Arrays.fill(recordIndexesByHash, -1);
         this.fixedRecordChunks = new byte[recordGroupsRequiredForCapacity(capacity)][];
         Arrays.fill(recordIndexByGroupId, -1);
     }
@@ -116,8 +119,7 @@ final class FlatGroupingTable
             long controlMatches = match(controlVector, repeated);
             while (controlMatches != 0) {
                 int index = bucket(bucket + (Long.numberOfTrailingZeros(controlMatches) >>> 3));
-                long groupId = groupIdsByHash[index];
-                int recordIndex = recordIndex(groupId);
+                int recordIndex = recordIndexesByHash[index];
                 if (recordIndex >= 0 && identical(recordIndex, hash, values, position)) {
                     return index;
                 }
@@ -150,6 +152,7 @@ final class FlatGroupingTable
         setControl(index, (byte) (hash & 0x7F | 0x80));
         groupIdsByHash[index] = toIntExact(groupId);
         int recordIndex = nextRecordIndex++;
+        recordIndexesByHash[index] = recordIndex;
         ensureGroupIdCapacity(toIntExact(groupId));
         recordIndexByGroupId[toIntExact(groupId)] = recordIndex;
 
@@ -182,7 +185,9 @@ final class FlatGroupingTable
 
         control = new byte[capacity + VECTOR_LENGTH];
         groupIdsByHash = new int[capacity];
+        recordIndexesByHash = new int[capacity];
         Arrays.fill(groupIdsByHash, -1);
+        Arrays.fill(recordIndexesByHash, -1);
 
         for (int groupId = 0; groupId < recordIndexByGroupId.length; groupId++) {
             int recordIndex = recordIndexByGroupId[groupId];
@@ -201,6 +206,7 @@ final class FlatGroupingTable
                     int index = bucket(bucket + (Long.numberOfTrailingZeros(emptyMatches) >>> 3));
                     setControl(index, hashPrefix);
                     groupIdsByHash[index] = groupId;
+                    recordIndexesByHash[index] = recordIndex;
                     break;
                 }
                 bucket = bucket(bucket + step);
@@ -382,11 +388,10 @@ final class FlatGroupingTable
         private int chunkIndex;
         private int chunkOffset;
 
-        public Pointer append(Vector vector, int position)
+        public long append(byte[] source, int sourceOffset, int length)
         {
-            int length = OperatorVectorSupport.binaryLength(vector, position);
             if (length == 0) {
-                return new Pointer(chunkIndex, chunkOffset);
+                return pointer(chunkIndex, chunkOffset);
             }
 
             if (chunkOffset + length > CHUNK_SIZE) {
@@ -402,14 +407,9 @@ final class FlatGroupingTable
 
             byte[] chunk = chunks[chunkIndex];
             int offset = chunkOffset;
-            switch (vector) {
-                case BinaryVector binary -> System.arraycopy(binary.data(), binary.startOffset(position), chunk, offset, length);
-                case org.weakref.nitro.data.DictionaryVector dictionary -> copy(dictionary.values(), dictionary.ids()[position], chunk, offset, length);
-                case org.weakref.nitro.data.RleVector rle -> copy(rle.values(), OperatorVectorSupport.runIndex(rle, position), chunk, offset, length);
-                default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
-            }
+            System.arraycopy(source, sourceOffset, chunk, offset, length);
             chunkOffset += length;
-            return new Pointer(chunkIndex, offset);
+            return pointer(chunkIndex, offset);
         }
 
         public byte[] chunk(int index)
@@ -417,18 +417,19 @@ final class FlatGroupingTable
             return chunks[index];
         }
 
-        private void copy(Vector vector, int position, byte[] chunk, int offset, int length)
+        public static long pointer(int chunkIndex, int chunkOffset)
         {
-            switch (vector) {
-                case BinaryVector binary -> System.arraycopy(binary.data(), binary.startOffset(position), chunk, offset, length);
-                case org.weakref.nitro.data.DictionaryVector dictionary -> copy(dictionary.values(), dictionary.ids()[position], chunk, offset, length);
-                case org.weakref.nitro.data.RleVector rle -> copy(rle.values(), OperatorVectorSupport.runIndex(rle, position), chunk, offset, length);
-                default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
-            }
+            return (((long) chunkIndex) << 32) | (chunkOffset & 0xFFFF_FFFFL);
         }
 
-        record Pointer(int chunkIndex, int chunkOffset)
+        public static int chunkIndex(long pointer)
         {
+            return (int) (pointer >>> 32);
+        }
+
+        public static int chunkOffset(long pointer)
+        {
+            return (int) pointer;
         }
     }
 }

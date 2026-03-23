@@ -186,7 +186,7 @@ final class OperatorVectorSupport
         return values.runIndex(position);
     }
 
-    private static int binaryHash(byte[] bytes, int offset, int length)
+    static int binaryHash(byte[] bytes, int offset, int length)
     {
         int result = 1;
         for (int index = 0; index < length; index++) {
@@ -195,7 +195,7 @@ final class OperatorVectorSupport
         return result;
     }
 
-    private static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
+    static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
     {
         if (length >= 16) {
             return Arrays.mismatch(left, leftOffset, leftOffset + length, right, rightOffset, rightOffset + length) == -1;
