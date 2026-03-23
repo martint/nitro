@@ -14,10 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.F64Vector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -89,20 +86,9 @@ final class FlatGroupingTable
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
-        return switch (field.handler().kind()) {
-            case LONG -> Streams.ofValuesAndNulls(
-                    materializeLongValues(size, mask, field, nullGroup, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, nullGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
-            case BOOLEAN -> Streams.ofValuesAndNulls(
-                    materializeBooleanValues(size, mask, field, nullGroup, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, nullGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
-            case DOUBLE -> Streams.ofValuesAndNulls(
-                    materializeDoubleValues(size, mask, field, nullGroup, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, nullGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
-            case BINARY -> Streams.ofValuesAndNulls(
-                    materializeBinaryValues(size, mask, field, nullGroup, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeNulls(size, mask, nullGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
-        };
+        return Streams.ofValuesAndNulls(
+                field.handler().materializeValues(this, field, size, mask, nullGroup, output == null ? null : output.values(), allocator, allocationContext),
+                materializeNulls(size, mask, nullGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 
     private int getIndex(Vector[] values, int position, long hash)
@@ -213,100 +199,6 @@ final class FlatGroupingTable
         }
     }
 
-    private I64Vector materializeLongValues(int size, Mask mask, FlatKeyLayout.Field field, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
-    {
-        I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
-        Arrays.fill(result.values(), 0);
-        for (int index : mask) {
-            if (index == nullGroup) {
-                continue;
-            }
-            int recordIndex = recordIndex(index);
-            if (recordIndex >= 0) {
-                result.values()[index] = field.handler().readLong(fixedChunk(recordIndex), fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset());
-            }
-        }
-        return result;
-    }
-
-    private BooleanVector materializeBooleanValues(int size, Mask mask, FlatKeyLayout.Field field, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
-    {
-        BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
-        Arrays.fill(result.values(), false);
-        for (int index : mask) {
-            if (index == nullGroup) {
-                continue;
-            }
-            int recordIndex = recordIndex(index);
-            if (recordIndex >= 0) {
-                result.values()[index] = field.handler().readBoolean(fixedChunk(recordIndex), fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset());
-            }
-        }
-        return result;
-    }
-
-    private F64Vector materializeDoubleValues(int size, Mask mask, FlatKeyLayout.Field field, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
-    {
-        F64Vector result = allocator.allocateOrGrow(allocationContext, (F64Vector) output, F64Vector.class, size, F64Vector::new);
-        Arrays.fill(result.values(), 0);
-        for (int index : mask) {
-            if (index == nullGroup) {
-                continue;
-            }
-            int recordIndex = recordIndex(index);
-            if (recordIndex >= 0) {
-                result.values()[index] = Double.longBitsToDouble(field.handler().readDoubleBits(fixedChunk(recordIndex), fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset()));
-            }
-        }
-        return result;
-    }
-
-    private BinaryVector materializeBinaryValues(int size, Mask mask, FlatKeyLayout.Field field, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
-    {
-        long totalBytes = 0;
-        for (int index : mask) {
-            if (index == nullGroup) {
-                continue;
-            }
-            int recordIndex = recordIndex(index);
-            if (recordIndex >= 0) {
-                totalBytes += field.handler().binaryLength(fixedChunk(recordIndex), fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset());
-            }
-        }
-        if (totalBytes > Integer.MAX_VALUE) {
-            throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
-        }
-
-        BinaryVector result = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) output, size, (int) totalBytes);
-        Arrays.fill(result.offsets(), 0);
-        result.clearTraits();
-        result.addTraits(field.binaryTraits());
-
-        int previousIndex = 0;
-        for (int index : mask) {
-            while (previousIndex < index) {
-                result.setNull(previousIndex++);
-            }
-            if (index == nullGroup) {
-                result.setNull(index);
-            }
-            else {
-                int recordIndex = recordIndex(index);
-                if (recordIndex >= 0) {
-                    field.handler().copyBinaryTo(fixedChunk(recordIndex), fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset(), variableWidthArena, result, index);
-                }
-                else {
-                    result.setNull(index);
-                }
-            }
-            previousIndex = index + 1;
-        }
-        while (previousIndex < size) {
-            result.setNull(previousIndex++);
-        }
-        return result;
-    }
-
     private BooleanVector materializeNulls(int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
@@ -317,12 +209,12 @@ final class FlatGroupingTable
         return result;
     }
 
-    private int recordIndex(long groupId)
+    int recordIndex(long groupId)
     {
         return groupId >= 0 && groupId < recordIndexByGroupId.length ? recordIndexByGroupId[(int) groupId] : -1;
     }
 
-    private byte[] fixedChunk(int recordIndex)
+    byte[] fixedChunk(int recordIndex)
     {
         int groupIndex = recordIndex >> RECORDS_PER_GROUP_SHIFT;
         byte[] chunk = fixedRecordChunks[groupIndex];
@@ -333,9 +225,14 @@ final class FlatGroupingTable
         return chunk;
     }
 
-    private int fixedOffset(int recordIndex)
+    int fixedOffset(int recordIndex)
     {
         return (recordIndex & RECORDS_PER_GROUP_MASK) * fixedRecordSize;
+    }
+
+    FlatVariableWidthArena variableWidthArena()
+    {
+        return variableWidthArena;
     }
 
     private int bucket(int hash)

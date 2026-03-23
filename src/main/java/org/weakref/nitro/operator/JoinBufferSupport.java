@@ -191,17 +191,7 @@ final class JoinBufferSupport
 
     public Vector materializeStream(Vector sample, Vector[] rows)
     {
-        return switch (OperatorVectorSupport.flatten(sample)) {
-            case I32Vector _ -> materializeInts(rows);
-            case I64Vector _ -> materializeLongs(rows);
-            case BooleanVector _ -> materializeBooleans(rows);
-            case F64Vector _ -> materializeDoubles(rows);
-            case BinaryVector binary -> materializeBinary(binary, rows);
-            case ArrayVector array -> materializeArrays(array, rows);
-            case MapVector map -> materializeMaps(map, rows);
-            case StructVector struct -> materializeStructs(struct, rows);
-            default -> throw new IllegalArgumentException("Unsupported materialized vector type: " + sample.getClass().getSimpleName());
-        };
+        return sample.materializeRows(allocator, allocationContext, rows);
     }
 
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
@@ -216,36 +206,12 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
-        return switch (source) {
-            case I32Vector values -> copyIntPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case I64Vector values -> copyLongPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case BooleanVector values -> copyBooleanPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case F64Vector values -> copyDoublePositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case BinaryVector values -> copyBinaryPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case ArrayVector values -> copyArrayPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case MapVector values -> copyMapPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case StructVector values -> copyStructPositions(values, existing, sourcePositions, sourceCount, outputStart, size);
-            case DictionaryVector values -> copyVectorPositions(existing, values.values(), dictionaryPositions(values.ids(), sourcePositions, sourceCount), outputStart, size);
-            case RleVector values -> copyVectorPositions(existing, values.values(), rlePositions(values, sourcePositions, sourceCount), outputStart, size);
-            default -> throw new IllegalArgumentException("Unsupported join vector type: " + source.getClass().getSimpleName());
-        };
+        return source.copyPositionsInto(allocator, allocationContext, existing, sourcePositions, sourceCount, outputStart, size);
     }
 
     private Vector copyVectorSinglePosition(Vector existing, Vector source, int sourcePosition, int outputPosition, int size)
     {
-        return switch (source) {
-            case I32Vector values -> copyIntSinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case I64Vector values -> copyLongSinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case BooleanVector values -> copyBooleanSinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case F64Vector values -> copyDoubleSinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case BinaryVector values -> copyBinarySinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case ArrayVector values -> copyArraySinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case MapVector values -> copyMapSinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case StructVector values -> copyStructSinglePosition(values, existing, sourcePosition, outputPosition, size);
-            case DictionaryVector values -> copyVectorSinglePosition(existing, values.values(), values.ids()[sourcePosition], outputPosition, size);
-            case RleVector values -> copyVectorSinglePosition(existing, values.values(), rlePosition(values, sourcePosition), outputPosition, size);
-            default -> throw new IllegalArgumentException("Unsupported join vector type: " + source.getClass().getSimpleName());
-        };
+        return source.copySinglePositionInto(allocator, allocationContext, existing, sourcePosition, outputPosition, size);
     }
 
     private I64Vector copyLongPositions(I64Vector source, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
@@ -681,37 +647,7 @@ final class JoinBufferSupport
 
     private Vector emptyVector(Vector source)
     {
-        return switch (source) {
-            case I32Vector _ -> allocator.allocate(allocationContext, I32Vector.class, 0, I32Vector::new);
-            case I64Vector _ -> allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
-            case BooleanVector _ -> allocator.allocate(allocationContext, BooleanVector.class, 0, BooleanVector::new);
-            case F64Vector _ -> allocator.allocate(allocationContext, F64Vector.class, 0, F64Vector::new);
-            case BinaryVector binary -> {
-                BinaryVector empty = allocator.allocateBinary(allocationContext, 0, 0);
-                empty.addTraits(binary.traits());
-                yield empty;
-            }
-            case ArrayVector values -> {
-                ArrayVector empty = allocator.allocateArray(allocationContext, 0);
-                empty.setElements(emptyLike(values.elements()));
-                yield empty;
-            }
-            case MapVector values -> {
-                MapVector empty = allocator.allocateMap(allocationContext, 0);
-                empty.setEntries(emptyLike(values.keys()), emptyLike(values.values()));
-                yield empty;
-            }
-            case StructVector values -> {
-                StructVector empty = allocator.allocate(allocationContext, StructVector.class, 0, StructVector::new);
-                for (Map.Entry<String, Streams> entry : values.fields().entrySet()) {
-                    empty.setField(entry.getKey(), emptyLike(entry.getValue()));
-                }
-                yield empty;
-            }
-            case DictionaryVector values -> emptyVector(values.values());
-            case RleVector values -> emptyVector(values.values());
-            default -> throw new IllegalArgumentException("Unsupported nested-loop vector type: " + source.getClass().getSimpleName());
-        };
+        return source.emptyLike(allocator, allocationContext);
     }
 
     private static int[] positions(Mask mask, int maskStart, int copied)

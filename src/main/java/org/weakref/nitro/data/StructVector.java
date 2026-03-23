@@ -106,6 +106,75 @@ public final class StructVector
     }
 
     @Override
+    public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
+    {
+        for (int position : mask) {
+            existing = copySinglePositionInto(allocator, allocationContext, existing, position, position, length());
+        }
+        return existing;
+    }
+
+    @Override
+    public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
+    {
+        StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
+        if (outputStart == 0) {
+            output.clearFields();
+        }
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            output.setField(entry.getKey(), copyStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, sourcePositions, sourceCount, outputStart, size));
+        }
+        return output;
+    }
+
+    @Override
+    public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
+        if (outputPosition == 0) {
+            output.clearFields();
+        }
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            output.setField(entry.getKey(), copySingleStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, sourcePosition, outputPosition, size));
+        }
+        return output;
+    }
+
+    @Override
+    public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
+    {
+        StructVector empty = allocator.allocate(allocationContext, StructVector.class, 0, StructVector::new);
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            Streams.Builder streams = Streams.builder();
+            for (Map.Entry<Stream, Vector> child : entry.getValue().asMap().entrySet()) {
+                streams.put(child.getKey(), child.getValue().emptyLike(allocator, allocationContext));
+            }
+            empty.setField(entry.getKey(), streams.build());
+        }
+        return empty;
+    }
+
+    @Override
+    public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
+    {
+        StructVector result = allocator.allocate(allocationContext, StructVector.class, VectorSupport.totalLength(rows), StructVector::new);
+        int outputStart = 0;
+        for (Vector row : rows) {
+            int rowLength = row.length();
+            if (rowLength == 1) {
+                result = (StructVector) row.copySinglePositionInto(allocator, allocationContext, result, 0, outputStart, result.length());
+            }
+            else if (rowLength > 1) {
+                result = (StructVector) row.copyPositionsInto(allocator, allocationContext, result, VectorSupport.densePositions(rowLength), rowLength, outputStart, result.length());
+            }
+            outputStart += rowLength;
+        }
+        return result;
+    }
+
+    @Override
     public void copyInto(Vector target)
     {
         StructVector structTarget = (StructVector) target;
@@ -142,5 +211,25 @@ public final class StructVector
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         fields.values().forEach(streams -> streams.asMap().values().forEach(consumer));
+    }
+
+    private static Streams copyStreams(Streams source, Streams existing, Allocator allocator, Allocator.Context allocationContext, int[] sourcePositions, int sourceCount, int outputStart, int size)
+    {
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
+            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
+            result.put(entry.getKey(), entry.getValue().copyPositionsInto(allocator, allocationContext, existingVector, sourcePositions, sourceCount, outputStart, size));
+        }
+        return result.build();
+    }
+
+    private static Streams copySingleStreams(Streams source, Streams existing, Allocator allocator, Allocator.Context allocationContext, int sourcePosition, int outputPosition, int size)
+    {
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
+            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
+            result.put(entry.getKey(), entry.getValue().copySinglePositionInto(allocator, allocationContext, existingVector, sourcePosition, outputPosition, size));
+        }
+        return result.build();
     }
 }

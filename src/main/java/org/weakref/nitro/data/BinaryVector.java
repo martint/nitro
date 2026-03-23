@@ -181,6 +181,121 @@ public final class BinaryVector
     }
 
     @Override
+    public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
+    {
+        int totalBytes = 0;
+        for (int position : mask) {
+            totalBytes += length(position);
+        }
+
+        BinaryVector target = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) existing, positionCount, totalBytes);
+        target.clearTraits();
+        target.addTraits(traits);
+        Arrays.fill(target.offsets(), 0);
+
+        for (int position : mask) {
+            int valueLength = length(position);
+            if (valueLength == 0) {
+                target.setNull(position);
+            }
+            else {
+                target.setBytes(position, data, startOffset(position), valueLength);
+            }
+        }
+        return target;
+    }
+
+    @Override
+    public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
+    {
+        int byteCapacity = 0;
+        if (existing instanceof BinaryVector output && outputStart > 0) {
+            byteCapacity = output.offsets()[outputStart];
+        }
+        for (int index = 0; index < sourceCount; index++) {
+            byteCapacity += length(sourcePositions[index]);
+        }
+
+        BinaryVector target = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) existing, size, byteCapacity);
+        if (outputStart == 0) {
+            Arrays.fill(target.offsets(), 0);
+            target.clearTraits();
+        }
+        target.addTraits(traits);
+
+        int currentOffset = target.offsets()[outputStart];
+        for (int index = 0; index < sourceCount; index++) {
+            int targetPosition = outputStart + index;
+            target.offsets()[targetPosition] = currentOffset;
+            int sourcePosition = sourcePositions[index];
+            int valueLength = length(sourcePosition);
+            if (valueLength == 0) {
+                target.setNull(targetPosition);
+            }
+            else {
+                target.setBytes(targetPosition, data, startOffset(sourcePosition), valueLength);
+                currentOffset = target.endOffset(targetPosition);
+            }
+        }
+        return target;
+    }
+
+    @Override
+    public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        int byteCapacity = length(sourcePosition);
+        if (existing instanceof BinaryVector output && outputPosition > 0) {
+            byteCapacity += output.offsets()[outputPosition];
+        }
+
+        BinaryVector target = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) existing, size, byteCapacity);
+        if (outputPosition == 0) {
+            Arrays.fill(target.offsets(), 0);
+            target.clearTraits();
+        }
+        target.addTraits(traits);
+
+        int currentOffset = target.offsets()[outputPosition];
+        target.offsets()[outputPosition] = currentOffset;
+        int valueLength = length(sourcePosition);
+        if (valueLength == 0) {
+            target.setNull(outputPosition);
+        }
+        else {
+            target.setBytes(outputPosition, data, startOffset(sourcePosition), valueLength);
+        }
+        return target;
+    }
+
+    @Override
+    public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
+    {
+        BinaryVector empty = allocator.allocateBinary(allocationContext, 0, 0);
+        empty.addTraits(traits);
+        return empty;
+    }
+
+    @Override
+    public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
+    {
+        int totalPositions = VectorSupport.totalLength(rows);
+        BinaryVector result = allocator.allocateBinary(allocationContext, totalPositions, 0);
+        result.addTraits(traits);
+        int outputStart = 0;
+        for (Vector row : rows) {
+            int rowLength = row.length();
+            if (rowLength == 1) {
+                result = (BinaryVector) row.copySinglePositionInto(allocator, allocationContext, result, 0, outputStart, totalPositions);
+            }
+            else if (rowLength > 1) {
+                result = (BinaryVector) row.copyPositionsInto(allocator, allocationContext, result, VectorSupport.densePositions(rowLength), rowLength, outputStart, totalPositions);
+            }
+            outputStart += rowLength;
+        }
+        return result;
+    }
+
+    @Override
     public void copyInto(Vector target)
     {
         BinaryVector copy = (BinaryVector) target;

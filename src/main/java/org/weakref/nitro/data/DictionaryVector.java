@@ -81,6 +81,43 @@ public final class DictionaryVector
     }
 
     @Override
+    public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
+    {
+        for (int position : mask) {
+            existing = values.copySinglePositionInto(allocator, allocationContext, existing, ids[position], position, length());
+        }
+        return existing;
+    }
+
+    @Override
+    public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
+    {
+        int[] dictionaryPositions = new int[sourceCount];
+        for (int index = 0; index < sourceCount; index++) {
+            dictionaryPositions[index] = ids[sourcePositions[index]];
+        }
+        return values.copyPositionsInto(allocator, allocationContext, existing, dictionaryPositions, sourceCount, outputStart, size);
+    }
+
+    @Override
+    public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        return values.copySinglePositionInto(allocator, allocationContext, existing, ids[sourcePosition], outputPosition, size);
+    }
+
+    @Override
+    public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
+    {
+        return values.emptyLike(allocator, allocationContext);
+    }
+
+    @Override
+    public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
+    {
+        return values.materializeRows(allocator, allocationContext, rows);
+    }
+
+    @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         consumer.accept(values);

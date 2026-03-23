@@ -26,6 +26,31 @@ public sealed interface Vector
 
     Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions);
 
+    default Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
+    {
+        throw new UnsupportedOperationException("Vector does not support copyMasked: " + getClass().getSimpleName());
+    }
+
+    default Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
+    {
+        throw new UnsupportedOperationException("Vector does not support copyPositionsInto: " + getClass().getSimpleName());
+    }
+
+    default Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
+    {
+        throw new UnsupportedOperationException("Vector does not support copySinglePositionInto: " + getClass().getSimpleName());
+    }
+
+    default Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException("Vector does not support emptyLike: " + getClass().getSimpleName());
+    }
+
+    default Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
+    {
+        throw new UnsupportedOperationException("Vector does not support materializeRows: " + getClass().getSimpleName());
+    }
+
     default void copyInto(Vector target)
     {
         throw new UnsupportedOperationException("Vector does not support copyInto: " + getClass().getSimpleName());

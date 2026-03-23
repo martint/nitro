@@ -13,7 +13,9 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
 interface FlatTypeHandler
@@ -59,6 +61,11 @@ interface FlatTypeHandler
     }
 
     default void copyBinaryTo(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, BinaryVector output, int outputPosition)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         throw new UnsupportedOperationException();
     }
