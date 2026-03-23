@@ -13,36 +13,32 @@
  */
 package org.weakref.nitro.data;
 
-import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
-
-import java.util.ArrayList;
+import java.util.Arrays;
 
 public final class DistinctCountStateVector
         implements FlatVector
 {
-    private final ArrayList<ObjectOpenHashSet<Object>> keysByGroup = new ArrayList<>();
-    private Object reusableProbeKey;
+    private long[] distinctCounts = new long[0];
+    private Object implementation;
 
     @Override
     public int length()
     {
-        return keysByGroup.size();
+        return distinctCounts.length;
     }
 
     @Override
     public long retainedBytes()
     {
-        return 0;
+        return (long) distinctCounts.length * Long.BYTES;
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         DistinctCountStateVector copy = new DistinctCountStateVector();
-        for (ObjectOpenHashSet<Object> keys : keysByGroup) {
-            copy.keysByGroup.add(keys == null ? null : new ObjectOpenHashSet<>(keys));
-        }
-        copy.reusableProbeKey = reusableProbeKey;
+        copy.distinctCounts = Arrays.copyOf(distinctCounts, distinctCounts.length);
+        copy.implementation = implementation;
         return allocator.adopt(allocationContext, copy);
     }
 
@@ -54,38 +50,29 @@ public final class DistinctCountStateVector
 
     public void ensureGroupCapacity(int size)
     {
-        while (keysByGroup.size() < size) {
-            keysByGroup.add(null);
+        if (distinctCounts.length < size) {
+            distinctCounts = Arrays.copyOf(distinctCounts, size);
         }
     }
 
-    public ObjectOpenHashSet<Object> keys(int group)
+    public void incrementDistinctCount(int group)
     {
         ensureGroupCapacity(group + 1);
-        ObjectOpenHashSet<Object> keys = keysByGroup.get(group);
-        if (keys == null) {
-            keys = new ObjectOpenHashSet<>();
-            keysByGroup.set(group, keys);
-        }
-        return keys;
+        distinctCounts[group]++;
     }
 
     public long distinctCount(int group)
     {
-        if (group >= keysByGroup.size()) {
-            return 0;
-        }
-        ObjectOpenHashSet<Object> keys = keysByGroup.get(group);
-        return keys == null ? 0 : keys.size();
+        return group >= distinctCounts.length ? 0 : distinctCounts[group];
     }
 
-    public Object reusableProbeKey()
+    public Object implementation()
     {
-        return reusableProbeKey;
+        return implementation;
     }
 
-    public void setReusableProbeKey(Object reusableProbeKey)
+    public void setImplementation(Object implementation)
     {
-        this.reusableProbeKey = reusableProbeKey;
+        this.implementation = implementation;
     }
 }

@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -25,6 +25,8 @@ import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 import static java.lang.Math.toIntExact;
 
@@ -32,9 +34,6 @@ public class DistinctCount
         implements Accumulator
 {
     private final int inputColumn;
-    private Vector cachedDictionaryValues;
-    private int[] dictionaryGenerations = new int[0];
-    private int dictionaryGeneration;
 
     public DistinctCount(int inputColumn)
     {
@@ -71,68 +70,13 @@ public class DistinctCount
         DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
         Vector values = streams.values(inputColumn);
         BooleanVector nulls = streams.nulls(inputColumn);
-        OperatorKeySemantics.Key reusableProbeKey = reusableProbeKey(stateVector, values);
-
-        if (values instanceof DictionaryVector dictionary) {
-            accumulateDictionary(stateVector, dictionary, nulls, mask, reusableProbeKey);
-            return;
-        }
+        DistinctIndex distinctIndex = distinctIndex(stateVector, new Vector[] {values});
 
         for (int position : mask) {
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKey);
-            if (key == null) {
-                continue;
-            }
-            if (!stateVector.keys(group).contains(key)) {
-                stateVector.keys(group).add(OperatorKeySemantics.ownedKey(key));
+            if (distinctIndex.add(new Vector[] {values}, new BooleanVector[] {nulls}, position, group)) {
+                stateVector.incrementDistinctCount(group);
             }
         }
-    }
-
-    private void accumulateDictionary(DistinctCountStateVector stateVector, DictionaryVector dictionary, BooleanVector nulls, Mask mask, OperatorKeySemantics.Key reusableProbeKey)
-    {
-        Vector dictionaryValues = dictionary.values();
-        ensureDictionaryCacheCapacity(dictionaryValues.length());
-        int generation = currentDictionaryGeneration(dictionaryValues);
-        int[] ids = dictionary.ids();
-        for (int position : mask) {
-            if (OperatorVectorSupport.isNull(nulls, position)) {
-                continue;
-            }
-
-            int dictionaryId = ids[position];
-            if (dictionaryGenerations[dictionaryId] == generation) {
-                continue;
-            }
-            dictionaryGenerations[dictionaryId] = generation;
-
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(dictionaryValues, null, dictionaryId, reusableProbeKey);
-            if (!stateVector.keys(0).contains(key)) {
-                stateVector.keys(0).add(OperatorKeySemantics.ownedKey(key));
-            }
-        }
-    }
-
-    private void ensureDictionaryCacheCapacity(int size)
-    {
-        if (dictionaryGenerations.length >= size) {
-            return;
-        }
-        int newSize = Math.max(size, Math.max(16, dictionaryGenerations.length * 2));
-        dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, newSize);
-    }
-
-    private int currentDictionaryGeneration(Vector dictionaryValues)
-    {
-        if (cachedDictionaryValues != dictionaryValues) {
-            cachedDictionaryValues = dictionaryValues;
-            if (dictionaryGeneration == Integer.MAX_VALUE) {
-                Arrays.fill(dictionaryGenerations, 0);
-                dictionaryGeneration = 0;
-            }
-            return ++dictionaryGeneration;
-        }
-        return dictionaryGeneration;
     }
 
     @Override
@@ -142,16 +86,12 @@ public class DistinctCount
         Vector values = streams.values(inputColumn);
         BooleanVector nulls = streams.nulls(inputColumn);
         I64Vector groupVector = (I64Vector) groups;
-        OperatorKeySemantics.Key reusableProbeKey = reusableProbeKey(stateVector, values);
+        DistinctIndex distinctIndex = distinctIndex(stateVector, new Vector[] {groups, values});
 
         for (int position : mask) {
-            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKey);
-            if (key == null) {
-                continue;
-            }
             int group = toIntExact(groupVector.values()[position]);
-            if (!stateVector.keys(group).contains(key)) {
-                stateVector.keys(group).add(OperatorKeySemantics.ownedKey(key));
+            if (distinctIndex.add(new Vector[] {groups, values}, new BooleanVector[] {null, nulls}, position, group)) {
+                stateVector.incrementDistinctCount(group);
             }
         }
     }
@@ -180,14 +120,101 @@ public class DistinctCount
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static OperatorKeySemantics.Key reusableProbeKey(DistinctCountStateVector stateVector, Vector values)
+    private static DistinctIndex distinctIndex(DistinctCountStateVector stateVector, Vector[] keyValues)
     {
-        Object reusableProbeKey = stateVector.reusableProbeKey();
-        if (reusableProbeKey == null) {
-            OperatorKeySemantics.Key key = OperatorKeySemantics.reusableProbeKey(values);
-            stateVector.setReusableProbeKey(key);
-            return key;
+        Object implementation = stateVector.implementation();
+        if (implementation != null) {
+            return (DistinctIndex) implementation;
         }
-        return (OperatorKeySemantics.Key) reusableProbeKey;
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(keyValues);
+        DistinctIndex index = layout != null ? new FlatDistinctIndex(layout) : new ObjectDistinctIndex(keyValues.length);
+        stateVector.setImplementation(index);
+        return index;
+    }
+
+    private interface DistinctIndex
+    {
+        boolean add(Vector[] values, BooleanVector[] nulls, int position, int group);
+    }
+
+    private static final class FlatDistinctIndex
+            implements DistinctIndex
+    {
+        private final FlatGroupingTable table;
+        private long nextGroupId;
+
+        private FlatDistinctIndex(FlatKeyLayout layout)
+        {
+            this.table = new FlatGroupingTable(layout, 1024);
+        }
+
+        @Override
+        public boolean add(Vector[] values, BooleanVector[] nulls, int position, int group)
+        {
+            if (hasNull(nulls, position)) {
+                return false;
+            }
+            long newGroupId = nextGroupId;
+            long assigned = table.assignGroup(values, position, newGroupId);
+            if (assigned == newGroupId) {
+                nextGroupId++;
+                return true;
+            }
+            return false;
+        }
+
+        private static boolean hasNull(BooleanVector[] nulls, int position)
+        {
+            for (BooleanVector nullsVector : nulls) {
+                if (OperatorVectorSupport.isNull(nullsVector, position)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private static final class ObjectDistinctIndex
+            implements DistinctIndex
+    {
+        private final Map<Integer, ObjectOpenHashSet<Object>> keysByGroup = new HashMap<>();
+        private final OperatorKeySemantics.Key[] probeKeys;
+        private final OperatorKeySemantics.CompositeProbeKey compositeProbeKey;
+
+        private ObjectDistinctIndex(int keyCount)
+        {
+            this.probeKeys = new OperatorKeySemantics.Key[keyCount];
+            this.compositeProbeKey = keyCount > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(keyCount) : null;
+        }
+
+        @Override
+        public boolean add(Vector[] values, BooleanVector[] nulls, int position, int group)
+        {
+            OperatorKeySemantics.Key key = keyForPosition(values, nulls, position);
+            if (key == null) {
+                return false;
+            }
+            ObjectOpenHashSet<Object> keys = keysByGroup.computeIfAbsent(group, _ -> new ObjectOpenHashSet<>());
+            if (keys.contains(key)) {
+                return false;
+            }
+            keys.add(OperatorKeySemantics.ownedKey(key));
+            return true;
+        }
+
+        private OperatorKeySemantics.Key keyForPosition(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                if (probeKeys[keyIndex] == null) {
+                    probeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(values[keyIndex]);
+                }
+                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, probeKeys[keyIndex]);
+                if (key == null) {
+                    return null;
+                }
+                probeKeys[keyIndex] = key;
+            }
+            return OperatorKeySemantics.probeCompositeKey(probeKeys, compositeProbeKey);
+        }
     }
 }
