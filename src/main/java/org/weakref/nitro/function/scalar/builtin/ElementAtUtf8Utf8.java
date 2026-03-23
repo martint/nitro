@@ -85,7 +85,8 @@ public final class ElementAtUtf8Utf8
         if (requestedStreams.contains(Stream.VALUES)) {
             int requiredLength = Math.max(mask.maxPosition() + 1, mapInput.length());
             int byteCapacity = requiredByteCapacity(maps, mapInput, mapKeys, mapValues, mapValueNulls, keys, mapNulls, keyNulls, mask);
-            BinaryVector outputValues = context.allocator().allocateOrGrowBinary(
+            BinaryVector outputValues = BinaryVector.allocateOrGrow(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
                     output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof BinaryVector vector ? vector : null,
                     requiredLength,

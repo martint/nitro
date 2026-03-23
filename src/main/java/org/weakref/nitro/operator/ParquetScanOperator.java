@@ -611,13 +611,13 @@ public final class ParquetScanOperator
         Vector keyValues = switch (column.mapSpec().key().kind()) {
             case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, entryCount, I32Vector::new);
             case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
-            case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, keyBinaryCapacity);
+            case BINARY -> BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, entryCount, keyBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
         };
         Vector valueValues = switch (column.mapSpec().value().kind()) {
             case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, entryCount, I32Vector::new);
             case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
-            case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, entryCount, valueBinaryCapacity);
+            case BINARY -> BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, entryCount, valueBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map value kind: " + column.mapSpec().value().kind());
         };
         BooleanVector valueNulls = column.mapSpec().value().nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, entryCount, BooleanVector::new) : null;
@@ -731,7 +731,7 @@ public final class ParquetScanOperator
                 case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rowCount, I32Vector::new);
                 case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
                 case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
-                case BINARY -> allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, binaryCapacities[fieldIndex]);
+                case BINARY -> BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rowCount, binaryCapacities[fieldIndex]);
                 default -> throw new IllegalArgumentException("Unsupported struct field kind: " + field.kind());
             };
             fieldNulls[fieldIndex] = field.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
@@ -1209,7 +1209,7 @@ public final class ParquetScanOperator
             for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
                 dictionaryByteCapacity += dictionary.decodeToBinary(index).length();
             }
-            BinaryVector dictionaryValues = allocator.allocateBinary(ALLOCATION_CONTEXT, columnPages.dictionaryPage().getDictionarySize(), dictionaryByteCapacity);
+            BinaryVector dictionaryValues = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, columnPages.dictionaryPage().getDictionarySize(), dictionaryByteCapacity);
             for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
                 dictionaryValues.setBytes(index, dictionary.decodeToBinary(index).getBytesUnsafe());
             }
@@ -1284,7 +1284,7 @@ public final class ParquetScanOperator
 
     private ColumnBuffer readFlatBinaryColumn(ColumnSpec column, int rowCount, int byteCapacity, ColumnReader columnReader, Mask mask)
     {
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, byteCapacity);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rowCount, byteCapacity);
         BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();

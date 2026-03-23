@@ -387,7 +387,7 @@ public final class HardwoodParquetScanOperator
 
         private ColumnBuffer readBinaryBatch(int rowCount, Mask mask)
         {
-            BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rowCount, 0);
+            BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rowCount, 0);
             values.addTraits(column.binaryTraits());
             BooleanVector nullVector = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] nulls = nullVector == null ? null : nullVector.values();
@@ -410,7 +410,7 @@ public final class HardwoodParquetScanOperator
                 byte[] value = binaries[batchValuePosition];
                 if (selected) {
                     totalBytes += value.length;
-                    values = allocator.allocateOrGrowBinary(ALLOCATION_CONTEXT, values, rowCount, totalBytes);
+                    values = BinaryVector.allocateOrGrow(allocator, ALLOCATION_CONTEXT, values, rowCount, totalBytes);
                     values.setBytes(position, value);
                 }
                 else {

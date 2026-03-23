@@ -174,7 +174,7 @@ public class ConstantTableOperator
             asciiOnly &= bytes.length == ((String) value).length();
         }
 
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rows.size(), byteCapacity);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rows.size(), byteCapacity);
         values.addTrait(BinaryVector.Trait.UTF8_STRING);
         if (asciiOnly) {
             values.addTrait(BinaryVector.Trait.ASCII_ONLY);
@@ -202,7 +202,7 @@ public class ConstantTableOperator
             }
         }
 
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, rows.size(), byteCapacity);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rows.size(), byteCapacity);
         BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
         for (int position = 0; position < rows.size(); position++) {
             Object value = value(rows.get(position), column);

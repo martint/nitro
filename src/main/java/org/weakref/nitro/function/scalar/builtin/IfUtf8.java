@@ -85,7 +85,8 @@ public final class IfUtf8
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            BinaryVector outputValues = context.allocator().allocateOrGrowBinary(
+            BinaryVector outputValues = BinaryVector.allocateOrGrow(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                     requiredLength,

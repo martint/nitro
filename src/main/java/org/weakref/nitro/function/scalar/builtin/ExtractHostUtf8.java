@@ -98,7 +98,8 @@ public final class ExtractHostUtf8
             return applyDictionary(dictionary, dictionaryValues, totalBytes, requiredLength, output, context);
         }
 
-        BinaryVector outputValues = context.allocator().allocateOrGrowBinary(
+        BinaryVector outputValues = BinaryVector.allocateOrGrow(
+                context.allocator(),
                 ALLOCATION_CONTEXT,
                 output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                 requiredLength,
@@ -128,7 +129,8 @@ public final class ExtractHostUtf8
         BinaryVector existingDictionaryValues = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector existingDictionary && existingDictionary.values() instanceof BinaryVector vector
                 ? vector
                 : null;
-        BinaryVector extractedValues = context.allocator().allocateOrGrowBinary(
+        BinaryVector extractedValues = BinaryVector.allocateOrGrow(
+                context.allocator(),
                 ALLOCATION_CONTEXT,
                 existingDictionaryValues,
                 dictionaryValues.length(),

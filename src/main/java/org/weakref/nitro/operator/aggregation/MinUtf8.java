@@ -114,7 +114,8 @@ public class MinUtf8
             }
         }
 
-        BinaryVector outputValues = allocator.allocateOrGrowBinary(
+        BinaryVector outputValues = BinaryVector.allocateOrGrow(
+                allocator,
                 allocationContext,
                 output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                 size,

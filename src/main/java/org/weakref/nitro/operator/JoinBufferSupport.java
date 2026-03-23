@@ -285,7 +285,7 @@ final class JoinBufferSupport
             byteCapacity += source.length(sourcePositions[index]);
         }
 
-        BinaryVector output = allocator.allocateOrGrowBinary(allocationContext, existing instanceof BinaryVector vector ? vector : null, size, byteCapacity);
+        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, byteCapacity);
         if (outputStart == 0) {
             Arrays.fill(output.offsets(), 0);
             output.clearTraits();
@@ -319,7 +319,7 @@ final class JoinBufferSupport
         if (existing == null && outputPosition == 0 && size > 1) {
             requestedCapacity = Math.max(requiredCapacity, estimatedBinaryCapacity(source, size));
         }
-        BinaryVector output = allocator.allocateOrGrowBinary(allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity);
+        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity);
         if (outputPosition == 0) {
             Arrays.fill(output.offsets(), 0);
             output.clearTraits();
@@ -538,7 +538,7 @@ final class JoinBufferSupport
             }
         }
 
-        BinaryVector result = allocator.allocateBinary(allocationContext, totalPositions, totalBytes);
+        BinaryVector result = BinaryVector.allocate(allocator, allocationContext, totalPositions, totalBytes);
         result.addTraits(sample.traits());
         int outputPosition = 0;
         for (Vector row : rows) {

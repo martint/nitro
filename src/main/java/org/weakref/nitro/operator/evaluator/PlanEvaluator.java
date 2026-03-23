@@ -423,7 +423,7 @@ public final class PlanEvaluator
     private Vector fillUtf8(String value, int length)
     {
         byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, 1, bytes.length);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, 1, bytes.length);
         values.addTrait(BinaryVector.Trait.UTF8_STRING);
         if (bytes.length == value.length()) {
             values.addTrait(BinaryVector.Trait.ASCII_ONLY);

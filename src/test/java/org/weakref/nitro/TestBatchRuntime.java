@@ -231,10 +231,10 @@ public class TestBatchRuntime
         Allocator allocator = new Allocator();
         Allocator.Context context = new Allocator.Context("ExactBinaryVectorPool");
 
-        BinaryVector first = allocator.allocateBinary(context, 8, 32);
+        BinaryVector first = BinaryVector.allocate(allocator, context, 8, 32);
         allocator.release(context);
 
-        BinaryVector second = allocator.allocateBinary(context, 4, 16);
+        BinaryVector second = BinaryVector.allocate(allocator, context, 4, 16);
 
         assertThat(second).isNotSameAs(first);
         assertThat(second.length()).isEqualTo(4);
@@ -322,15 +322,15 @@ public class TestBatchRuntime
         Allocator allocator = new Allocator();
         Allocator.Context context = new Allocator.Context("CappedBinaryVectorPool");
 
-        BinaryVector first = allocator.allocateBinary(context, 8, 16);
-        BinaryVector second = allocator.allocateBinary(context, 8, 32);
-        BinaryVector third = allocator.allocateBinary(context, 8, 64);
+        BinaryVector first = BinaryVector.allocate(allocator, context, 8, 16);
+        BinaryVector second = BinaryVector.allocate(allocator, context, 8, 32);
+        BinaryVector third = BinaryVector.allocate(allocator, context, 8, 64);
 
         allocator.release(context);
 
-        BinaryVector reusedOne = allocator.allocateBinary(context, 8, 8);
-        BinaryVector reusedTwo = allocator.allocateBinary(context, 8, 24);
-        BinaryVector fresh = allocator.allocateBinary(context, 8, 48);
+        BinaryVector reusedOne = BinaryVector.allocate(allocator, context, 8, 8);
+        BinaryVector reusedTwo = BinaryVector.allocate(allocator, context, 8, 24);
+        BinaryVector fresh = BinaryVector.allocate(allocator, context, 8, 48);
 
         assertThat(reusedCount(List.of(first, second, third), List.of(reusedOne, reusedTwo, fresh))).isEqualTo(2);
     }

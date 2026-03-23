@@ -64,6 +64,34 @@ public final class BinaryVector
         return new PoolFamily(positionCount);
     }
 
+    public static BinaryVector allocate(Allocator allocator, Allocator.Context allocationContext, int positionCount, int byteCapacity)
+    {
+        return allocator.allocatePooled(
+                allocationContext,
+                poolFamily(positionCount),
+                byteCapacity,
+                false,
+                BinaryVector.class,
+                () -> new BinaryVector(positionCount, byteCapacity));
+    }
+
+    public static BinaryVector allocateOrGrow(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity)
+    {
+        if (existing == null) {
+            return allocate(allocator, allocationContext, positionCount, Allocator.growthCapacity(byteCapacity));
+        }
+        if (existing.length() < positionCount || existing.byteCapacity() < byteCapacity) {
+            BinaryVector grown = allocate(allocator, allocationContext, positionCount, Allocator.growthCapacity(byteCapacity));
+            System.arraycopy(existing.offsets(), 0, grown.offsets(), 0, existing.length() + 1);
+            int bytesUsed = Arrays.stream(existing.offsets()).max().orElse(0);
+            System.arraycopy(existing.data(), 0, grown.data(), 0, bytesUsed);
+            grown.addTraits(existing.traits());
+            allocator.discard(allocationContext, existing);
+            return grown;
+        }
+        return existing;
+    }
+
     public Set<Trait> traits()
     {
         return Set.copyOf(traits);
@@ -153,7 +181,7 @@ public final class BinaryVector
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         int byteLength = offsets[positionCount];
-        BinaryVector copy = allocator.allocateBinary(allocationContext, positionCount, byteLength);
+        BinaryVector copy = allocate(allocator, allocationContext, positionCount, byteLength);
         copyInto(copy);
         return copy;
     }
@@ -165,7 +193,7 @@ public final class BinaryVector
         for (int position : positions) {
             totalBytes += length(position);
         }
-        BinaryVector copy = allocator.allocateBinary(allocationContext, positions.length, totalBytes);
+        BinaryVector copy = allocate(allocator, allocationContext, positions.length, totalBytes);
         copy.addTraits(traits);
         for (int index = 0; index < positions.length; index++) {
             int position = positions[index];
@@ -188,7 +216,7 @@ public final class BinaryVector
             totalBytes += length(position);
         }
 
-        BinaryVector target = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) existing, positionCount, totalBytes);
+        BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, positionCount, totalBytes);
         target.clearTraits();
         target.addTraits(traits);
         Arrays.fill(target.offsets(), 0);
@@ -216,7 +244,7 @@ public final class BinaryVector
             byteCapacity += length(sourcePositions[index]);
         }
 
-        BinaryVector target = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) existing, size, byteCapacity);
+        BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, size, byteCapacity);
         if (outputStart == 0) {
             Arrays.fill(target.offsets(), 0);
             target.clearTraits();
@@ -248,7 +276,7 @@ public final class BinaryVector
             byteCapacity += output.offsets()[outputPosition];
         }
 
-        BinaryVector target = allocator.allocateOrGrowBinary(allocationContext, (BinaryVector) existing, size, byteCapacity);
+        BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, size, byteCapacity);
         if (outputPosition == 0) {
             Arrays.fill(target.offsets(), 0);
             target.clearTraits();
@@ -270,7 +298,7 @@ public final class BinaryVector
     @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
-        BinaryVector empty = allocator.allocateBinary(allocationContext, 0, 0);
+        BinaryVector empty = allocate(allocator, allocationContext, 0, 0);
         empty.addTraits(traits);
         return empty;
     }
@@ -279,7 +307,7 @@ public final class BinaryVector
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
         int totalPositions = VectorSupport.totalLength(rows);
-        BinaryVector result = allocator.allocateBinary(allocationContext, totalPositions, 0);
+        BinaryVector result = allocate(allocator, allocationContext, totalPositions, 0);
         result.addTraits(traits);
         int outputStart = 0;
         for (Vector row : rows) {

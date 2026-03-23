@@ -516,7 +516,7 @@ public final class TrinoParquetScanOperator
             }
         }
 
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, positionCount, totalBytes);
         values.addTraits(column.binaryTraits());
 
         Slice rawSlice = dictionaryValues.getRawSlice();
@@ -592,7 +592,7 @@ public final class TrinoParquetScanOperator
         int totalBytes = Math.max(0, lastEnd - firstOffset);
         Slice rawSlice = block.getRawSlice();
 
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, positionCount, totalBytes);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, positionCount, totalBytes);
         values.addTraits(column.binaryTraits());
 
         if (totalBytes > 0) {
@@ -636,7 +636,7 @@ public final class TrinoParquetScanOperator
     private BinaryVector copyMaskedBinary(ColumnSpec column, Block block, Mask mask)
     {
         int totalBytes = selectedBinaryBytes(block, mask);
-        BinaryVector values = allocator.allocateBinary(ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
+        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
         values.addTraits(column.binaryTraits());
         forEachSelected(mask, position -> {
             if (block.isNull(position)) {

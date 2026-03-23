@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.IntFunction;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
@@ -52,40 +53,12 @@ public class Allocator
 
     public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
     {
-        ContextState state = state(context);
-        Vector vector = state.borrowVector(vectorType, size, true, vectorType);
-        boolean reused = vector != null;
-        if (!reused) {
-            vector = allocator.apply(size);
-        }
-        else {
-            vector.clearForReuse();
-        }
-
-        @SuppressWarnings("unchecked")
-        T typedVector = (T) vectorType.cast(vector);
-        state.trackVector(typedVector, reused);
-        return typedVector;
+        return allocatePooled(context, vectorType, size, true, vectorType, () -> allocator.apply(size));
     }
 
     public <T extends Vector> T adopt(Context context, T vector)
     {
         state(context).trackVector(requireNonNull(vector, "vector is null"), false);
-        return vector;
-    }
-
-    public BinaryVector allocateBinary(Context context, int positionCount, int byteCapacity)
-    {
-        ContextState state = state(context);
-        BinaryVector vector = state.borrowVector(BinaryVector.poolFamily(positionCount), byteCapacity, false, BinaryVector.class);
-        boolean reused = vector != null;
-        if (!reused) {
-            vector = new BinaryVector(positionCount, byteCapacity);
-        }
-        else {
-            vector.clearForReuse();
-        }
-        state.trackVector(vector, reused);
         return vector;
     }
 
@@ -100,23 +73,6 @@ public class Allocator
     {
         RleVector vector = new RleVector(Arrays.copyOf(counts, counts.length), values);
         state(context).trackVector(vector, false);
-        return vector;
-    }
-
-    public BinaryVector allocateOrGrowBinary(Context context, BinaryVector vector, int positionCount, int byteCapacity)
-    {
-        if (vector == null) {
-            return allocateBinary(context, positionCount, growthCapacity(byteCapacity));
-        }
-        if (vector.length() < positionCount || vector.byteCapacity() < byteCapacity) {
-            BinaryVector grown = allocateBinary(context, positionCount, growthCapacity(byteCapacity));
-            System.arraycopy(vector.offsets(), 0, grown.offsets(), 0, vector.length() + 1);
-            int bytesUsed = Arrays.stream(vector.offsets()).max().orElse(0);
-            System.arraycopy(vector.data(), 0, grown.data(), 0, bytesUsed);
-            grown.addTraits(vector.traits());
-            discardVector(context, vector);
-            return grown;
-        }
         return vector;
     }
 
@@ -142,6 +98,29 @@ public class Allocator
             return grown;
         }
         return vector;
+    }
+
+    public <T extends Vector> T allocatePooled(Context context, Object poolFamily, int minimumPoolCapacity, boolean exactCapacityMatch, Class<T> vectorType, Supplier<T> allocator)
+    {
+        ContextState state = state(context);
+        T vector = state.borrowVector(poolFamily, minimumPoolCapacity, exactCapacityMatch, vectorType);
+        boolean reused = vector != null;
+        if (!reused) {
+            vector = requireNonNull(allocator.get(), "allocator returned null");
+        }
+        else {
+            vector.clearForReuse();
+        }
+        state.trackVector(vector, reused);
+        return vector;
+    }
+
+    public static int growthCapacity(int desiredSize)
+    {
+        if (desiredSize <= 0) {
+            return 0;
+        }
+        return Math.max(desiredSize, computeCapacity(desiredSize));
     }
 
     public <T extends Vector> T reallocateIfNecessary(Context context, T vector, Class<T> vectorType, int count, IntFunction<T> vectorAllocator)
@@ -698,14 +677,6 @@ public class Allocator
             }
         }
         return true;
-    }
-
-    private static int growthCapacity(int desiredSize)
-    {
-        if (desiredSize <= 0) {
-            return 0;
-        }
-        return Math.max(desiredSize, computeCapacity(desiredSize));
     }
 
     private static void copyMask(Mask target, Mask source)
