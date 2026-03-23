@@ -20,6 +20,7 @@ import org.weakref.nitro.data.AvgStateVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
@@ -295,6 +296,22 @@ public class TestBatchRuntime
         assertThat(grown.isNull(3)).isFalse();
         assertThat(grown.sum(7)).isZero();
         assertThat(grown.isNull(7)).isTrue();
+    }
+
+    @Test
+    void testDistinctCountStateVectorGrowPreservesValuesWithoutFlatCopy()
+    {
+        DistinctCountStateVector state = new DistinctCountStateVector();
+        state.incrementDistinctCount(0);
+        state.incrementDistinctCount(3);
+        state.incrementDistinctCount(3);
+
+        state.ensureGroupCapacity(8);
+
+        assertThat(state.length()).isEqualTo(8);
+        assertThat(state.distinctCount(0)).isEqualTo(1);
+        assertThat(state.distinctCount(3)).isEqualTo(2);
+        assertThat(state.distinctCount(7)).isZero();
     }
 
     @Test

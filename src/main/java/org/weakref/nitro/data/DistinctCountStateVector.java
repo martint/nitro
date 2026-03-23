@@ -13,32 +13,40 @@
  */
 package org.weakref.nitro.data;
 
-import java.util.Arrays;
-
 public final class DistinctCountStateVector
         implements FlatVector
 {
-    private long[] distinctCounts = new long[0];
+    private static final int CHUNK_SHIFT = 12;
+    private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
+    private static final int CHUNK_MASK = CHUNK_SIZE - 1;
+
+    private int length;
+    private long[][] chunks = new long[0][];
+    private long retainedBytes;
     private Object implementation;
 
     @Override
     public int length()
     {
-        return distinctCounts.length;
+        return length;
     }
 
     @Override
     public long retainedBytes()
     {
-        return (long) distinctCounts.length * Long.BYTES;
+        return retainedBytes;
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         DistinctCountStateVector copy = new DistinctCountStateVector();
-        copy.distinctCounts = Arrays.copyOf(distinctCounts, distinctCounts.length);
-        copy.implementation = implementation;
+        copy.length = length;
+        copy.chunks = new long[chunks.length][];
+        for (int index = 0; index < chunks.length; index++) {
+            copy.chunks[index] = java.util.Arrays.copyOf(chunks[index], chunks[index].length);
+        }
+        copy.retainedBytes = retainedBytes;
         return allocator.adopt(allocationContext, copy);
     }
 
@@ -50,20 +58,34 @@ public final class DistinctCountStateVector
 
     public void ensureGroupCapacity(int size)
     {
-        if (distinctCounts.length < size) {
-            distinctCounts = Arrays.copyOf(distinctCounts, size);
+        if (length >= size) {
+            return;
+        }
+
+        length = size;
+        int requiredChunkCount = chunkCount(size);
+        if (requiredChunkCount > chunks.length) {
+            long[][] grown = java.util.Arrays.copyOf(chunks, requiredChunkCount);
+            for (int index = chunks.length; index < requiredChunkCount; index++) {
+                grown[index] = new long[CHUNK_SIZE];
+                retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+            }
+            chunks = grown;
         }
     }
 
     public void incrementDistinctCount(int group)
     {
         ensureGroupCapacity(group + 1);
-        distinctCounts[group]++;
+        increment(group, 1);
     }
 
     public long distinctCount(int group)
     {
-        return group >= distinctCounts.length ? 0 : distinctCounts[group];
+        if (group >= length) {
+            return 0;
+        }
+        return chunks[group >> CHUNK_SHIFT][group & CHUNK_MASK];
     }
 
     public Object implementation()
@@ -74,5 +96,15 @@ public final class DistinctCountStateVector
     public void setImplementation(Object implementation)
     {
         this.implementation = implementation;
+    }
+
+    private void increment(int index, long count)
+    {
+        chunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+    }
+
+    private static int chunkCount(int length)
+    {
+        return (length + CHUNK_MASK) >> CHUNK_SHIFT;
     }
 }
