@@ -328,11 +328,11 @@ public class TestClickBenchHitsQueries
     }
 
     @Test
-    void testClickBenchQuery20SearchPhrasesForUserId()
+    void testClickBenchQuery20UserIdsForExactUserId()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query20SearchPhrasesForUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
-            assertThat(operator(query)).matchesExactly(List.of(row("news")));
+        try (Operator query = ClickBenchHitsSupport.query20UserIdsForExactUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+            assertThat(operator(query)).matchesExactly(List.of(row(ClickBenchHitsSupport.QUERY20_USER_ID)));
         }
     }
 
@@ -383,17 +383,11 @@ public class TestClickBenchHitsQueries
             throws IOException
     {
         try (Operator query = ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
-            assertThat(operator(query)).matchesExactly(List.of(row(
-                    6_348L,
-                    6_356L,
-                    6_364L,
-                    6_372L,
-                    6_380L,
-                    6_388L,
-                    6_396L,
-                    6_404L,
-                    6_412L,
-                    6_420L)));
+            Object[] sums = new Object[90];
+            for (int offset = 0; offset < sums.length; offset++) {
+                sums[offset] = 6_340L + (8L * offset);
+            }
+            assertThat(operator(query)).matchesExactly(List.of(row(sums)));
         }
     }
 

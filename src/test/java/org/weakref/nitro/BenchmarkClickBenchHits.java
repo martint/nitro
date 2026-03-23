@@ -173,9 +173,9 @@ public class BenchmarkClickBenchHits
     }
 
     @Benchmark
-    public void query20SearchPhrasesForUserId()
+    public void query20UserIdsForExactUserId()
     {
-        consume(ClickBenchHitsSupport.query20SearchPhrasesForUserId(allocator, primitiveRegistry, clickBenchHitsDirectory));
+        consume(ClickBenchHitsSupport.query20UserIdsForExactUserId(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark

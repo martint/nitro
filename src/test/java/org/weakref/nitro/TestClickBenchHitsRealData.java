@@ -323,11 +323,12 @@ public class TestClickBenchHitsRealData
     @Test
     void testQuery20()
     {
-        try (Operator query = ClickBenchHitsSupport.query20SearchPhrasesForUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query20UserIdsForExactUserId(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(1);
-            assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
+            assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
+            assertThat(rows.getFirst().values()[0]).isEqualTo(ClickBenchHitsSupport.QUERY20_USER_ID);
         }
     }
 
@@ -370,7 +371,7 @@ public class TestClickBenchHitsRealData
         try (Operator query = ClickBenchHitsSupport.query30SumResolutionWidthPlusOffsets(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
-            assertThat(rows.getFirst().values()).hasSize(10);
+            assertThat(rows.getFirst().values()).hasSize(90);
             for (Object value : rows.getFirst().values()) {
                 assertThat(value).isInstanceOf(Long.class);
             }

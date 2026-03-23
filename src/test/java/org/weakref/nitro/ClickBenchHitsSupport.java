@@ -36,6 +36,7 @@ import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TrinoParquetScanOperator;
+import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.Max;
@@ -64,11 +65,13 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 
+import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
@@ -461,11 +464,9 @@ final class ClickBenchHitsSupport
         return new TopNOperator(allocator, 10, 3, aggregated);
     }
 
-    public static Operator query20SearchPhrasesForUserId(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
+    public static Operator query20UserIdsForExactUserId(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchPhrase", "UserID"), equalI64(1, QUERY20_USER_ID));
-        Operator projected = projectInputs(allocator, new PrimitiveRegistry(), filtered, 0);
-        return new LimitOperator(allocator, 10, projected);
+        return filter(allocator, primitiveRegistry, file, List.of("UserID"), equalI64(0, QUERY20_USER_ID));
     }
 
     public static Operator query26SearchPhrasesOrderedAscending(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -528,21 +529,9 @@ final class ClickBenchHitsSupport
 
     public static Operator query30SumResolutionWidthPlusOffsets(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator projected = projectResolutionWidthOffsets(allocator, primitiveRegistry, clickBenchScan(allocator, file, "ResolutionWidth"), 10);
-        return new AggregationOperator(
-                allocator,
-                List.of(
-                        new Sum(0),
-                        new Sum(1),
-                        new Sum(2),
-                        new Sum(3),
-                        new Sum(4),
-                        new Sum(5),
-                        new Sum(6),
-                        new Sum(7),
-                        new Sum(8),
-                        new Sum(9)),
-                projected);
+        int sumCount = 90;
+        Operator projected = projectResolutionWidthOffsets(allocator, primitiveRegistry, clickBenchScan(allocator, file, "ResolutionWidth"), sumCount);
+        return new AggregationOperator(allocator, offsetSums(sumCount), projected);
     }
 
     public static Operator query31SearchEngineAndClientIp(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -595,10 +584,10 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("URL", "CounterID", "EventTime", "DontCountHits", "IsRefresh"),
+                List.of("URL", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
                 and(
                         notEqualUtf8(0, ""),
-                        counterAndJulyFilter(1, 2, 4),
+                        counterAndJulyEventDateFilter(file, 1, 2, 4),
                         equalTo(3, 0)));
         return topUtf8Counts(allocator, null, filtered, 0);
     }
@@ -609,10 +598,10 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("Title", "CounterID", "EventTime", "DontCountHits", "IsRefresh"),
+                List.of("Title", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
                 and(
                         notEqualUtf8(0, ""),
-                        counterAndJulyFilter(1, 2, 4),
+                        counterAndJulyEventDateFilter(file, 1, 2, 4),
                         equalTo(3, 0)));
         return topUtf8Counts(allocator, null, filtered, 0);
     }
@@ -623,9 +612,9 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("URL", "CounterID", "EventTime", "IsRefresh", "IsLink", "IsDownload"),
+                List.of("URL", "CounterID", "EventDate", "IsRefresh", "IsLink", "IsDownload"),
                 and(
-                        counterAndJulyFilter(1, 2, 3),
+                        counterAndJulyEventDateFilter(file, 1, 2, 3),
                         notEqualTo(4, 0),
                         equalTo(5, 0)));
         Operator grouped = new GroupOperator(allocator, 0, filtered);
@@ -645,8 +634,8 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("TraficSourceID", "SearchEngineID", "AdvEngineID", "Referer", "URL", "CounterID", "EventTime", "IsRefresh"),
-                counterAndJulyFilter(5, 6, 7));
+                List.of("TraficSourceID", "SearchEngineID", "AdvEngineID", "Referer", "URL", "CounterID", "EventDate", "IsRefresh"),
+                counterAndJulyEventDateFilter(file, 5, 6, 7));
         Operator projected = projectTrafficSourceCase(allocator, primitiveRegistry, filtered);
         Operator grouped = new GroupOperator(allocator, new int[] {0, 1, 2, 3, 4}, projected);
         Operator aggregated = new GroupedAggregationOperator(
@@ -665,11 +654,11 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("URLHash", "EventDate", "CounterID", "EventTime", "IsRefresh", "TraficSourceID", "RefererHash"),
+                List.of("URLHash", "EventDate", "CounterID", "IsRefresh", "TraficSourceID", "RefererHash"),
                 and(
-                        counterAndJulyFilter(2, 3, 4),
-                        trafficSourceIn(5),
-                        equalTo(6, QUERY41_REFERER_HASH)));
+                        counterAndJulyEventDateFilter(file, 2, 1, 3),
+                        trafficSourceIn(4),
+                        equalTo(5, QUERY41_REFERER_HASH)));
         Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, filtered);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
@@ -687,9 +676,9 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("WindowClientWidth", "WindowClientHeight", "CounterID", "EventTime", "IsRefresh", "DontCountHits", "URLHash"),
+                List.of("WindowClientWidth", "WindowClientHeight", "CounterID", "EventDate", "IsRefresh", "DontCountHits", "URLHash"),
                 and(
-                        counterAndJulyFilter(2, 3, 4),
+                        counterAndJulyEventDateFilter(file, 2, 3, 4),
                         equalTo(5, 0),
                         equalTo(6, QUERY42_URL_HASH)));
         Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, filtered);
@@ -709,10 +698,10 @@ final class ClickBenchHitsSupport
                 allocator,
                 primitiveRegistry,
                 file,
-                List.of("EventTime", "CounterID", "DontCountHits", "IsRefresh"),
+                List.of("EventTime", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
                 and(
-                        minuteWindowFilter(0, 1, 3, JULY_14_2013_UTC, JULY_16_2013_UTC),
-                        equalTo(2, 0)));
+                        counterAndEventDateFilter(file, 1, 2, 4, LocalDate.of(2013, 7, 14), LocalDate.of(2013, 7, 16)),
+                        equalTo(3, 0)));
         Operator projected = projectMinuteBucket(allocator, primitiveRegistry, filtered, 0);
         Operator grouped = new GroupOperator(allocator, 0, projected);
         Operator aggregated = new GroupedAggregationOperator(
@@ -894,7 +883,8 @@ final class ClickBenchHitsSupport
         java.util.ArrayList<Assignment> assignments = new java.util.ArrayList<>();
         java.util.ArrayList<Reference> outputs = new java.util.ArrayList<>();
         int variableId = 0;
-        for (int offset = 1; offset <= count; offset++) {
+        outputs.add(new Reference(new Input(0), Stream.VALUES));
+        for (int offset = 1; offset < count; offset++) {
             Variable literal = new Variable(variableId++);
             assignments.add(new Assignment(literal, new Literal((long) offset), AllMask.ALL));
             Variable sum = new Variable(variableId++);
@@ -904,6 +894,15 @@ final class ClickBenchHitsSupport
             outputs.add(new Reference(sum, Stream.VALUES));
         }
         return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static List<Accumulator> offsetSums(int count)
+    {
+        java.util.ArrayList<Accumulator> sums = new java.util.ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            sums.add(new Sum(index));
+        }
+        return sums;
     }
 
     private static Operator projectCounterAndUtf8Length(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -1140,22 +1139,18 @@ final class ClickBenchHitsSupport
         return result;
     }
 
-    private static FilterSpec counterAndJulyFilter(int counterIndex, int eventTimeIndex, int isRefreshIndex)
+    private static FilterSpec counterAndJulyEventDateFilter(Path file, int counterIndex, int eventDateIndex, int isRefreshIndex)
     {
-        return and(
-                equalTo(counterIndex, 62),
-                and(
-                        equalTo(isRefreshIndex, 0),
-                        timeRange(eventTimeIndex, JULY_1_2013_UTC, AUGUST_1_2013_UTC)));
+        return counterAndEventDateFilter(file, counterIndex, eventDateIndex, isRefreshIndex, LocalDate.of(2013, 7, 1), LocalDate.of(2013, 8, 1));
     }
 
-    private static FilterSpec minuteWindowFilter(int eventTimeIndex, int counterIndex, int isRefreshIndex, long startExclusiveLowerBound, long exclusiveUpperBound)
+    private static FilterSpec counterAndEventDateFilter(Path file, int counterIndex, int eventDateIndex, int isRefreshIndex, LocalDate inclusiveLowerBound, LocalDate exclusiveUpperBound)
     {
         return and(
                 equalTo(counterIndex, 62),
                 and(
                         equalTo(isRefreshIndex, 0),
-                        timeRange(eventTimeIndex, startExclusiveLowerBound, exclusiveUpperBound)));
+                        dateRange(file, eventDateIndex, inclusiveLowerBound, exclusiveUpperBound)));
     }
 
     private static FilterSpec timeRange(int inputIndex, long inclusiveLowerBound, long exclusiveUpperBound)
@@ -1163,6 +1158,40 @@ final class ClickBenchHitsSupport
         FilterSpec lowerBound = greaterThan(inputIndex, inclusiveLowerBound - 1);
         FilterSpec upperBound = lessThan(inputIndex, exclusiveUpperBound);
         return and(lowerBound, upperBound);
+    }
+
+    private static FilterSpec dateRange(Path file, int inputIndex, LocalDate inclusiveLowerBound, LocalDate exclusiveUpperBound)
+    {
+        return timeRange(inputIndex, eventDateLiteral(file, inclusiveLowerBound), eventDateLiteral(file, exclusiveUpperBound));
+    }
+
+    private static int eventDateLiteral(Path file, LocalDate date)
+    {
+        if (eventDateUsesEpochDays(file)) {
+            return toIntExact(date.toEpochDay());
+        }
+        return (date.getYear() * 10_000) + (date.getMonthValue() * 100) + date.getDayOfMonth();
+    }
+
+    private static boolean eventDateUsesEpochDays(Path file)
+    {
+        if (Files.isDirectory(file)) {
+            try {
+                file = parquetFiles(file).getFirst();
+            }
+            catch (IOException exception) {
+                throw new UncheckedIOException("Unable to list ClickBench parquet files in " + file, exception);
+            }
+        }
+        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+            var field = reader.getFooter().getFileMetaData().getSchema().getType("EventDate").asPrimitiveType();
+            return field.getLogicalTypeAnnotation() instanceof org.apache.parquet.schema.LogicalTypeAnnotation.IntLogicalTypeAnnotation logicalType
+                    && !logicalType.isSigned()
+                    && logicalType.getBitWidth() == 16;
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to inspect ClickBench EventDate encoding for " + file, exception);
+        }
     }
 
     private static FilterSpec lessThan(int inputIndex, long constant)
@@ -1407,11 +1436,6 @@ final class ClickBenchHitsSupport
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
     {
     }
-
-    private static final long JULY_1_2013_UTC = 1_372_636_800L;
-    private static final long JULY_14_2013_UTC = 1_373_760_000L;
-    private static final long JULY_16_2013_UTC = 1_373_932_800L;
-    private static final long AUGUST_1_2013_UTC = 1_375_315_200L;
 
     private enum ReaderKind
     {
