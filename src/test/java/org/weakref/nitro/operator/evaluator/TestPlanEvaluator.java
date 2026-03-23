@@ -315,6 +315,51 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testRegexpReplaceUtf8MatchesClickBenchHostPattern()
+    {
+        Variable pattern = new Variable(0);
+        Variable replacement = new Variable(1);
+        Variable host = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(pattern, new Literal("^https?://(?:www\\.)?([^/]+)/.*$"), AllMask.ALL),
+                        new Assignment(replacement, new Literal("\\1"), AllMask.ALL),
+                        new Assignment(
+                                host,
+                                new Call("regexp_replace_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(pattern, Stream.VALUES),
+                                        new Reference(replacement, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(host, Stream.VALUES)));
+
+        BinaryVector dictionaryValues = new BinaryVector(4, 160);
+        dictionaryValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionaryValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionaryValues.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(2, "https://example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(3, "mailto:test@example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 3}, dictionaryValues);
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(4));
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+
+        DictionaryVector hosts = (DictionaryVector) result.values();
+        BinaryVector rewrittenValues = (BinaryVector) hosts.values();
+        assertThat(rewrittenValues.utf8Value(hosts.ids()[0])).isEqualTo("google.com");
+        assertThat(rewrittenValues.utf8Value(hosts.ids()[1])).isEqualTo("news.ycombinator.com");
+        assertThat(rewrittenValues.utf8Value(hosts.ids()[2])).isEqualTo("https://example.com");
+        assertThat(rewrittenValues.utf8Value(hosts.ids()[3])).isEqualTo("mailto:test@example.com");
+    }
+
+    @Test
     void testStructFieldCombinesParentAndChildNulls()
     {
         Variable name = new Variable(0);

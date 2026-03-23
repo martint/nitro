@@ -919,9 +919,16 @@ final class ClickBenchHitsSupport
     {
         Variable host = new Variable(0);
         Variable length = new Variable(1);
+        Variable pattern = new Variable(2);
+        Variable replacement = new Variable(3);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(
-                        new Assignment(host, new Call("extract_host_utf8", List.of(new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(pattern, new Literal("^https?://(?:www\\.)?([^/]+)/.*$"), AllMask.ALL),
+                        new Assignment(replacement, new Literal("\\1"), AllMask.ALL),
+                        new Assignment(host, new Call("regexp_replace_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(pattern, Stream.VALUES),
+                                new Reference(replacement, Stream.VALUES))), AllMask.ALL),
                         new Assignment(length, new Call("length_utf8", List.of(new Reference(new Input(0), Stream.VALUES))), AllMask.ALL)),
                 List.of(new Reference(host, Stream.VALUES), new Reference(length, Stream.VALUES), new Reference(new Input(0), Stream.VALUES)));
         return new ProjectOperator(allocator, plan, primitiveRegistry, source);
