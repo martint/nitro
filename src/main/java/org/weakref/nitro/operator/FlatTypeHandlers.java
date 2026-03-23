@@ -357,12 +357,37 @@ final class FlatTypeHandlers
         @Override
         public long hashInput(Vector vector, int position)
         {
+            if (vector instanceof BinaryVector binary) {
+                return OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(position), binary.length(position));
+            }
+            if (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector binaryValues) {
+                int dictionaryPosition = dictionary.ids()[position];
+                return OperatorVectorSupport.binaryHash(binaryValues.data(), binaryValues.startOffset(dictionaryPosition), binaryValues.length(dictionaryPosition));
+            }
+            if (vector instanceof RleVector rle && rle.values() instanceof BinaryVector binaryValues) {
+                int runIndex = OperatorVectorSupport.runIndex(rle, position);
+                return OperatorVectorSupport.binaryHash(binaryValues.data(), binaryValues.startOffset(runIndex), binaryValues.length(runIndex));
+            }
             return hashBinary(vector, position);
         }
 
         @Override
         public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
         {
+            if (vector instanceof BinaryVector binary) {
+                writeFlat(binary.data(), binary.startOffset(position), binary.length(position), fixedChunk, fixedOffset, variableWidthArena);
+                return;
+            }
+            if (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector binaryValues) {
+                int dictionaryPosition = dictionary.ids()[position];
+                writeFlat(binaryValues.data(), binaryValues.startOffset(dictionaryPosition), binaryValues.length(dictionaryPosition), fixedChunk, fixedOffset, variableWidthArena);
+                return;
+            }
+            if (vector instanceof RleVector rle && rle.values() instanceof BinaryVector binaryValues) {
+                int runIndex = OperatorVectorSupport.runIndex(rle, position);
+                writeFlat(binaryValues.data(), binaryValues.startOffset(runIndex), binaryValues.length(runIndex), fixedChunk, fixedOffset, variableWidthArena);
+                return;
+            }
             writeBinaryFlat(vector, position, fixedChunk, fixedOffset, variableWidthArena);
         }
 
@@ -372,6 +397,20 @@ final class FlatTypeHandlers
             int length = binaryLength(fixedChunk, fixedOffset);
             byte[] chunk = variableWidthArena.chunk(readChunkIndex(fixedChunk, fixedOffset));
             int offset = readChunkOffset(fixedChunk, fixedOffset);
+            if (vector instanceof BinaryVector binary) {
+                return binary.length(position) == length &&
+                        OperatorVectorSupport.binaryEquals(binary.data(), binary.startOffset(position), chunk, offset, length);
+            }
+            if (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector binaryValues) {
+                int dictionaryPosition = dictionary.ids()[position];
+                return binaryValues.length(dictionaryPosition) == length &&
+                        OperatorVectorSupport.binaryEquals(binaryValues.data(), binaryValues.startOffset(dictionaryPosition), chunk, offset, length);
+            }
+            if (vector instanceof RleVector rle && rle.values() instanceof BinaryVector binaryValues) {
+                int runIndex = OperatorVectorSupport.runIndex(rle, position);
+                return binaryValues.length(runIndex) == length &&
+                        OperatorVectorSupport.binaryEquals(binaryValues.data(), binaryValues.startOffset(runIndex), chunk, offset, length);
+            }
             return binaryEquals(vector, position, chunk, offset, length);
         }
 
