@@ -76,8 +76,13 @@ public final class DistinctCountStateVector
 
     public void incrementDistinctCount(int group)
     {
+        incrementDistinctCount(group, 1);
+    }
+
+    public void incrementDistinctCount(int group, long count)
+    {
         ensureGroupCapacity(group + 1);
-        increment(group, 1);
+        increment(group, count);
     }
 
     public long distinctCount(int group)

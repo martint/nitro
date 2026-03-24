@@ -38,6 +38,12 @@ public class DistinctCount
     }
 
     @Override
+    public int[] distinctInputColumns()
+    {
+        return new int[] {inputColumn};
+    }
+
+    @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
         DistinctCountStateVector stateVector = new DistinctCountStateVector();
@@ -77,6 +83,18 @@ public class DistinctCount
     }
 
     @Override
+    public void accumulateDistinctSelected(Streams state, int group, Mask mask, StreamAccessor streams)
+    {
+        if (group != 0) {
+            throw new UnsupportedOperationException("DistinctCount does not support grouped accumulation");
+        }
+
+        DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
+        stateVector.ensureGroupCapacity(group + 1);
+        stateVector.incrementDistinctCount(group, mask.count());
+    }
+
+    @Override
     public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
     {
         DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
@@ -90,6 +108,24 @@ public class DistinctCount
             if (distinctIndex.add(new Vector[] {groups, values}, new BooleanVector[] {null, nulls}, position, group)) {
                 stateVector.incrementDistinctCount(group);
             }
+        }
+    }
+
+    @Override
+    public void accumulateDistinctSelected(Streams state, Vector groups, Mask mask, StreamAccessor streams)
+    {
+        DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
+        I64Vector groupVector = (I64Vector) groups;
+
+        if (mask.all()) {
+            for (int position = 0; position <= mask.maxPosition(); position++) {
+                stateVector.incrementDistinctCount(toIntExact(groupVector.values()[position]));
+            }
+            return;
+        }
+
+        for (int position : mask) {
+            stateVector.incrementDistinctCount(toIntExact(groupVector.values()[position]));
         }
     }
 

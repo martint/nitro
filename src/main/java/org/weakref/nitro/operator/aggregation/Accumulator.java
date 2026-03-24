@@ -27,6 +27,15 @@ import org.weakref.nitro.operator.Streams;
 public interface Accumulator
 {
     /**
+     * Returns the input columns defining DISTINCT semantics for this accumulator, or {@code null}
+     * when it consumes every row selected by the incoming mask.
+     */
+    default int[] distinctInputColumns()
+    {
+        return null;
+    }
+
+    /**
      * Allocates initial state capable of holding at least {@code size} groups.
      */
     Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size);
@@ -47,9 +56,27 @@ public interface Accumulator
     void accumulate(Streams state, int group, Mask mask, StreamAccessor streams);
 
     /**
+     * Accumulates rows selected by {@code mask} after DISTINCT has already been applied for this
+     * accumulator's input columns.
+     */
+    default void accumulateDistinctSelected(Streams state, int group, Mask mask, StreamAccessor streams)
+    {
+        accumulate(state, group, mask, streams);
+    }
+
+    /**
      * Accumulates rows selected by {@code mask} using per-row group ids from {@code groups}.
      */
     void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams);
+
+    /**
+     * Accumulates rows selected by {@code mask} using per-row group ids after DISTINCT has already
+     * been applied for this accumulator's input columns.
+     */
+    default void accumulateDistinctSelected(Streams state, Vector groups, Mask mask, StreamAccessor streams)
+    {
+        accumulate(state, groups, mask, streams);
+    }
 
     /**
      * Materializes result streams for the selected result mask.

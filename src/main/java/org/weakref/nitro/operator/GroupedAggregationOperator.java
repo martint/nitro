@@ -22,8 +22,11 @@ import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static java.lang.Math.toIntExact;
@@ -39,6 +42,8 @@ public class GroupedAggregationOperator
     private final int[] groupByColumns;
     private final int[] groupedKeyIndexes;
     private final Accumulator[] aggregations;
+    private final int[] plainAggregationIndexes;
+    private final DistinctAggregationGroup[] distinctAggregationGroups;
     private final Operator source;
     private final Streams[] groupedResults;
     private final Streams[] result;
@@ -90,6 +95,9 @@ public class GroupedAggregationOperator
         this.groupByColumns = groupByColumns;
         this.groupedKeyIndexes = groupedKeyIndexes;
         this.aggregations = aggregations.toArray(Accumulator[]::new);
+        DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(this.aggregations);
+        this.plainAggregationIndexes = distinctAggregationPlan.plainAggregationIndexes();
+        this.distinctAggregationGroups = distinctAggregationPlan.distinctAggregationGroups();
         this.source = source;
         this.inlineGroupingState = inlineGroupingState;
 
@@ -139,15 +147,8 @@ public class GroupedAggregationOperator
 
             int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
             var streamAccessor = StreamAccessors.forBatch(batch);
-            for (int i = 0; i < aggregations.length; i++) {
-                Accumulator accumulator = aggregations[i];
-
-                states[i] = states[i] == null
-                        ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
-                        : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[i], newCapacity);
-                accumulator.initialize(states[i], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
-                accumulator.accumulate(states[i], group, mask, streamAccessor);
-            }
+            prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
+            accumulateGroupedRows(group, mask, streamAccessor);
         }
 
         this.maxGroup = toIntExact(maxObservedGroup);
@@ -187,14 +188,8 @@ public class GroupedAggregationOperator
 
                 int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
                 var streamAccessor = StreamAccessors.forBatch(batch);
-                for (int index = 0; index < aggregations.length; index++) {
-                    Accumulator accumulator = aggregations[index];
-                    states[index] = states[index] == null
-                            ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
-                            : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[index], newCapacity);
-                    accumulator.initialize(states[index], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
-                    accumulator.accumulate(states[index], reusableGroups, mask, streamAccessor);
-                }
+                prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
+                accumulateGroupedRows(reusableGroups, mask, streamAccessor);
             }
         }
 
@@ -238,6 +233,36 @@ public class GroupedAggregationOperator
             maxObservedGroup = Math.max(maxObservedGroup, groups.values()[position]);
         }
         return maxObservedGroup;
+    }
+
+    private void prepareAggregationStates(long previousMaxGroup, long maxObservedGroup, int newCapacity)
+    {
+        for (int index = 0; index < aggregations.length; index++) {
+            Accumulator accumulator = aggregations[index];
+            states[index] = states[index] == null
+                    ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
+                    : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[index], newCapacity);
+            accumulator.initialize(states[index], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
+        }
+    }
+
+    private void accumulateGroupedRows(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor)
+    {
+        for (int aggregationIndex : plainAggregationIndexes) {
+            aggregations[aggregationIndex].accumulate(states[aggregationIndex], groups, mask, streamAccessor);
+        }
+
+        for (DistinctAggregationGroup distinctAggregationGroup : distinctAggregationGroups) {
+            Mask distinctMask = distinctAggregationGroup.select(groups, mask, streamAccessor, allocator);
+            try {
+                for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
+                    aggregations[aggregationIndex].accumulateDistinctSelected(states[aggregationIndex], groups, distinctMask, streamAccessor);
+                }
+            }
+            finally {
+                allocator.release(ALLOCATION_CONTEXT, distinctMask);
+            }
+        }
     }
 
     private void finishResults(long maxObservedGroup)
@@ -385,5 +410,99 @@ public class GroupedAggregationOperator
             indexes[outputIndex] = groupedKeyIndex;
         }
         return indexes;
+    }
+
+    private static DistinctAggregationPlan planDistinctAggregations(Accumulator[] aggregations)
+    {
+        List<Integer> plainAggregationIndexes = new ArrayList<>();
+        Map<DistinctSignature, List<Integer>> aggregationIndexesBySignature = new LinkedHashMap<>();
+        for (int aggregationIndex = 0; aggregationIndex < aggregations.length; aggregationIndex++) {
+            int[] distinctInputColumns = aggregations[aggregationIndex].distinctInputColumns();
+            if (distinctInputColumns == null || distinctInputColumns.length == 0) {
+                plainAggregationIndexes.add(aggregationIndex);
+                continue;
+            }
+            aggregationIndexesBySignature.computeIfAbsent(new DistinctSignature(distinctInputColumns), _ -> new ArrayList<>())
+                    .add(aggregationIndex);
+        }
+
+        DistinctAggregationGroup[] distinctAggregationGroups = aggregationIndexesBySignature.entrySet().stream()
+                .map(entry -> new DistinctAggregationGroup(entry.getKey().inputColumns(), entry.getValue().stream().mapToInt(Integer::intValue).toArray()))
+                .toArray(DistinctAggregationGroup[]::new);
+
+        return new DistinctAggregationPlan(
+                plainAggregationIndexes.stream().mapToInt(Integer::intValue).toArray(),
+                distinctAggregationGroups);
+    }
+
+    private record DistinctAggregationPlan(int[] plainAggregationIndexes, DistinctAggregationGroup[] distinctAggregationGroups) {}
+
+    private record DistinctSignature(int[] inputColumns)
+    {
+        private DistinctSignature
+        {
+            inputColumns = inputColumns.clone();
+        }
+
+        @Override
+        public boolean equals(Object other)
+        {
+            return other instanceof DistinctSignature signature && java.util.Arrays.equals(inputColumns, signature.inputColumns);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return java.util.Arrays.hashCode(inputColumns);
+        }
+    }
+
+    private static final class DistinctAggregationGroup
+    {
+        private final int[] inputColumns;
+        private final int[] aggregationIndexes;
+        private DistinctKeySet distinctKeySet;
+        private int[] distinctPositions = new int[0];
+
+        private DistinctAggregationGroup(int[] inputColumns, int[] aggregationIndexes)
+        {
+            this.inputColumns = inputColumns.clone();
+            this.aggregationIndexes = aggregationIndexes;
+        }
+
+        public int[] aggregationIndexes()
+        {
+            return aggregationIndexes;
+        }
+
+        public Mask select(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, Allocator allocator)
+        {
+            if (mask.none()) {
+                return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], mask.size());
+            }
+
+            Vector[] values = new Vector[inputColumns.length + 1];
+            BooleanVector[] nulls = new BooleanVector[inputColumns.length + 1];
+            values[0] = groups;
+            for (int index = 0; index < inputColumns.length; index++) {
+                values[index + 1] = streamAccessor.values(inputColumns[index]);
+                nulls[index + 1] = streamAccessor.nulls(inputColumns[index]);
+            }
+
+            if (distinctKeySet == null) {
+                distinctKeySet = DistinctKeySet.create(values);
+            }
+            if (distinctPositions.length < mask.selectedCount()) {
+                distinctPositions = new int[mask.selectedCount()];
+            }
+
+            int selectedCount = 0;
+            for (int position : mask) {
+                if (distinctKeySet.add(values, nulls, position)) {
+                    distinctPositions[selectedCount++] = position;
+                }
+            }
+            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, distinctPositions, selectedCount, mask.size());
+        }
     }
 }

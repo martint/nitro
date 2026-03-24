@@ -43,6 +43,7 @@ import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.First;
@@ -1359,6 +1360,33 @@ public class TestOperators
                         row(1L, "alpha"),
                         row(1L, "beta"),
                         row(2L, "alpha")));
+    }
+
+    @Test
+    void testGroupedAggregationWithMixedDistinctAccumulator()
+    {
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        allocator,
+                        0,
+                        List.of(1),
+                        List.of(new Sum(2), new CountAll(), new Avg(3), new DistinctCount(4)),
+                        new GroupOperator(
+                                allocator,
+                                0,
+                                new ConstantTableOperator(
+                                        allocator,
+                                        4,
+                                        List.of(
+                                                row(1L, 10L, 100L, 1000L),
+                                                row(1L, 20L, 200L, 1000L),
+                                                row(1L, 30L, 300L, 2000L),
+                                                row(2L, 40L, 100L, 3000L),
+                                                row(2L, 50L, 200L, 3000L),
+                                                row(2L, 60L, 300L, null)))))))
+                .matchesExactly(List.of(
+                        row(1L, 60L, 3L, 200.0, 2L),
+                        row(2L, 150L, 3L, 200.0, 1L)));
     }
 
     @Test
