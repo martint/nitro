@@ -1642,6 +1642,40 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDirectNotMaskEvaluationOptimizesSimpleLongEquality()
+    {
+        Variable zero = new Variable(0);
+        Variable equals = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(
+                                equals,
+                                new Call("eq", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {0, 1, 0, 5, 7}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, false, false}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(
+                new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES))),
+                Mask.all(5));
+
+        assertThat(result.selectedCount()).isEqualTo(3);
+        assertThat(result.position(0)).isEqualTo(1);
+        assertThat(result.position(1)).isEqualTo(3);
+        assertThat(result.position(2)).isEqualTo(4);
+    }
+
+    @Test
     void testOrMaskAllowsLaterTrueToSuppressNullAndError()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
