@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
@@ -25,8 +24,6 @@ import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
 
 import static java.lang.Math.toIntExact;
 
@@ -126,8 +123,7 @@ public class DistinctCount
         if (implementation != null) {
             return (DistinctIndex) implementation;
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(keyValues);
-        DistinctIndex index = layout != null ? new FlatDistinctIndex(layout) : new ObjectDistinctIndex(keyValues.length);
+        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(keyValues));
         stateVector.setImplementation(index);
         return index;
     }
@@ -137,84 +133,20 @@ public class DistinctCount
         boolean add(Vector[] values, BooleanVector[] nulls, int position, int group);
     }
 
-    private static final class FlatDistinctIndex
+    private static final class DelegatingDistinctIndex
             implements DistinctIndex
     {
-        private final FlatGroupingTable table;
-        private long nextGroupId;
+        private final DistinctKeySet keys;
 
-        private FlatDistinctIndex(FlatKeyLayout layout)
+        private DelegatingDistinctIndex(DistinctKeySet keys)
         {
-            this.table = new FlatGroupingTable(layout, 1024);
+            this.keys = keys;
         }
 
         @Override
         public boolean add(Vector[] values, BooleanVector[] nulls, int position, int group)
         {
-            if (hasNull(nulls, position)) {
-                return false;
-            }
-            long newGroupId = nextGroupId;
-            long assigned = table.assignGroup(values, position, newGroupId);
-            if (assigned == newGroupId) {
-                nextGroupId++;
-                return true;
-            }
-            return false;
-        }
-
-        private static boolean hasNull(BooleanVector[] nulls, int position)
-        {
-            for (BooleanVector nullsVector : nulls) {
-                if (OperatorVectorSupport.isNull(nullsVector, position)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
-
-    private static final class ObjectDistinctIndex
-            implements DistinctIndex
-    {
-        private final Map<Integer, ObjectOpenHashSet<Object>> keysByGroup = new HashMap<>();
-        private final OperatorKeySemantics.Key[] probeKeys;
-        private final OperatorKeySemantics.CompositeProbeKey compositeProbeKey;
-
-        private ObjectDistinctIndex(int keyCount)
-        {
-            this.probeKeys = new OperatorKeySemantics.Key[keyCount];
-            this.compositeProbeKey = keyCount > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(keyCount) : null;
-        }
-
-        @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position, int group)
-        {
-            OperatorKeySemantics.Key key = keyForPosition(values, nulls, position);
-            if (key == null) {
-                return false;
-            }
-            ObjectOpenHashSet<Object> keys = keysByGroup.computeIfAbsent(group, _ -> new ObjectOpenHashSet<>());
-            if (keys.contains(key)) {
-                return false;
-            }
-            keys.add(OperatorKeySemantics.ownedKey(key));
-            return true;
-        }
-
-        private OperatorKeySemantics.Key keyForPosition(Vector[] values, BooleanVector[] nulls, int position)
-        {
-            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
-                if (probeKeys[keyIndex] == null) {
-                    probeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(values[keyIndex]);
-                }
-                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, probeKeys[keyIndex]);
-                if (key == null) {
-                    return null;
-                }
-                probeKeys[keyIndex] = key;
-            }
-            return OperatorKeySemantics.probeCompositeKey(probeKeys, compositeProbeKey);
+            return keys.add(values, nulls, position);
         }
     }
 }

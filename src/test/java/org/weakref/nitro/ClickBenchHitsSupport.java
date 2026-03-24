@@ -30,6 +30,7 @@ import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
+import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
@@ -300,12 +301,13 @@ final class ClickBenchHitsSupport
 
     public static Operator query9TopRegionsByDistinctUsers(Allocator allocator, Path file)
     {
-        Operator grouped = new GroupOperator(allocator, 0, clickBenchScan(allocator, file, "RegionID", "UserID"));
+        Operator distinct = new MarkDistinctOperator(allocator, new int[] {0, 1}, clickBenchScan(allocator, file, "RegionID", "UserID"));
+        Operator grouped = new GroupOperator(allocator, 0, distinct);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1),
-                List.of(new DistinctCount(2)),
+                List.of(new CountAll()),
                 grouped);
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
@@ -325,12 +327,13 @@ final class ClickBenchHitsSupport
     public static Operator query11TopMobilePhoneModelsByDistinctUsers(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhoneModel", "UserID"), notEqualUtf8(0, ""));
-        Operator grouped = new GroupOperator(allocator, 0, filtered);
+        Operator distinct = new MarkDistinctOperator(allocator, new int[] {0, 1}, filtered);
+        Operator grouped = new GroupOperator(allocator, 0, distinct);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1),
-                List.of(new DistinctCount(2)),
+                List.of(new CountAll()),
                 grouped);
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
@@ -338,12 +341,13 @@ final class ClickBenchHitsSupport
     public static Operator query12TopMobilePhonesAndModelsByDistinctUsers(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhone", "MobilePhoneModel", "UserID"), notEqualUtf8(1, ""));
-        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, filtered);
+        Operator distinct = new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, filtered);
+        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, distinct);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1, 2),
-                List.of(new DistinctCount(3)),
+                List.of(new CountAll()),
                 grouped);
         return new TopNOperator(allocator, 10, 2, aggregated);
     }
@@ -810,7 +814,7 @@ final class ClickBenchHitsSupport
 
     private static Operator countDistinct(Allocator allocator, Operator source)
     {
-        return new AggregationOperator(allocator, List.of(new DistinctCount(0)), source);
+        return new AggregationOperator(allocator, List.of(new CountAll()), new MarkDistinctOperator(allocator, 0, source));
     }
 
     private static Operator topIntegerCounts(Allocator allocator, Path file, String column)

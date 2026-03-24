@@ -35,6 +35,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
+import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
@@ -1335,6 +1336,29 @@ public class TestOperators
                                         row((Object) null),
                                         row((Object) "gamma"))))))
                 .matchesExactly(List.of(row(3L)));
+    }
+
+    @Test
+    void testMarkDistinctOperatorKeepsFirstOccurrenceRows()
+    {
+        assertThat(operator(
+                new MarkDistinctOperator(
+                        allocator,
+                        new int[] {0, 1},
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, "alpha"),
+                                        row(1L, "alpha"),
+                                        row(1L, "beta"),
+                                        row(2L, "alpha"),
+                                        row((Object) null, "alpha"),
+                                        row(2L, (Object) null))))))
+                .matchesExactly(List.of(
+                        row(1L, "alpha"),
+                        row(1L, "beta"),
+                        row(2L, "alpha")));
     }
 
     @Test
