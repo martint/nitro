@@ -178,6 +178,23 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testAggregationOperatorProducesMultipleSumsFromSharedScan()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new Sum(1)),
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(2L, 20L),
+                        row(3L, 30L))));
+
+        Batch batch = operator.next();
+        assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
+        assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(60L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorProducesGroupedAggregateBatch()
     {
         Allocator allocator = new Allocator();
