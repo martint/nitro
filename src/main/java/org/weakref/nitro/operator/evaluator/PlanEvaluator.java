@@ -369,9 +369,19 @@ public final class PlanEvaluator
         return switch (expression) {
             case AllMask _ -> mask;
             case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
-            case NotMask(MaskExpression source) -> evaluateMaskOutcome(source, mask).falseMask(allocator, ALLOCATION_CONTEXT, mask);
+            case NotMask(MaskExpression source) -> evaluateFalseMask(source, mask);
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
             case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOrTrueMask(terms, mask);
+        };
+    }
+
+    private Mask evaluateFalseMask(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> emptyMask(mask.size());
+            case ReferenceMask(Reference reference) -> evaluateFalseReferenceMask(reference, mask);
+            case NotMask(MaskExpression source) -> evaluateTrueMask(source, mask);
+            case AndMask _, OrMask _ -> evaluateMaskOutcome(expression, mask).falseMask(allocator, ALLOCATION_CONTEXT, mask);
         };
     }
 
@@ -391,6 +401,19 @@ public final class PlanEvaluator
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
         return classifyTrueBooleanMask(values, nulls, errors, mask);
+    }
+
+    private Mask evaluateFalseReferenceMask(Reference reference, Mask mask)
+    {
+        MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
+        if (!(resolved instanceof ReferenceMask(Reference resolvedReference) && resolvedReference.equals(reference))) {
+            return evaluateFalseMask(resolved, mask);
+        }
+
+        BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
+        BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
+        BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        return classifyFalseBooleanMask(values, nulls, errors, mask);
     }
 
     private Streams prepareOutput(Streams output)
@@ -723,6 +746,30 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, truePositions, outputIndex, mask.size());
     }
 
+    private Mask classifyFalseBooleanMask(BooleanVector values, BooleanVector nulls, BooleanVector errors, Mask mask)
+    {
+        boolean[] valueData = values.values();
+        boolean[] nullData = nulls == null ? null : nulls.values();
+        boolean[] errorData = errors == null ? null : errors.values();
+
+        int falseCount = countFalseRows(valueData, nullData, errorData, mask);
+        int[] falsePositions = new int[falseCount];
+        int outputIndex = 0;
+        for (int position : mask) {
+            if (errorData != null && errorData[position]) {
+                continue;
+            }
+            if (nullData != null && nullData[position]) {
+                continue;
+            }
+            if (!valueData[position]) {
+                falsePositions[outputIndex++] = position;
+            }
+        }
+
+        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, falsePositions, outputIndex, mask.size());
+    }
+
     private ClassificationCounts countLongComparisonOutcomes(
             LongComparison comparison,
             Vector leftValues,
@@ -816,6 +863,23 @@ public final class PlanEvaluator
             }
         }
         return trueCount;
+    }
+
+    private int countFalseRows(boolean[] valueData, boolean[] nullData, boolean[] errorData, Mask mask)
+    {
+        int falseCount = 0;
+        for (int position : mask) {
+            if (errorData != null && errorData[position]) {
+                continue;
+            }
+            if (nullData != null && nullData[position]) {
+                continue;
+            }
+            if (!valueData[position]) {
+                falseCount++;
+            }
+        }
+        return falseCount;
     }
 
     private LongComparison resolveLongComparison(Reference reference)
@@ -1075,7 +1139,7 @@ public final class PlanEvaluator
         return switch (expression) {
             case AllMask _ -> mask;
             case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
-            case NotMask(MaskExpression source) -> evaluateMaskOutcome(source, mask).falseMask(allocator, ALLOCATION_CONTEXT, mask);
+            case NotMask(MaskExpression source) -> evaluateFalseMask(source, mask);
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
             case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOrTrueMask(terms, mask);
         };

@@ -1596,6 +1596,52 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDirectNotMaskEvaluationKeepsOnlyDefiniteFalseRows()
+    {
+        Variable predicate = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        predicate,
+                        new Call("contains_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of());
+
+        BinaryVector haystack = new BinaryVector(5, 64);
+        haystack.addTrait(BinaryVector.Trait.UTF8_STRING);
+        haystack.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        haystack.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        haystack.setBytes(1, "bing".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        haystack.setBytes(2, "maps.google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        haystack.setBytes(3, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        haystack.setBytes(4, "ask".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        BooleanVector haystackNulls = new BooleanVector(new boolean[] {false, false, false, true, false});
+        BinaryVector needle = new BinaryVector(1, 16);
+        needle.addTrait(BinaryVector.Trait.UTF8_STRING);
+        needle.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        needle.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), haystack,
+                        new Reference(new Input(0), Stream.NULLS), haystackNulls,
+                        new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {5}, needle))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(
+                new NotMask(new ReferenceMask(new Reference(predicate, Stream.VALUES))),
+                Mask.all(5));
+
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(1);
+        assertThat(result.position(1)).isEqualTo(4);
+    }
+
+    @Test
     void testOrMaskAllowsLaterTrueToSuppressNullAndError()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
