@@ -13,8 +13,11 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
@@ -30,6 +33,9 @@ final class DistinctKeySet
 
     public static DistinctKeySet create(Vector[] samples)
     {
+        if (samples.length == 1 && isIntegerVector(samples[0])) {
+            return new DistinctKeySet(new LongDistinctIndex(Math.max(16, samples[0].length())));
+        }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples);
         if (layout != null) {
             return new DistinctKeySet(new FlatDistinctIndex(layout, Math.max(16, samples[0].length())));
@@ -45,6 +51,26 @@ final class DistinctKeySet
     private interface DistinctIndex
     {
         boolean add(Vector[] values, BooleanVector[] nulls, int position);
+    }
+
+    private static final class LongDistinctIndex
+            implements DistinctIndex
+    {
+        private final LongOpenHashSet keys;
+
+        private LongDistinctIndex(int expectedSize)
+        {
+            this.keys = new LongOpenHashSet(expectedSize);
+        }
+
+        @Override
+        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            if (OperatorVectorSupport.isNull(nulls[0], position)) {
+                return false;
+            }
+            return keys.add(OperatorVectorSupport.longValue(values[0], position));
+        }
     }
 
     private static final class FlatDistinctIndex
@@ -128,5 +154,14 @@ final class DistinctKeySet
             }
             return OperatorKeySemantics.probeCompositeKey(Arrays.copyOf(probeKeys, probeKeys.length), compositeProbeKey);
         }
+    }
+
+    private static boolean isIntegerVector(Vector vector)
+    {
+        return switch (OperatorVectorSupport.flatten(vector)) {
+            case I32Vector _ -> true;
+            case I64Vector _ -> true;
+            default -> false;
+        };
     }
 }
