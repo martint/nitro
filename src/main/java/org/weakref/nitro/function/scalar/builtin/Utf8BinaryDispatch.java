@@ -98,6 +98,16 @@ public final class Utf8BinaryDispatch
 
     private static void applyValues(String functionName, Operation operation, Vector left, Vector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
     {
+        if (operation == Operation.CONTAINS && right instanceof RleVector rightRle && rightRle.counts().length == 1) {
+            if (left instanceof BinaryVector leftValues) {
+                applyContainsFlatSingleNeedle(functionName, leftValues, rightRle, leftNulls, rightNulls, mask, output);
+                return;
+            }
+            if (left instanceof DictionaryVector leftDictionary) {
+                applyContainsDictionarySingleNeedle(functionName, leftDictionary, rightRle, leftNulls, rightNulls, mask, output);
+                return;
+            }
+        }
         if (left instanceof BinaryVector leftValues && right instanceof BinaryVector rightValues) {
             applyFlatFlat(functionName, operation, leftValues, rightValues, leftNulls, rightNulls, mask, output);
             return;
@@ -135,6 +145,55 @@ public final class Utf8BinaryDispatch
             return;
         }
         throw new IllegalArgumentException("Unsupported " + functionName + " vector types: " + left.getClass().getSimpleName() + ", " + right.getClass().getSimpleName());
+    }
+
+    private static void applyContainsFlatSingleNeedle(String functionName, BinaryVector left, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        requireUtf8Traits(functionName, left, right);
+
+        ContainsNeedle needle = compileContainsNeedle(right, 0);
+        boolean needleNull = isNull(rightNulls, 0);
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = !needleNull &&
+                        !isNull(leftNulls, position) &&
+                        binaryContains(left, position, needle);
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = !needleNull &&
+                    !isNull(leftNulls, position) &&
+                    binaryContains(left, position, needle);
+        }
+    }
+
+    private static void applyContainsDictionarySingleNeedle(String functionName, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        requireUtf8Traits(functionName, left, right);
+
+        ContainsNeedle needle = compileContainsNeedle(right, 0);
+        boolean needleNull = isNull(rightNulls, 0);
+        int[] leftIds = leftDictionary.ids();
+        boolean[] dictionaryMatches = new boolean[left.length()];
+        for (int index = 0; index < dictionaryMatches.length; index++) {
+            dictionaryMatches[index] = !needleNull && binaryContains(left, index, needle);
+        }
+
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
+        }
     }
 
     private static void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
@@ -491,23 +550,47 @@ public final class Utf8BinaryDispatch
 
     private static boolean binaryContains(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
-        int haystackLength = left.length(leftPosition);
-        int needleLength = right.length(rightPosition);
-        if (needleLength == 0) {
+        return binaryContains(left, leftPosition, compileContainsNeedle(right, rightPosition));
+    }
+
+    private static boolean binaryContains(BinaryVector haystack, int haystackPosition, ContainsNeedle needle)
+    {
+        int haystackLength = haystack.length(haystackPosition);
+        if (needle.length() == 0) {
             return true;
         }
-        if (haystackLength < needleLength) {
+        if (haystackLength < needle.length()) {
             return false;
         }
 
-        byte[] haystackData = left.data();
-        byte[] needleData = right.data();
-        int haystackStart = left.startOffset(leftPosition);
-        int needleStart = right.startOffset(rightPosition);
-        if (needleLength == 1) {
-            return binaryContainsSingleByte(haystackData, haystackStart, haystackLength, needleData[needleStart]);
+        byte[] haystackData = haystack.data();
+        int haystackStart = haystack.startOffset(haystackPosition);
+        if (needle.length() == 1) {
+            return binaryContainsSingleByte(haystackData, haystackStart, haystackLength, needle.firstProbeByte());
         }
-        return binaryContainsVectorized(haystackData, haystackStart, haystackLength, needleData, needleStart, needleLength);
+        return binaryContainsVectorized(
+                haystackData,
+                haystackStart,
+                haystackLength,
+                needle.data(),
+                needle.start(),
+                needle.length(),
+                needle.firstProbeOffset(),
+                needle.secondProbeOffset(),
+                needle.firstProbeByte(),
+                needle.secondProbeByte());
+    }
+
+    private static ContainsNeedle compileContainsNeedle(BinaryVector needleVector, int needlePosition)
+    {
+        byte[] needleData = needleVector.data();
+        int needleStart = needleVector.startOffset(needlePosition);
+        int needleLength = needleVector.length(needlePosition);
+        int firstProbeOffset = 0;
+        int secondProbeOffset = needleLength <= 1 ? 0 : selectSecondProbeOffset(needleData, needleStart, needleLength);
+        byte firstProbeByte = needleLength == 0 ? 0 : needleData[needleStart + firstProbeOffset];
+        byte secondProbeByte = needleLength <= 1 ? firstProbeByte : needleData[needleStart + secondProbeOffset];
+        return new ContainsNeedle(needleData, needleStart, needleLength, firstProbeOffset, secondProbeOffset, firstProbeByte, secondProbeByte);
     }
 
     private static boolean binaryContainsSingleByte(byte[] haystackData, int haystackStart, int haystackLength, byte needleByte)
@@ -531,12 +614,18 @@ public final class Utf8BinaryDispatch
         return false;
     }
 
-    private static boolean binaryContainsVectorized(byte[] haystackData, int haystackStart, int haystackLength, byte[] needleData, int needleStart, int needleLength)
+    private static boolean binaryContainsVectorized(
+            byte[] haystackData,
+            int haystackStart,
+            int haystackLength,
+            byte[] needleData,
+            int needleStart,
+            int needleLength,
+            int firstProbeOffset,
+            int secondProbeOffset,
+            byte firstProbeByte,
+            byte secondProbeByte)
     {
-        int firstProbeOffset = 0;
-        int secondProbeOffset = selectSecondProbeOffset(needleData, needleStart, needleLength);
-        byte firstProbeByte = needleData[needleStart + firstProbeOffset];
-        byte secondProbeByte = needleData[needleStart + secondProbeOffset];
         int lastStart = haystackLength - needleLength;
         int candidateCount = lastStart + 1;
         int fullLength = CONTAINS_SPECIES.loopBound(candidateCount);
@@ -628,5 +717,16 @@ public final class Utf8BinaryDispatch
         LESS_THAN,
         STARTS_WITH,
         CONTAINS,
+    }
+
+    private record ContainsNeedle(
+            byte[] data,
+            int start,
+            int length,
+            int firstProbeOffset,
+            int secondProbeOffset,
+            byte firstProbeByte,
+            byte secondProbeByte)
+    {
     }
 }
