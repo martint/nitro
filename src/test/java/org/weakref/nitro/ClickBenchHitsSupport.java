@@ -497,13 +497,12 @@ final class ClickBenchHitsSupport
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("CounterID", "URL"), notEqualUtf8(1, ""));
         Operator projected = projectCounterAndUtf8Length(allocator, primitiveRegistry, filtered);
-        Operator grouped = new GroupOperator(allocator, 0, projected);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1),
-                List.of(new Avg(2), new CountAll()),
-                grouped);
+                List.of(0),
+                List.of(0),
+                List.of(new Avg(1), new CountAll()),
+                projected);
         Operator having = filter(
                 allocator,
                 primitiveRegistry,
