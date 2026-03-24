@@ -14,8 +14,10 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -34,23 +36,50 @@ public class GroupedAggregationOperator
 
     private final int groupColumn;
     private final int[] groupedColumns;
+    private final int[] groupByColumns;
+    private final int[] groupedKeyIndexes;
     private final Accumulator[] aggregations;
     private final Operator source;
     private final Streams[] groupedResults;
     private final Streams[] result;
+    private final GroupingState inlineGroupingState;
     private Streams[] states;
     private int maxGroup = -1;
     private boolean done;
     private GroupedKeySource groupedKeySource;
+    private I64Vector reusableGroups;
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupColumn, List.of(), aggregations, source);
+        this(allocator, groupColumn, List.of(), aggregations, source, null, null, null);
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        if (!groupedColumns.isEmpty() && !(source instanceof GroupedKeySource)) {
+        this(allocator, groupColumn, groupedColumns, aggregations, source, null, null, null);
+    }
+
+    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Accumulator> aggregations, Operator source)
+    {
+        this(allocator, groupByColumns, groupByColumns, aggregations, source);
+    }
+
+    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
+    {
+        this(allocator, -1, groupedColumns, aggregations, source, toArray(groupByColumns), mapGroupedKeyIndexes(groupByColumns, groupedColumns), new GroupingState());
+    }
+
+    private GroupedAggregationOperator(
+            Allocator allocator,
+            int groupColumn,
+            List<Integer> groupedColumns,
+            List<Accumulator> aggregations,
+            Operator source,
+            int[] groupByColumns,
+            int[] groupedKeyIndexes,
+            GroupingState inlineGroupingState)
+    {
+        if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
             throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
         }
         this.allocator = allocator;
@@ -58,8 +87,11 @@ public class GroupedAggregationOperator
         this.groupedColumns = groupedColumns.stream()
                 .mapToInt(Integer::intValue)
                 .toArray();
+        this.groupByColumns = groupByColumns;
+        this.groupedKeyIndexes = groupedKeyIndexes;
         this.aggregations = aggregations.toArray(Accumulator[]::new);
         this.source = source;
+        this.inlineGroupingState = inlineGroupingState;
 
         groupedResults = new Streams[this.groupedColumns.length];
         result = new Streams[this.aggregations.length];
@@ -79,6 +111,10 @@ public class GroupedAggregationOperator
 
     private Mask computeResults()
     {
+        if (groupByColumns != null) {
+            return computeInlineGroupedResults();
+        }
+
         states = new Streams[aggregations.length];
         long maxObservedGroup = -1;
         while (source.hasNext()) {
@@ -131,6 +167,95 @@ public class GroupedAggregationOperator
         done = true;
 
         return allocator.allocateAllMask(ALLOCATION_CONTEXT, this.maxGroup + 1);
+    }
+
+    private Mask computeInlineGroupedResults()
+    {
+        states = new Streams[aggregations.length];
+        long maxObservedGroup = -1;
+        while (source.hasNext()) {
+            try (Batch batch = source.next()) {
+                Mask mask = batch.borrowMask();
+                if (mask.none()) {
+                    continue;
+                }
+
+                long previousMaxGroup = maxObservedGroup;
+                reusableGroups = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
+                assignInlineGroups(batch, mask, reusableGroups);
+                maxObservedGroup = Math.max(maxObservedGroup, maxGroup(reusableGroups, mask));
+
+                int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
+                var streamAccessor = StreamAccessors.forBatch(batch);
+                for (int index = 0; index < aggregations.length; index++) {
+                    Accumulator accumulator = aggregations[index];
+                    states[index] = states[index] == null
+                            ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
+                            : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[index], newCapacity);
+                    accumulator.initialize(states[index], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
+                    accumulator.accumulate(states[index], reusableGroups, mask, streamAccessor);
+                }
+            }
+        }
+
+        finishResults(maxObservedGroup);
+        return allocator.allocateAllMask(ALLOCATION_CONTEXT, this.maxGroup + 1);
+    }
+
+    private void assignInlineGroups(Batch batch, Mask mask, I64Vector groups)
+    {
+        if (groupByColumns.length == 1) {
+            Output output = batch.output(groupByColumns[0]);
+            inlineGroupingState.assignGroups(
+                    output.borrow(Stream.VALUES),
+                    output.borrowOrNull(Stream.NULLS),
+                    mask,
+                    groups);
+            return;
+        }
+
+        Vector[] values = new Vector[groupByColumns.length];
+        BooleanVector[] nulls = new BooleanVector[groupByColumns.length];
+        for (int index = 0; index < groupByColumns.length; index++) {
+            Output output = batch.output(groupByColumns[index]);
+            values[index] = output.borrow(Stream.VALUES);
+            nulls[index] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        }
+        inlineGroupingState.assignGroups(values, nulls, mask, groups);
+    }
+
+    private static long maxGroup(I64Vector groups, Mask mask)
+    {
+        long maxObservedGroup = -1;
+        if (mask.all()) {
+            for (int position = 0; position <= mask.maxPosition(); position++) {
+                maxObservedGroup = Math.max(maxObservedGroup, groups.values()[position]);
+            }
+            return maxObservedGroup;
+        }
+
+        for (int position : mask) {
+            maxObservedGroup = Math.max(maxObservedGroup, groups.values()[position]);
+        }
+        return maxObservedGroup;
+    }
+
+    private void finishResults(long maxObservedGroup)
+    {
+        this.maxGroup = toIntExact(maxObservedGroup);
+        for (int index = 0; index < result.length; index++) {
+            if (states[index] == null) {
+                states[index] = aggregations[index].allocate(allocator, ALLOCATION_CONTEXT, 0);
+            }
+            result[index] = null;
+        }
+        if (groupedColumns.length > 0 && groupByColumns == null) {
+            groupedKeySource = (GroupedKeySource) source;
+        }
+        for (int index = 0; index < groupedColumns.length; index++) {
+            groupedResults[index] = null;
+        }
+        done = true;
     }
 
     @Override
@@ -201,7 +326,12 @@ public class GroupedAggregationOperator
         if (streams != null && batchState.mask.equals(batchState.materializedMask[output])) {
             return streams;
         }
-        streams = groupedKeySource.groupedKeyOutput(groupedColumns[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+        if (groupByColumns == null) {
+            streams = groupedKeySource.groupedKeyOutput(groupedColumns[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+        }
+        else {
+            streams = inlineGroupingState.groupedValues(groupedKeyIndexes[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+        }
         groupedResults[output] = streams;
         batchState.materializedMask[output] = batchState.mask;
         return streams;
@@ -234,5 +364,26 @@ public class GroupedAggregationOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+    }
+
+    private static int[] toArray(List<Integer> values)
+    {
+        return values.stream()
+                .mapToInt(Integer::intValue)
+                .toArray();
+    }
+
+    private static int[] mapGroupedKeyIndexes(List<Integer> groupByColumns, List<Integer> groupedColumns)
+    {
+        int[] indexes = new int[groupedColumns.size()];
+        for (int outputIndex = 0; outputIndex < groupedColumns.size(); outputIndex++) {
+            int groupedColumn = groupedColumns.get(outputIndex);
+            int groupedKeyIndex = groupByColumns.indexOf(groupedColumn);
+            if (groupedKeyIndex < 0) {
+                throw new IllegalArgumentException("Grouped output " + groupedColumn + " is not present in group by columns " + groupByColumns);
+            }
+            indexes[outputIndex] = groupedKeyIndex;
+        }
+        return indexes;
     }
 }

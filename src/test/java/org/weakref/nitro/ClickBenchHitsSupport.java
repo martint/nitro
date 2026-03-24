@@ -572,13 +572,11 @@ final class ClickBenchHitsSupport
     public static Operator query36ClientIpArithmeticGroups(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator projected = projectClientIpOffsets(allocator, primitiveRegistry, clickBenchScan(allocator, file, "ClientIP"));
-        Operator grouped = new GroupOperator(allocator, new int[] {0, 1, 2, 3}, projected);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1, 2, 3, 4),
+                List.of(0, 1, 2, 3),
                 List.of(new CountAll()),
-                grouped);
+                projected);
         return new TopNOperator(allocator, 10, 4, aggregated);
     }
 
@@ -819,13 +817,11 @@ final class ClickBenchHitsSupport
 
     private static Operator topIntegerCounts(Allocator allocator, Path file, String column)
     {
-        Operator grouped = new GroupOperator(allocator, 0, clickBenchScan(allocator, file, column));
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1),
+                List.of(0),
                 List.of(new CountAll()),
-                grouped);
+                clickBenchScan(allocator, file, column));
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
 
@@ -1042,13 +1038,11 @@ final class ClickBenchHitsSupport
 
     private static Operator topGroupedCountSumAvg(Allocator allocator, Operator source, int[] groupColumns, int sumColumn, int avgColumn)
     {
-        Operator grouped = new GroupOperator(allocator, groupColumns, source);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                Arrays.stream(groupColumns).map(index -> index + 1).boxed().toList(),
-                List.of(new CountAll(), new Sum(sumColumn + 1), new Avg(avgColumn + 1)),
-                grouped);
+                Arrays.stream(groupColumns).boxed().toList(),
+                List.of(new CountAll(), new Sum(sumColumn), new Avg(avgColumn)),
+                source);
         return new TopNOperator(allocator, 10, groupColumns.length, aggregated);
     }
 

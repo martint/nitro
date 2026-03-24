@@ -200,6 +200,26 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorCanFuseGroupingAndAggregation()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountAll()),
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(10L, 1L),
+                        row(10L, 2L),
+                        row(20L, 3L))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(10L, 20L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(3L, 3L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 1L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorCanExposeGroupingKeyBatch()
     {
         Allocator allocator = new Allocator();
@@ -225,6 +245,33 @@ public class TestOperatorBatches
         assertThat(keys.utf8Value(0)).isEqualTo("alpha");
         assertThat(keys.utf8Value(1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
+    }
+
+    @Test
+    void testGroupedAggregationOperatorCanFuseMultipleGroupingKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new CountAll()),
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(10L, "alpha"),
+                        row(10L, "alpha"),
+                        row(10L, "beta"),
+                        row(20L, "alpha"))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        I64Vector leftKeys = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector rightKeys = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(leftKeys.values(), rowCount)).containsExactly(10L, 10L, 20L);
+        assertThat(rightKeys.utf8Value(0)).isEqualTo("alpha");
+        assertThat(rightKeys.utf8Value(1)).isEqualTo("beta");
+        assertThat(rightKeys.utf8Value(2)).isEqualTo("alpha");
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L, 1L);
     }
 
     @Test
