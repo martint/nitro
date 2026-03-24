@@ -289,13 +289,11 @@ final class ClickBenchHitsSupport
                 primitiveRegistry,
                 predicate.predicate(),
                 allocator);
-        Operator grouped = new GroupOperator(allocator, 0, filtered);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1),
+                List.of(0),
                 List.of(new CountAll()),
-                grouped);
+                filtered);
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
 
