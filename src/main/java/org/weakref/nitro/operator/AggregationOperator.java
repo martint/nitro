@@ -15,11 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
-import org.weakref.nitro.operator.aggregation.Sum;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 
@@ -31,7 +28,6 @@ public class AggregationOperator
 
     private final Operator source;
     private final List<Accumulator> aggregations;
-    private final Sum[] fusedSums;
 
     private final Streams[] reusableResults;
     private BatchState currentBatchState;
@@ -42,7 +38,6 @@ public class AggregationOperator
         this.allocator = allocator;
         this.source = source;
         this.aggregations = aggregations;
-        this.fusedSums = allSums(aggregations);
 
         reusableResults = new Streams[aggregations.size()];
     }
@@ -112,75 +107,15 @@ public class AggregationOperator
             while (source.hasNext()) {
                 try (Batch batch = source.next()) {
                     Mask mask = batch.borrowMask();
-                    var streamAccessor = StreamAccessors.forBatch(batch);
-                    if (fusedSums != null) {
-                        accumulateSums(state, mask, streamAccessor);
-                    }
-                    else {
-                        for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
-                            Accumulator accumulator = aggregations.get(aggregation);
-                            accumulator.accumulate(state[aggregation], 0, mask, streamAccessor);
-                            reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
-                            batchState.results[aggregation] = reusableResults[aggregation];
-                        }
-                    }
-                    if (fusedSums != null) {
-                        for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
-                            Accumulator accumulator = aggregations.get(aggregation);
-                            reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
-                            batchState.results[aggregation] = reusableResults[aggregation];
-                        }
+                    for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
+                        Accumulator accumulator = aggregations.get(aggregation);
+                        accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
+                        reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
+                        batchState.results[aggregation] = reusableResults[aggregation];
                     }
                 }
             }
         }
-    }
-
-    private void accumulateSums(Streams[] state, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor)
-    {
-        long[] sums = new long[fusedSums.length];
-        org.weakref.nitro.data.Vector[] inputValues = new org.weakref.nitro.data.Vector[fusedSums.length];
-        boolean[][] inputNulls = new boolean[fusedSums.length][];
-        for (int index = 0; index < fusedSums.length; index++) {
-            int inputColumn = fusedSums[index].inputColumn();
-            inputValues[index] = streamAccessor.values(inputColumn);
-            inputNulls[index] = Sum.nulls(streamAccessor.stream(inputColumn, Stream.NULLS));
-        }
-
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                for (int aggregation = 0; aggregation < fusedSums.length; aggregation++) {
-                    sums[aggregation] += Sum.isNull(inputNulls[aggregation], position) ? 0 : Sum.valueAt(inputValues[aggregation], position);
-                }
-            }
-        }
-        else {
-            for (int position : mask) {
-                for (int aggregation = 0; aggregation < fusedSums.length; aggregation++) {
-                    sums[aggregation] += Sum.isNull(inputNulls[aggregation], position) ? 0 : Sum.valueAt(inputValues[aggregation], position);
-                }
-            }
-        }
-
-        for (int aggregation = 0; aggregation < fusedSums.length; aggregation++) {
-            ((SumStateVector) state[aggregation].values()).increment(0, sums[aggregation]);
-        }
-    }
-
-    private static Sum[] allSums(List<Accumulator> aggregations)
-    {
-        if (aggregations.isEmpty()) {
-            return null;
-        }
-        Sum[] sums = new Sum[aggregations.size()];
-        for (int index = 0; index < aggregations.size(); index++) {
-            if (!(aggregations.get(index) instanceof Sum sum)) {
-                return null;
-            }
-            sums[index] = sum;
-        }
-        return sums;
     }
 
     @Override

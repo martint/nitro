@@ -37,11 +37,6 @@ public class Sum
         this.inputColumn = inputColumn;
     }
 
-    public int inputColumn()
-    {
-        return inputColumn;
-    }
-
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
@@ -78,12 +73,12 @@ public class Sum
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                sum += isNull(inputNulls, position) ? 0 : valueAt(inputValues, position);
+                sum += isNull(inputNulls, position) ? 0 : value(inputValues, position);
             }
         }
         else {
             for (int position : mask) {
-                sum += isNull(inputNulls, position) ? 0 : valueAt(inputValues, position);
+                sum += isNull(inputNulls, position) ? 0 : value(inputValues, position);
             }
         }
 
@@ -101,13 +96,13 @@ public class Sum
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
-                stateVector.increment(group, isNull(inputNulls, position) ? 0 : valueAt(inputValues, position));
+                stateVector.increment(group, isNull(inputNulls, position) ? 0 : value(inputValues, position));
             }
         }
         else {
             for (int position : mask) {
                 int group = toIntExact(groupVector.values()[position]);
-                stateVector.increment(group, isNull(inputNulls, position) ? 0 : valueAt(inputValues, position));
+                stateVector.increment(group, isNull(inputNulls, position) ? 0 : value(inputValues, position));
             }
         }
     }
@@ -154,23 +149,23 @@ public class Sum
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    public static long valueAt(Vector v, int position)
+    private static long value(Vector v, int position)
     {
         return switch (v) {
             case I64Vector values -> values.values()[position];
             case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> valueAt(values.values(), values.ids()[position]);
-            case RleVector values -> valueAt(values.values(), values.runIndex(position));
+            case DictionaryVector values -> value(values.values(), values.ids()[position]);
+            case RleVector values -> value(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected integer vector but found " + v.getClass().getSimpleName());
         };
     }
 
-    public static boolean[] nulls(Vector v)
+    private static boolean[] nulls(Vector v)
     {
         return v == null ? null : ((BooleanVector) v).values();
     }
 
-    public static boolean isNull(boolean[] nulls, int position)
+    private static boolean isNull(boolean[] nulls, int position)
     {
         return nulls != null && nulls[position];
     }
