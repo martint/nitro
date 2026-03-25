@@ -413,13 +413,11 @@ final class ClickBenchHitsSupport
     public static Operator query15TopSearchEngineAndPhrasePairs(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchEngineID", "SearchPhrase"), notEqualUtf8(1, ""));
-        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, filtered);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1, 2),
+                List.of(0, 1),
                 List.of(new CountAll()),
-                grouped);
+                filtered);
         return new TopNOperator(allocator, 10, 2, aggregated);
     }
 
