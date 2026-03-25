@@ -14,22 +14,24 @@ Method:
 Caveats:
 - These are still directional engineering numbers, not publication-grade benchmark results.
 - The forked `-f 1 -i 3` shape is materially more stable than the earlier same-VM one-shot runs, but the confidence intervals are still wide on some queries because the iterations are intentionally short.
-- `Q21-Q24` were later rerun in a focused post-fix pass after changing the Trino harness from a bespoke `strpos` lowering to faithful SQL `LIKE` / `NOT LIKE`. The main full-suite headline below still comes from the last whole-suite run; the targeted `Q21-Q24` numbers below supersede those four rows only.
+- `Q21-Q24` were later rerun in a focused post-fix pass after changing the Trino harness from a bespoke `strpos` lowering to faithful SQL `LIKE` / `NOT LIKE`.
+- The summary and table below reflect the current best-known per-query numbers, combining the last whole-suite forked run with the newer focused `Q21-Q24` reruns.
+- The overall benchmark total below is derived by summing the per-query average times for all 44 queries, not by using the suite wall-clock measurement.
 
 Summary:
-- Nitro faster on 29 / 44 queries
-- Trino faster on 15 / 44 queries
-- Geometric mean of `Trino / Nitro`: about `1.52x`
-- End-to-end full-suite wall clock:
-  Nitro `924.20s` (`15m 24.20s`)
-  Trino `1878.68s` (`31m 18.68s`)
-  Trino took about `2.03x` as long as Nitro overall
+- Nitro faster on 31 / 44 queries
+- Trino faster on 13 / 44 queries
+- Geometric mean of `Trino / Nitro`: about `1.59x`
+- End-to-end total from summed per-query times:
+  Nitro `305.56s` (`5m 05.56s`)
+  Trino `622.20s` (`10m 22.20s`)
+  Trino took about `2.04x` as long as Nitro overall by this aggregate measure
 
 Notable movement in this refresh:
-- This refresh switches to the steadier forked baseline, so several near-ties moved relative to the earlier same-VM snapshot.
-- `Q5` remains on the Nitro side under the forked runs (`2780.168 ms/op` vs Trino `3612.037 ms/op`).
-- `Q30` also lands decisively on the Nitro side in the forked run (`8768.431 ms/op` vs Trino `29580.280 ms/op`).
-- The main remaining Trino wins are now concentrated in `Q21/Q22`, several string/order near-ties (`Q25-Q28`), and a handful of grouped queries (`Q9`, `Q11`, `Q12`, `Q15`, `Q16`, `Q19`, `Q32`).
+- The forked full-suite baseline still anchors most rows, but the later focused `Q21-Q24` reruns now replace those four entries in the summary.
+- `Q22` flipped to Nitro after the `contains_utf8` Vector API rewrite (`8431.885 ms/op` vs Trino `9819.377 ms/op`).
+- The whole `Q21-Q24` family is now on the Nitro side.
+- The remaining Trino wins are concentrated in a smaller set of near-ties and grouped queries: `Q4`, `Q7`, `Q9`, `Q11`, `Q12`, `Q15`, `Q16`, `Q19`, `Q25-Q28`, and `Q32`.
 
 Targeted `Q21-Q24` post-fix refresh:
 - Method: same forked shape (`-f 1 -wi 0 -i 3 -w 1ms -r 1ms`) on the real parquet `hits` data
@@ -93,7 +95,7 @@ Targeted `Q21-Q24` post-fix refresh:
 | Q42 | 1084.067 | 1985.264 | 1.83 | Nitro |
 | Q43 | 903.862 | 1827.496 | 2.02 | Nitro |
 
-Queries where Trino was faster in the last whole-suite run:
+Queries where Trino is faster in the current best-known per-query mix:
 - Q4
 - Q7
 - Q9
