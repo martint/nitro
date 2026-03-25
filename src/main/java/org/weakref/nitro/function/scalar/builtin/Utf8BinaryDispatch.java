@@ -98,6 +98,18 @@ public final class Utf8BinaryDispatch
 
     private static void applyValues(String functionName, Operation operation, Vector left, Vector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
     {
+        if (operation == Operation.EQUALS && right instanceof RleVector rightRle && rightRle.counts().length == 1) {
+            if (left instanceof DictionaryVector leftDictionary) {
+                applyEqualsDictionarySingleValue(functionName, leftDictionary, rightRle, leftNulls, rightNulls, mask, output);
+                return;
+            }
+        }
+        if (operation == Operation.EQUALS && left instanceof RleVector leftRle && leftRle.counts().length == 1) {
+            if (right instanceof DictionaryVector rightDictionary) {
+                applyEqualsSingleValueDictionary(functionName, leftRle, rightDictionary, leftNulls, rightNulls, mask, output);
+                return;
+            }
+        }
         if (operation == Operation.CONTAINS && right instanceof RleVector rightRle && rightRle.counts().length == 1) {
             if (left instanceof BinaryVector leftValues) {
                 applyContainsFlatSingleNeedle(functionName, leftValues, rightRle, leftNulls, rightNulls, mask, output);
@@ -193,6 +205,66 @@ public final class Utf8BinaryDispatch
         }
         for (int position : mask) {
             outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
+        }
+    }
+
+    private static void applyEqualsDictionarySingleValue(String functionName, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        requireUtf8Traits(functionName, left, right);
+
+        boolean literalNull = isNull(rightNulls, 0);
+        int[] leftIds = leftDictionary.ids();
+        boolean[] outputValues = output.values();
+        if (literalNull) {
+            fillFalse(outputValues, mask);
+            return;
+        }
+
+        boolean[] dictionaryMatches = new boolean[left.length()];
+        for (int index = 0; index < dictionaryMatches.length; index++) {
+            dictionaryMatches[index] = binaryEquals(left, index, right, 0);
+        }
+
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
+        }
+    }
+
+    private static void applyEqualsSingleValueDictionary(String functionName, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
+        BinaryVector left = requireBinaryRle(functionName, leftRle);
+        BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
+        requireUtf8Traits(functionName, left, right);
+
+        boolean literalNull = isNull(leftNulls, 0);
+        int[] rightIds = rightDictionary.ids();
+        boolean[] outputValues = output.values();
+        if (literalNull) {
+            fillFalse(outputValues, mask);
+            return;
+        }
+
+        boolean[] dictionaryMatches = new boolean[right.length()];
+        for (int index = 0; index < dictionaryMatches.length; index++) {
+            dictionaryMatches[index] = binaryEquals(left, 0, right, index);
+        }
+
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
         }
     }
 
@@ -492,6 +564,17 @@ public final class Utf8BinaryDispatch
     private static boolean isNull(BooleanVector nulls, int position)
     {
         return nulls != null && nulls.values()[position];
+    }
+
+    private static void fillFalse(boolean[] outputValues, Mask mask)
+    {
+        if (mask.all()) {
+            Arrays.fill(outputValues, 0, mask.size(), false);
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = false;
+        }
     }
 
     private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)

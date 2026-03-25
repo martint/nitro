@@ -36,6 +36,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.operator.Batch;
@@ -491,6 +492,49 @@ public class TestParquetOperator
             assertThat(values.values()[0]).isTrue();
             assertThat(values.values()[1]).isFalse();
         }
+    }
+
+    @Test
+    void testEqualUtf8SupportsDictionaryAgainstSingleLiteral()
+    {
+        BinaryVector dictionaryValues = new BinaryVector(3, 32);
+        dictionaryValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionaryValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionaryValues.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(2, "nokia".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector left = DictionaryVector.wrap(new int[] {0, 1, 2, 1, 0}, dictionaryValues);
+        BooleanVector leftNulls = new BooleanVector(new boolean[] {false, false, true, false, false});
+
+        BinaryVector literal = new BinaryVector(1, 1);
+        literal.addTrait(BinaryVector.Trait.UTF8_STRING);
+        literal.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        literal.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        Streams result = eqUtf8().apply(
+                List.of(
+                        Streams.ofValues(left).with(Stream.NULLS, leftNulls),
+                        Streams.ofValues(new RleVector(new int[] {5}, literal))),
+                Mask.all(5),
+                EnumSet.of(Stream.VALUES, Stream.NULLS),
+                Streams.empty(),
+                new PrimitiveExecutionContext(new Allocator()));
+
+        BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+
+        assertThat(values.values()[0]).isTrue();
+        assertThat(values.values()[1]).isFalse();
+        assertThat(values.values()[2]).isFalse();
+        assertThat(values.values()[3]).isFalse();
+        assertThat(values.values()[4]).isTrue();
+
+        assertThat(nulls.values()[0]).isFalse();
+        assertThat(nulls.values()[1]).isFalse();
+        assertThat(nulls.values()[2]).isTrue();
+        assertThat(nulls.values()[3]).isFalse();
+        assertThat(nulls.values()[4]).isFalse();
     }
 
     @Test
