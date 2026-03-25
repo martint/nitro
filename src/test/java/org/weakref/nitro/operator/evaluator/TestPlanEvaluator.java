@@ -1729,6 +1729,86 @@ public class TestPlanEvaluator
         assertThat(result.position(2)).isEqualTo(2);
     }
 
+    @Test
+    void testUtf8DictionaryLiteralReferenceMaskUsesPrimitiveTrueMask()
+    {
+        Variable literal = new Variable(0);
+        Variable equals = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literal, new Literal(""), AllMask.ALL),
+                        new Assignment(
+                                equals,
+                                new Call("eq_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literal, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector dictionary = new BinaryVector(3, 32);
+        dictionary.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionary.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionary.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(2, "pixel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, dictionary);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(equals, Stream.VALUES)), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
+    void testUtf8DictionaryLiteralNotMaskUsesPrimitiveFalseMask()
+    {
+        Variable literal = new Variable(0);
+        Variable equals = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literal, new Literal(""), AllMask.ALL),
+                        new Assignment(
+                                equals,
+                                new Call("eq_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literal, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector dictionary = new BinaryVector(3, 32);
+        dictionary.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionary.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionary.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(2, "pixel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, dictionary);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES))), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(1);
+        assertThat(result.position(1)).isEqualTo(4);
+    }
+
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);

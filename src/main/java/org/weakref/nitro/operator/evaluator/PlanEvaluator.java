@@ -397,6 +397,11 @@ public final class PlanEvaluator
             return optimized;
         }
 
+        Mask primitiveMask = tryEvaluatePrimitiveTrueMask(reference, mask);
+        if (primitiveMask != null) {
+            return primitiveMask;
+        }
+
         BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
@@ -413,6 +418,11 @@ public final class PlanEvaluator
         Mask optimized = tryEvaluateLongComparisonFalseMask(reference, mask);
         if (optimized != null) {
             return optimized;
+        }
+
+        Mask primitiveMask = tryEvaluatePrimitiveFalseMask(reference, mask);
+        if (primitiveMask != null) {
+            return primitiveMask;
         }
 
         BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
@@ -982,6 +992,49 @@ public final class PlanEvaluator
             return null;
         }
         return new LongComparison(call.name(), left, right);
+    }
+
+    private Mask tryEvaluatePrimitiveTrueMask(Reference reference, Mask mask)
+    {
+        return tryEvaluatePrimitiveMask(reference, mask, true);
+    }
+
+    private Mask tryEvaluatePrimitiveFalseMask(Reference reference, Mask mask)
+    {
+        return tryEvaluatePrimitiveMask(reference, mask, false);
+    }
+
+    private Mask tryEvaluatePrimitiveMask(Reference reference, Mask mask, boolean selectTrue)
+    {
+        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
+            return null;
+        }
+
+        Assignment assignment = assignments.get(variable);
+        if (assignment == null || !(assignment.operation() instanceof Call call)) {
+            return null;
+        }
+
+        PrimitiveFunction function;
+        try {
+            function = primitiveRegistry.get(call.name());
+        }
+        catch (IllegalArgumentException _) {
+            return null;
+        }
+        if (!(function instanceof MaskEvaluablePrimitiveFunction maskFunction)) {
+            return null;
+        }
+
+        List<Streams> inputs = new ArrayList<>(call.arguments().size());
+        boolean requiresInputCompanionStreams = function.requiresInputCompanionStreams();
+        for (Reference argument : call.arguments()) {
+            inputs.add(requiresInputCompanionStreams ? evaluateArgument(argument, mask) : evaluate(argument, mask));
+        }
+
+        return selectTrue
+                ? maskFunction.tryEvaluateTrueMask(inputs, mask, executionContext)
+                : maskFunction.tryEvaluateFalseMask(inputs, mask, executionContext);
     }
 
     private LongOperand resolveLongOperand(Reference reference)

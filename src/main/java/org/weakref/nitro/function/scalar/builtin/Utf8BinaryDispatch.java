@@ -56,6 +56,16 @@ public final class Utf8BinaryDispatch
         return apply(functionName, allocationContext, Operation.CONTAINS, inputs, mask, requestedStreams, output, context);
     }
 
+    public static Mask tryEvaluateEqualsTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateEqualsMask(functionName, allocationContext, inputs, mask, context, true);
+    }
+
+    public static Mask tryEvaluateEqualsFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateEqualsMask(functionName, allocationContext, inputs, mask, context, false);
+    }
+
     private static Streams apply(String functionName, Allocator.Context allocationContext, Operation operation, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
@@ -109,6 +119,24 @@ public final class Utf8BinaryDispatch
             result = result.with(Stream.VALUES, outputValues);
         }
         return result;
+    }
+
+    private static Mask tryEvaluateEqualsMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    {
+        checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
+
+        Vector left = inputs.get(0).values();
+        Vector right = inputs.get(1).values();
+        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+
+        if (right instanceof RleVector rightRle && rightRle.counts().length == 1 && left instanceof DictionaryVector leftDictionary) {
+            return evaluateEqualsDictionarySingleValueMask(functionName, allocationContext, leftDictionary, rightRle, leftNulls, rightNulls, mask, context, selectMatches);
+        }
+        if (left instanceof RleVector leftRle && leftRle.counts().length == 1 && right instanceof DictionaryVector rightDictionary) {
+            return evaluateEqualsSingleValueDictionaryMask(functionName, allocationContext, leftRle, rightDictionary, leftNulls, rightNulls, mask, context, selectMatches);
+        }
+        return null;
     }
 
     private static Vector tryApplySpecializedValues(
@@ -269,6 +297,39 @@ public final class Utf8BinaryDispatch
         return output;
     }
 
+    private static Mask evaluateEqualsDictionarySingleValueMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    {
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector right = requireBinaryRle(functionName, rightRle);
+        requireUtf8Traits(functionName, left, right);
+
+        if (isNull(rightNulls, 0)) {
+            return context.allocator().allocateSparseMask(allocationContext, new int[0], 0, mask.size());
+        }
+
+        int[] leftIds = leftDictionary.ids();
+        boolean[] dictionaryMatches = new boolean[left.length()];
+        for (int index = 0; index < dictionaryMatches.length; index++) {
+            dictionaryMatches[index] = binaryEquals(left, index, right, 0);
+        }
+
+        int selectedCount = 0;
+        for (int position : mask) {
+            if (!isNull(leftNulls, position) && dictionaryMatches[leftIds[position]] == selectMatches) {
+                selectedCount++;
+            }
+        }
+
+        int[] positions = new int[selectedCount];
+        int outputIndex = 0;
+        for (int position : mask) {
+            if (!isNull(leftNulls, position) && dictionaryMatches[leftIds[position]] == selectMatches) {
+                positions[outputIndex++] = position;
+            }
+        }
+        return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
+    }
+
     private static Vector applyEqualsSingleValueDictionary(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
@@ -299,6 +360,39 @@ public final class Utf8BinaryDispatch
             outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
         }
         return output;
+    }
+
+    private static Mask evaluateEqualsSingleValueDictionaryMask(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    {
+        BinaryVector left = requireBinaryRle(functionName, leftRle);
+        BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
+        requireUtf8Traits(functionName, left, right);
+
+        if (isNull(leftNulls, 0)) {
+            return context.allocator().allocateSparseMask(allocationContext, new int[0], 0, mask.size());
+        }
+
+        int[] rightIds = rightDictionary.ids();
+        boolean[] dictionaryMatches = new boolean[right.length()];
+        for (int index = 0; index < dictionaryMatches.length; index++) {
+            dictionaryMatches[index] = binaryEquals(left, 0, right, index);
+        }
+
+        int selectedCount = 0;
+        for (int position : mask) {
+            if (!isNull(rightNulls, position) && dictionaryMatches[rightIds[position]] == selectMatches) {
+                selectedCount++;
+            }
+        }
+
+        int[] positions = new int[selectedCount];
+        int outputIndex = 0;
+        for (int position : mask) {
+            if (!isNull(rightNulls, position) && dictionaryMatches[rightIds[position]] == selectMatches) {
+                positions[outputIndex++] = position;
+            }
+        }
+        return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
     }
 
     private static void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)

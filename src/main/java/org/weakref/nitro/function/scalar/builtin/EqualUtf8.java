@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -28,7 +29,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "eq_utf8")
 public final class EqualUtf8
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualUtf8");
 
@@ -49,5 +50,19 @@ public final class EqualUtf8
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
         return Utf8BinaryDispatch.applyEquals("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
+    }
+
+    @Override
+    public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
+        return Utf8BinaryDispatch.tryEvaluateEqualsTrueMask("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
+    }
+
+    @Override
+    public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
+        return Utf8BinaryDispatch.tryEvaluateEqualsFalseMask("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
     }
 }
