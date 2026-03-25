@@ -14,9 +14,15 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.Max;
+import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 
@@ -107,15 +113,92 @@ public class AggregationOperator
             while (source.hasNext()) {
                 try (Batch batch = source.next()) {
                     Mask mask = batch.borrowMask();
-                    for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
-                        Accumulator accumulator = aggregations.get(aggregation);
-                        accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
-                        reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
-                        batchState.results[aggregation] = reusableResults[aggregation];
+                    if (!tryAccumulateFusedMinMax(state, batch, mask, batchState)) {
+                        for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
+                            Accumulator accumulator = aggregations.get(aggregation);
+                            accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
+                            reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
+                            batchState.results[aggregation] = reusableResults[aggregation];
+                        }
                     }
                 }
             }
         }
+    }
+
+    private boolean tryAccumulateFusedMinMax(Streams[] state, Batch batch, Mask mask, BatchState batchState)
+    {
+        if (aggregations.size() != 2) {
+            return false;
+        }
+
+        int minIndex;
+        int maxIndex;
+        if (aggregations.get(0) instanceof Min && aggregations.get(1) instanceof Max) {
+            minIndex = 0;
+            maxIndex = 1;
+        }
+        else if (aggregations.get(0) instanceof Max && aggregations.get(1) instanceof Min) {
+            minIndex = 1;
+            maxIndex = 0;
+        }
+        else {
+            return false;
+        }
+
+        Min min = (Min) aggregations.get(minIndex);
+        Max max = (Max) aggregations.get(maxIndex);
+        if (min.inputColumn() != max.inputColumn()) {
+            return false;
+        }
+
+        Output output = batch.output(min.inputColumn());
+        Vector inputValues = output.borrow(Stream.VALUES);
+        BooleanVector inputNulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+
+        I64Vector minValues = (I64Vector) state[minIndex].values();
+        BooleanVector minNulls = (BooleanVector) state[minIndex].get(Stream.NULLS);
+        I64Vector maxValues = (I64Vector) state[maxIndex].values();
+        BooleanVector maxNulls = (BooleanVector) state[maxIndex].get(Stream.NULLS);
+
+        long currentMin = minValues.values()[0];
+        boolean currentMinNull = minNulls.values()[0];
+        long currentMax = maxValues.values()[0];
+        boolean currentMaxNull = maxNulls.values()[0];
+
+        for (int position : mask) {
+            if (OperatorVectorSupport.isNull(inputNulls, position)) {
+                continue;
+            }
+
+            long value = OperatorVectorSupport.longValue(inputValues, position);
+            if (currentMinNull) {
+                currentMin = value;
+                currentMinNull = false;
+            }
+            else {
+                currentMin = Math.min(currentMin, value);
+            }
+
+            if (currentMaxNull) {
+                currentMax = value;
+                currentMaxNull = false;
+            }
+            else {
+                currentMax = Math.max(currentMax, value);
+            }
+        }
+
+        minValues.values()[0] = currentMin;
+        minNulls.values()[0] = currentMinNull;
+        maxValues.values()[0] = currentMax;
+        maxNulls.values()[0] = currentMaxNull;
+
+        reusableResults[minIndex] = aggregations.get(minIndex).result(1, state[minIndex], reusableResults[minIndex], allocator, ALLOCATION_CONTEXT);
+        batchState.results[minIndex] = reusableResults[minIndex];
+        reusableResults[maxIndex] = aggregations.get(maxIndex).result(1, state[maxIndex], reusableResults[maxIndex], allocator, ALLOCATION_CONTEXT);
+        batchState.results[maxIndex] = reusableResults[maxIndex];
+        return true;
     }
 
     @Override

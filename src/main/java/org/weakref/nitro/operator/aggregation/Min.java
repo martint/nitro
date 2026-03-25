@@ -38,6 +38,11 @@ public class Min
         this.inputColumn = inputColumn;
     }
 
+    public int inputColumn()
+    {
+        return inputColumn;
+    }
+
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
