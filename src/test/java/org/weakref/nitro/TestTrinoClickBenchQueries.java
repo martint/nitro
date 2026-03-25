@@ -105,6 +105,50 @@ public class TestTrinoClickBenchQueries
     }
 
     @Test
+    void testTrinoQuery21CountUrlsContainingGoogle()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query21CountUrlsContainingGoogle(writeHitsFixture());
+            assertThat(result.getRowCount()).isEqualTo(1);
+            assertThat(result.getOnlyValue()).isEqualTo(4L);
+        }
+    }
+
+    @Test
+    void testTrinoQuery22SearchPhrasesWithGoogleUrls()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query22SearchPhrasesWithGoogleUrls(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isNotEmpty();
+            assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(3);
+        }
+    }
+
+    @Test
+    void testTrinoQuery23GoogleTitlesNonGoogleUrls()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query23GoogleTitlesNonGoogleUrls(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isNotEmpty();
+            assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(5);
+        }
+    }
+
+    @Test
+    void testTrinoQuery24SelectAllGoogleUrlsOrderedByEventTime()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query24SelectAllGoogleUrlsOrderedByEventTime(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isNotEmpty();
+            assertThat(result.getMaterializedRows().getFirst().getFields().size()).isGreaterThan(20);
+        }
+    }
+
+    @Test
     void testTrinoQuery29RefererHosts()
             throws IOException
     {

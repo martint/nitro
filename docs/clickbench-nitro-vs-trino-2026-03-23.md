@@ -14,6 +14,7 @@ Method:
 Caveats:
 - These are still directional engineering numbers, not publication-grade benchmark results.
 - The forked `-f 1 -i 3` shape is materially more stable than the earlier same-VM one-shot runs, but the confidence intervals are still wide on some queries because the iterations are intentionally short.
+- `Q21-Q24` were later rerun in a focused post-fix pass after changing the Trino harness from a bespoke `strpos` lowering to faithful SQL `LIKE` / `NOT LIKE`. The main full-suite headline below still comes from the last whole-suite run; the targeted `Q21-Q24` numbers below supersede those four rows only.
 
 Summary:
 - Nitro faster on 29 / 44 queries
@@ -29,6 +30,20 @@ Notable movement in this refresh:
 - `Q5` remains on the Nitro side under the forked runs (`2780.168 ms/op` vs Trino `3612.037 ms/op`).
 - `Q30` also lands decisively on the Nitro side in the forked run (`8768.431 ms/op` vs Trino `29580.280 ms/op`).
 - The main remaining Trino wins are now concentrated in `Q21/Q22`, several string/order near-ties (`Q25-Q28`), and a handful of grouped queries (`Q9`, `Q11`, `Q12`, `Q15`, `Q16`, `Q19`, `Q32`).
+
+Targeted `Q21-Q24` post-fix refresh:
+- Method: same forked shape (`-f 1 -wi 0 -i 3 -w 1ms -r 1ms`) on the real parquet `hits` data
+- This rerun switched the Trino harness to faithful `LIKE` / `NOT LIKE` expressions instead of the earlier `strpos` lowering
+- Focused wall clock:
+  Nitro `142.16s` (`2m 22.16s`)
+  Trino `273.39s` (`4m 33.39s`)
+  Trino took about `1.92x` as long across `Q21-Q24`
+- Updated outcomes for those four queries:
+  - `Q21`: Nitro `11301.649 ms/op`, Trino `14408.644 ms/op`
+  - `Q22`: Nitro `9911.027 ms/op`, Trino `8400.803 ms/op`
+  - `Q23`: Nitro `12640.583 ms/op`, Trino `20372.006 ms/op`
+  - `Q24`: Nitro `13057.308 ms/op`, Trino `45711.398 ms/op`
+- Main takeaway: the earlier Trino advantage on `Q21` was an artifact of the non-canonical `strpos` lowering. With faithful `LIKE`, Nitro is faster on `Q21`, `Q23`, and `Q24`, and only `Q22` remains on the Trino side in this family.
 
 | Query | Nitro ms/op | Trino ms/op | Trino/Nitro | Faster |
 |---|---:|---:|---:|---|
@@ -53,10 +68,10 @@ Notable movement in this refresh:
 | Q18 | 13314.900 | 14831.865 | 1.11 | Nitro |
 | Q19 | 22884.723 | 22661.311 | 0.99 | Trino |
 | Q20 | 590.804 | 594.154 | 1.01 | Nitro |
-| Q21 | 11499.447 | 8887.881 | 0.77 | Trino |
-| Q22 | 9732.948 | 7760.461 | 0.80 | Trino |
-| Q23 | 12090.996 | 14796.659 | 1.22 | Nitro |
-| Q24 | 12970.304 | 40190.261 | 3.10 | Nitro |
+| Q21 | 11301.649 | 14408.644 | 1.28 | Nitro |
+| Q22 | 9911.027 | 8400.803 | 0.85 | Trino |
+| Q23 | 12640.583 | 20372.006 | 1.61 | Nitro |
+| Q24 | 13057.308 | 45711.398 | 3.50 | Nitro |
 | Q25 | 2735.058 | 2660.568 | 0.97 | Trino |
 | Q26 | 2760.080 | 2419.228 | 0.88 | Trino |
 | Q27 | 2776.774 | 2668.373 | 0.96 | Trino |
@@ -77,7 +92,7 @@ Notable movement in this refresh:
 | Q42 | 1084.067 | 1985.264 | 1.83 | Nitro |
 | Q43 | 903.862 | 1827.496 | 2.02 | Nitro |
 
-Queries where Trino is currently faster:
+Queries where Trino was faster in the last whole-suite run:
 - Q4
 - Q7
 - Q9
@@ -86,7 +101,6 @@ Queries where Trino is currently faster:
 - Q15
 - Q16
 - Q19
-- Q21
 - Q22
 - Q25
 - Q26

@@ -45,6 +45,7 @@ import io.trino.testing.MaterializedResult;
 import io.trino.testing.PageConsumerOperator;
 import io.trino.testing.TestingSession;
 import io.trino.testing.TestingTaskContext;
+import io.trino.type.LikePattern;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
 
@@ -74,6 +75,7 @@ import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
 import static io.trino.type.JoniRegexpType.JONI_REGEXP;
+import static io.trino.type.LikePatternType.LIKE_PATTERN;
 import static java.lang.Math.toIntExact;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
@@ -498,7 +500,7 @@ public final class TrinoClickBenchSupport
                 input,
                 List.of("URL"),
                 List.of(
-                        filterAndProjectFactory(1, List.of(VARCHAR), Optional.of(contains(0, "google")), List.of(), List.of()),
+                        filterAndProjectFactory(1, List.of(VARCHAR), Optional.of(like(0, "%google%")), List.of(), List.of()),
                         aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
                 List.of(BIGINT));
     }
@@ -513,7 +515,7 @@ public final class TrinoClickBenchSupport
                         filterAndProjectFactory(
                                 1,
                                 List.of(VARCHAR, VARCHAR),
-                                Optional.of(and(notEqual(0, VARCHAR, Slices.utf8Slice("")), contains(1, "google"))),
+                                Optional.of(and(notEqual(0, VARCHAR, Slices.utf8Slice("")), like(1, "%google%"))),
                                 List.of(field(0, VARCHAR), field(1, VARCHAR)),
                                 List.of(VARCHAR, VARCHAR)),
                         hashAggregationFactory(
@@ -537,8 +539,8 @@ public final class TrinoClickBenchSupport
                                 1,
                                 List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT),
                                 Optional.of(and(
-                                        contains(2, "Google"),
-                                        notContains(1, ".google."),
+                                        like(2, "%Google%"),
+                                        notLike(1, "%.google.%"),
                                         notEqual(0, VARCHAR, Slices.utf8Slice("")))),
                                 List.of(field(0, VARCHAR), field(1, VARCHAR), field(2, VARCHAR), field(3, BIGINT)),
                                 List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT)),
@@ -565,7 +567,7 @@ public final class TrinoClickBenchSupport
                 input,
                 columns,
                 List.of(
-                        filterAndProjectFactory(1, types, Optional.of(contains(urlIndex, "google")), identityProjections(types), types),
+                        filterAndProjectFactory(1, types, Optional.of(like(urlIndex, "%google%")), identityProjections(types), types),
                         topNFactory(2, types, 10, List.of(eventTimeIndex), List.of(ascending()))),
                 types);
     }
@@ -1189,20 +1191,21 @@ public final class TrinoClickBenchSupport
         return new CallExpression(FUNCTION_RESOLUTION.resolveFunction("$not", fromTypes(BOOLEAN)), List.of(expression));
     }
 
-    private static RowExpression contains(int inputChannel, String needle)
+    private static RowExpression like(int inputChannel, String pattern)
     {
-        return contains(field(inputChannel, VARCHAR), needle);
+        return like(field(inputChannel, VARCHAR), pattern);
     }
 
-    private static RowExpression contains(RowExpression expression, String needle)
+    private static RowExpression like(RowExpression expression, String pattern)
     {
-        RowExpression strpos = new CallExpression(FUNCTION_RESOLUTION.resolveFunction("strpos", fromTypes(VARCHAR, VARCHAR)), List.of(expression, constant(Slices.utf8Slice(needle), VARCHAR)));
-        return lessThan(constant(0L, BIGINT), strpos, BIGINT);
+        return new CallExpression(
+                FUNCTION_RESOLUTION.resolveFunction("$like", fromTypes(VARCHAR, LIKE_PATTERN)),
+                List.of(expression, constant(LikePattern.compile(pattern, Optional.empty()), LIKE_PATTERN)));
     }
 
-    private static RowExpression notContains(int inputChannel, String needle)
+    private static RowExpression notLike(int inputChannel, String pattern)
     {
-        return not(contains(inputChannel, needle));
+        return not(like(inputChannel, pattern));
     }
 
     private static RowExpression length(RowExpression expression)
