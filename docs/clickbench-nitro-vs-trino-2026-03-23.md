@@ -19,19 +19,19 @@ Caveats:
 - The overall benchmark total below is derived by summing the per-query average times for all 44 queries, not by using the suite wall-clock measurement.
 
 Summary:
-- Nitro faster on 40 / 44 queries
-- Trino faster on 4 / 44 queries
-- Geometric mean of `Trino / Nitro`: about `2.13x`
+- Nitro faster on 44 / 44 queries
+- Trino faster on 0 / 44 queries
+- Geometric mean of `Trino / Nitro`: about `2.22x`
 - End-to-end total from summed per-query times:
-  Nitro `272.69s` (`4m 32.69s`)
-  Trino `619.31s` (`10m 19.31s`)
-  Trino took about `2.27x` as long as Nitro overall by this aggregate measure
+  Nitro `268.25s` (`4m 28.25s`)
+  Trino `622.20s` (`10m 22.20s`)
+  Trino took about `2.32x` as long as Nitro overall by this aggregate measure
 
 Notable movement in this refresh:
-- Nitro was rerun end to end after fixing the `Q33` grouped-state pooling regression; `Q33` no longer OOMs and improved from `23129.801 ms/op` to `21488.560 ms/op`.
-- The new Nitro rerun also moved a broad set of queries in the right direction, including `Q21-Q24`, `Q29`, `Q30`, `Q31`, `Q32`, `Q36`, and the distinct-heavy queries.
-- `Q11`, `Q12`, `Q15`, `Q16`, `Q19`, `Q28`, and `Q32` all flipped to Nitro relative to the older forked comparison.
-- Only four near-ties remain on the Trino side in the current best-known mix: `Q7`, `Q25`, `Q26`, and `Q27`.
+- Nitro was rerun end to end after the recent `TopN` ordering work, and the summed per-query total improved from `272.69s` to `268.25s`.
+- The latest full Nitro run moved the remaining ordered-string holdouts in the right direction: `Q25` improved from `2758.597 ms/op` to `2646.803 ms/op`, `Q26` from `2524.199 ms/op` to `2222.973 ms/op`, and `Q27` from `2889.928 ms/op` to `2630.661 ms/op`.
+- `Q7` also stayed firmly on the Nitro side after the fused global integer `min/max` path, landing at `180.683 ms/op` against the Trino baseline of `534.487 ms/op`.
+- With those changes in place, there are no remaining Trino wins in the current best-known per-query mix. The closest near-ties are now `Q25` and `Q27`, but Nitro is still slightly ahead on both.
 
 Targeted `Q21-Q24` post-fix refresh:
 - Method: same forked shape (`-f 1 -wi 0 -i 3 -w 1ms -r 1ms`) on the real parquet `hits` data
@@ -50,53 +50,50 @@ Targeted `Q21-Q24` post-fix refresh:
 
 | Query | Nitro ms/op | Trino ms/op | Trino/Nitro | Faster |
 |---|---:|---:|---:|---|
-| Q0 | 6501.028 | 36092.080 | 5.55 | Nitro |
-| Q1 | 34.717 | 388.604 | 11.19 | Nitro |
-| Q2 | 190.829 | 534.153 | 2.80 | Nitro |
-| Q3 | 507.219 | 1371.200 | 2.70 | Nitro |
-| Q4 | 362.553 | 606.067 | 1.67 | Nitro |
-| Q5 | 2320.763 | 3612.037 | 1.56 | Nitro |
-| Q6 | 5504.464 | 7771.508 | 1.41 | Nitro |
-| Q7 | 615.442 | 534.487 | 0.87 | Trino |
-| Q8 | 184.739 | 521.405 | 2.82 | Nitro |
-| Q9 | 7121.719 | 7887.137 | 1.11 | Nitro |
-| Q10 | 9835.632 | 10147.615 | 1.03 | Nitro |
-| Q11 | 1263.558 | 1415.871 | 1.12 | Nitro |
-| Q12 | 1532.811 | 1688.791 | 1.10 | Nitro |
-| Q13 | 5114.597 | 6252.828 | 1.22 | Nitro |
-| Q14 | 8052.762 | 11227.541 | 1.39 | Nitro |
-| Q15 | 5822.771 | 6274.031 | 1.08 | Nitro |
-| Q16 | 3737.844 | 4077.531 | 1.09 | Nitro |
-| Q17 | 14075.188 | 16129.625 | 1.15 | Nitro |
-| Q18 | 13100.601 | 14831.865 | 1.13 | Nitro |
-| Q19 | 20657.253 | 22661.311 | 1.10 | Nitro |
-| Q20 | 328.007 | 594.154 | 1.81 | Nitro |
-| Q21 | 7893.450 | 14408.644 | 1.83 | Nitro |
-| Q22 | 7715.648 | 8400.803 | 1.09 | Nitro |
-| Q23 | 10274.878 | 20372.006 | 1.98 | Nitro |
-| Q24 | 9370.791 | 45711.398 | 4.88 | Nitro |
-| Q25 | 2758.597 | 2660.568 | 0.96 | Trino |
-| Q26 | 2524.199 | 2419.228 | 0.96 | Trino |
-| Q27 | 2889.928 | 2668.373 | 0.92 | Trino |
-| Q28 | 9167.015 | 10135.586 | 1.11 | Nitro |
-| Q29 | 25733.999 | 186324.703 | 7.24 | Nitro |
-| Q30 | 8047.568 | 29580.280 | 3.68 | Nitro |
-| Q31 | 4306.866 | 5248.066 | 1.22 | Nitro |
-| Q32 | 5267.045 | 5600.837 | 1.06 | Nitro |
-| Q33 | 21488.560 | 24454.002 | 1.14 | Nitro |
-| Q34 | 20148.270 | 29231.639 | 1.45 | Nitro |
-| Q35 | 19838.456 | 31645.996 | 1.60 | Nitro |
-| Q36 | 4865.338 | 11685.647 | 2.40 | Nitro |
-| Q37 | 494.473 | 6060.612 | 12.26 | Nitro |
-| Q38 | 442.971 | 6349.352 | 14.33 | Nitro |
-| Q39 | 322.178 | 5724.804 | 17.77 | Nitro |
-| Q40 | 743.821 | 10166.418 | 13.67 | Nitro |
-| Q41 | 553.177 | 2031.502 | 3.67 | Nitro |
-| Q42 | 552.225 | 1985.264 | 3.60 | Nitro |
-| Q43 | 421.176 | 1827.496 | 4.34 | Nitro |
+| Q0 | 6303.188 | 36092.080 | 5.73 | Nitro |
+| Q1 | 33.979 | 388.604 | 11.44 | Nitro |
+| Q2 | 191.270 | 534.153 | 2.79 | Nitro |
+| Q3 | 523.585 | 1371.200 | 2.62 | Nitro |
+| Q4 | 390.578 | 606.067 | 1.55 | Nitro |
+| Q5 | 2448.137 | 3612.037 | 1.48 | Nitro |
+| Q6 | 5654.378 | 7771.508 | 1.37 | Nitro |
+| Q7 | 180.683 | 534.487 | 2.96 | Nitro |
+| Q8 | 195.197 | 521.405 | 2.67 | Nitro |
+| Q9 | 7257.483 | 7887.137 | 1.09 | Nitro |
+| Q10 | 8787.209 | 10147.615 | 1.15 | Nitro |
+| Q11 | 1207.570 | 1415.871 | 1.17 | Nitro |
+| Q12 | 1411.721 | 1688.791 | 1.20 | Nitro |
+| Q13 | 4743.216 | 6252.828 | 1.32 | Nitro |
+| Q14 | 7402.496 | 11227.541 | 1.52 | Nitro |
+| Q15 | 5547.745 | 6274.031 | 1.13 | Nitro |
+| Q16 | 3394.017 | 4077.531 | 1.20 | Nitro |
+| Q17 | 13285.312 | 16129.625 | 1.21 | Nitro |
+| Q18 | 12545.658 | 14831.865 | 1.18 | Nitro |
+| Q19 | 20030.133 | 22661.311 | 1.13 | Nitro |
+| Q20 | 334.543 | 594.154 | 1.78 | Nitro |
+| Q21 | 7874.495 | 15249.959 | 1.94 | Nitro |
+| Q22 | 7596.159 | 9819.377 | 1.29 | Nitro |
+| Q23 | 10345.257 | 20027.606 | 1.94 | Nitro |
+| Q24 | 9282.484 | 46682.787 | 5.03 | Nitro |
+| Q25 | 2646.803 | 2660.568 | 1.01 | Nitro |
+| Q26 | 2222.973 | 2419.228 | 1.09 | Nitro |
+| Q27 | 2630.661 | 2668.373 | 1.01 | Nitro |
+| Q28 | 9295.595 | 10135.586 | 1.09 | Nitro |
+| Q29 | 27117.626 | 186324.703 | 6.87 | Nitro |
+| Q30 | 8179.079 | 29580.280 | 3.62 | Nitro |
+| Q31 | 4310.405 | 5248.066 | 1.22 | Nitro |
+| Q32 | 5079.382 | 5600.837 | 1.10 | Nitro |
+| Q33 | 19710.718 | 24454.002 | 1.24 | Nitro |
+| Q34 | 20017.862 | 29231.639 | 1.46 | Nitro |
+| Q35 | 21584.118 | 31645.996 | 1.47 | Nitro |
+| Q36 | 4825.592 | 11685.647 | 2.42 | Nitro |
+| Q37 | 517.220 | 6060.612 | 11.72 | Nitro |
+| Q38 | 468.466 | 6349.352 | 13.55 | Nitro |
+| Q39 | 373.442 | 5724.804 | 15.33 | Nitro |
+| Q40 | 726.804 | 10166.418 | 13.99 | Nitro |
+| Q41 | 565.799 | 2031.502 | 3.59 | Nitro |
+| Q42 | 558.139 | 1985.264 | 3.56 | Nitro |
+| Q43 | 449.055 | 1827.496 | 4.07 | Nitro |
 
 Queries where Trino is faster in the current best-known per-query mix:
-- Q7
-- Q25
-- Q26
-- Q27
+- None
