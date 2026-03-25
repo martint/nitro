@@ -281,20 +281,13 @@ public final class Utf8BinaryDispatch
         for (int index = 0; index < dictionaryMatches.length; index++) {
             dictionaryMatches[index] = binaryEquals(left, index, right, 0);
         }
-
-        BooleanVector output = writableBooleanOutput(allocationContext, context, existing, outputLength);
-        boolean[] outputValues = output.values();
-
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
-            }
-            return output;
-        }
-        for (int position : mask) {
-            outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
-        }
-        return output;
+        BooleanVector dictionaryValues = context.allocator().allocate(
+                allocationContext,
+                BooleanVector.class,
+                dictionaryMatches.length,
+                BooleanVector::new);
+        System.arraycopy(dictionaryMatches, 0, dictionaryValues.values(), 0, dictionaryMatches.length);
+        return context.allocator().allocateDictionary(allocationContext, leftIds, dictionaryValues);
     }
 
     private static Mask evaluateEqualsDictionarySingleValueMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
@@ -346,20 +339,13 @@ public final class Utf8BinaryDispatch
         for (int index = 0; index < dictionaryMatches.length; index++) {
             dictionaryMatches[index] = binaryEquals(left, 0, right, index);
         }
-
-        BooleanVector output = writableBooleanOutput(allocationContext, context, existing, outputLength);
-        boolean[] outputValues = output.values();
-
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
-            }
-            return output;
-        }
-        for (int position : mask) {
-            outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
-        }
-        return output;
+        BooleanVector dictionaryValues = context.allocator().allocate(
+                allocationContext,
+                BooleanVector.class,
+                dictionaryMatches.length,
+                BooleanVector::new);
+        System.arraycopy(dictionaryMatches, 0, dictionaryValues.values(), 0, dictionaryMatches.length);
+        return context.allocator().allocateDictionary(allocationContext, rightIds, dictionaryValues);
     }
 
     private static Mask evaluateEqualsSingleValueDictionaryMask(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)

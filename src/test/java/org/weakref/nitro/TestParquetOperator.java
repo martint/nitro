@@ -521,14 +521,15 @@ public class TestParquetOperator
                 Streams.empty(),
                 new PrimitiveExecutionContext(new Allocator()));
 
-        BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
+        org.weakref.nitro.data.Vector values = result.get(Stream.VALUES);
         BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
 
-        assertThat(values.values()[0]).isTrue();
-        assertThat(values.values()[1]).isFalse();
-        assertThat(values.values()[2]).isFalse();
-        assertThat(values.values()[3]).isFalse();
-        assertThat(values.values()[4]).isTrue();
+        assertThat(values).isInstanceOf(DictionaryVector.class);
+        assertThat(booleanValue(values, 0)).isTrue();
+        assertThat(booleanValue(values, 1)).isFalse();
+        assertThat(booleanValue(values, 2)).isFalse();
+        assertThat(booleanValue(values, 3)).isFalse();
+        assertThat(booleanValue(values, 4)).isTrue();
 
         assertThat(nulls.values()[0]).isFalse();
         assertThat(nulls.values()[1]).isFalse();
@@ -2327,6 +2328,16 @@ public class TestParquetOperator
     private static long expectedUtf8Hash(String value)
     {
         return value.hashCode();
+    }
+
+    private static boolean booleanValue(org.weakref.nitro.data.Vector values, int position)
+    {
+        return switch (values) {
+            case BooleanVector vector -> vector.values()[position];
+            case DictionaryVector vector -> ((BooleanVector) vector.values()).values()[vector.ids()[position]];
+            case RleVector vector -> ((BooleanVector) vector.values()).values()[vector.runIndex(position)];
+            default -> throw new IllegalArgumentException("Expected boolean-backed vector but got " + values.getClass().getSimpleName());
+        };
     }
 
     private static String utf8Value(org.weakref.nitro.data.Vector values, int position)

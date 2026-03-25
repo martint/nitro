@@ -402,7 +402,7 @@ public final class PlanEvaluator
             return primitiveMask;
         }
 
-        BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
+        Vector values = evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
         return classifyTrueBooleanMask(values, nulls, errors, mask);
@@ -425,7 +425,7 @@ public final class PlanEvaluator
             return primitiveMask;
         }
 
-        BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
+        Vector values = evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
         return classifyFalseBooleanMask(values, nulls, errors, mask);
@@ -595,7 +595,7 @@ public final class PlanEvaluator
             return optimized;
         }
 
-        BooleanVector values = (BooleanVector) evaluate(reference, mask).get(reference.stream());
+        Vector values = evaluate(reference, mask).get(reference.stream());
         BooleanVector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         BooleanVector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
         return classifyBooleanMask(values, nulls, errors, mask);
@@ -753,13 +753,12 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, falsePositions, outputIndex, mask.size());
     }
 
-    private MaskOutcome classifyBooleanMask(BooleanVector values, BooleanVector nulls, BooleanVector errors, Mask mask)
+    private MaskOutcome classifyBooleanMask(Vector values, BooleanVector nulls, BooleanVector errors, Mask mask)
     {
-        boolean[] valueData = values.values();
         boolean[] nullData = nulls == null ? null : nulls.values();
         boolean[] errorData = errors == null ? null : errors.values();
 
-        ClassificationCounts counts = countBooleanMaskOutcomes(valueData, nullData, errorData, mask);
+        ClassificationCounts counts = countBooleanMaskOutcomes(values, nullData, errorData, mask);
         int[] truePositions = new int[counts.trueCount()];
         int[] nullPositions = new int[counts.nullCount()];
         int[] errorPositions = new int[counts.errorCount()];
@@ -774,7 +773,7 @@ public final class PlanEvaluator
             else if (nullData != null && nullData[position]) {
                 nullPositions[nullCount++] = position;
             }
-            else if (valueData[position]) {
+            else if (readBoolean(values, position)) {
                 truePositions[trueCount++] = position;
             }
         }
@@ -785,13 +784,12 @@ public final class PlanEvaluator
                 allocator.allocateSparseMask(ALLOCATION_CONTEXT, errorPositions, errorCount, mask.size()));
     }
 
-    private Mask classifyTrueBooleanMask(BooleanVector values, BooleanVector nulls, BooleanVector errors, Mask mask)
+    private Mask classifyTrueBooleanMask(Vector values, BooleanVector nulls, BooleanVector errors, Mask mask)
     {
-        boolean[] valueData = values.values();
         boolean[] nullData = nulls == null ? null : nulls.values();
         boolean[] errorData = errors == null ? null : errors.values();
 
-        int trueCount = countTrueRows(valueData, nullData, errorData, mask);
+        int trueCount = countTrueRows(values, nullData, errorData, mask);
         int[] truePositions = new int[trueCount];
         int outputIndex = 0;
         for (int position : mask) {
@@ -801,7 +799,7 @@ public final class PlanEvaluator
             if (nullData != null && nullData[position]) {
                 continue;
             }
-            if (valueData[position]) {
+            if (readBoolean(values, position)) {
                 truePositions[outputIndex++] = position;
             }
         }
@@ -809,13 +807,12 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, truePositions, outputIndex, mask.size());
     }
 
-    private Mask classifyFalseBooleanMask(BooleanVector values, BooleanVector nulls, BooleanVector errors, Mask mask)
+    private Mask classifyFalseBooleanMask(Vector values, BooleanVector nulls, BooleanVector errors, Mask mask)
     {
-        boolean[] valueData = values.values();
         boolean[] nullData = nulls == null ? null : nulls.values();
         boolean[] errorData = errors == null ? null : errors.values();
 
-        int falseCount = countFalseRows(valueData, nullData, errorData, mask);
+        int falseCount = countFalseRows(values, nullData, errorData, mask);
         int[] falsePositions = new int[falseCount];
         int outputIndex = 0;
         for (int position : mask) {
@@ -825,7 +822,7 @@ public final class PlanEvaluator
             if (nullData != null && nullData[position]) {
                 continue;
             }
-            if (!valueData[position]) {
+            if (!readBoolean(values, position)) {
                 falsePositions[outputIndex++] = position;
             }
         }
@@ -892,7 +889,7 @@ public final class PlanEvaluator
         return falseCount;
     }
 
-    private ClassificationCounts countBooleanMaskOutcomes(boolean[] valueData, boolean[] nullData, boolean[] errorData, Mask mask)
+    private ClassificationCounts countBooleanMaskOutcomes(Vector values, boolean[] nullData, boolean[] errorData, Mask mask)
     {
         int trueCount = 0;
         int nullCount = 0;
@@ -904,7 +901,7 @@ public final class PlanEvaluator
             else if (nullData != null && nullData[position]) {
                 nullCount++;
             }
-            else if (valueData[position]) {
+            else if (readBoolean(values, position)) {
                 trueCount++;
             }
         }
@@ -939,7 +936,7 @@ public final class PlanEvaluator
         return trueCount;
     }
 
-    private int countTrueRows(boolean[] valueData, boolean[] nullData, boolean[] errorData, Mask mask)
+    private int countTrueRows(Vector values, boolean[] nullData, boolean[] errorData, Mask mask)
     {
         int trueCount = 0;
         for (int position : mask) {
@@ -949,14 +946,14 @@ public final class PlanEvaluator
             if (nullData != null && nullData[position]) {
                 continue;
             }
-            if (valueData[position]) {
+            if (readBoolean(values, position)) {
                 trueCount++;
             }
         }
         return trueCount;
     }
 
-    private int countFalseRows(boolean[] valueData, boolean[] nullData, boolean[] errorData, Mask mask)
+    private int countFalseRows(Vector values, boolean[] nullData, boolean[] errorData, Mask mask)
     {
         int falseCount = 0;
         for (int position : mask) {
@@ -966,7 +963,7 @@ public final class PlanEvaluator
             if (nullData != null && nullData[position]) {
                 continue;
             }
-            if (!valueData[position]) {
+            if (!readBoolean(values, position)) {
                 falseCount++;
             }
         }
@@ -1062,6 +1059,16 @@ public final class PlanEvaluator
             case DictionaryVector values -> readLong(values.values(), values.ids()[position]);
             case RleVector values -> readLong(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static boolean readBoolean(Vector vector, int position)
+    {
+        return switch (vector) {
+            case BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> readBoolean(values.values(), values.ids()[position]);
+            case RleVector values -> readBoolean(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean vector but found " + vector.getClass().getSimpleName());
         };
     }
 
