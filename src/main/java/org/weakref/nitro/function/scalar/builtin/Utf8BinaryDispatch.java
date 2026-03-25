@@ -84,32 +84,61 @@ public final class Utf8BinaryDispatch
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            BooleanVector outputValues = context.allocator().allocateOrGrow(
+            Vector outputValues = tryApplySpecializedValues(
+                    functionName,
                     allocationContext,
-                    output != null && output.has(Stream.VALUES) && output.values() instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
+                    operation,
+                    left,
+                    right,
+                    leftNulls,
+                    rightNulls,
+                    mask,
+                    output == null ? null : output.getOrNull(Stream.VALUES),
                     outputLength,
-                    BooleanVector::new);
-            applyValues(functionName, operation, left, right, leftNulls, rightNulls, mask, outputValues);
+                    context);
+            if (outputValues == null) {
+                BooleanVector booleanOutputValues = context.allocator().allocateOrGrow(
+                        allocationContext,
+                        output != null && output.has(Stream.VALUES) && output.values() instanceof BooleanVector vector ? vector : null,
+                        BooleanVector.class,
+                        outputLength,
+                        BooleanVector::new);
+                applyValues(functionName, operation, left, right, leftNulls, rightNulls, mask, booleanOutputValues);
+                outputValues = booleanOutputValues;
+            }
             result = result.with(Stream.VALUES, outputValues);
         }
         return result;
     }
 
-    private static void applyValues(String functionName, Operation operation, Vector left, Vector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    private static Vector tryApplySpecializedValues(
+            String functionName,
+            Allocator.Context allocationContext,
+            Operation operation,
+            Vector left,
+            Vector right,
+            BooleanVector leftNulls,
+            BooleanVector rightNulls,
+            Mask mask,
+            Vector existing,
+            int outputLength,
+            PrimitiveExecutionContext context)
     {
         if (operation == Operation.EQUALS && right instanceof RleVector rightRle && rightRle.counts().length == 1) {
             if (left instanceof DictionaryVector leftDictionary) {
-                applyEqualsDictionarySingleValue(functionName, leftDictionary, rightRle, leftNulls, rightNulls, mask, output);
-                return;
+                return applyEqualsDictionarySingleValue(functionName, allocationContext, leftDictionary, rightRle, leftNulls, rightNulls, mask, existing, outputLength, context);
             }
         }
         if (operation == Operation.EQUALS && left instanceof RleVector leftRle && leftRle.counts().length == 1) {
             if (right instanceof DictionaryVector rightDictionary) {
-                applyEqualsSingleValueDictionary(functionName, leftRle, rightDictionary, leftNulls, rightNulls, mask, output);
-                return;
+                return applyEqualsSingleValueDictionary(functionName, allocationContext, leftRle, rightDictionary, leftNulls, rightNulls, mask, existing, outputLength, context);
             }
         }
+        return null;
+    }
+
+    private static void applyValues(String functionName, Operation operation, Vector left, Vector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    {
         if (operation == Operation.CONTAINS && right instanceof RleVector rightRle && rightRle.counts().length == 1) {
             if (left instanceof BinaryVector leftValues) {
                 applyContainsFlatSingleNeedle(functionName, leftValues, rightRle, leftNulls, rightNulls, mask, output);
@@ -208,7 +237,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyEqualsDictionarySingleValue(String functionName, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    private static Vector applyEqualsDictionarySingleValue(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
@@ -216,10 +245,8 @@ public final class Utf8BinaryDispatch
 
         boolean literalNull = isNull(rightNulls, 0);
         int[] leftIds = leftDictionary.ids();
-        boolean[] outputValues = output.values();
         if (literalNull) {
-            fillFalse(outputValues, mask);
-            return;
+            return existing != null ? existing : writableBooleanOutput(allocationContext, context, null, outputLength);
         }
 
         boolean[] dictionaryMatches = new boolean[left.length()];
@@ -227,18 +254,22 @@ public final class Utf8BinaryDispatch
             dictionaryMatches[index] = binaryEquals(left, index, right, 0);
         }
 
+        BooleanVector output = writableBooleanOutput(allocationContext, context, existing, outputLength);
+        boolean[] outputValues = output.values();
+
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
                 outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
             }
-            return;
+            return output;
         }
         for (int position : mask) {
             outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[leftIds[position]];
         }
+        return output;
     }
 
-    private static void applyEqualsSingleValueDictionary(String functionName, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    private static Vector applyEqualsSingleValueDictionary(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
@@ -246,10 +277,8 @@ public final class Utf8BinaryDispatch
 
         boolean literalNull = isNull(leftNulls, 0);
         int[] rightIds = rightDictionary.ids();
-        boolean[] outputValues = output.values();
         if (literalNull) {
-            fillFalse(outputValues, mask);
-            return;
+            return existing != null ? existing : writableBooleanOutput(allocationContext, context, null, outputLength);
         }
 
         boolean[] dictionaryMatches = new boolean[right.length()];
@@ -257,15 +286,19 @@ public final class Utf8BinaryDispatch
             dictionaryMatches[index] = binaryEquals(left, 0, right, index);
         }
 
+        BooleanVector output = writableBooleanOutput(allocationContext, context, existing, outputLength);
+        boolean[] outputValues = output.values();
+
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
                 outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
             }
-            return;
+            return output;
         }
         for (int position : mask) {
             outputValues[position] = !isNull(rightNulls, position) && dictionaryMatches[rightIds[position]];
         }
+        return output;
     }
 
     private static void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)
@@ -566,15 +599,17 @@ public final class Utf8BinaryDispatch
         return nulls != null && nulls.values()[position];
     }
 
-    private static void fillFalse(boolean[] outputValues, Mask mask)
+    private static BooleanVector writableBooleanOutput(Allocator.Context allocationContext, PrimitiveExecutionContext context, Vector existing, int outputLength)
     {
-        if (mask.all()) {
-            Arrays.fill(outputValues, 0, mask.size(), false);
-            return;
+        if (existing instanceof BooleanVector vector) {
+            return context.allocator().allocateOrGrow(allocationContext, vector, BooleanVector.class, outputLength, BooleanVector::new);
         }
-        for (int position : mask) {
-            outputValues[position] = false;
+
+        BooleanVector target = context.allocator().allocateOrGrow(allocationContext, null, BooleanVector.class, outputLength, BooleanVector::new);
+        if (existing instanceof RleVector existingRle && existingRle.values() instanceof BooleanVector values && existingRle.counts().length == 1) {
+            Arrays.fill(target.values(), 0, outputLength, values.values()[0]);
         }
+        return target;
     }
 
     private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)

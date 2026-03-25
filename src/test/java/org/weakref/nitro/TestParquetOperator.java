@@ -538,6 +538,39 @@ public class TestParquetOperator
     }
 
     @Test
+    void testEqualUtf8PreservesExistingValuesWhenLiteralIsNull()
+    {
+        BinaryVector dictionaryValues = new BinaryVector(2, 16);
+        dictionaryValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionaryValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionaryValues.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector left = DictionaryVector.wrap(new int[] {0, 1, 1, 0}, dictionaryValues);
+        BooleanVector existingValues = new BooleanVector(new boolean[] {true, false, true, false});
+
+        BinaryVector literal = new BinaryVector(1, 1);
+        literal.addTrait(BinaryVector.Trait.UTF8_STRING);
+        literal.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        literal.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        Streams result = eqUtf8().apply(
+                List.of(
+                        Streams.ofValues(left),
+                        Streams.ofValues(new RleVector(new int[] {4}, literal)).with(Stream.NULLS, new BooleanVector(new boolean[] {true, true, true, true}))),
+                Mask.all(4),
+                EnumSet.of(Stream.VALUES, Stream.NULLS),
+                Streams.ofValues(existingValues),
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(result.get(Stream.VALUES)).isSameAs(existingValues);
+        assertThat(existingValues.values()).containsExactly(true, false, true, false);
+
+        BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
+        assertThat(nulls.values()).containsExactly(true, true, true, true);
+    }
+
+    @Test
     void testLessThanUtf8FiltersAsciiParquetStrings()
             throws IOException
     {
