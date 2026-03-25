@@ -27,16 +27,23 @@ import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.lang.invoke.VarHandle;
 import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.invoke.MethodHandles.byteArrayViewVarHandle;
+import static java.nio.ByteOrder.LITTLE_ENDIAN;
 
 @ScalarFunction(name = "length_utf8")
 public final class LengthUtf8
         implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LengthUtf8");
+    private static final VarHandle INT_HANDLE = byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
+    private static final VarHandle LONG_HANDLE = byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
+    private static final int TOP_MASK32 = 0x8080_8080;
+    private static final long TOP_MASK64 = 0x8080_8080_8080_8080L;
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -109,13 +116,44 @@ public final class LengthUtf8
 
     private static int utf8Length(byte[] data, int offset, int end)
     {
-        int count = 0;
-        for (int index = offset; index < end; index++) {
-            if ((data[index] & 0xC0) != 0x80) {
-                count++;
-            }
+        int length = end - offset;
+        if (length == 0) {
+            return 0;
         }
-        return count;
+
+        int continuationBytesCount = 0;
+        int index = offset;
+        int lastLongStart = end - Long.BYTES;
+        for (; index <= lastLongStart; index += Long.BYTES) {
+            continuationBytesCount += countContinuationBytes((long) LONG_HANDLE.get(data, index));
+        }
+        if (index <= end - Integer.BYTES) {
+            continuationBytesCount += countContinuationBytes((int) INT_HANDLE.get(data, index));
+            index += Integer.BYTES;
+        }
+        for (; index < end; index++) {
+            continuationBytesCount += countContinuationBytes(data[index]);
+        }
+
+        return length - continuationBytesCount;
+    }
+
+    private static int countContinuationBytes(byte value)
+    {
+        int unsigned = value & 0xff;
+        return (unsigned >>> 7) & (~unsigned >>> 6);
+    }
+
+    private static int countContinuationBytes(int value)
+    {
+        value = ((value & TOP_MASK32) >>> 1) & (~value);
+        return Integer.bitCount(value);
+    }
+
+    private static int countContinuationBytes(long value)
+    {
+        value = ((value & TOP_MASK64) >>> 1) & (~value);
+        return Long.bitCount(value);
     }
 
     private static void copyNulls(BooleanVector inputNulls, Mask mask, BooleanVector output)
