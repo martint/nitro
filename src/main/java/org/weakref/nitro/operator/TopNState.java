@@ -15,6 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -76,22 +78,52 @@ final class TopNState
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int orderingColumn = orderingColumns[orderingIndex];
             Output output = batch.output(orderingColumn);
-            comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
-            Streams currentOrdering = comparisonColumns[orderingColumn];
             Streams slotOrdering = slotColumns[orderingColumn][slot];
-            int comparison = OperatorOrderingSemantics.compare(
-                    currentOrdering.values(),
-                    (BooleanVector) currentOrdering.getOrNull(Stream.NULLS),
-                    0,
-                    slotOrdering.values(),
-                    (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
-                    0);
+            int comparison = tryComparePrimitiveOrderingValue(output, position, slotOrdering);
+            if (comparison == Integer.MIN_VALUE) {
+                comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
+                Streams currentOrdering = comparisonColumns[orderingColumn];
+                comparison = OperatorOrderingSemantics.compare(
+                        currentOrdering.values(),
+                        (BooleanVector) currentOrdering.getOrNull(Stream.NULLS),
+                        0,
+                        slotOrdering.values(),
+                        (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
+                        0);
+            }
             comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
             if (comparison != 0) {
                 return comparison;
             }
         }
         return 0;
+    }
+
+    private int tryComparePrimitiveOrderingValue(Output output, int position, Streams slotOrdering)
+    {
+        Vector currentValues = output.borrow(Stream.VALUES);
+        Vector slotValues = slotOrdering.values();
+        Vector flattenedCurrent = OperatorVectorSupport.flatten(currentValues);
+        Vector flattenedSlot = OperatorVectorSupport.flatten(slotValues);
+        if (!((flattenedCurrent instanceof I64Vector || flattenedCurrent instanceof I32Vector) &&
+                (flattenedSlot instanceof I64Vector || flattenedSlot instanceof I32Vector))) {
+            return Integer.MIN_VALUE;
+        }
+
+        BooleanVector currentNulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        BooleanVector slotNulls = (BooleanVector) slotOrdering.getOrNull(Stream.NULLS);
+        boolean currentNull = OperatorVectorSupport.isNull(currentNulls, position);
+        boolean slotNull = OperatorVectorSupport.isNull(slotNulls, 0);
+        if (currentNull || slotNull) {
+            if (currentNull == slotNull) {
+                return 0;
+            }
+            return currentNull ? -1 : 1;
+        }
+
+        return Long.compare(
+                OperatorVectorSupport.longValue(currentValues, position),
+                OperatorVectorSupport.longValue(slotValues, 0));
     }
 
     public int compareSlots(int leftSlot, int rightSlot)
