@@ -37,6 +37,11 @@ public interface PrimitiveFunction
         return false;
     }
 
+    default boolean deterministic()
+    {
+        return true;
+    }
+
     default Set<Allocator.Context> allocationContexts()
     {
         return Set.of();

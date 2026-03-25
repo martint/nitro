@@ -802,6 +802,76 @@ consider the sibling streams of the same producer as well:
 This makes mask evaluation row-local null/error-aware rather than raw
 boolean-only and aligns mask semantics with the rest of the stream model.
 
+### Recent evaluator learnings
+
+Recent ClickBench profiling clarified a few practical rules that should guide
+the evaluator design:
+
+- Function-specific encoded fast paths are useful as stepping stones, but the
+  long-term direction should be evaluator-native encoded execution. The `Q11`
+  and `Q12` work showed that keeping `eq_utf8(dictionary, literal)` encoded all
+  the way into boolean-mask classification is better than flattening to a
+  row-wise boolean vector early.
+- Masks and boolean streams should stay separate semantic concepts, but mask
+  classification should understand encoded boolean results directly. In
+  practice, that means `DictionaryVector<BooleanVector>` and `RleVector` should
+  remain valid intermediate boolean representations for filter evaluation.
+- The biggest gap to Velox-style execution is no longer "Nitro is row-wise."
+  Nitro is already encoding-aware in specific hot paths. The remaining gap is
+  that dictionary peeling is not yet a generic evaluator capability and mask
+  refinement still tends to happen after predicate evaluation rather than as the
+  native control-flow shape of the filter path.
+- Dense/bitset mask forms are not the first missing representation for the
+  current ClickBench string filters. For `Q11`, the real win comes from keeping
+  dictionary remap information alive longer, not from replacing sparse masks
+  with a generic dense representation.
+
+### Future direction: selection-native filter execution
+
+The evaluator should move toward a filter path that is more selection-native
+without collapsing masks and boolean streams into one abstraction.
+
+The intended direction is:
+
+- keep `Mask` as the row-selection/control-flow abstraction
+- keep boolean `VALUES` streams as data streams that may still be projected or
+  memoized like other outputs
+- allow filter evaluation to consume owned masks with take-style semantics and
+  narrow them in place when the calling context proves that destructive
+  refinement is safe
+- allow predicate evaluation to preserve encoded forms such as dictionary or RLE
+  booleans until the latest possible point, only materializing sparse row
+  positions when a downstream consumer truly needs a sparse `Mask`
+
+This keeps the existing conceptual split while still allowing Velox-like
+selection-native execution in the hot filter path.
+
+### Future direction: evaluator-native dictionary peeling
+
+The evaluator should eventually make dictionary-aware execution a generic
+expression capability rather than a collection of function-local optimizations.
+
+The target shape is:
+
+- detect when a deterministic call is fed by compatible dictionary and/or
+  single-run RLE wrappers
+- peel those wrappers at the evaluator boundary
+- evaluate the primitive once over the reduced base domain
+- rewrap the produced streams through the original ids when the outer row domain
+  still expects dictionary-shaped results
+- let mask-only consumers classify those encoded boolean streams directly
+
+That is the closest Nitro analogue to Velox's "compute on distinct values only"
+behavior while preserving Nitro's explicit-mask semantics.
+
+Two important constraints from current experiments:
+
+- the evaluator should own the peel-and-rewrap decision so `PlanEvaluator` stays
+  generic and functions do not need special-case knowledge of specific callers
+- the first useful version does not need a brand-new runtime selection type;
+  it can keep `Mask` as the control-flow object and teach mask classification to
+  operate on encoded boolean vectors efficiently
+
 ## Target Operator Contract
 
 The current `Operator` API should remain the batch protocol, but its meaning
@@ -1833,7 +1903,9 @@ architecture:
   that technology is mature enough for practical use.
 - Whether masks eventually need more internal representations beyond `all` and
   sparse positions, such as range or bitset forms, if profiling shows those are
-  worthwhile.
+  worthwhile. Recent ClickBench work suggests that evaluator-native
+  dictionary-remap execution is a higher-priority next step than generic dense
+  mask storage.
 - More formal separation between IR mask semantics and runtime mask-buffer
   storage if implementation experience suggests the current conceptual split is
   still too loose.
@@ -1843,8 +1915,9 @@ architecture:
 - Whether the runtime should grow a Velox-style dictionary peeling optimization,
   where shared dictionary-wrapped inputs are evaluated once over distinct base
   values and then rewrapped through the original ids. The current runtime is
-  dictionary-aware, but it does not yet have a general peel-at-the-expression
-  boundary mechanism.
+  now dictionary-aware in some hot predicate paths and can classify encoded
+  boolean results directly, but it still does not have a general
+  peel-at-the-expression-boundary mechanism.
 - The eventual type-system contract for which logical families are orderable,
   equatable, hashable, or otherwise legal as keys. The current runtime may
   support some concrete physical families in specific operators, but the

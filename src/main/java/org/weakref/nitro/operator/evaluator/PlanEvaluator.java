@@ -200,8 +200,115 @@ public final class PlanEvaluator
             inputs.add(requiresInputCompanionStreams ? evaluateArgument(argument, mask) : evaluate(argument, mask));
         }
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
+        Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
+        if (peeledResult != null) {
+            return completeRequestedStreams(requestedStreams, peeledResult, mask);
+        }
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
         return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private Streams tryEvaluateDictionaryPeeledCall(PrimitiveFunction function, List<Streams> inputs, Set<Stream> requestedStreams)
+    {
+        if (!function.deterministic()) {
+            return null;
+        }
+
+        DictionaryPeeling peeling = tryBuildDictionaryPeeling(inputs);
+        if (peeling == null) {
+            return null;
+        }
+
+        Streams baseResult = function.apply(inputsForPeeling(peeling), peeling.baseMask(), requestedStreams, null, executionContext);
+        return wrapDictionaryPeeledStreams(peeling.ids(), baseResult);
+    }
+
+    private static List<Streams> inputsForPeeling(DictionaryPeeling peeling)
+    {
+        return peeling.inputs();
+    }
+
+    private DictionaryPeeling tryBuildDictionaryPeeling(List<Streams> inputs)
+    {
+        int[] sharedIds = null;
+        int rowCount = -1;
+        for (Streams inputStreams : inputs) {
+            Vector values = inputStreams.getOrNull(Stream.VALUES);
+            if (values instanceof DictionaryVector dictionary) {
+                if (sharedIds == null) {
+                    sharedIds = dictionary.ids();
+                    rowCount = dictionary.length();
+                }
+                else if (dictionary.length() != rowCount || !Arrays.equals(sharedIds, dictionary.ids())) {
+                    return null;
+                }
+            }
+        }
+        if (sharedIds == null) {
+            return null;
+        }
+
+        int baseLength = 0;
+        for (int id : sharedIds) {
+            baseLength = Math.max(baseLength, id + 1);
+        }
+        Mask baseMask = Mask.all(baseLength);
+
+        List<Streams> peeledInputs = new ArrayList<>(inputs.size());
+        for (Streams inputStreams : inputs) {
+            Streams peeled = peelDictionaryCompatibleStreams(inputStreams, sharedIds, rowCount, baseLength);
+            if (peeled == null) {
+                return null;
+            }
+            peeledInputs.add(peeled);
+        }
+        return new DictionaryPeeling(sharedIds, baseMask, List.copyOf(peeledInputs));
+    }
+
+    private Streams peelDictionaryCompatibleStreams(Streams streams, int[] sharedIds, int rowCount, int baseLength)
+    {
+        Streams.Builder peeled = Streams.builder();
+        for (Stream stream : streams.streams()) {
+            Vector peeledVector = peelDictionaryCompatibleVector(streams.get(stream), sharedIds, rowCount, baseLength);
+            if (peeledVector == null) {
+                return null;
+            }
+            peeled.put(stream, peeledVector);
+        }
+        return peeled.build();
+    }
+
+    private Vector peelDictionaryCompatibleVector(Vector vector, int[] sharedIds, int rowCount, int baseLength)
+    {
+        return switch (vector) {
+            case DictionaryVector dictionary when dictionary.length() == rowCount && Arrays.equals(sharedIds, dictionary.ids()) -> dictionary.values();
+            case RleVector rle when rle.counts().length == 1 -> executionContext.allocator().allocateRle(ALLOCATION_CONTEXT, new int[] {baseLength}, rle.values());
+            case BooleanVector booleans when booleans.length() == rowCount && isConstantBooleanVector(booleans) -> fillBoolean(booleans.values()[0], baseLength);
+            default -> null;
+        };
+    }
+
+    private static boolean isConstantBooleanVector(BooleanVector vector)
+    {
+        if (vector.length() == 0) {
+            return true;
+        }
+        boolean value = vector.values()[0];
+        for (int index = 1; index < vector.length(); index++) {
+            if (vector.values()[index] != value) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Streams wrapDictionaryPeeledStreams(int[] sharedIds, Streams streams)
+    {
+        Streams.Builder wrapped = Streams.builder();
+        for (Stream stream : streams.streams()) {
+            wrapped.put(stream, executionContext.allocator().allocateDictionary(ALLOCATION_CONTEXT, sharedIds, streams.get(stream)));
+        }
+        return wrapped.build();
     }
 
     private Streams evaluateArgument(Reference argument, Mask mask)
@@ -1074,7 +1181,20 @@ public final class PlanEvaluator
 
     private BooleanVector optionalBooleanStream(org.weakref.nitro.operator.evaluator.ir.Producer producer, Stream stream, Mask mask)
     {
-        return (BooleanVector) evaluate(new Reference(producer, stream), mask).getOrNull(stream);
+        Vector vector = evaluate(new Reference(producer, stream), mask).getOrNull(stream);
+        if (vector == null) {
+            return null;
+        }
+        if (vector instanceof BooleanVector booleanVector) {
+            return booleanVector;
+        }
+
+        BooleanVector materialized = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, vector.length(), BooleanVector::new);
+        boolean[] values = materialized.values();
+        for (int position = 0; position < vector.length(); position++) {
+            values[position] = readBoolean(vector, position);
+        }
+        return materialized;
     }
 
     private Streams completeRequestedStreams(Set<Stream> requestedStreams, Streams streams, Mask mask)
@@ -1353,6 +1473,8 @@ public final class PlanEvaluator
     private record LongComparison(String functionName, LongOperand left, LongOperand right) {}
 
     private record ClassificationCounts(int trueCount, int nullCount, int errorCount) {}
+
+    private record DictionaryPeeling(int[] ids, Mask baseMask, List<Streams> inputs) {}
 
     private record KeyAccess(BinaryVector values, boolean dictionary, int[] ids)
     {

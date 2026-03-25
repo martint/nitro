@@ -1809,6 +1809,46 @@ public class TestPlanEvaluator
         assertThat(result.position(1)).isEqualTo(4);
     }
 
+    @Test
+    void testDictionaryLiteralCallIsPeeledAndRewrappedByEvaluator()
+    {
+        Variable literal = new Variable(0);
+        Variable lessThan = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literal, new Literal("m"), AllMask.ALL),
+                        new Assignment(
+                                lessThan,
+                                new Call("lt_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literal, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(lessThan, Stream.VALUES)));
+
+        BinaryVector dictionary = new BinaryVector(3, 32);
+        dictionary.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionary.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionary.setBytes(0, "android".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(2, "pixel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, dictionary);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(lessThan, Stream.VALUES), Mask.all(5));
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+
+        DictionaryVector encoded = (DictionaryVector) result.values();
+        assertThat(encoded.ids()).containsExactly(0, 1, 0, 2, 1);
+        BooleanVector dictionaryValues = (BooleanVector) encoded.values();
+        assertThat(dictionaryValues.values()).containsExactly(true, true, false);
+    }
+
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);
