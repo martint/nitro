@@ -34,16 +34,17 @@ Notable movement in this refresh:
 Targeted `Q21-Q24` post-fix refresh:
 - Method: same forked shape (`-f 1 -wi 0 -i 3 -w 1ms -r 1ms`) on the real parquet `hits` data
 - This rerun switched the Trino harness to faithful `LIKE` / `NOT LIKE` expressions instead of the earlier `strpos` lowering
+- Nitro also includes the later `contains_utf8` Vector API rewrite that removed the old hot-path mask allocation churn
 - Focused wall clock:
-  Nitro `142.16s` (`2m 22.16s`)
-  Trino `273.39s` (`4m 33.39s`)
-  Trino took about `1.92x` as long across `Q21-Q24`
+  Nitro `118.23s` (`1m 58.23s`)
+  Trino `283.52s` (`4m 43.52s`)
+  Trino took about `2.40x` as long across `Q21-Q24`
 - Updated outcomes for those four queries:
-  - `Q21`: Nitro `11301.649 ms/op`, Trino `14408.644 ms/op`
-  - `Q22`: Nitro `9911.027 ms/op`, Trino `8400.803 ms/op`
-  - `Q23`: Nitro `12640.583 ms/op`, Trino `20372.006 ms/op`
-  - `Q24`: Nitro `13057.308 ms/op`, Trino `45711.398 ms/op`
-- Main takeaway: the earlier Trino advantage on `Q21` was an artifact of the non-canonical `strpos` lowering. With faithful `LIKE`, Nitro is faster on `Q21`, `Q23`, and `Q24`, and only `Q22` remains on the Trino side in this family.
+  - `Q21`: Nitro `8503.677 ms/op`, Trino `15249.959 ms/op`
+  - `Q22`: Nitro `8431.885 ms/op`, Trino `9819.377 ms/op`
+  - `Q23`: Nitro `11527.449 ms/op`, Trino `20027.606 ms/op`
+  - `Q24`: Nitro `10403.475 ms/op`, Trino `46682.787 ms/op`
+- Main takeaway: the earlier Trino advantage on `Q21` was an artifact of the non-canonical `strpos` lowering, and the remaining `Q22` gap disappeared once Nitro’s `contains_utf8` hot loop stopped allocating Vector API mask temporaries. With the faithful `LIKE` harness and the rewritten kernel, Nitro is now faster on all four queries in this family.
 
 | Query | Nitro ms/op | Trino ms/op | Trino/Nitro | Faster |
 |---|---:|---:|---:|---|
@@ -68,10 +69,10 @@ Targeted `Q21-Q24` post-fix refresh:
 | Q18 | 13314.900 | 14831.865 | 1.11 | Nitro |
 | Q19 | 22884.723 | 22661.311 | 0.99 | Trino |
 | Q20 | 590.804 | 594.154 | 1.01 | Nitro |
-| Q21 | 11301.649 | 14408.644 | 1.28 | Nitro |
-| Q22 | 9911.027 | 8400.803 | 0.85 | Trino |
-| Q23 | 12640.583 | 20372.006 | 1.61 | Nitro |
-| Q24 | 13057.308 | 45711.398 | 3.50 | Nitro |
+| Q21 | 8503.677 | 15249.959 | 1.79 | Nitro |
+| Q22 | 8431.885 | 9819.377 | 1.16 | Nitro |
+| Q23 | 11527.449 | 20027.606 | 1.74 | Nitro |
+| Q24 | 10403.475 | 46682.787 | 4.49 | Nitro |
 | Q25 | 2735.058 | 2660.568 | 0.97 | Trino |
 | Q26 | 2760.080 | 2419.228 | 0.88 | Trino |
 | Q27 | 2776.774 | 2668.373 | 0.96 | Trino |
@@ -101,7 +102,6 @@ Queries where Trino was faster in the last whole-suite run:
 - Q15
 - Q16
 - Q19
-- Q22
 - Q25
 - Q26
 - Q27
