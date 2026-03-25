@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -79,7 +80,7 @@ final class TopNState
             int orderingColumn = orderingColumns[orderingIndex];
             Output output = batch.output(orderingColumn);
             Streams slotOrdering = slotColumns[orderingColumn][slot];
-            int comparison = tryComparePrimitiveOrderingValue(output, position, slotOrdering);
+            int comparison = tryCompareDirectOrderingValue(output, position, slotOrdering);
             if (comparison == Integer.MIN_VALUE) {
                 comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
                 Streams currentOrdering = comparisonColumns[orderingColumn];
@@ -99,17 +100,10 @@ final class TopNState
         return 0;
     }
 
-    private int tryComparePrimitiveOrderingValue(Output output, int position, Streams slotOrdering)
+    private int tryCompareDirectOrderingValue(Output output, int position, Streams slotOrdering)
     {
         Vector currentValues = output.borrow(Stream.VALUES);
         Vector slotValues = slotOrdering.values();
-        Vector flattenedCurrent = OperatorVectorSupport.flatten(currentValues);
-        Vector flattenedSlot = OperatorVectorSupport.flatten(slotValues);
-        if (!((flattenedCurrent instanceof I64Vector || flattenedCurrent instanceof I32Vector) &&
-                (flattenedSlot instanceof I64Vector || flattenedSlot instanceof I32Vector))) {
-            return Integer.MIN_VALUE;
-        }
-
         BooleanVector currentNulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
         BooleanVector slotNulls = (BooleanVector) slotOrdering.getOrNull(Stream.NULLS);
         boolean currentNull = OperatorVectorSupport.isNull(currentNulls, position);
@@ -121,9 +115,18 @@ final class TopNState
             return currentNull ? -1 : 1;
         }
 
-        return Long.compare(
-                OperatorVectorSupport.longValue(currentValues, position),
-                OperatorVectorSupport.longValue(slotValues, 0));
+        Vector flattenedCurrent = OperatorVectorSupport.flatten(currentValues);
+        Vector flattenedSlot = OperatorVectorSupport.flatten(slotValues);
+        if ((flattenedCurrent instanceof I64Vector || flattenedCurrent instanceof I32Vector) &&
+                (flattenedSlot instanceof I64Vector || flattenedSlot instanceof I32Vector)) {
+            return Long.compare(
+                    OperatorVectorSupport.longValue(currentValues, position),
+                    OperatorVectorSupport.longValue(slotValues, 0));
+        }
+        if (flattenedCurrent instanceof BinaryVector && flattenedSlot instanceof BinaryVector) {
+            return OperatorVectorSupport.binaryCompare(currentValues, position, slotValues, 0);
+        }
+        return Integer.MIN_VALUE;
     }
 
     public int compareSlots(int leftSlot, int rightSlot)
