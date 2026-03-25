@@ -448,13 +448,11 @@ final class ClickBenchHitsSupport
     {
         Operator source = clickBenchScan(allocator, file, "UserID", "EventTime", "SearchPhrase");
         Operator projected = projectEventTimeMinute(allocator, primitiveRegistry, source);
-        Operator grouped = new GroupOperator(allocator, new int[] {0, 1, 2}, projected);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1, 2, 3),
+                List.of(0, 1, 2),
                 List.of(new CountAll()),
-                grouped);
+                projected);
         return new TopNOperator(allocator, 10, 3, aggregated);
     }
 
