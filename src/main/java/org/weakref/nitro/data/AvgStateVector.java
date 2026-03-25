@@ -16,6 +16,7 @@ package org.weakref.nitro.data;
 public final class AvgStateVector
         implements FlatVector
 {
+    private static final long MAX_POOLED_RETAINED_BYTES = 8L * 1024 * 1024;
     private static final int CHUNK_SHIFT = 12;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
     private static final int CHUNK_MASK = CHUNK_SIZE - 1;
@@ -128,7 +129,7 @@ public final class AvgStateVector
     @Override
     public int poolMaxRetained()
     {
-        return 2;
+        return retainedBytes <= MAX_POOLED_RETAINED_BYTES ? 2 : 0;
     }
 
     public void increment(int index, long sum, long count)

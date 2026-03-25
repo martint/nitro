@@ -374,6 +374,34 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorDoesNotPoolOversizedSumStateVector()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("LargeSumStatePool");
+
+        SumStateVector first = allocator.allocate(context, SumStateVector.class, 1_000_000, SumStateVector::new);
+        allocator.release(context);
+
+        SumStateVector second = allocator.allocate(context, SumStateVector.class, 1_000_000, SumStateVector::new);
+
+        assertThat(second).isNotSameAs(first);
+    }
+
+    @Test
+    void testAllocatorDoesNotPoolOversizedAvgStateVector()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("LargeAvgStatePool");
+
+        AvgStateVector first = allocator.allocate(context, AvgStateVector.class, 600_000, AvgStateVector::new);
+        allocator.release(context);
+
+        AvgStateVector second = allocator.allocate(context, AvgStateVector.class, 600_000, AvgStateVector::new);
+
+        assertThat(second).isNotSameAs(first);
+    }
+
+    @Test
     void testAllocatorComputedCapacityNeverDropsBelowRequestedSize()
     {
         assertThat(Allocator.computeCapacity(0)).isEqualTo(0);
