@@ -300,13 +300,11 @@ final class ClickBenchHitsSupport
     public static Operator query9TopRegionsByDistinctUsers(Allocator allocator, Path file)
     {
         Operator distinct = new MarkDistinctOperator(allocator, new int[] {0, 1}, clickBenchScan(allocator, file, "RegionID", "UserID"));
-        Operator grouped = new GroupOperator(allocator, 0, distinct);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1),
+                List.of(0),
                 List.of(new CountAll()),
-                grouped);
+                distinct);
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
 
@@ -326,13 +324,11 @@ final class ClickBenchHitsSupport
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhoneModel", "UserID"), notEqualUtf8(0, ""));
         Operator distinct = new MarkDistinctOperator(allocator, new int[] {0, 1}, filtered);
-        Operator grouped = new GroupOperator(allocator, 0, distinct);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1),
+                List.of(0),
                 List.of(new CountAll()),
-                grouped);
+                distinct);
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
 
@@ -340,13 +336,11 @@ final class ClickBenchHitsSupport
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhone", "MobilePhoneModel", "UserID"), notEqualUtf8(1, ""));
         Operator distinct = new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, filtered);
-        Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, distinct);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                0,
-                List.of(1, 2),
+                List.of(0, 1),
                 List.of(new CountAll()),
-                grouped);
+                distinct);
         return new TopNOperator(allocator, 10, 2, aggregated);
     }
 
