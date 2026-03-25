@@ -1169,6 +1169,36 @@ public final class PlanEvaluator
         };
     }
 
+    private Streams evaluateAvailableArgument(Reference argument, Mask mask)
+    {
+        Streams result = evaluate(argument, mask);
+        if (argument.stream() != Stream.VALUES) {
+            return result;
+        }
+
+        return switch (argument.producer()) {
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> {
+                Vector nulls = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(index), Stream.NULLS), mask);
+                Vector errors = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(index), Stream.ERRORS), mask);
+                Streams available = result;
+                if (nulls != null) {
+                    available = available.with(Stream.NULLS, nulls);
+                }
+                if (errors != null) {
+                    available = available.with(Stream.ERRORS, errors);
+                }
+                yield available;
+            }
+            case Variable variable -> {
+                Assignment assignment = assignments.get(variable);
+                if (assignment != null && assignment.operation() instanceof Literal) {
+                    yield result;
+                }
+                yield evaluateArgument(argument, mask);
+            }
+        };
+    }
+
     private static boolean readBoolean(Vector vector, int position)
     {
         return switch (vector) {

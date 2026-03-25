@@ -46,6 +46,12 @@ public final class EqualUtf8
     }
 
     @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        return false;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");

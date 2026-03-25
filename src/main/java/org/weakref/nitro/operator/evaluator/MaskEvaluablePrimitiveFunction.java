@@ -21,6 +21,11 @@ import java.util.List;
 public interface MaskEvaluablePrimitiveFunction
         extends PrimitiveFunction
 {
+    default boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        return true;
+    }
+
     default Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return null;
