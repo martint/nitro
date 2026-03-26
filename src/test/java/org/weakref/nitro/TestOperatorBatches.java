@@ -1035,10 +1035,10 @@ public class TestOperatorBatches
     {
         Allocator allocator = new Allocator();
         List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
-        for (int index = 0; index < 600; index++) {
+        for (int index = 0; index < 2_500; index++) {
             innerRows.add(row(1L, 1000L + index));
         }
-        for (int index = 0; index < 600; index++) {
+        for (int index = 0; index < 2_500; index++) {
             innerRows.add(row(2L, 2000L + index));
         }
         innerRows.add(row(3L, 3000L));
@@ -1052,20 +1052,20 @@ public class TestOperatorBatches
                 new ConstantTableOperator(allocator, 2, innerRows),
                 0)) {
             try (Batch first = join.next()) {
-                assertThat(first.borrowMask().count()).isEqualTo(1024);
-                assertThat(((I64Vector) first.output(1).borrow(Stream.VALUES)).values()[1023]).isEqualTo(20L);
+                assertThat(first.borrowMask().count()).isEqualTo(4_096);
+                assertThat(((I64Vector) first.output(1).borrow(Stream.VALUES)).values()[4_095]).isEqualTo(20L);
             }
 
             try (Batch second = join.next()) {
-                assertThat(second.borrowMask().count()).isEqualTo(177);
+                assertThat(second.borrowMask().count()).isEqualTo(905);
                 I64Vector outerPayloads = (I64Vector) second.output(1).borrow(Stream.VALUES);
                 I64Vector innerPayloads = (I64Vector) second.output(3).borrow(Stream.VALUES);
 
-                for (int index = 0; index < 176; index++) {
+                for (int index = 0; index < 904; index++) {
                     assertThat(outerPayloads.values()[index]).isEqualTo(20L);
                 }
-                assertThat(outerPayloads.values()[176]).isEqualTo(30L);
-                assertThat(innerPayloads.values()[176]).isEqualTo(3000L);
+                assertThat(outerPayloads.values()[904]).isEqualTo(30L);
+                assertThat(innerPayloads.values()[904]).isEqualTo(3000L);
             }
         }
     }
