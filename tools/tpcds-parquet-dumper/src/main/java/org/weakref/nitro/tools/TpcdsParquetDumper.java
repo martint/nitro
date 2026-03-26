@@ -75,7 +75,9 @@ public final class TpcdsParquetDumper
         }
 
         String sourceName = "tpcds." + quotedIdentifier(arguments.sourceSchema()) + "." + quotedTable;
-        String sql = "CREATE TABLE " + targetName + " WITH (format = 'PARQUET') AS SELECT * FROM " + sourceName;
+        String sql = "CREATE TABLE " + targetName + " WITH (format = 'PARQUET') AS SELECT " +
+                selectList(queryRunner, arguments.sourceSchema(), table) +
+                " FROM " + sourceName;
 
         Instant start = Instant.now();
         System.out.printf("Creating %s from %s ...%n", targetName, sourceName);
@@ -94,6 +96,32 @@ public final class TpcdsParquetDumper
         List<String> tables = new ArrayList<>();
         result.getMaterializedRows().forEach(row -> tables.add((String) row.getField(0)));
         return tables;
+    }
+
+    private static String selectList(QueryRunner queryRunner, String sourceSchema, String table)
+    {
+        MaterializedResult result = execute(queryRunner, "SHOW COLUMNS FROM tpcds." + quotedIdentifier(sourceSchema) + "." + quotedIdentifier(table));
+        List<String> expressions = new ArrayList<>();
+        for (var row : result.getMaterializedRows()) {
+            String column = (String) row.getField(0);
+            String type = ((String) row.getField(1)).toLowerCase(Locale.ENGLISH);
+            String quotedColumn = quotedIdentifier(column);
+
+            if (requiresHiveCast(type)) {
+                expressions.add("CAST(" + quotedColumn + " AS varchar) AS " + quotedColumn);
+                continue;
+            }
+
+            expressions.add(quotedColumn);
+        }
+        return String.join(", ", expressions);
+    }
+
+    private static boolean requiresHiveCast(String type)
+    {
+        return type.equals("time") ||
+                type.startsWith("time(") ||
+                type.startsWith("time with time zone");
     }
 
     private static boolean tableExists(QueryRunner queryRunner, String schema, String table)
