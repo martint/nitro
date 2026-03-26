@@ -51,9 +51,27 @@ public class BenchmarkTpcdsParquet
     }
 
     @Benchmark
-    public void query41ProductNames()
+    public void query41()
     {
-        consume(TpcdsParquetSupport.query41ProductNames(allocator, primitiveRegistry, tables));
+        consume(TpcdsParquetSupport.query41(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query62()
+    {
+        consume(TpcdsParquetSupport.query62(allocator, tables));
+    }
+
+    @Benchmark
+    public void query96()
+    {
+        consume(TpcdsParquetSupport.query96(allocator, tables));
+    }
+
+    @Benchmark
+    public void query99()
+    {
+        consume(TpcdsParquetSupport.query99(allocator, tables));
     }
 
     private static void consume(Operator operator)

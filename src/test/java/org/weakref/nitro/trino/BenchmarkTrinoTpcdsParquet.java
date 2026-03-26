@@ -53,8 +53,26 @@ public class BenchmarkTrinoTpcdsParquet
     }
 
     @Benchmark
-    public Object query41ProductNames()
+    public Object query41()
     {
-        return support.query41ProductNames(tables);
+        return support.query41(tables);
+    }
+
+    @Benchmark
+    public Object query62()
+    {
+        return support.query62(tables);
+    }
+
+    @Benchmark
+    public Object query96()
+    {
+        return support.query96(tables);
+    }
+
+    @Benchmark
+    public Object query99()
+    {
+        return support.query99(tables);
     }
 }
