@@ -45,11 +45,12 @@ import io.trino.testing.MaterializedResult;
 import io.trino.testing.PageConsumerOperator;
 import io.trino.testing.TestingSession;
 import io.trino.testing.TestingTaskContext;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
 import org.weakref.nitro.tpcds.TpcdsParquetTables;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -152,7 +153,7 @@ public final class TrinoTpcdsParquetSupport
                 tables.tableFiles("store_sales"),
                 columns,
                 List.of(
-                        integerDimensionFilterFactory(30, factTypes, new int[] {0, 1, 2}, new Set[] {lookup.timeKeys(), lookup.householdKeys(), lookup.storeKeys()}),
+                        integerDimensionFilterFactory(30, factTypes, new int[] {0, 1, 2}, new IntSet[] {lookup.timeKeys(), lookup.householdKeys(), lookup.storeKeys()}),
                         aggregationFactory(31, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
                 List.of(BIGINT));
     }
@@ -242,7 +243,7 @@ public final class TrinoTpcdsParquetSupport
                     tables.tableFiles("store_sales"),
                     List.of("ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
                     List.of(
-                            integerDimensionFilterFactory(70 + (bucket * 2), factTypes, new int[] {0, 1, 2}, new Set[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()}),
+                            integerDimensionFilterFactory(70 + (bucket * 2), factTypes, new int[] {0, 1, 2}, new IntSet[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()}),
                             aggregationFactory(71 + (bucket * 2), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
                     List.of(BIGINT)));
         }
@@ -290,7 +291,7 @@ public final class TrinoTpcdsParquetSupport
 
     private Query10Lookup query10Lookup(TpcdsParquetTables tables)
     {
-        Set<Integer> eligibleDates = dateKeysForYearMonthRange(tables, 2002, 1, 4);
+        IntSet eligibleDates = dateKeysForYearMonthRange(tables, 2002, 1, 4);
         return new Query10Lookup(
                 addressKeysForCounties(tables, "Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"),
                 customerKeysForDates(tables, "store_sales", List.of("ss_customer_sk", "ss_sold_date_sk"), eligibleDates),
@@ -386,7 +387,7 @@ public final class TrinoTpcdsParquetSupport
         return TrinoClickBenchPageReader.columnTypes(tables.tableFiles(tableName).getFirst(), columns);
     }
 
-    private Set<Integer> dateKeysForMonthSequence(TpcdsParquetTables tables, int minimumMonthSequence, int maximumMonthSequence)
+    private IntSet dateKeysForMonthSequence(TpcdsParquetTables tables, int minimumMonthSequence, int maximumMonthSequence)
     {
         return integerKeySet(
                 scanTable(tables, "date_dim", List.of("d_date_sk", "d_month_seq"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_month_seq"))),
@@ -396,7 +397,7 @@ public final class TrinoTpcdsParquetSupport
                 });
     }
 
-    private Set<Integer> dateKeysForYearMonthRange(TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
+    private IntSet dateKeysForYearMonthRange(TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
     {
         return integerKeySet(
                 scanTable(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"))),
@@ -405,9 +406,9 @@ public final class TrinoTpcdsParquetSupport
                         ((Number) row.getField(2)).intValue() <= maximumMonthOfYear);
     }
 
-    private Set<Integer> dateKeysForDayOfMonthAndYears(TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
+    private IntSet dateKeysForDayOfMonthAndYears(TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
     {
-        Set<Integer> allowedYears = Arrays.stream(years).boxed().collect(java.util.stream.Collectors.toSet());
+        IntSet allowedYears = new IntOpenHashSet(years);
         return integerKeySet(
                 scanTable(tables, "date_dim", List.of("d_date_sk", "d_dom", "d_year"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_dom", "d_year"))),
                 row -> ((Number) row.getField(1)).intValue() >= minimumDayOfMonth &&
@@ -415,7 +416,7 @@ public final class TrinoTpcdsParquetSupport
                         allowedYears.contains(((Number) row.getField(2)).intValue()));
     }
 
-    private Set<Integer> customerKeysForDates(TpcdsParquetTables tables, String tableName, List<String> columns, Set<Integer> allowedDates)
+    private IntSet customerKeysForDates(TpcdsParquetTables tables, String tableName, List<String> columns, IntSet allowedDates)
     {
         return integerKeySet(
                 scanTable(tables, tableName, columns, tableColumnTypes(tables, tableName, columns)),
@@ -424,7 +425,7 @@ public final class TrinoTpcdsParquetSupport
                         allowedDates.contains(((Number) row.getField(1)).intValue()));
     }
 
-    private Set<Integer> addressKeysForCounties(TpcdsParquetTables tables, String... counties)
+    private IntSet addressKeysForCounties(TpcdsParquetTables tables, String... counties)
     {
         Set<String> allowedCounties = Set.of(counties);
         return integerKeySet(
@@ -435,7 +436,7 @@ public final class TrinoTpcdsParquetSupport
                 });
     }
 
-    private Set<Integer> storeKeysForCounties(TpcdsParquetTables tables, String... counties)
+    private IntSet storeKeysForCounties(TpcdsParquetTables tables, String... counties)
     {
         Set<String> allowedCounties = Set.of(counties);
         return integerKeySet(
@@ -446,7 +447,7 @@ public final class TrinoTpcdsParquetSupport
                 });
     }
 
-    private Set<Integer> storeKeysByName(TpcdsParquetTables tables, String storeName)
+    private IntSet storeKeysByName(TpcdsParquetTables tables, String storeName)
     {
         return integerKeySet(
                 scanTable(tables, "store", List.of("s_store_sk", "s_store_name"), tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_name"))),
@@ -456,7 +457,7 @@ public final class TrinoTpcdsParquetSupport
                 });
     }
 
-    private Set<Integer> householdKeysForQuery73(TpcdsParquetTables tables)
+    private IntSet householdKeysForQuery73(TpcdsParquetTables tables)
     {
         return integerKeySet(
                 scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"))),
@@ -470,7 +471,7 @@ public final class TrinoTpcdsParquetSupport
                 });
     }
 
-    private Set<Integer> householdKeysForQuery88(TpcdsParquetTables tables)
+    private IntSet householdKeysForQuery88(TpcdsParquetTables tables)
     {
         return integerKeySet(
                 scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"))),
@@ -483,11 +484,11 @@ public final class TrinoTpcdsParquetSupport
     }
 
     @SuppressWarnings("unchecked")
-    private Set<Integer>[] timeBucketKeysForQuery88(TpcdsParquetTables tables)
+    private IntSet[] timeBucketKeysForQuery88(TpcdsParquetTables tables)
     {
-        Set<Integer>[] buckets = new Set[8];
+        IntSet[] buckets = new IntSet[8];
         for (int bucket = 0; bucket < buckets.length; bucket++) {
-            buckets[bucket] = new HashSet<>();
+            buckets[bucket] = new IntOpenHashSet();
         }
         scanTable(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute"), tableColumnTypes(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute")))
                 .getMaterializedRows()
@@ -555,9 +556,9 @@ public final class TrinoTpcdsParquetSupport
         return ((Number) result.getMaterializedRows().getFirst().getField(0)).longValue();
     }
 
-    private static Set<Integer> integerKeySet(MaterializedResult result, java.util.function.Predicate<io.trino.testing.MaterializedRow> predicate)
+    private static IntSet integerKeySet(MaterializedResult result, java.util.function.Predicate<io.trino.testing.MaterializedRow> predicate)
     {
-        Set<Integer> values = new HashSet<>();
+        IntSet values = new IntOpenHashSet();
         for (io.trino.testing.MaterializedRow row : result.getMaterializedRows()) {
             if (predicate.test(row)) {
                 values.add(((Number) row.getField(0)).intValue());
@@ -637,7 +638,7 @@ public final class TrinoTpcdsParquetSupport
                 orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders));
     }
 
-    private OperatorFactory integerDimensionFilterFactory(int operatorId, List<Type> inputTypes, int[] inputChannels, Set<Integer>[] allowedValues)
+    private OperatorFactory integerDimensionFilterFactory(int operatorId, List<Type> inputTypes, int[] inputChannels, IntSet[] allowedValues)
     {
         return new IntegerDimensionFilterOperator.Factory(operatorId, new PlanNodeId("int-filter-" + operatorId), inputTypes, inputChannels, allowedValues);
     }
@@ -793,21 +794,21 @@ public final class TrinoTpcdsParquetSupport
     }
 
     private record Query10Lookup(
-            Set<Integer> eligibleAddressKeys,
-            Set<Integer> storeCustomerKeys,
-            Set<Integer> webCustomerKeys,
-            Set<Integer> catalogCustomerKeys,
+            IntSet eligibleAddressKeys,
+            IntSet storeCustomerKeys,
+            IntSet webCustomerKeys,
+            IntSet catalogCustomerKeys,
             Map<Integer, CustomerDemographicsRecord> demographics) {}
 
     private record Query73Lookup(
-            Set<Integer> allowedDateKeys,
-            Set<Integer> allowedStoreKeys,
-            Set<Integer> allowedHouseholdKeys,
+            IntSet allowedDateKeys,
+            IntSet allowedStoreKeys,
+            IntSet allowedHouseholdKeys,
             Map<Integer, CustomerIdentityRecord> customers) {}
 
-    private record Query88Lookup(Set<Integer>[] timeBucketKeys, Set<Integer> allowedHouseholdKeys, Set<Integer> allowedStoreKeys) {}
+    private record Query88Lookup(IntSet[] timeBucketKeys, IntSet allowedHouseholdKeys, IntSet allowedStoreKeys) {}
 
-    private record Query96Lookup(Set<Integer> timeKeys, Set<Integer> householdKeys, Set<Integer> storeKeys) {}
+    private record Query96Lookup(IntSet timeKeys, IntSet householdKeys, IntSet storeKeys) {}
 
     private record CustomerDemographicsRecord(
             String gender,
@@ -821,7 +822,7 @@ public final class TrinoTpcdsParquetSupport
 
     private record CustomerIdentityRecord(String lastName, String firstName, String salutation, String preferredCustomerFlag) {}
 
-    private record ShippingBucketsLookup(Set<Integer> allowedShipDates, Map<Integer, String> firstNames, Map<Integer, String> secondNames, Map<Integer, String> thirdNames) {}
+    private record ShippingBucketsLookup(IntSet allowedShipDates, Map<Integer, String> firstNames, Map<Integer, String> secondNames, Map<Integer, String> thirdNames) {}
 
     private static final class IntegerDimensionFilterOperator
             implements Operator
@@ -833,11 +834,11 @@ public final class TrinoTpcdsParquetSupport
             private final PlanNodeId planNodeId;
             private final List<Type> inputTypes;
             private final int[] inputChannels;
-            private final Set<Integer>[] allowedValues;
+            private final IntSet[] allowedValues;
             private boolean closed;
 
             @SuppressWarnings("unchecked")
-            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, int[] inputChannels, Set<Integer>[] allowedValues)
+            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, int[] inputChannels, IntSet[] allowedValues)
             {
                 this.operatorId = operatorId;
                 this.planNodeId = planNodeId;
@@ -875,13 +876,13 @@ public final class TrinoTpcdsParquetSupport
         private final io.trino.operator.OperatorContext operatorContext;
         private final List<Type> inputTypes;
         private final int[] inputChannels;
-        private final Set<Integer>[] allowedValues;
+        private final IntSet[] allowedValues;
 
         private Page outputPage;
         private boolean finishing;
 
         @SuppressWarnings("unchecked")
-        private IntegerDimensionFilterOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, int[] inputChannels, Set<Integer>[] allowedValues)
+        private IntegerDimensionFilterOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, int[] inputChannels, IntSet[] allowedValues)
         {
             this.operatorContext = operatorContext;
             this.inputTypes = List.copyOf(inputTypes);

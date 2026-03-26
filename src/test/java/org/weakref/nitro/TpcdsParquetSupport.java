@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro;
 
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.ints.IntSet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -111,7 +113,7 @@ final class TpcdsParquetSupport
                 allocator,
                 factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
                 new int[] {0, 1, 2},
-                new Set[] {lookup.timeKeys(), lookup.householdKeys(), lookup.storeKeys()});
+                new IntSet[] {lookup.timeKeys(), lookup.householdKeys(), lookup.storeKeys()});
         return new AggregationOperator(allocator, List.of(new CountAll()), filtered);
     }
 
@@ -174,7 +176,7 @@ final class TpcdsParquetSupport
                     allocator,
                     factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
                     new int[] {0, 1, 2},
-                    new Set[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()});
+                    new IntSet[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()});
                     Operator aggregated = new AggregationOperator(allocator, List.of(new CountAll()), filtered)) {
                 counts[bucket] = singleLongResult(aggregated);
             }
@@ -235,7 +237,7 @@ final class TpcdsParquetSupport
                 utf8Map(scanRows(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"), 0, 1));
     }
 
-    private static Set<Integer> dateKeysForYearMonthRange(Allocator allocator, TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
+    private static IntSet dateKeysForYearMonthRange(Allocator allocator, TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
     {
         return integerKeySet(scanRows(allocator, tables, "date_dim", "d_date_sk", "d_year", "d_moy"), row ->
                 integerField(row, 1) == year &&
@@ -243,16 +245,16 @@ final class TpcdsParquetSupport
                         integerField(row, 2) <= maximumMonthOfYear);
     }
 
-    private static Set<Integer> dateKeysForDayOfMonthAndYears(Allocator allocator, TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
+    private static IntSet dateKeysForDayOfMonthAndYears(Allocator allocator, TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
     {
-        Set<Integer> allowedYears = Arrays.stream(years).boxed().collect(java.util.stream.Collectors.toSet());
+        IntSet allowedYears = new IntOpenHashSet(years);
         return integerKeySet(scanRows(allocator, tables, "date_dim", "d_date_sk", "d_dom", "d_year"), row ->
                 integerField(row, 1) >= minimumDayOfMonth &&
                         integerField(row, 1) <= maximumDayOfMonth &&
                         allowedYears.contains(integerField(row, 2)));
     }
 
-    private static Set<Integer> customerKeysForDates(Allocator allocator, TpcdsParquetTables tables, String tableName, String customerColumn, String dateColumn, Set<Integer> allowedDates)
+    private static IntSet customerKeysForDates(Allocator allocator, TpcdsParquetTables tables, String tableName, String customerColumn, String dateColumn, IntSet allowedDates)
     {
         return integerKeySet(scanRows(allocator, tables, tableName, customerColumn, dateColumn), row -> {
             Object customerKey = row.values()[0];
@@ -263,7 +265,7 @@ final class TpcdsParquetSupport
         });
     }
 
-    private static Set<Integer> addressKeysForCounties(Allocator allocator, TpcdsParquetTables tables, String... counties)
+    private static IntSet addressKeysForCounties(Allocator allocator, TpcdsParquetTables tables, String... counties)
     {
         Set<String> allowedCounties = Set.of(counties);
         return integerKeySet(scanRows(allocator, tables, "customer_address", "ca_address_sk", "ca_county"), row -> {
@@ -272,7 +274,7 @@ final class TpcdsParquetSupport
         });
     }
 
-    private static Set<Integer> storeKeysForCounties(Allocator allocator, TpcdsParquetTables tables, String... counties)
+    private static IntSet storeKeysForCounties(Allocator allocator, TpcdsParquetTables tables, String... counties)
     {
         Set<String> allowedCounties = Set.of(counties);
         return integerKeySet(scanRows(allocator, tables, "store", "s_store_sk", "s_county"), row -> {
@@ -281,7 +283,7 @@ final class TpcdsParquetSupport
         });
     }
 
-    private static Set<Integer> storeKeysByName(Allocator allocator, TpcdsParquetTables tables, String storeName)
+    private static IntSet storeKeysByName(Allocator allocator, TpcdsParquetTables tables, String storeName)
     {
         return integerKeySet(scanRows(allocator, tables, "store", "s_store_sk", "s_store_name"), row -> {
             String name = stringField(row, 1);
@@ -289,7 +291,7 @@ final class TpcdsParquetSupport
         });
     }
 
-    private static Set<Integer> householdKeysForQuery73(Allocator allocator, TpcdsParquetTables tables)
+    private static IntSet householdKeysForQuery73(Allocator allocator, TpcdsParquetTables tables)
     {
         return integerKeySet(scanRows(allocator, tables, "household_demographics", "hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"), row -> {
             String buyPotential = stringField(row, 1);
@@ -301,7 +303,7 @@ final class TpcdsParquetSupport
         });
     }
 
-    private static Set<Integer> householdKeysForQuery88(Allocator allocator, TpcdsParquetTables tables)
+    private static IntSet householdKeysForQuery88(Allocator allocator, TpcdsParquetTables tables)
     {
         return integerKeySet(scanRows(allocator, tables, "household_demographics", "hd_demo_sk", "hd_dep_count", "hd_vehicle_count"), row -> {
             int dependentCount = integerField(row, 1);
@@ -312,11 +314,11 @@ final class TpcdsParquetSupport
     }
 
     @SuppressWarnings("unchecked")
-    private static Set<Integer>[] timeBucketKeysForQuery88(Allocator allocator, TpcdsParquetTables tables)
+    private static IntSet[] timeBucketKeysForQuery88(Allocator allocator, TpcdsParquetTables tables)
     {
-        Set<Integer>[] buckets = new Set[8];
+        IntSet[] buckets = new IntSet[8];
         for (int bucket = 0; bucket < buckets.length; bucket++) {
-            buckets[bucket] = new HashSet<>();
+            buckets[bucket] = new IntOpenHashSet();
         }
         for (Row row : scanRows(allocator, tables, "time_dim", "t_time_sk", "t_hour", "t_minute")) {
             int hour = integerField(row, 1);
@@ -382,7 +384,7 @@ final class TpcdsParquetSupport
 
     private static Query10Lookup query10Lookup(Allocator allocator, TpcdsParquetTables tables)
     {
-        Set<Integer> eligibleDates = dateKeysForYearMonthRange(allocator, tables, 2002, 1, 4);
+        IntSet eligibleDates = dateKeysForYearMonthRange(allocator, tables, 2002, 1, 4);
         return new Query10Lookup(
                 addressKeysForCounties(allocator, tables, "Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"),
                 customerKeysForDates(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", eligibleDates),
@@ -460,7 +462,7 @@ final class TpcdsParquetSupport
                 path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
     }
 
-    private static Set<Integer> dateKeysForMonthSequence(Allocator allocator, TpcdsParquetTables tables, int minimumMonthSequence, int maximumMonthSequence)
+    private static IntSet dateKeysForMonthSequence(Allocator allocator, TpcdsParquetTables tables, int minimumMonthSequence, int maximumMonthSequence)
     {
         return integerKeySet(scanRows(allocator, tables, "date_dim", "d_date_sk", "d_month_seq"), row -> {
             int monthSequence = integerField(row, 1);
@@ -468,9 +470,9 @@ final class TpcdsParquetSupport
         });
     }
 
-    private static Set<Integer> integerKeySet(List<Row> rows, java.util.function.Predicate<Row> predicate)
+    private static IntSet integerKeySet(List<Row> rows, java.util.function.Predicate<Row> predicate)
     {
-        Set<Integer> result = new HashSet<>();
+        IntSet result = new IntOpenHashSet();
         for (Row row : rows) {
             if (predicate.test(row)) {
                 result.add(integerField(row, 0));
@@ -704,21 +706,21 @@ final class TpcdsParquetSupport
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate) {}
 
     private record Query10Lookup(
-            Set<Integer> eligibleAddressKeys,
-            Set<Integer> storeCustomerKeys,
-            Set<Integer> webCustomerKeys,
-            Set<Integer> catalogCustomerKeys,
+            IntSet eligibleAddressKeys,
+            IntSet storeCustomerKeys,
+            IntSet webCustomerKeys,
+            IntSet catalogCustomerKeys,
             Map<Integer, CustomerDemographicsRecord> demographics) {}
 
     private record Query73Lookup(
-            Set<Integer> allowedDateKeys,
-            Set<Integer> allowedStoreKeys,
-            Set<Integer> allowedHouseholdKeys,
+            IntSet allowedDateKeys,
+            IntSet allowedStoreKeys,
+            IntSet allowedHouseholdKeys,
             Map<Integer, CustomerIdentityRecord> customers) {}
 
-    private record Query88Lookup(Set<Integer>[] timeBucketKeys, Set<Integer> allowedHouseholdKeys, Set<Integer> allowedStoreKeys) {}
+    private record Query88Lookup(IntSet[] timeBucketKeys, IntSet allowedHouseholdKeys, IntSet allowedStoreKeys) {}
 
-    private record Query96Lookup(Set<Integer> timeKeys, Set<Integer> householdKeys, Set<Integer> storeKeys) {}
+    private record Query96Lookup(IntSet timeKeys, IntSet householdKeys, IntSet storeKeys) {}
 
     private record CustomerDemographicsRecord(
             byte[] gender,
@@ -732,7 +734,7 @@ final class TpcdsParquetSupport
 
     private record CustomerIdentityRecord(byte[] lastName, byte[] firstName, byte[] salutation, byte[] preferredCustomerFlag) {}
 
-    private record ShippingBucketsLookup(Set<Integer> allowedShipDates, Map<Integer, byte[]> firstNames, Map<Integer, byte[]> secondNames, Map<Integer, byte[]> thirdNames) {}
+    private record ShippingBucketsLookup(IntSet allowedShipDates, Map<Integer, byte[]> firstNames, Map<Integer, byte[]> secondNames, Map<Integer, byte[]> thirdNames) {}
 
     private static int integerField(Row row, int index)
     {
@@ -894,13 +896,13 @@ final class TpcdsParquetSupport
         private final Allocator allocator;
         private final Operator source;
         private final int[] inputChannels;
-        private final Set<Integer>[] allowedValues;
+        private final IntSet[] allowedValues;
 
         private int[] selectedPositions = new int[0];
         private Batch nextBatch;
 
         @SuppressWarnings("unchecked")
-        private IntegerDimensionFilterOperator(Allocator allocator, Operator source, int[] inputChannels, Set<Integer>[] allowedValues)
+        private IntegerDimensionFilterOperator(Allocator allocator, Operator source, int[] inputChannels, IntSet[] allowedValues)
         {
             this.allocator = allocator;
             this.source = source;
