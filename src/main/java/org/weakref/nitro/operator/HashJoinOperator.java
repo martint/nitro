@@ -113,11 +113,6 @@ public class HashJoinOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = resultOutput(outputIndex);
         }
-        if (!outer.supportsRetainedBatches() && currentOutputCount > 0) {
-            for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-                materializeOutput(outputIndex);
-            }
-        }
         return new Batch(
                 batchMask,
                 takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
