@@ -44,30 +44,65 @@ public final class LessThanI64
     }
 
     @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for lt");
-        if (!requestedStreams.contains(Stream.VALUES)) {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
+        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
+
+        Streams result = Streams.empty();
+        BooleanVector outputNulls = null;
+        if (requestedStreams.contains(Stream.NULLS)) {
+            outputNulls = context.allocator().allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    existingNulls,
+                    BooleanVector.class,
+                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
+                    BooleanVector::new);
+            applyNulls(leftNulls, rightNulls, mask, outputNulls);
+            result = result.with(Stream.NULLS, outputNulls);
+        }
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return result;
+        }
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
             BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
-            return Streams.of(Stream.VALUES, I64BinaryDispatch.rleRleBoolean(leftRle, rightRle, values, LessThanI64::apply));
+            return result.with(Stream.VALUES, I64BinaryDispatch.rleRleBoolean(leftRle, rightRle, values, LessThanI64::apply));
         }
 
-        BooleanVector result = context.allocator().allocateOrGrow(
+        BooleanVector values = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
-        I64BinaryDispatch.applyBoolean(left, right, mask, result, LessThanI64::apply);
-        return Streams.of(Stream.VALUES, result);
+        I64BinaryDispatch.applyBoolean(left, right, mask, values, LessThanI64::apply);
+        return result.with(Stream.VALUES, values);
+    }
+
+    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    {
+        boolean[] nulls = outputNulls.values();
+        java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
+        for (int position : mask) {
+            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
+                    (rightNulls != null && rightNulls.values()[position]);
+        }
     }
 
     @Override

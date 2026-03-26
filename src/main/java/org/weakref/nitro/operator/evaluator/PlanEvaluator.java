@@ -167,7 +167,7 @@ public final class PlanEvaluator
         Vector inputVector = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), reference.stream()), mask);
         checkArgument(inputVector != null || reference.stream() != Stream.VALUES, "Missing VALUES stream for input %s", reference);
         Streams result = inputVector == null ? Streams.empty() : Streams.of(reference.stream(), inputVector);
-        return completeRequestedStreams(requestedStreams(reference.stream()), result, mask);
+        return completeRequestedStreams(computeRequestedStreams(reference), result, mask);
     }
 
     private Streams evaluateVariable(Reference reference, Variable variable, Mask mask, Streams output)
@@ -630,8 +630,12 @@ public final class PlanEvaluator
     {
         Map<Producer, java.util.EnumSet<Stream>> projected = new HashMap<>();
         for (Reference output : outputs) {
-            projected.computeIfAbsent(output.producer(), _ -> java.util.EnumSet.noneOf(Stream.class))
-                    .add(output.stream());
+            java.util.EnumSet<Stream> streams = projected.computeIfAbsent(output.producer(), _ -> java.util.EnumSet.noneOf(Stream.class));
+            streams.add(output.stream());
+            if (output.stream() == Stream.VALUES) {
+                streams.add(Stream.NULLS);
+                streams.add(Stream.ERRORS);
+            }
         }
         return projected.entrySet().stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Set.copyOf(entry.getValue())));

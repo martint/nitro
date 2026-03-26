@@ -22,6 +22,7 @@ import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
 import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
+import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
@@ -44,6 +45,7 @@ import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
+import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -65,6 +67,7 @@ public final class TestPrimitiveFunctions
                 ArrayMinI64.class,
                 ArraySumI64.class,
                 Cardinality.class,
+                ConcatUtf8.class,
                 ContainsUtf8.class,
                 ExtractHostUtf8.class,
                 ElementAtI64Utf8.class,
@@ -90,7 +93,8 @@ public final class TestPrimitiveFunctions
                 AndBoolean.class,
                 OrBoolean.class,
                 RegexpReplaceUtf8.class,
-                StartsWithUtf8.class)) {
+                StartsWithUtf8.class,
+                SubstringUtf8.class)) {
             primitiveRegistry.register(scalarRegistry.register(functionClass));
         }
         return primitiveRegistry;

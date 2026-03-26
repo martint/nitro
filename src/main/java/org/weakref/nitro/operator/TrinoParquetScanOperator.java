@@ -640,13 +640,16 @@ public final class TrinoParquetScanOperator
         int totalBytes = selectedBinaryBytes(block, mask);
         BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
         values.addTraits(column.binaryTraits());
+        int[] currentOffset = {0};
         forEachSelected(mask, position -> {
+            values.offsets()[position] = currentOffset[0];
             if (block.isNull(position)) {
                 values.setNull(position);
                 return;
             }
             Slice slice = readSlice(block, position);
             values.setBytes(position, slice.byteArray(), slice.byteArrayOffset(), slice.length());
+            currentOffset[0] = values.endOffset(position);
         });
         return values;
     }

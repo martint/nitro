@@ -238,6 +238,171 @@ public class TestOperators
     }
 
     @Test
+    void testIfI64TreatsNullConditionAsFalseBranch()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable selected = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        selected,
+                        new Call("if_i64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        3,
+                        List.of(
+                                row(true, 11L, 21L),
+                                row((Object) null, 12L, 22L),
+                                row(false, 13L, 23L))))) {
+            try (Batch batch = operator.next()) {
+                assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(11L, 22L, 23L);
+            }
+        }
+    }
+
+    @Test
+    void testIfUtf8TreatsNullConditionAsFalseBranch()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable selected = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        selected,
+                        new Call("if_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        3,
+                        List.of(
+                                row(true, "left", "right"),
+                                row((Object) null, "wrong", "fallback"),
+                                row(false, "wrong-again", "false-branch"))))) {
+            try (Batch batch = operator.next()) {
+                BinaryVector values = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+                assertThat(values.utf8Value(0)).isEqualTo("left");
+                assertThat(values.utf8Value(1)).isEqualTo("fallback");
+                assertThat(values.utf8Value(2)).isEqualTo("false-branch");
+            }
+        }
+    }
+
+    @Test
+    void testLessThanPropagatesNulls()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable result = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("lt", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES), new Reference(result, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(10L, 11L),
+                                row(20L, (Object) null),
+                                row(30L, 2L))))) {
+            try (Batch batch = operator.next()) {
+                assertThat(((BooleanVector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(true, false, false);
+                assertThat(((BooleanVector) batch.output(1).borrow(Stream.NULLS)).values()).containsExactly(false, true, false);
+            }
+        }
+    }
+
+    @Test
+    void testAndPropagatesNullsUnlessFalseBranchDecidesResult()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable result = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("and", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES), new Reference(result, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(true, true),
+                                row(true, (Object) null),
+                                row(false, (Object) null),
+                                row((Object) null, false))))) {
+            try (Batch batch = operator.next()) {
+                assertThat(((BooleanVector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(true, false, false, false);
+                assertThat(((BooleanVector) batch.output(1).borrow(Stream.NULLS)).values()).containsExactly(false, true, false, false);
+            }
+        }
+    }
+
+    @Test
+    void testOrPropagatesNullsUnlessTrueBranchDecidesResult()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable result = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("or", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES), new Reference(result, Stream.NULLS)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(false, false),
+                                row(false, (Object) null),
+                                row(true, (Object) null),
+                                row((Object) null, true))))) {
+            try (Batch batch = operator.next()) {
+                assertThat(((BooleanVector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(false, false, true, true);
+                assertThat(((BooleanVector) batch.output(1).borrow(Stream.NULLS)).values()).containsExactly(false, true, false, false);
+            }
+        }
+    }
+
+    @Test
     void testConstantTableOperatorSupportsTypedScalarColumns()
     {
         assertThat(operator(new ConstantTableOperator(
@@ -809,6 +974,49 @@ public class TestOperators
                                 row(30L))))) {
             Batch batch = operator.next();
             BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            assertThat(nulls.values()).containsExactly(false, true, false);
+        }
+    }
+
+    @Test
+    void testProjectOperatorExposesCompanionNullsForProjectedValues()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("nullable_copy", (inputs, mask, requestedStreams, output, context) -> {
+            long[] inputValues = ((org.weakref.nitro.data.I64Vector) inputs.getFirst().values()).values();
+            Streams result = Streams.empty();
+            if (requestedStreams.contains(Stream.VALUES)) {
+                result = result.with(Stream.VALUES, new org.weakref.nitro.data.I64Vector(inputValues.clone()));
+            }
+            if (requestedStreams.contains(Stream.NULLS)) {
+                result = result.with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false}));
+            }
+            return result;
+        });
+
+        Variable result = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("nullable_copy", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row(10L),
+                                row(20L),
+                                row(30L))))) {
+            Batch batch = operator.next();
+            assertThat(((org.weakref.nitro.data.I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(10L, 20L, 30L);
+            BooleanVector nulls = (BooleanVector) batch.output(0).borrowOrNull(Stream.NULLS);
+            assertThat(nulls).isNotNull();
             assertThat(nulls.values()).containsExactly(false, true, false);
         }
     }

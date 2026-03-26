@@ -119,3 +119,27 @@ push optimization work into harness code instead of core execution paths.
 If a harness looks like it needs a bespoke operator, treat that as a design
 warning and look for a more general operator-assembly or primitive-function
 solution first.
+
+## Do not use host-side benchmark side channels
+
+Benchmark harnesses should not precompute query subresults in Java collections
+and then inject those results back into the operator graph.
+
+Prefer:
+
+- lowerings that keep subqueries as operator-side relations
+- standard join, semi-join, grouping, and projection machinery
+- Trino and Nitro harnesses that use the same lowered topology
+
+Avoid:
+
+- collecting membership sets such as `Set<String>` in harness code and turning
+  them into `value IN (...)` predicates
+- building query results through host-side `Map` or `Set` lookups when the
+  same logic should be expressed as join or semi-join operators
+- lowering a query differently on Nitro and Trino just because one side is
+  easier to wire through Java helpers
+
+Constant tables are still fine for small literal relations that are part of the
+lowered query itself. The problem is host-side extraction of dynamic query
+subresults, not literal build-side data.

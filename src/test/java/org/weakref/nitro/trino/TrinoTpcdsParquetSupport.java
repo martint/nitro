@@ -26,10 +26,13 @@ import io.trino.operator.FilterAndProjectOperator;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import io.trino.operator.HashArraySizeSupplier;
+import io.trino.operator.HashSemiJoinOperator;
 import io.trino.operator.JoinOperatorType;
 import io.trino.operator.Operator;
 import io.trino.operator.OperatorFactory;
 import io.trino.operator.PagesIndex;
+import io.trino.operator.SetBuilderOperator.SetBuilderOperatorFactory;
+import io.trino.operator.SetBuilderOperator.SetSupplier;
 import io.trino.operator.TopNOperator;
 import io.trino.operator.ValuesOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
@@ -43,6 +46,7 @@ import io.trino.spi.connector.SortOrder;
 import io.trino.spi.function.OperatorType;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeOperators;
+import io.trino.sql.gen.JoinCompiler;
 import io.trino.sql.gen.OrderingCompiler;
 import io.trino.sql.planner.plan.AggregationNode.Step;
 import io.trino.sql.planner.plan.PlanNodeId;
@@ -59,10 +63,8 @@ import org.weakref.nitro.tpcds.TpcdsParquetTables;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -79,12 +81,12 @@ import static io.trino.spi.connector.SortOrder.ASC_NULLS_FIRST;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_LAST;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
-import static java.lang.Math.toIntExact;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 
@@ -96,6 +98,9 @@ public final class TrinoTpcdsParquetSupport
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", ImmutableList.of());
     private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
+    private static final TestingAggregationFunction BIGINT_AVG = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT));
+    private static final TestingAggregationFunction BIGINT_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(BIGINT));
+    private static final TestingAggregationFunction BIGINT_MAX = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT));
 
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("TrinoTpcdsParquetSupport"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoTpcdsParquetSupport-scheduled"));
@@ -106,193 +111,653 @@ public final class TrinoTpcdsParquetSupport
     public MaterializedResult query41(TpcdsParquetTables tables)
     {
         List<Path> itemFiles = tables.tableFiles("item");
-        // Keep the same lowering as the Nitro harness so the side-by-side benchmark compares
-        // equivalent operator assemblies, not different subquery rewrites.
-        Set<String> eligibleManufacturers = query41EligibleManufacturerSlices(itemFiles).stream()
-                .map(Slice::toStringUtf8)
-                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
-        return execute(
+        List<Type> probeTypes = List.of(VARCHAR, INTEGER, VARCHAR);
+        List<PipelineStep> steps = List.of(
+                factoryStep(filterAndProjectFactory(
+                        10,
+                        Optional.of(and(
+                                greaterThan(1, 737),
+                                lessThan(1, 779))),
+                        identityProjections(probeTypes),
+                        probeTypes)),
+                semiJoinStep(new SemiJoinSpec(
+                        11,
+                        probeTypes,
+                        2,
+                        Optional.empty(),
+                        itemFiles,
+                        List.of("i_manufact", "i_category", "i_color", "i_units", "i_size"),
+                        List.of(factoryStep(filterAndProjectFactory(
+                                11_1,
+                                Optional.of(query41EligibilityPredicate()),
+                                List.of(field(0, VARCHAR)),
+                                List.of(VARCHAR)))),
+                        List.of(VARCHAR),
+                        0)),
+                factoryStep(filterAndProjectFactory(
+                        12,
+                        Optional.of(field(3, BOOLEAN)),
+                        List.of(field(0, VARCHAR)),
+                        List.of(VARCHAR))),
+                factoryStep(hashAggregationFactory(13, List.of(VARCHAR), List.of(0))),
+                factoryStep(topNFactory(14, List.of(VARCHAR), 100, List.of(0), List.of(ASC_NULLS_LAST))));
+        return executePipeline(
                 itemFiles,
                 List.of("i_product_name", "i_manufact_id", "i_manufact"),
-                List.of(
-                        filterAndProjectFactory(
-                                10,
-                                Optional.of(and(
-                                        greaterThan(1, 737),
-                                        lessThan(1, 779),
-                                        varcharAnyOf(2, eligibleManufacturers))),
-                                identityProjections(List.of(VARCHAR, INTEGER, VARCHAR)),
-                                List.of(VARCHAR, INTEGER, VARCHAR)),
-                        hashAggregationFactory(12, List.of(VARCHAR), List.of(0)),
-                        topNFactory(13, List.of(VARCHAR), 100, List.of(0), List.of(ASC_NULLS_LAST))),
+                steps,
                 List.of(VARCHAR));
     }
 
     public MaterializedResult query62(TpcdsParquetTables tables)
     {
-        ShippingBucketsLookup lookup = query62Lookup(tables);
         List<String> columns = List.of("ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk", "ws_ship_mode_sk", "ws_web_site_sk");
         List<Type> factTypes = tableColumnTypes(tables, "web_sales", columns);
+        List<Type> afterShipDateTypes = concatTypes(factTypes, List.of(BIGINT));
+        List<Type> afterWarehouseTypes = concatTypes(afterShipDateTypes, List.of(BIGINT, VARCHAR));
+        List<Type> afterShipModeTypes = concatTypes(afterWarehouseTypes, List.of(BIGINT, VARCHAR));
+        List<Type> afterSiteTypes = concatTypes(afterShipModeTypes, List.of(BIGINT, VARCHAR));
         List<Type> projectedTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
-        return execute(
-                tables.tableFiles("web_sales"),
-                columns,
-                List.of(
-                        shippingBucketsProjectFactory(20, factTypes, lookup),
-                        hashAggregationFactory(
-                                21,
-                                List.of(VARCHAR, VARCHAR, VARCHAR),
-                                List.of(0, 1, 2),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(7), OptionalInt.empty())),
-                        topNFactory(22, projectedTypes, 100, List.of(0, 1, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST))),
-                projectedTypes);
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Page> allowedShipDates = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_month_seq"),
+                Optional.of(and(greaterThan(1, 1199, INTEGER), lessThan(1, 1212, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> warehouseNames = relationPages(
+                tables,
+                "warehouse",
+                List.of("w_warehouse_sk", "w_warehouse_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<Page> shipModeNames = relationPages(
+                tables,
+                "ship_mode",
+                List.of("sm_ship_mode_sk", "sm_type"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<Page> webSiteNames = relationPages(
+                tables,
+                "web_site",
+                List.of("web_site_sk", "web_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(hashJoinStep(new HashJoinSpec(20, factTypes, List.of(0), allowedShipDates, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(21, afterShipDateTypes, List.of(2), warehouseNames, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(22, afterWarehouseTypes, List.of(3), shipModeNames, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(23, afterShipModeTypes, List.of(4), webSiteNames, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(factoryStep(filterAndProjectFactory(24, Optional.empty(), shippingBucketProjections(7, 9, 11, 0, 1), projectedTypes)));
+        steps.add(factoryStep(hashAggregationFactory(
+                25,
+                List.of(VARCHAR, VARCHAR, VARCHAR),
+                List.of(0, 1, 2),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(7), OptionalInt.empty()))));
+        steps.add(factoryStep(topNFactory(26, outputTypes, 100, List.of(0, 1, 2), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))));
+        return executePipeline(tables.tableFiles("web_sales"), columns, steps, outputTypes);
     }
 
     public MaterializedResult query96(TpcdsParquetTables tables)
     {
-        Query96Lookup lookup = query96Lookup(tables);
         List<String> columns = List.of("ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", columns);
-        return execute(
+        List<Type> afterTimeTypes = concatTypes(factTypes, List.of(BIGINT));
+        List<Type> afterHouseholdTypes = concatTypes(afterTimeTypes, List.of(BIGINT));
+        List<Page> timeKeys = relationPages(
+                tables,
+                "time_dim",
+                List.of("t_time_sk", "t_hour", "t_minute"),
+                Optional.of(query96TimePredicate()),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> householdKeys = relationPages(
+                tables,
+                "household_demographics",
+                List.of("hd_demo_sk", "hd_dep_count"),
+                Optional.of(equal(1, 7, INTEGER)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> storeKeys = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_store_name"),
+                Optional.of(equal(1, VARCHAR, "ese")),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        return executePipeline(
                 tables.tableFiles("store_sales"),
                 columns,
                 List.of(
-                        integerDimensionFilterFactory(30, factTypes, new int[] {0, 1, 2}, new IntSet[] {lookup.timeKeys(), lookup.householdKeys(), lookup.storeKeys()}),
-                        aggregationFactory(31, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                        hashJoinStep(new HashJoinSpec(30, factTypes, List.of(0), timeKeys, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(31, afterTimeTypes, List.of(1), householdKeys, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(32, afterHouseholdTypes, List.of(2), storeKeys, List.of(BIGINT), List.of(0))),
+                        factoryStep(aggregationFactory(33, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))),
                 List.of(BIGINT));
     }
 
     public MaterializedResult query99(TpcdsParquetTables tables)
     {
-        ShippingBucketsLookup lookup = query99Lookup(tables);
         List<String> columns = List.of("cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk", "cs_ship_mode_sk", "cs_call_center_sk");
         List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", columns);
+        List<Type> afterShipDateTypes = concatTypes(factTypes, List.of(BIGINT));
+        List<Type> afterWarehouseTypes = concatTypes(afterShipDateTypes, List.of(BIGINT, VARCHAR));
+        List<Type> afterShipModeTypes = concatTypes(afterWarehouseTypes, List.of(BIGINT, VARCHAR));
+        List<Type> afterCallCenterTypes = concatTypes(afterShipModeTypes, List.of(BIGINT, VARCHAR));
         List<Type> projectedTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
-        return execute(
-                tables.tableFiles("catalog_sales"),
-                columns,
-                List.of(
-                        shippingBucketsProjectFactory(40, factTypes, lookup),
-                        hashAggregationFactory(
-                                41,
-                                List.of(VARCHAR, VARCHAR, VARCHAR),
-                                List.of(0, 1, 2),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty()),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(7), OptionalInt.empty())),
-                        topNFactory(42, projectedTypes, 100, List.of(0, 1, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST))),
-                projectedTypes);
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Page> allowedShipDates = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_month_seq"),
+                Optional.of(and(greaterThan(1, 1199, INTEGER), lessThan(1, 1212, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> warehouseNames = relationPages(
+                tables,
+                "warehouse",
+                List.of("w_warehouse_sk", "w_warehouse_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<Page> shipModeNames = relationPages(
+                tables,
+                "ship_mode",
+                List.of("sm_ship_mode_sk", "sm_type"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<Page> callCenterNames = relationPages(
+                tables,
+                "call_center",
+                List.of("cc_call_center_sk", "cc_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(hashJoinStep(new HashJoinSpec(40, factTypes, List.of(0), allowedShipDates, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(41, afterShipDateTypes, List.of(2), warehouseNames, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(42, afterWarehouseTypes, List.of(3), shipModeNames, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(43, afterShipModeTypes, List.of(4), callCenterNames, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(factoryStep(filterAndProjectFactory(44, Optional.empty(), shippingBucketProjections(7, 9, 11, 0, 1), projectedTypes)));
+        steps.add(factoryStep(hashAggregationFactory(
+                45,
+                List.of(VARCHAR, VARCHAR, VARCHAR),
+                List.of(0, 1, 2),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty()),
+                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(7), OptionalInt.empty()))));
+        steps.add(factoryStep(topNFactory(46, outputTypes, 100, List.of(0, 1, 2), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))));
+        return executePipeline(tables.tableFiles("catalog_sales"), columns, steps, outputTypes);
     }
 
     public MaterializedResult query10(TpcdsParquetTables tables)
     {
-        Query10Lookup lookup = query10Lookup(tables);
         List<Type> groupTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
-        return executeWithHashJoin(
-                tables.tableFiles("customer"),
-                List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"),
+        List<Type> baseTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> afterDemographicsTypes = concatTypes(baseTypes, List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT));
+        List<Page> eligibleAddressKeys = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_county"),
+                Optional.of(varcharAnyOf(1, Set.of("Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> storeCustomerKeys = customerKeyPagesForEligibleDates(
+                tables,
+                "store_sales",
+                "ss_customer_sk",
+                "ss_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                yearMonthRangePredicate(1, 2, 2002, 1, 4),
+                54_000);
+        List<Page> otherCustomerKeys = new ArrayList<>(customerKeyPagesForEligibleDates(
+                tables,
+                "web_sales",
+                "ws_bill_customer_sk",
+                "ws_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                yearMonthRangePredicate(1, 2, 2002, 1, 4),
+                54_010));
+        otherCustomerKeys.addAll(customerKeyPagesForEligibleDates(
+                tables,
+                "catalog_sales",
+                "cs_ship_customer_sk",
+                "cs_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                yearMonthRangePredicate(1, 2, 2002, 1, 4),
+                54_020));
+        OperatorFactory demographicsProjection = filterAndProjectFactory(
+                58,
+                Optional.empty(),
                 List.of(
-                        customerEligibilityProjectFactory(50, tableColumnTypes(tables, "customer", List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk")), lookup)),
-                new HashJoinSpec(
-                        51,
-                        List.of(BIGINT),
-                        List.of(0),
-                        customerDemographicsBuildPages(tables),
-                        List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT),
-                        List.of(0)),
+                        field(4, VARCHAR),
+                        field(5, VARCHAR),
+                        field(6, VARCHAR),
+                        field(7, BIGINT),
+                        field(8, VARCHAR),
+                        field(9, BIGINT),
+                        field(10, BIGINT),
+                        field(11, BIGINT)),
+                groupTypes);
+        OperatorFactory groupedCount = hashAggregationFactory(59, groupTypes, List.of(0, 1, 2, 3, 4, 5, 6, 7), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()));
+        OperatorFactory reorderedProjection = filterAndProjectFactory(
+                60,
+                Optional.empty(),
                 List.of(
-                        filterAndProjectFactory(
-                                52,
-                                Optional.empty(),
-                                List.of(
-                                        field(2, VARCHAR),
-                                        field(3, VARCHAR),
-                                        field(4, VARCHAR),
-                                        field(5, BIGINT),
-                                        field(6, VARCHAR),
-                                        field(7, BIGINT),
-                                        field(8, BIGINT),
-                                        field(9, BIGINT)),
-                                groupTypes),
-                        hashAggregationFactory(53, groupTypes, List.of(0, 1, 2, 3, 4, 5, 6, 7), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        filterAndProjectFactory(
-                                54,
-                                Optional.empty(),
-                                List.of(
-                                        field(0, VARCHAR),
-                                        field(1, VARCHAR),
-                                        field(2, VARCHAR),
-                                        field(8, BIGINT),
-                                        field(3, BIGINT),
-                                        field(8, BIGINT),
-                                        field(4, VARCHAR),
-                                        field(8, BIGINT),
-                                        field(5, BIGINT),
-                                        field(8, BIGINT),
-                                        field(6, BIGINT),
-                                        field(8, BIGINT),
-                                        field(7, BIGINT),
-                                        field(8, BIGINT)),
-                                outputTypes),
-                        topNFactory(55, outputTypes, 100, List.of(0, 1, 2, 4, 6, 8, 10, 12), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
+                        field(0, VARCHAR),
+                        field(1, VARCHAR),
+                        field(2, VARCHAR),
+                        field(8, BIGINT),
+                        field(3, BIGINT),
+                        field(8, BIGINT),
+                        field(4, VARCHAR),
+                        field(8, BIGINT),
+                        field(5, BIGINT),
+                        field(8, BIGINT),
+                        field(6, BIGINT),
+                        field(8, BIGINT),
+                        field(7, BIGINT),
+                        field(8, BIGINT)),
                 outputTypes);
+        OperatorFactory topN = topNFactory(61, outputTypes, 100, List.of(0, 1, 2, 4, 6, 8, 10, 12), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(50, baseTypes, 0, eligibleAddressKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(51, baseTypes, true)));
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(52, baseTypes, 1, storeCustomerKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(53, baseTypes, true)));
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(54, baseTypes, 1, otherCustomerKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(55, baseTypes, true)));
+        steps.add(hashJoinStep(new HashJoinSpec(56, baseTypes, List.of(2), customerDemographicsBuildPages(tables), List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT), List.of(0))));
+        steps.add(factoryStep(demographicsProjection));
+        steps.add(factoryStep(groupedCount));
+        steps.add(factoryStep(reorderedProjection));
+        steps.add(factoryStep(topN));
+        return executePipeline(tables.tableFiles("customer"), List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"), steps, outputTypes);
+    }
+
+    public MaterializedResult query35(TpcdsParquetTables tables)
+    {
+        List<Type> baseTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> afterAddressTypes = concatTypes(baseTypes, List.of(BIGINT, VARCHAR));
+        List<Type> groupTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(
+                VARCHAR, VARCHAR, VARCHAR, BIGINT,
+                BIGINT, BIGINT, BIGINT, BIGINT_AVG.getFinalType(),
+                BIGINT, BIGINT, BIGINT, BIGINT, BIGINT_AVG.getFinalType(),
+                BIGINT, BIGINT, BIGINT, BIGINT, BIGINT_AVG.getFinalType());
+        List<Page> storeCustomerKeys = customerKeyPagesForEligibleDates(
+                tables,
+                "store_sales",
+                "ss_customer_sk",
+                "ss_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_qoy"),
+                yearQuarterRangePredicate(1, 2, 2002, 1, 3),
+                35_100);
+        List<Page> otherCustomerKeys = new ArrayList<>(customerKeyPagesForEligibleDates(
+                tables,
+                "web_sales",
+                "ws_bill_customer_sk",
+                "ws_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_qoy"),
+                yearQuarterRangePredicate(1, 2, 2002, 1, 3),
+                35_110));
+        otherCustomerKeys.addAll(customerKeyPagesForEligibleDates(
+                tables,
+                "catalog_sales",
+                "cs_ship_customer_sk",
+                "cs_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_qoy"),
+                yearQuarterRangePredicate(1, 2, 2002, 1, 3),
+                35_120));
+        OperatorFactory demographicsProjection = filterAndProjectFactory(
+                35_8,
+                Optional.empty(),
+                List.of(
+                        field(4, VARCHAR),
+                        field(6, VARCHAR),
+                        field(7, VARCHAR),
+                        field(11, BIGINT),
+                        field(12, BIGINT),
+                        field(13, BIGINT)),
+                groupTypes);
+        OperatorFactory groupedAggregation = hashAggregationFactory(
+                35_9,
+                groupTypes,
+                List.of(0, 1, 2, 3, 4, 5),
+                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                BIGINT_MIN.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                BIGINT_MAX.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                BIGINT_MIN.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                BIGINT_MAX.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                BIGINT_MIN.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
+                BIGINT_MAX.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
+                BIGINT_AVG.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()));
+        OperatorFactory reorderedProjection = filterAndProjectFactory(
+                35_10,
+                Optional.empty(),
+                List.of(
+                        field(0, VARCHAR),
+                        field(1, VARCHAR),
+                        field(2, VARCHAR),
+                        field(3, BIGINT),
+                        field(6, BIGINT),
+                        field(7, BIGINT),
+                        field(8, BIGINT),
+                        field(9, BIGINT_AVG.getFinalType()),
+                        field(4, BIGINT),
+                        field(10, BIGINT),
+                        field(11, BIGINT),
+                        field(12, BIGINT),
+                        field(13, BIGINT_AVG.getFinalType()),
+                        field(5, BIGINT),
+                        field(14, BIGINT),
+                        field(15, BIGINT),
+                        field(16, BIGINT),
+                        field(17, BIGINT_AVG.getFinalType())),
+                outputTypes);
+        OperatorFactory topN = topNFactory(35_11, outputTypes, 100, List.of(0, 1, 2, 3, 8, 13), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(35_0, baseTypes, 1, storeCustomerKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(35_1, baseTypes, true)));
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(35_2, baseTypes, 1, otherCustomerKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(35_3, baseTypes, true)));
+        steps.add(hashJoinStep(new HashJoinSpec(35_4, baseTypes, List.of(0), customerAddressStateBuildPages(tables), List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(35_5, afterAddressTypes, List.of(2), customerDemographicsBuildPages(tables), List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT), List.of(0))));
+        steps.add(factoryStep(demographicsProjection));
+        steps.add(factoryStep(groupedAggregation));
+        steps.add(factoryStep(reorderedProjection));
+        steps.add(factoryStep(topN));
+        return executePipeline(tables.tableFiles("customer"), List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"), steps, outputTypes);
+    }
+
+    public MaterializedResult query69(TpcdsParquetTables tables)
+    {
+        List<Type> baseTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> groupTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR);
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT);
+        List<Page> eligibleAddressKeys = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_state"),
+                Optional.of(varcharAnyOf(1, Set.of("KY", "GA", "NM"))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> storeCustomerKeys = customerKeyPagesForEligibleDates(
+                tables,
+                "store_sales",
+                "ss_customer_sk",
+                "ss_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                yearMonthRangePredicate(1, 2, 2001, 4, 6),
+                69_100);
+        List<Page> excludedCustomerKeys = new ArrayList<>(customerKeyPagesForEligibleDates(
+                tables,
+                "web_sales",
+                "ws_bill_customer_sk",
+                "ws_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                yearMonthRangePredicate(1, 2, 2001, 4, 6),
+                69_110));
+        excludedCustomerKeys.addAll(customerKeyPagesForEligibleDates(
+                tables,
+                "catalog_sales",
+                "cs_ship_customer_sk",
+                "cs_sold_date_sk",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                yearMonthRangePredicate(1, 2, 2001, 4, 6),
+                69_120));
+        OperatorFactory demographicsProjection = filterAndProjectFactory(
+                69_10,
+                Optional.empty(),
+                List.of(
+                        field(4, VARCHAR),
+                        field(5, VARCHAR),
+                        field(6, VARCHAR),
+                        field(7, BIGINT),
+                        field(8, VARCHAR)),
+                groupTypes);
+        OperatorFactory groupedCount = hashAggregationFactory(69_11, groupTypes, List.of(0, 1, 2, 3, 4), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()));
+        OperatorFactory reorderedProjection = filterAndProjectFactory(
+                69_12,
+                Optional.empty(),
+                List.of(
+                        field(0, VARCHAR),
+                        field(1, VARCHAR),
+                        field(2, VARCHAR),
+                        field(5, BIGINT),
+                        field(3, BIGINT),
+                        field(5, BIGINT),
+                        field(4, VARCHAR),
+                        field(5, BIGINT)),
+                outputTypes);
+        OperatorFactory topN = topNFactory(69_13, outputTypes, 100, List.of(0, 1, 2, 4, 6), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(69_0, baseTypes, 0, eligibleAddressKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(69_1, baseTypes, true)));
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(69_2, baseTypes, 1, storeCustomerKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(69_3, baseTypes, true)));
+        steps.add(semiJoinPagesStep(new SemiJoinPagesSpec(69_4, baseTypes, 1, excludedCustomerKeys, List.of(BIGINT), 0)));
+        steps.add(factoryStep(semiJoinFilterProjectFactory(69_5, baseTypes, false)));
+        steps.add(hashJoinStep(new HashJoinSpec(69_8, baseTypes, List.of(2), customerDemographicsBuildPages(tables), List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT), List.of(0))));
+        steps.add(factoryStep(demographicsProjection));
+        steps.add(factoryStep(groupedCount));
+        steps.add(factoryStep(reorderedProjection));
+        steps.add(factoryStep(topN));
+        return executePipeline(tables.tableFiles("customer"), List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"), steps, outputTypes);
     }
 
     public MaterializedResult query73(TpcdsParquetTables tables)
     {
-        Query73Lookup lookup = query73Lookup(tables);
-        List<Type> inputTypes = tableColumnTypes(tables, "store_sales", List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"));
         List<Type> projectedTypes = List.of(BIGINT, BIGINT);
         List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT);
-        return executeWithHashJoin(
-                tables.tableFiles("store_sales"),
-                List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"),
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"));
+        List<Type> afterDateTypes = concatTypes(factTypes, List.of(BIGINT));
+        List<Type> afterStoreTypes = concatTypes(afterDateTypes, List.of(BIGINT));
+        List<Type> afterHouseholdTypes = concatTypes(afterStoreTypes, List.of(BIGINT));
+        List<Page> allowedDateKeys = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_dom", "d_year"),
+                Optional.of(dayOfMonthAndYearsPredicate(1, 2, 1, 2, 1999, 2000, 2001)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> allowedStoreKeys = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_county"),
+                Optional.of(varcharAnyOf(1, Set.of("Williamson County", "Franklin Parish", "Bronx County", "Orange County"))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> allowedHouseholdKeys = relationPages(
+                tables,
+                "household_demographics",
+                List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"),
+                Optional.of(query73HouseholdPredicate()),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> customerIdentityPages = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag"),
+                Optional.empty(),
+                identityProjections(List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR)),
+                List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR));
+        OperatorFactory groupedCount = hashAggregationFactory(63, projectedTypes, List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()));
+        OperatorFactory countFilter = filterAndProjectFactory(64, Optional.of(and(greaterThan(2, 0, BIGINT), lessThan(2, 6, BIGINT))), identityProjections(List.of(BIGINT, BIGINT, BIGINT)), List.of(BIGINT, BIGINT, BIGINT));
+        OperatorFactory finalProjection = filterAndProjectFactory(
+                66,
+                Optional.empty(),
                 List.of(
-                        ticketCustomerFilterProjectFactory(60, inputTypes, lookup),
-                        hashAggregationFactory(61, projectedTypes, List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        filterAndProjectFactory(62, Optional.of(and(greaterThan(2, 0, BIGINT), lessThan(2, 6, BIGINT))), identityProjections(List.of(BIGINT, BIGINT, BIGINT)), List.of(BIGINT, BIGINT, BIGINT))),
-                new HashJoinSpec(
-                        63,
-                        List.of(BIGINT, BIGINT, BIGINT),
-                        List.of(1),
-                        customerIdentityBuildPages(tables),
-                        List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR),
-                        List.of(0)),
-                List.of(
-                        filterAndProjectFactory(
-                                64,
-                                Optional.empty(),
-                                List.of(
-                                        field(4, VARCHAR),
-                                        field(5, VARCHAR),
-                                        field(6, VARCHAR),
-                                        field(7, VARCHAR),
-                                        field(0, BIGINT),
-                                        field(2, BIGINT)),
-                                outputTypes),
-                        topNFactory(65, outputTypes, 100, List.of(5, 0, 4), List.of(io.trino.spi.connector.SortOrder.DESC_NULLS_LAST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
+                        field(4, VARCHAR),
+                        field(5, VARCHAR),
+                        field(6, VARCHAR),
+                        field(7, VARCHAR),
+                        field(0, BIGINT),
+                        field(2, BIGINT)),
                 outputTypes);
+        OperatorFactory topN = topNFactory(67, outputTypes, 100, List.of(5, 0, 4), List.of(io.trino.spi.connector.SortOrder.DESC_NULLS_LAST, ASC_NULLS_FIRST, ASC_NULLS_FIRST));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(hashJoinStep(new HashJoinSpec(60, factTypes, List.of(2), allowedDateKeys, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(61, afterDateTypes, List.of(3), allowedStoreKeys, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(62, afterStoreTypes, List.of(4), allowedHouseholdKeys, List.of(BIGINT), List.of(0))));
+        steps.add(factoryStep(groupedCount));
+        steps.add(factoryStep(countFilter));
+        steps.add(hashJoinStep(new HashJoinSpec(65, List.of(BIGINT, BIGINT, BIGINT), List.of(1), customerIdentityPages, List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR), List.of(0))));
+        steps.add(factoryStep(finalProjection));
+        steps.add(factoryStep(topN));
+        return executePipeline(tables.tableFiles("store_sales"), List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"), steps, outputTypes);
+    }
+
+    public MaterializedResult query84(TpcdsParquetTables tables)
+    {
+        List<Type> customerTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT);
+        List<Type> afterAddressTypes = concatTypes(customerTypes, List.of(BIGINT));
+        List<Type> afterHouseholdTypes = concatTypes(afterAddressTypes, List.of(BIGINT));
+        List<Type> afterCustomerDemographicsTypes = concatTypes(afterHouseholdTypes, List.of(BIGINT));
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR);
+        List<Page> eligibleAddressKeys = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_city"),
+                Optional.of(equal(1, VARCHAR, "Edgewood")),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> eligibleIncomeBandKeys = relationPages(
+                tables,
+                "income_band",
+                List.of("ib_income_band_sk", "ib_lower_bound", "ib_upper_bound"),
+                Optional.of(and(greaterThan(1, 38127, INTEGER), lessThan(2, 88129, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> eligibleHouseholdKeys = executePipelinePages(
+                tables.tableFiles("household_demographics"),
+                List.of("hd_demo_sk", "hd_income_band_sk"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(84_10, List.of(BIGINT, BIGINT), List.of(1), eligibleIncomeBandKeys, List.of(BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(84_11, Optional.of(greaterThan(field(0, BIGINT), constant(0L, BIGINT), BIGINT)), List.of(field(0, BIGINT)), List.of(BIGINT)))));
+        List<Page> customerDemographicKeys = relationPages(
+                tables,
+                "customer_demographics",
+                List.of("cd_demo_sk"),
+                Optional.of(greaterThan(field(0, BIGINT), constant(0L, BIGINT), BIGINT)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> storeReturnCustomerDemographics = relationPages(
+                tables,
+                "store_returns",
+                List.of("sr_cdemo_sk"),
+                Optional.of(greaterThan(field(0, BIGINT), constant(0L, BIGINT), BIGINT)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(hashJoinStep(new HashJoinSpec(84_0, customerTypes, List.of(3), eligibleAddressKeys, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(84_1, afterAddressTypes, List.of(5), eligibleHouseholdKeys, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(84_2, afterHouseholdTypes, List.of(4), customerDemographicKeys, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(84_3, afterCustomerDemographicsTypes, List.of(4), storeReturnCustomerDemographics, List.of(BIGINT), List.of(0))));
+        steps.add(factoryStep(filterAndProjectFactory(
+                84_4,
+                Optional.empty(),
+                List.of(
+                        field(0, VARCHAR),
+                        concat(concat(field(1, VARCHAR), constant(Slices.utf8Slice(", "), VARCHAR)), field(2, VARCHAR))),
+                outputTypes)));
+        steps.add(factoryStep(topNFactory(84_5, outputTypes, 100, List.of(0), List.of(ASC_NULLS_LAST))));
+        return executePipeline(
+                tables.tableFiles("customer"),
+                List.of("c_customer_id", "c_last_name", "c_first_name", "c_current_addr_sk", "c_current_cdemo_sk", "c_current_hdemo_sk"),
+                steps,
+                outputTypes);
+    }
+
+    public MaterializedResult query90(TpcdsParquetTables tables)
+    {
+        List<Page> householdKeys = relationPages(
+                tables,
+                "household_demographics",
+                List.of("hd_demo_sk", "hd_dep_count"),
+                Optional.of(equal(1, 6, INTEGER)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> pageKeys = relationPages(
+                tables,
+                "web_page",
+                List.of("wp_web_page_sk", "wp_char_count"),
+                Optional.of(and(greaterThan(1, 4999, INTEGER), lessThan(1, 5201, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> morningTimeKeys = relationPages(
+                tables,
+                "time_dim",
+                List.of("t_time_sk", "t_hour"),
+                Optional.of(and(greaterThan(1, 7, INTEGER), lessThan(1, 10, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> eveningTimeKeys = relationPages(
+                tables,
+                "time_dim",
+                List.of("t_time_sk", "t_hour"),
+                Optional.of(and(greaterThan(1, 18, INTEGER), lessThan(1, 21, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        double ratio = (double) query90Count(tables, morningTimeKeys, householdKeys, pageKeys) /
+                query90Count(tables, eveningTimeKeys, householdKeys, pageKeys);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(TestingSession.testSessionBuilder().build(), List.of(DOUBLE));
+        result.row(ratio);
+        return result.build();
     }
 
     public MaterializedResult query88(TpcdsParquetTables tables)
     {
-        Query88Lookup lookup = query88Lookup(tables);
         long[] counts = new long[8];
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"));
+        List<Type> afterTimeTypes = concatTypes(factTypes, List.of(BIGINT));
+        List<Type> afterHouseholdTypes = concatTypes(afterTimeTypes, List.of(BIGINT));
+        List<Page> allowedHouseholdKeys = relationPages(
+                tables,
+                "household_demographics",
+                List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"),
+                Optional.of(query88HouseholdPredicate()),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> allowedStoreKeys = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_store_name"),
+                Optional.of(equal(1, VARCHAR, "ese")),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
         for (int bucket = 0; bucket < counts.length; bucket++) {
-            counts[bucket] = singleLongResult(execute(
+            List<Page> timeBucketKeys = relationPages(
+                    tables,
+                    "time_dim",
+                    List.of("t_time_sk", "t_hour", "t_minute"),
+                    Optional.of(query88TimeBucketPredicate(bucket)),
+                    List.of(field(0, BIGINT)),
+                    List.of(BIGINT));
+            List<PipelineStep> steps = List.of(
+                    hashJoinStep(new HashJoinSpec(70 + (bucket * 4), factTypes, List.of(0), timeBucketKeys, List.of(BIGINT), List.of(0))),
+                    hashJoinStep(new HashJoinSpec(71 + (bucket * 4), afterTimeTypes, List.of(1), allowedHouseholdKeys, List.of(BIGINT), List.of(0))),
+                    hashJoinStep(new HashJoinSpec(72 + (bucket * 4), afterHouseholdTypes, List.of(2), allowedStoreKeys, List.of(BIGINT), List.of(0))),
+                    factoryStep(aggregationFactory(73 + (bucket * 4), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))));
+            counts[bucket] = singleLongResult(executePipeline(
                     tables.tableFiles("store_sales"),
                     List.of("ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
-                    List.of(
-                            integerDimensionFilterFactory(70 + (bucket * 2), factTypes, new int[] {0, 1, 2}, new IntSet[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()}),
-                            aggregationFactory(71 + (bucket * 2), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                    steps,
                     List.of(BIGINT)));
         }
 
@@ -306,62 +771,6 @@ public final class TrinoTpcdsParquetSupport
         return query41EligibleManufacturerSlices(tables.tableFiles("item")).stream()
                 .map(Slice::toStringUtf8)
                 .collect(java.util.stream.Collectors.toCollection(HashSet::new));
-    }
-
-    private ShippingBucketsLookup query62Lookup(TpcdsParquetTables tables)
-    {
-        return new ShippingBucketsLookup(
-                dateKeysForMonthSequence(tables, 1200, 1211),
-                prefixedUtf8Map(scanTable(tables, "warehouse", List.of("w_warehouse_sk", "w_warehouse_name"), tableColumnTypes(tables, "warehouse", List.of("w_warehouse_sk", "w_warehouse_name"))), 0, 1, 20),
-                utf8Map(scanTable(tables, "ship_mode", List.of("sm_ship_mode_sk", "sm_type"), tableColumnTypes(tables, "ship_mode", List.of("sm_ship_mode_sk", "sm_type"))), 0, 1),
-                utf8Map(scanTable(tables, "web_site", List.of("web_site_sk", "web_name"), tableColumnTypes(tables, "web_site", List.of("web_site_sk", "web_name"))), 0, 1));
-    }
-
-    private Query96Lookup query96Lookup(TpcdsParquetTables tables)
-    {
-        return new Query96Lookup(
-                integerKeySet(scanTable(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute"), tableColumnTypes(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute"))),
-                        row -> ((Number) row.getField(1)).intValue() == 20 && ((Number) row.getField(2)).intValue() >= 30),
-                integerKeySet(scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count"))),
-                        row -> ((Number) row.getField(1)).intValue() == 7),
-                integerKeySet(scanTable(tables, "store", List.of("s_store_sk", "s_store_name"), tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_name"))),
-                        row -> "ese".equals(row.getField(1))));
-    }
-
-    private ShippingBucketsLookup query99Lookup(TpcdsParquetTables tables)
-    {
-        return new ShippingBucketsLookup(
-                dateKeysForMonthSequence(tables, 1200, 1211),
-                prefixedUtf8Map(scanTable(tables, "warehouse", List.of("w_warehouse_sk", "w_warehouse_name"), tableColumnTypes(tables, "warehouse", List.of("w_warehouse_sk", "w_warehouse_name"))), 0, 1, 20),
-                utf8Map(scanTable(tables, "ship_mode", List.of("sm_ship_mode_sk", "sm_type"), tableColumnTypes(tables, "ship_mode", List.of("sm_ship_mode_sk", "sm_type"))), 0, 1),
-                utf8Map(scanTable(tables, "call_center", List.of("cc_call_center_sk", "cc_name"), tableColumnTypes(tables, "call_center", List.of("cc_call_center_sk", "cc_name"))), 0, 1));
-    }
-
-    private Query10Lookup query10Lookup(TpcdsParquetTables tables)
-    {
-        IntSet eligibleDates = dateKeysForYearMonthRange(tables, 2002, 1, 4);
-        return new Query10Lookup(
-                addressKeysForCounties(tables, "Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"),
-                customerKeysForDates(tables, "store_sales", List.of("ss_customer_sk", "ss_sold_date_sk"), eligibleDates),
-                customerKeysForDates(tables, "web_sales", List.of("ws_bill_customer_sk", "ws_sold_date_sk"), eligibleDates),
-                customerKeysForDates(tables, "catalog_sales", List.of("cs_ship_customer_sk", "cs_sold_date_sk"), eligibleDates));
-    }
-
-    private Query73Lookup query73Lookup(TpcdsParquetTables tables)
-    {
-        return new Query73Lookup(
-                dateKeysForDayOfMonthAndYears(tables, 1, 2, 1999, 2000, 2001),
-                storeKeysForCounties(tables, "Williamson County", "Franklin Parish", "Bronx County", "Orange County"),
-                householdKeysForQuery73(tables));
-    }
-
-    @SuppressWarnings("unchecked")
-    private Query88Lookup query88Lookup(TpcdsParquetTables tables)
-    {
-        return new Query88Lookup(
-                timeBucketKeysForQuery88(tables),
-                householdKeysForQuery88(tables),
-                storeKeysByName(tables, "ese"));
     }
 
     @Override
@@ -391,14 +800,37 @@ public final class TrinoTpcdsParquetSupport
 
     private MaterializedResult execute(List<Path> files, List<String> columns, List<OperatorFactory> factories, List<Type> outputTypes)
     {
+        return executePipeline(
+                files,
+                columns,
+                factories.stream()
+                        .map(TrinoTpcdsParquetSupport::factoryStep)
+                        .toList(),
+                outputTypes);
+    }
+
+    private MaterializedResult executePipeline(List<Path> files, List<String> columns, List<PipelineStep> steps, List<Type> outputTypes)
+    {
+        List<Page> outputPages = executePipelinePages(files, columns, steps);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(taskContext().getSession(), outputTypes);
+        for (Page page : outputPages) {
+            result.page(page);
+        }
+        return result.build();
+    }
+
+    private List<Page> executePipelinePages(List<Path> files, List<String> columns, List<PipelineStep> steps)
+    {
         List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
         try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(files, columns)) {
-            DriverContext driverContext = taskContext().addPipelineContext(0, true, true, false).addDriverContext();
+            DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
             List<Operator> operators = new ArrayList<>();
             TrinoPageSequenceSourceOperator.Factory sourceFactory = new TrinoPageSequenceSourceOperator.Factory(0, new PlanNodeId("source"), reader);
             operators.add(sourceFactory.createOperator(driverContext));
 
-            for (OperatorFactory factory : factories) {
+            for (PipelineStep step : steps) {
+                OperatorFactory factory = step.createOperatorFactory(taskContext, this);
                 operators.add(factory.createOperator(driverContext));
                 factory.noMoreOperators();
             }
@@ -414,63 +846,28 @@ public final class TrinoTpcdsParquetSupport
             catch (Exception exception) {
                 throw new RuntimeException("Unable to execute Trino TPC-DS parquet pipeline", exception);
             }
-
-            MaterializedResult.Builder result = MaterializedResult.resultBuilder(driverContext.getSession(), outputTypes);
-            for (Page page : outputPages) {
-                result.page(page);
-            }
-            return result.build();
         }
+        return outputPages;
     }
 
-    private MaterializedResult executeWithHashJoin(
-            List<Path> probeFiles,
-            List<String> probeColumns,
-            List<OperatorFactory> preJoinFactories,
-            HashJoinSpec hashJoinSpec,
-            List<OperatorFactory> postJoinFactories,
-            List<Type> outputTypes)
+    private static PipelineStep factoryStep(OperatorFactory factory)
     {
-        List<Page> outputPages = new ArrayList<>();
-        io.trino.operator.TaskContext taskContext = taskContext();
-        try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(probeFiles, probeColumns)) {
-            OperatorFactory joinFactory = createHashJoinFactory(taskContext, hashJoinSpec);
-            DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
-            List<Operator> operators = new ArrayList<>();
-            TrinoPageSequenceSourceOperator.Factory sourceFactory = new TrinoPageSequenceSourceOperator.Factory(0, new PlanNodeId("source"), reader);
-            operators.add(sourceFactory.createOperator(driverContext));
+        return new FactoryStep(factory);
+    }
 
-            for (OperatorFactory factory : preJoinFactories) {
-                operators.add(factory.createOperator(driverContext));
-                factory.noMoreOperators();
-            }
+    private static PipelineStep hashJoinStep(HashJoinSpec spec)
+    {
+        return new HashJoinStep(spec);
+    }
 
-            operators.add(joinFactory.createOperator(driverContext));
-            joinFactory.noMoreOperators();
+    private static PipelineStep semiJoinStep(SemiJoinSpec spec)
+    {
+        return new SemiJoinStep(spec);
+    }
 
-            for (OperatorFactory factory : postJoinFactories) {
-                operators.add(factory.createOperator(driverContext));
-                factory.noMoreOperators();
-            }
-
-            operators.add(new PageConsumerOperator(
-                    driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
-                    outputPages::add,
-                    java.util.function.Function.identity()));
-
-            try (Driver driver = Driver.createDriver(driverContext, operators)) {
-                processDriver(driver, operators);
-            }
-            catch (Exception exception) {
-                throw new RuntimeException("Unable to execute Trino TPC-DS parquet join pipeline", exception);
-            }
-
-            MaterializedResult.Builder result = MaterializedResult.resultBuilder(driverContext.getSession(), outputTypes);
-            for (Page page : outputPages) {
-                result.page(page);
-            }
-            return result.build();
-        }
+    private static PipelineStep semiJoinPagesStep(SemiJoinPagesSpec spec)
+    {
+        return new SemiJoinPagesStep(spec);
     }
 
     private OperatorFactory createHashJoinFactory(io.trino.operator.TaskContext taskContext, HashJoinSpec hashJoinSpec)
@@ -534,137 +931,144 @@ public final class TrinoTpcdsParquetSupport
         return joinFactory;
     }
 
+    private OperatorFactory createSemiJoinFactory(io.trino.operator.TaskContext taskContext, SemiJoinSpec semiJoinSpec)
+    {
+        JoinCompiler joinCompiler = new JoinCompiler(new TypeOperators());
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(
+                9500 + semiJoinSpec.operatorId(),
+                new PlanNodeId("semi-build-" + semiJoinSpec.operatorId()),
+                semiJoinSpec.buildTypes().get(semiJoinSpec.buildJoinChannel()),
+                semiJoinSpec.buildJoinChannel(),
+                10_000,
+                joinCompiler,
+                new TypeOperators());
+        SetSupplier setSupplier = setBuilderOperatorFactory.getSetProvider();
+
+        buildSemiJoinSet(taskContext, setBuilderOperatorFactory, semiJoinSpec.buildPages().orElse(null), semiJoinSpec.buildFiles(), semiJoinSpec.buildColumns(), semiJoinSpec.buildSteps(), semiJoinSpec.operatorId());
+
+        return HashSemiJoinOperator.createOperatorFactory(
+                semiJoinSpec.operatorId(),
+                new PlanNodeId("semi-join-" + semiJoinSpec.operatorId()),
+                setSupplier,
+                semiJoinSpec.probeTypes(),
+                semiJoinSpec.probeJoinChannel());
+    }
+
+    private OperatorFactory createSemiJoinFactory(io.trino.operator.TaskContext taskContext, SemiJoinPagesSpec semiJoinSpec)
+    {
+        JoinCompiler joinCompiler = new JoinCompiler(new TypeOperators());
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(
+                9500 + semiJoinSpec.operatorId(),
+                new PlanNodeId("semi-build-" + semiJoinSpec.operatorId()),
+                semiJoinSpec.buildTypes().get(semiJoinSpec.buildJoinChannel()),
+                semiJoinSpec.buildJoinChannel(),
+                10_000,
+                joinCompiler,
+                new TypeOperators());
+        SetSupplier setSupplier = setBuilderOperatorFactory.getSetProvider();
+
+        buildSemiJoinSet(taskContext, setBuilderOperatorFactory, semiJoinSpec.buildPages(), List.of(), List.of(), List.of(), semiJoinSpec.operatorId());
+
+        return HashSemiJoinOperator.createOperatorFactory(
+                semiJoinSpec.operatorId(),
+                new PlanNodeId("semi-join-" + semiJoinSpec.operatorId()),
+                setSupplier,
+                semiJoinSpec.probeTypes(),
+                semiJoinSpec.probeJoinChannel());
+    }
+
+    private void buildSemiJoinSet(
+            io.trino.operator.TaskContext taskContext,
+            SetBuilderOperatorFactory setBuilderOperatorFactory,
+            List<Page> buildPages,
+            List<Path> buildFiles,
+            List<String> buildColumns,
+            List<PipelineStep> buildSteps,
+            int operatorId)
+    {
+        try {
+            DriverContext buildDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
+            List<Operator> operators = new ArrayList<>();
+
+            if (buildPages != null) {
+                ValuesOperator.ValuesOperatorFactory valuesOperatorFactory = new ValuesOperator.ValuesOperatorFactory(
+                        8_500 + operatorId,
+                        new PlanNodeId("semi-build-values-" + operatorId),
+                        buildPages);
+                operators.add(valuesOperatorFactory.createOperator(buildDriverContext));
+                valuesOperatorFactory.noMoreOperators();
+            }
+            else {
+                TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(buildFiles, buildColumns);
+                TrinoPageSequenceSourceOperator.Factory sourceFactory = new TrinoPageSequenceSourceOperator.Factory(
+                        0,
+                        new PlanNodeId("semi-build-source-" + operatorId),
+                        reader);
+                operators.add(sourceFactory.createOperator(buildDriverContext));
+            }
+
+            for (PipelineStep step : buildSteps) {
+                OperatorFactory factory = step.createOperatorFactory(taskContext, this);
+                operators.add(factory.createOperator(buildDriverContext));
+                factory.noMoreOperators();
+            }
+
+            operators.add(setBuilderOperatorFactory.createOperator(buildDriverContext));
+            setBuilderOperatorFactory.noMoreOperators();
+
+            try (Driver buildDriver = Driver.createDriver(buildDriverContext, operators)) {
+                processDriver(buildDriver, operators);
+            }
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to build Trino TPC-DS semi-join set", exception);
+        }
+    }
+
     private MaterializedResult scanTable(TpcdsParquetTables tables, String tableName, List<String> columns, List<Type> outputTypes)
     {
         return execute(tables.tableFiles(tableName), columns, List.of(), outputTypes);
     }
 
+    private List<Page> relationPages(TpcdsParquetTables tables, String tableName, List<String> columns, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
+    {
+        return executePipelinePages(
+                tables.tableFiles(tableName),
+                columns,
+                List.of(factoryStep(filterAndProjectFactory(7_000 + Math.abs(tableName.hashCode() % 1_000), filter, projections, outputTypes))));
+    }
+
+    private List<Page> customerKeyPagesForEligibleDates(
+            TpcdsParquetTables tables,
+            String salesTable,
+            String customerColumn,
+            String dateColumn,
+            List<String> dateColumns,
+            RowExpression dateFilter,
+            int operatorIdBase)
+    {
+        List<Page> eligibleDateKeys = relationPages(
+                tables,
+                "date_dim",
+                dateColumns,
+                Optional.of(dateFilter),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                List.of(customerColumn, dateColumn),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(operatorIdBase, List.of(BIGINT, BIGINT), List.of(1), eligibleDateKeys, List.of(BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 1,
+                                Optional.of(greaterThan(field(0, BIGINT), constant(0L, BIGINT), BIGINT)),
+                                List.of(field(0, BIGINT)),
+                                List.of(BIGINT)))));
+    }
+
     private List<Type> tableColumnTypes(TpcdsParquetTables tables, String tableName, List<String> columns)
     {
         return TrinoClickBenchPageReader.columnTypes(tables.tableFiles(tableName).getFirst(), columns);
-    }
-
-    private IntSet dateKeysForMonthSequence(TpcdsParquetTables tables, int minimumMonthSequence, int maximumMonthSequence)
-    {
-        return integerKeySet(
-                scanTable(tables, "date_dim", List.of("d_date_sk", "d_month_seq"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_month_seq"))),
-                row -> {
-                    int monthSequence = ((Number) row.getField(1)).intValue();
-                    return monthSequence >= minimumMonthSequence && monthSequence <= maximumMonthSequence;
-                });
-    }
-
-    private IntSet dateKeysForYearMonthRange(TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
-    {
-        return integerKeySet(
-                scanTable(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"))),
-                row -> ((Number) row.getField(1)).intValue() == year &&
-                        ((Number) row.getField(2)).intValue() >= minimumMonthOfYear &&
-                        ((Number) row.getField(2)).intValue() <= maximumMonthOfYear);
-    }
-
-    private IntSet dateKeysForDayOfMonthAndYears(TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
-    {
-        IntSet allowedYears = new IntOpenHashSet(years);
-        return integerKeySet(
-                scanTable(tables, "date_dim", List.of("d_date_sk", "d_dom", "d_year"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_dom", "d_year"))),
-                row -> ((Number) row.getField(1)).intValue() >= minimumDayOfMonth &&
-                        ((Number) row.getField(1)).intValue() <= maximumDayOfMonth &&
-                        allowedYears.contains(((Number) row.getField(2)).intValue()));
-    }
-
-    private IntSet customerKeysForDates(TpcdsParquetTables tables, String tableName, List<String> columns, IntSet allowedDates)
-    {
-        return integerKeySet(
-                scanTable(tables, tableName, columns, tableColumnTypes(tables, tableName, columns)),
-                row -> row.getField(0) != null &&
-                        row.getField(1) != null &&
-                        allowedDates.contains(((Number) row.getField(1)).intValue()));
-    }
-
-    private IntSet addressKeysForCounties(TpcdsParquetTables tables, String... counties)
-    {
-        Set<String> allowedCounties = Set.of(counties);
-        return integerKeySet(
-                scanTable(tables, "customer_address", List.of("ca_address_sk", "ca_county"), tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_county"))),
-                row -> {
-                    String county = (String) row.getField(1);
-                    return county != null && allowedCounties.contains(county);
-                });
-    }
-
-    private IntSet storeKeysForCounties(TpcdsParquetTables tables, String... counties)
-    {
-        Set<String> allowedCounties = Set.of(counties);
-        return integerKeySet(
-                scanTable(tables, "store", List.of("s_store_sk", "s_county"), tableColumnTypes(tables, "store", List.of("s_store_sk", "s_county"))),
-                row -> {
-                    String county = (String) row.getField(1);
-                    return county != null && allowedCounties.contains(county);
-                });
-    }
-
-    private IntSet storeKeysByName(TpcdsParquetTables tables, String storeName)
-    {
-        return integerKeySet(
-                scanTable(tables, "store", List.of("s_store_sk", "s_store_name"), tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_name"))),
-                row -> {
-                    String name = (String) row.getField(1);
-                    return name != null && storeName.equals(name);
-                });
-    }
-
-    private IntSet householdKeysForQuery73(TpcdsParquetTables tables)
-    {
-        return integerKeySet(
-                scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"))),
-                row -> {
-                    String buyPotential = (String) row.getField(1);
-                    int vehicleCount = ((Number) row.getField(2)).intValue();
-                    int dependentCount = ((Number) row.getField(3)).intValue();
-                    return (">10000".equals(buyPotential) || "Unknown".equals(buyPotential)) &&
-                            vehicleCount > 0 &&
-                            ((double) dependentCount / vehicleCount) > 1.0;
-                });
-    }
-
-    private IntSet householdKeysForQuery88(TpcdsParquetTables tables)
-    {
-        return integerKeySet(
-                scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"))),
-                row -> {
-                    int dependentCount = ((Number) row.getField(1)).intValue();
-                    int vehicleCount = ((Number) row.getField(2)).intValue();
-                    return (dependentCount == 4 || dependentCount == 2 || dependentCount == 0) &&
-                            vehicleCount <= (dependentCount + 2);
-                });
-    }
-
-    @SuppressWarnings("unchecked")
-    private IntSet[] timeBucketKeysForQuery88(TpcdsParquetTables tables)
-    {
-        IntSet[] buckets = new IntSet[8];
-        for (int bucket = 0; bucket < buckets.length; bucket++) {
-            buckets[bucket] = new IntOpenHashSet();
-        }
-        scanTable(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute"), tableColumnTypes(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute")))
-                .getMaterializedRows()
-                .forEach(row -> {
-                    int hour = ((Number) row.getField(1)).intValue();
-                    int minute = ((Number) row.getField(2)).intValue();
-                    int bucket = switch (hour) {
-                        case 8 -> minute >= 30 ? 0 : -1;
-                        case 9 -> minute < 30 ? 1 : 2;
-                        case 10 -> minute < 30 ? 3 : 4;
-                        case 11 -> minute < 30 ? 5 : 6;
-                        case 12 -> minute < 30 ? 7 : -1;
-                        default -> -1;
-                    };
-                    if (bucket >= 0) {
-                        buckets[bucket].add(((Number) row.getField(0)).intValue());
-                    }
-                });
-        return buckets;
     }
 
     private List<Page> customerDemographicsBuildPages(TpcdsParquetTables tables)
@@ -691,6 +1095,30 @@ public final class TrinoTpcdsParquetSupport
             BIGINT.writeLong(pageBuilder.getBlockBuilder(6), ((Number) row.getField(6)).longValue());
             BIGINT.writeLong(pageBuilder.getBlockBuilder(7), ((Number) row.getField(7)).longValue());
             BIGINT.writeLong(pageBuilder.getBlockBuilder(8), ((Number) row.getField(8)).longValue());
+        });
+        if (!pageBuilder.isEmpty()) {
+            pages.add(pageBuilder.build());
+        }
+        return pages;
+    }
+
+    private List<Page> customerAddressStateBuildPages(TpcdsParquetTables tables)
+    {
+        MaterializedResult result = scanTable(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_state"),
+                tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_state")));
+        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, VARCHAR));
+        List<Page> pages = new ArrayList<>();
+        result.getMaterializedRows().forEach(row -> {
+            if (pageBuilder.isFull()) {
+                pages.add(pageBuilder.build());
+                pageBuilder.reset();
+            }
+            pageBuilder.declarePosition();
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), ((Number) row.getField(0)).longValue());
+            writeJoinVarchar(pageBuilder.getBlockBuilder(1), (String) row.getField(1));
         });
         if (!pageBuilder.isEmpty()) {
             pages.add(pageBuilder.build());
@@ -725,6 +1153,49 @@ public final class TrinoTpcdsParquetSupport
         return pages;
     }
 
+    private List<Page> storeReturnCustomerDemographicsBuildPages(TpcdsParquetTables tables)
+    {
+        MaterializedResult result = scanTable(
+                tables,
+                "store_returns",
+                List.of("sr_cdemo_sk"),
+                tableColumnTypes(tables, "store_returns", List.of("sr_cdemo_sk")));
+        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT));
+        List<Page> pages = new ArrayList<>();
+        result.getMaterializedRows().forEach(row -> {
+            if (row.getField(0) == null) {
+                return;
+            }
+            if (pageBuilder.isFull()) {
+                pages.add(pageBuilder.build());
+                pageBuilder.reset();
+            }
+            pageBuilder.declarePosition();
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), ((Number) row.getField(0)).longValue());
+        });
+        if (!pageBuilder.isEmpty()) {
+            pages.add(pageBuilder.build());
+        }
+        return pages;
+    }
+
+    private long query90Count(TpcdsParquetTables tables, List<Page> timeKeys, List<Page> householdKeys, List<Page> pageKeys)
+    {
+        List<String> columns = List.of("ws_sold_time_sk", "ws_ship_hdemo_sk", "ws_web_page_sk");
+        List<Type> factTypes = tableColumnTypes(tables, "web_sales", columns);
+        List<Type> afterTimeTypes = concatTypes(factTypes, List.of(BIGINT));
+        List<Type> afterHouseholdTypes = concatTypes(afterTimeTypes, List.of(BIGINT));
+        return singleLongResult(executePipeline(
+                tables.tableFiles("web_sales"),
+                columns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(90_0, factTypes, List.of(0), timeKeys, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(90_1, afterTimeTypes, List.of(1), householdKeys, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(90_2, afterHouseholdTypes, List.of(2), pageKeys, List.of(BIGINT), List.of(0))),
+                        factoryStep(aggregationFactory(90_3, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))),
+                List.of(BIGINT)));
+    }
+
     private static long singleLongResult(MaterializedResult result)
     {
         if (result.getMaterializedRows().size() != 1) {
@@ -744,21 +1215,12 @@ public final class TrinoTpcdsParquetSupport
         return values;
     }
 
-    private static Map<Integer, String> utf8Map(MaterializedResult result, int keyIndex, int valueIndex)
+    private static List<Type> concatTypes(List<Type> left, List<Type> right)
     {
-        Map<Integer, String> values = new HashMap<>();
-        result.getMaterializedRows().forEach(row -> values.put(((Number) row.getField(keyIndex)).intValue(), (String) row.getField(valueIndex)));
-        return values;
-    }
-
-    private static Map<Integer, String> prefixedUtf8Map(MaterializedResult result, int keyIndex, int valueIndex, int prefixLength)
-    {
-        Map<Integer, String> values = new HashMap<>();
-        result.getMaterializedRows().forEach(row -> {
-            String value = (String) row.getField(valueIndex);
-            values.put(((Number) row.getField(keyIndex)).intValue(), value == null ? null : value.substring(0, Math.min(prefixLength, value.length())));
-        });
-        return values;
+        List<Type> types = new ArrayList<>(left.size() + right.size());
+        types.addAll(left);
+        types.addAll(right);
+        return types;
     }
 
     private io.trino.operator.TaskContext taskContext()
@@ -815,31 +1277,6 @@ public final class TrinoTpcdsParquetSupport
                 orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders));
     }
 
-    private OperatorFactory integerDimensionFilterFactory(int operatorId, List<Type> inputTypes, int[] inputChannels, IntSet[] allowedValues)
-    {
-        return new IntegerDimensionFilterOperator.Factory(operatorId, new PlanNodeId("int-filter-" + operatorId), inputTypes, inputChannels, allowedValues);
-    }
-
-    private OperatorFactory shippingBucketsProjectFactory(int operatorId, List<Type> inputTypes, ShippingBucketsLookup lookup)
-    {
-        return pageTransformFactory(operatorId, "shipping-buckets", page -> transformShippingBucketsPage(inputTypes, lookup, page));
-    }
-
-    private OperatorFactory customerEligibilityProjectFactory(int operatorId, List<Type> inputTypes, Query10Lookup lookup)
-    {
-        return pageTransformFactory(operatorId, "customer-eligibility", page -> transformCustomerEligibilityPage(inputTypes, lookup, page));
-    }
-
-    private OperatorFactory ticketCustomerFilterProjectFactory(int operatorId, List<Type> inputTypes, Query73Lookup lookup)
-    {
-        return pageTransformFactory(operatorId, "ticket-customer", page -> transformTicketCustomerPage(inputTypes, lookup, page));
-    }
-
-    private OperatorFactory pageTransformFactory(int operatorId, String name, PageTransform pageTransform)
-    {
-        return new PageTransformOperator.Factory(operatorId, new PlanNodeId(name + "-" + operatorId), pageTransform);
-    }
-
     private OperatorFactory filterAndProjectFactory(int operatorId, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
     {
         return FilterAndProjectOperator.createOperatorFactory(
@@ -858,193 +1295,6 @@ public final class TrinoTpcdsParquetSupport
             projections.add(field(index, types.get(index)));
         }
         return projections;
-    }
-
-    private static Page transformCustomerEligibilityPage(List<Type> inputTypes, Query10Lookup lookup, Page page)
-    {
-        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT));
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            int addressKey = readInt(inputTypes.get(0), page, 0, position);
-            int customerKey = readInt(inputTypes.get(1), page, 1, position);
-            if (!lookup.eligibleAddressKeys().contains(addressKey) ||
-                    !lookup.storeCustomerKeys().contains(customerKey) ||
-                    (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
-                continue;
-            }
-
-            pageBuilder.declarePosition();
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(2), page, 2, position));
-        }
-
-        return pageBuilder.isEmpty() ? null : pageBuilder.build();
-    }
-
-    private static Page transformTicketCustomerPage(List<Type> inputTypes, Query73Lookup lookup, Page page)
-    {
-        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, BIGINT));
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            if (!lookup.allowedDateKeys().contains(readInt(inputTypes.get(2), page, 2, position)) ||
-                    !lookup.allowedStoreKeys().contains(readInt(inputTypes.get(3), page, 3, position)) ||
-                    !lookup.allowedHouseholdKeys().contains(readInt(inputTypes.get(4), page, 4, position))) {
-                continue;
-            }
-
-            pageBuilder.declarePosition();
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(0), page, 0, position));
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(1), readLong(inputTypes.get(1), page, 1, position));
-        }
-
-        return pageBuilder.isEmpty() ? null : pageBuilder.build();
-    }
-
-    private static Page transformShippingBucketsPage(List<Type> inputTypes, ShippingBucketsLookup lookup, Page page)
-    {
-        PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT));
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            int shipDate = readInt(inputTypes.get(0), page, 0, position);
-            if (!lookup.allowedShipDates().contains(shipDate)) {
-                continue;
-            }
-
-            int firstKey = readInt(inputTypes.get(2), page, 2, position);
-            int secondKey = readInt(inputTypes.get(3), page, 3, position);
-            int thirdKey = readInt(inputTypes.get(4), page, 4, position);
-            if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
-                continue;
-            }
-            String first = lookup.firstNames().get(firstKey);
-            String second = lookup.secondNames().get(secondKey);
-            String third = lookup.thirdNames().get(thirdKey);
-
-            int days = shipDate - readInt(inputTypes.get(1), page, 1, position);
-
-            pageBuilder.declarePosition();
-            if (first == null) {
-                pageBuilder.getBlockBuilder(0).appendNull();
-            }
-            else {
-                VARCHAR.writeSlice(pageBuilder.getBlockBuilder(0), Slices.utf8Slice(first));
-            }
-            if (second == null) {
-                pageBuilder.getBlockBuilder(1).appendNull();
-            }
-            else {
-                VARCHAR.writeSlice(pageBuilder.getBlockBuilder(1), Slices.utf8Slice(second));
-            }
-            if (third == null) {
-                pageBuilder.getBlockBuilder(2).appendNull();
-            }
-            else {
-                VARCHAR.writeSlice(pageBuilder.getBlockBuilder(2), Slices.utf8Slice(third));
-            }
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(3), days <= 30 ? 1 : 0);
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(4), days > 30 && days <= 60 ? 1 : 0);
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(5), days > 60 && days <= 90 ? 1 : 0);
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(6), days > 90 && days <= 120 ? 1 : 0);
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(7), days > 120 ? 1 : 0);
-        }
-
-        return pageBuilder.isEmpty() ? null : pageBuilder.build();
-    }
-
-    @FunctionalInterface
-    private interface PageTransform
-    {
-        Page transform(Page page);
-    }
-
-    private static final class PageTransformOperator
-            implements Operator
-    {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final PageTransform pageTransform;
-            private boolean closed;
-
-            private Factory(int operatorId, PlanNodeId planNodeId, PageTransform pageTransform)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = planNodeId;
-                this.pageTransform = pageTransform;
-            }
-
-            @Override
-            public Operator createOperator(DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new PageTransformOperator(driverContext.addOperatorContext(operatorId, planNodeId, PageTransformOperator.class.getSimpleName()), pageTransform);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, pageTransform);
-            }
-        }
-
-        private final io.trino.operator.OperatorContext operatorContext;
-        private final PageTransform pageTransform;
-
-        private Page outputPage;
-        private boolean finishing;
-
-        private PageTransformOperator(io.trino.operator.OperatorContext operatorContext, PageTransform pageTransform)
-        {
-            this.operatorContext = operatorContext;
-            this.pageTransform = pageTransform;
-        }
-
-        @Override
-        public io.trino.operator.OperatorContext getOperatorContext()
-        {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && outputPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && outputPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-            outputPage = pageTransform.transform(page);
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = outputPage;
-            outputPage = null;
-            return page;
-        }
     }
 
     private static RowExpression query41EligibilityPredicate()
@@ -1124,6 +1374,26 @@ public final class TrinoTpcdsParquetSupport
                 List.of(field(inputChannel, type), constant(Slices.utf8Slice(constantValue), type)));
     }
 
+    private static RowExpression equal(int inputChannel, long constantValue, Type type)
+    {
+        return new CallExpression(
+                FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(type, type)),
+                List.of(field(inputChannel, type), constant(constantValue, type)));
+    }
+
+    private static RowExpression equal(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(type, type)), List.of(left, right));
+    }
+
+    private OperatorFactory semiJoinFilterProjectFactory(int operatorId, List<Type> probeTypes, boolean includeMatches)
+    {
+        RowExpression filter = includeMatches
+                ? field(probeTypes.size(), BOOLEAN)
+                : equal(field(probeTypes.size(), BOOLEAN), constant(false, BOOLEAN), BOOLEAN);
+        return filterAndProjectFactory(operatorId, Optional.of(filter), identityProjections(probeTypes), probeTypes);
+    }
+
     private static RowExpression greaterThan(int inputChannel, long constantValue)
     {
         return greaterThan(inputChannel, constantValue, INTEGER);
@@ -1149,6 +1419,133 @@ public final class TrinoTpcdsParquetSupport
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.LESS_THAN, List.of(type, type)), List.of(left, right));
     }
 
+    private static RowExpression concat(RowExpression left, RowExpression right)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveFunction("concat", fromTypes(VARCHAR, VARCHAR)), List.of(left, right));
+    }
+
+    private static RowExpression substring(RowExpression value, long start, long length)
+    {
+        return new CallExpression(
+                FUNCTION_RESOLUTION.resolveFunction("substring", fromTypes(VARCHAR, BIGINT, BIGINT)),
+                List.of(value, constant(start, BIGINT), constant(length, BIGINT)));
+    }
+
+    private static RowExpression greaterThan(RowExpression left, RowExpression right, Type type)
+    {
+        return lessThan(right, left, type);
+    }
+
+    private static RowExpression subtract(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.SUBTRACT, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression ifExpression(RowExpression condition, RowExpression whenTrue, RowExpression whenFalse, Type outputType)
+    {
+        return new SpecialForm(SpecialForm.Form.IF, outputType, List.of(condition, whenTrue, whenFalse), List.of());
+    }
+
+    private static RowExpression yearMonthRangePredicate(int yearIndex, int monthIndex, int year, int minimumMonthInclusive, int maximumMonthInclusive)
+    {
+        return and(
+                equal(yearIndex, year, INTEGER),
+                greaterThan(field(monthIndex, INTEGER), constant((long) minimumMonthInclusive - 1L, INTEGER), INTEGER),
+                lessThan(field(monthIndex, INTEGER), constant((long) maximumMonthInclusive + 1L, INTEGER), INTEGER));
+    }
+
+    private static RowExpression yearQuarterRangePredicate(int yearIndex, int quarterIndex, int year, int minimumQuarterInclusive, int maximumQuarterInclusive)
+    {
+        return and(
+                equal(yearIndex, year, INTEGER),
+                greaterThan(field(quarterIndex, INTEGER), constant((long) minimumQuarterInclusive - 1L, INTEGER), INTEGER),
+                lessThan(field(quarterIndex, INTEGER), constant((long) maximumQuarterInclusive + 1L, INTEGER), INTEGER));
+    }
+
+    private static RowExpression dayOfMonthAndYearsPredicate(int dayIndex, int yearIndex, int minimumDayInclusive, int maximumDayInclusive, int... years)
+    {
+        RowExpression yearsPredicate = equal(yearIndex, years[0], INTEGER);
+        for (int index = 1; index < years.length; index++) {
+            yearsPredicate = or(yearsPredicate, equal(yearIndex, years[index], INTEGER));
+        }
+        return and(
+                greaterThan(field(dayIndex, INTEGER), constant((long) minimumDayInclusive - 1L, INTEGER), INTEGER),
+                lessThan(field(dayIndex, INTEGER), constant((long) maximumDayInclusive + 1L, INTEGER), INTEGER),
+                yearsPredicate);
+    }
+
+    private static RowExpression query96TimePredicate()
+    {
+        return and(equal(1, 20, INTEGER), greaterThan(field(2, INTEGER), constant(29L, INTEGER), INTEGER));
+    }
+
+    private static RowExpression query73HouseholdPredicate()
+    {
+        return and(
+                varcharAnyOf(1, Set.of(">10000", "Unknown")),
+                greaterThan(field(2, INTEGER), constant(0L, INTEGER), INTEGER),
+                greaterThan(field(3, INTEGER), field(2, INTEGER), INTEGER));
+    }
+
+    private static RowExpression query88HouseholdPredicate()
+    {
+        return and(
+                or(equal(1, 4, INTEGER), equal(1, 2, INTEGER), equal(1, 0, INTEGER)),
+                lessThan(
+                        field(2, INTEGER),
+                        new CallExpression(
+                                FUNCTION_RESOLUTION.resolveOperator(OperatorType.ADD, List.of(INTEGER, INTEGER)),
+                                List.of(field(1, INTEGER), constant(3L, INTEGER))),
+                        INTEGER));
+    }
+
+    private static RowExpression query88TimeBucketPredicate(int bucket)
+    {
+        return switch (bucket) {
+            case 0 -> and(equal(1, 8, INTEGER), greaterThan(field(2, INTEGER), constant(29L, INTEGER), INTEGER));
+            case 1 -> and(equal(1, 9, INTEGER), lessThan(field(2, INTEGER), constant(30L, INTEGER), INTEGER));
+            case 2 -> and(equal(1, 9, INTEGER), greaterThan(field(2, INTEGER), constant(29L, INTEGER), INTEGER));
+            case 3 -> and(equal(1, 10, INTEGER), lessThan(field(2, INTEGER), constant(30L, INTEGER), INTEGER));
+            case 4 -> and(equal(1, 10, INTEGER), greaterThan(field(2, INTEGER), constant(29L, INTEGER), INTEGER));
+            case 5 -> and(equal(1, 11, INTEGER), lessThan(field(2, INTEGER), constant(30L, INTEGER), INTEGER));
+            case 6 -> and(equal(1, 11, INTEGER), greaterThan(field(2, INTEGER), constant(29L, INTEGER), INTEGER));
+            case 7 -> and(equal(1, 12, INTEGER), lessThan(field(2, INTEGER), constant(30L, INTEGER), INTEGER));
+            default -> throw new IllegalArgumentException("Unexpected Q88 bucket: " + bucket);
+        };
+    }
+
+    private static List<RowExpression> shippingBucketProjections(int firstNameIndex, int secondNameIndex, int thirdNameIndex, int shipDateIndex, int soldDateIndex)
+    {
+        RowExpression days = subtract(field(shipDateIndex, BIGINT), field(soldDateIndex, BIGINT), BIGINT);
+        RowExpression one = constant(1L, BIGINT);
+        RowExpression zero = constant(0L, BIGINT);
+        return List.of(
+                substring(field(firstNameIndex, VARCHAR), 1, 20),
+                field(secondNameIndex, VARCHAR),
+                field(thirdNameIndex, VARCHAR),
+                ifExpression(lessThan(days, constant(31L, BIGINT), BIGINT), one, zero, BIGINT),
+                ifExpression(and(greaterThan(days, constant(30L, BIGINT), BIGINT), lessThan(days, constant(61L, BIGINT), BIGINT)), one, zero, BIGINT),
+                ifExpression(and(greaterThan(days, constant(60L, BIGINT), BIGINT), lessThan(days, constant(91L, BIGINT), BIGINT)), one, zero, BIGINT),
+                ifExpression(and(greaterThan(days, constant(90L, BIGINT), BIGINT), lessThan(days, constant(121L, BIGINT), BIGINT)), one, zero, BIGINT),
+                ifExpression(greaterThan(days, constant(120L, BIGINT), BIGINT), one, zero, BIGINT));
+    }
+
+    private static List<RowExpression> shippingBucketGroupProjections(int firstGroupIndex, int secondGroupIndex, int thirdGroupIndex, int shipDateIndex, int soldDateIndex)
+    {
+        RowExpression days = subtract(field(shipDateIndex, BIGINT), field(soldDateIndex, BIGINT), BIGINT);
+        RowExpression one = constant(1L, BIGINT);
+        RowExpression zero = constant(0L, BIGINT);
+        return List.of(
+                field(firstGroupIndex, BIGINT),
+                field(secondGroupIndex, BIGINT),
+                field(thirdGroupIndex, BIGINT),
+                ifExpression(lessThan(days, constant(31L, BIGINT), BIGINT), one, zero, BIGINT),
+                ifExpression(and(greaterThan(days, constant(30L, BIGINT), BIGINT), lessThan(days, constant(61L, BIGINT), BIGINT)), one, zero, BIGINT),
+                ifExpression(and(greaterThan(days, constant(60L, BIGINT), BIGINT), lessThan(days, constant(91L, BIGINT), BIGINT)), one, zero, BIGINT),
+                ifExpression(and(greaterThan(days, constant(90L, BIGINT), BIGINT), lessThan(days, constant(121L, BIGINT), BIGINT)), one, zero, BIGINT),
+                ifExpression(greaterThan(days, constant(120L, BIGINT), BIGINT), one, zero, BIGINT));
+    }
+
     private static RowExpression and(RowExpression first, RowExpression second, RowExpression... rest)
     {
         RowExpression result = new SpecialForm(SpecialForm.Form.AND, BOOLEAN, List.of(first, second), List.of());
@@ -1167,23 +1564,6 @@ public final class TrinoTpcdsParquetSupport
         return result;
     }
 
-    private record Query10Lookup(
-            IntSet eligibleAddressKeys,
-            IntSet storeCustomerKeys,
-            IntSet webCustomerKeys,
-            IntSet catalogCustomerKeys) {}
-
-    private record Query73Lookup(
-            IntSet allowedDateKeys,
-            IntSet allowedStoreKeys,
-            IntSet allowedHouseholdKeys) {}
-
-    private record Query88Lookup(IntSet[] timeBucketKeys, IntSet allowedHouseholdKeys, IntSet allowedStoreKeys) {}
-
-    private record Query96Lookup(IntSet timeKeys, IntSet householdKeys, IntSet storeKeys) {}
-
-    private record ShippingBucketsLookup(IntSet allowedShipDates, Map<Integer, String> firstNames, Map<Integer, String> secondNames, Map<Integer, String> thirdNames) {}
-
     private record HashJoinSpec(
             int operatorId,
             List<Type> probeTypes,
@@ -1192,168 +1572,78 @@ public final class TrinoTpcdsParquetSupport
             List<Type> buildTypes,
             List<Integer> buildHashChannels) {}
 
-    private static final class IntegerDimensionFilterOperator
-            implements Operator
+    private record SemiJoinSpec(
+            int operatorId,
+            List<Type> probeTypes,
+            int probeJoinChannel,
+            Optional<List<Page>> buildPages,
+            List<Path> buildFiles,
+            List<String> buildColumns,
+            List<PipelineStep> buildSteps,
+            List<Type> buildTypes,
+            int buildJoinChannel) {}
+
+    private record SemiJoinPagesSpec(
+            int operatorId,
+            List<Type> probeTypes,
+            int probeJoinChannel,
+            List<Page> buildPages,
+            List<Type> buildTypes,
+            int buildJoinChannel) {}
+
+    private sealed interface PipelineStep
+            permits FactoryStep, HashJoinStep, SemiJoinStep, SemiJoinPagesStep
     {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final List<Type> inputTypes;
-            private final int[] inputChannels;
-            private final IntSet[] allowedValues;
-            private boolean closed;
+        OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support);
+    }
 
-            @SuppressWarnings("unchecked")
-            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, int[] inputChannels, IntSet[] allowedValues)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = planNodeId;
-                this.inputTypes = List.copyOf(inputTypes);
-                this.inputChannels = inputChannels.clone();
-                this.allowedValues = allowedValues.clone();
-            }
-
-            @Override
-            public Operator createOperator(DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new IntegerDimensionFilterOperator(
-                        driverContext.addOperatorContext(operatorId, planNodeId, IntegerDimensionFilterOperator.class.getSimpleName()),
-                        inputTypes,
-                        inputChannels,
-                        allowedValues);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, inputTypes, inputChannels, allowedValues);
-            }
-        }
-
-        private final io.trino.operator.OperatorContext operatorContext;
-        private final List<Type> inputTypes;
-        private final int[] inputChannels;
-        private final IntSet[] allowedValues;
-
-        private Page outputPage;
-        private boolean finishing;
-
-        @SuppressWarnings("unchecked")
-        private IntegerDimensionFilterOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, int[] inputChannels, IntSet[] allowedValues)
-        {
-            this.operatorContext = operatorContext;
-            this.inputTypes = List.copyOf(inputTypes);
-            this.inputChannels = inputChannels.clone();
-            this.allowedValues = allowedValues.clone();
-        }
-
+    private record FactoryStep(OperatorFactory factory)
+            implements PipelineStep
+    {
         @Override
-        public io.trino.operator.OperatorContext getOperatorContext()
+        public OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support)
         {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && outputPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && outputPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-
-            int selectedCount = 0;
-            for (int position = 0; position < page.getPositionCount(); position++) {
-                boolean keep = true;
-                for (int index = 0; index < inputChannels.length; index++) {
-                    int value = readInt(inputTypes.get(inputChannels[index]), page, inputChannels[index], position);
-                    if (!allowedValues[index].contains(value)) {
-                        keep = false;
-                        break;
-                    }
-                }
-                if (keep) {
-                    selectedCount++;
-                }
-            }
-
-            if (selectedCount == 0) {
-                outputPage = null;
-                return;
-            }
-            outputPage = new Page(selectedCount);
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = outputPage;
-            outputPage = null;
-            return page;
+            return factory;
         }
     }
 
-    private static int readInt(Type type, Page page, int channel, int position)
+    private record HashJoinStep(HashJoinSpec spec)
+            implements PipelineStep
     {
-        if (type.equals(INTEGER)) {
-            return INTEGER.getInt(page.getBlock(channel), position);
+        @Override
+        public OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support)
+        {
+            return support.createHashJoinFactory(taskContext, spec);
         }
-        if (type.equals(BIGINT)) {
-            return toIntExact(BIGINT.getLong(page.getBlock(channel), position));
-        }
-        throw new IllegalArgumentException("Expected integer-like type but found " + type);
     }
 
-    private static long readLong(Type type, Page page, int channel, int position)
+    private record SemiJoinStep(SemiJoinSpec spec)
+            implements PipelineStep
     {
-        if (type.equals(BIGINT)) {
-            return BIGINT.getLong(page.getBlock(channel), position);
+        @Override
+        public OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support)
+        {
+            return support.createSemiJoinFactory(taskContext, spec);
         }
-        if (type.equals(INTEGER)) {
-            return INTEGER.getInt(page.getBlock(channel), position);
-        }
-        throw new IllegalArgumentException("Expected bigint-like type but found " + type);
     }
 
-    private static void writeVarchar(io.trino.spi.block.BlockBuilder blockBuilder, String value)
+    private record SemiJoinPagesStep(SemiJoinPagesSpec spec)
+            implements PipelineStep
+    {
+        @Override
+        public OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support)
+        {
+            return support.createSemiJoinFactory(taskContext, spec);
+        }
+    }
+
+    private static void writeJoinVarchar(io.trino.spi.block.BlockBuilder blockBuilder, String value)
     {
         if (value == null) {
             blockBuilder.appendNull();
             return;
         }
         VARCHAR.writeSlice(blockBuilder, Slices.utf8Slice(value));
-    }
-
-    private static void writeJoinVarchar(io.trino.spi.block.BlockBuilder blockBuilder, String value)
-    {
-        VARCHAR.writeSlice(blockBuilder, Slices.utf8Slice(value == null ? "" : value));
     }
 
     private static List<Integer> rangeList(int size)

@@ -871,6 +871,19 @@ Recent TPC-DS `Q41` work sharpened this direction:
   `OR` still tends to fall back to ordinary mask materialization, so flattening
   wide disjunctions into a single predicate remains important
 
+The same `Q41` work also sharpened a benchmark-harness rule: operator
+comparisons should not use host-side side channels for dynamic subquery
+results. If a lowered query needs membership semantics, the target shape is an
+operator-side relation plus a join or semi-join, not:
+
+- scanning rows into a Java `Set`
+- turning that set into an `in_*` predicate
+- or otherwise resolving dynamic query state outside the operator graph
+
+Constant literal tables are still valid when they are part of the lowered query
+itself. The rule is specifically about dynamic query results that should stay
+inside the operator topology.
+
 This means "selection-native" in Nitro should usually look like:
 
 - copy or take an owned `Mask`

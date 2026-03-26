@@ -22,6 +22,7 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,7 +73,7 @@ public class ProjectOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Reference outputReference = outputReferences.get(outputIndex);
             outputs[outputIndex] = new Output(
-                    Set.of(outputReference.stream()),
+                    exposedStreams(outputReference.stream()),
                     stream -> evaluateOutput(batchState, outputReference, stream),
                     (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
         }
@@ -107,11 +108,19 @@ public class ProjectOperator
 
     private org.weakref.nitro.data.Vector evaluateOutput(BatchState batchState, Reference outputReference, Stream stream)
     {
-        if (stream != outputReference.stream()) {
+        if (!exposedStreams(outputReference.stream()).contains(stream)) {
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
         }
         Streams bundle = batchState.evaluatedOutputBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.mask()));
         return bundle.get(stream);
+    }
+
+    private static Set<Stream> exposedStreams(Stream stream)
+    {
+        if (stream != Stream.VALUES) {
+            return Set.of(stream);
+        }
+        return EnumSet.of(Stream.VALUES, Stream.NULLS, Stream.ERRORS);
     }
 
     @Override

@@ -36,6 +36,7 @@ import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
@@ -519,6 +520,28 @@ public class TestOperatorBatches
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 2L, 3L);
         assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(20L, 20L, 30L);
         assertThat(Arrays.copyOf(((I64Vector) batch.output(3).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(200L, 201L, 300L);
+    }
+
+    @Test
+    void testSemiJoinOperatorFiltersUtf8Membership()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("alpha", 10L),
+                        row("beta", 20L),
+                        row("gamma", 30L))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row("beta"),
+                        row("gamma"),
+                        row("gamma"))),
+                0);
+
+        new OperatorAssertions.OperatorAssert(operator).matchesExactly(List.of(
+                row("beta", 20L),
+                row("gamma", 30L)));
     }
 
     @Test

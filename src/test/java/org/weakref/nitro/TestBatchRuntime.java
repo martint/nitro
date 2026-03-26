@@ -242,6 +242,28 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testBinaryVectorCopyMaskedPreservesSparseSelectedPositions()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("BinaryCopyMasked");
+
+        BinaryVector values = new BinaryVector(5, 64);
+        values.addTrait(BinaryVector.Trait.UTF8_STRING);
+        values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        values.setBytes(0, "zero".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(1, "one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(2, "two".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(3, "three".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(4, "four".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        BinaryVector copy = (BinaryVector) values.copyMasked(allocator, context, null, Mask.sparse(new int[] {1, 3, 4}, 5));
+
+        assertThat(copy.utf8Value(1)).isEqualTo("one");
+        assertThat(copy.utf8Value(3)).isEqualTo("three");
+        assertThat(copy.utf8Value(4)).isEqualTo("four");
+    }
+
+    @Test
     void testMinUtf8StateVectorRetainedBytesAreCachedIncrementally()
     {
         MinUtf8StateVector state = new MinUtf8StateVector(4);

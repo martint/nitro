@@ -44,18 +44,28 @@ public final class SubtractExactI64
     }
 
     @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for subtract_exact");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
+        boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         boolean requestErrors = requestedStreams.contains(Stream.ERRORS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
+        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
         Vector existingErrors = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
 
-        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null) {
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null && !requestNulls && leftNulls == null && rightNulls == null) {
             if (requestValues && requestErrors) {
                 int resultLength = RleVector.computeTargetRleLength(leftRle, rightRle);
                 I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, resultLength, I64Vector::new);
@@ -76,6 +86,16 @@ public final class SubtractExactI64
 
         int length = I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length()));
         Streams resultStreams = Streams.empty();
+        if (requestNulls) {
+            BooleanVector nulls = context.allocator().allocateOrGrow(
+                    ALLOCATION_CONTEXT,
+                    existingNulls,
+                    BooleanVector.class,
+                    length,
+                    BooleanVector::new);
+            applyNulls(leftNulls, rightNulls, mask, nulls);
+            resultStreams = resultStreams.with(Stream.NULLS, nulls);
+        }
         if (requestValues && requestErrors) {
             I64Vector result = context.allocator().allocateOrGrow(
                     ALLOCATION_CONTEXT,
@@ -113,6 +133,16 @@ public final class SubtractExactI64
             resultStreams = Streams.ofValues(result);
         }
         return resultStreams;
+    }
+
+    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    {
+        boolean[] nulls = outputNulls.values();
+        java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
+        for (int position : mask) {
+            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
+                    (rightNulls != null && rightNulls.values()[position]);
+        }
     }
 
     private static void apply(long leftValue, long rightValue, long[] values, boolean[] errors, int position)

@@ -57,6 +57,10 @@ public class Mask
         checkArgument(totalPositions >= 0, "totalPositions is negative");
         checkArgument(activePositions.length <= totalPositions, "More active positions than total positions");
 
+        if (totalPositions == 0) {
+            return all(0);
+        }
+
         if (activePositions.length == 0) {
             return new Mask(totalPositions, 0, false, EMPTY_POSITIONS);
         }

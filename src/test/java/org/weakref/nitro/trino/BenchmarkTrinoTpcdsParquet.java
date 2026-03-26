@@ -65,6 +65,12 @@ public class BenchmarkTrinoTpcdsParquet
     }
 
     @Benchmark
+    public Object query35()
+    {
+        return support.query35(tables);
+    }
+
+    @Benchmark
     public Object query62()
     {
         return support.query62(tables);
@@ -74,6 +80,24 @@ public class BenchmarkTrinoTpcdsParquet
     public Object query73()
     {
         return support.query73(tables);
+    }
+
+    @Benchmark
+    public Object query69()
+    {
+        return support.query69(tables);
+    }
+
+    @Benchmark
+    public Object query84()
+    {
+        return support.query84(tables);
+    }
+
+    @Benchmark
+    public Object query90()
+    {
+        return support.query90(tables);
     }
 
     @Benchmark

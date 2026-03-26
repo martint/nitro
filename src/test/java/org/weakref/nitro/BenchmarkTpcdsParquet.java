@@ -63,9 +63,15 @@ public class BenchmarkTpcdsParquet
     }
 
     @Benchmark
+    public void query35()
+    {
+        consume(TpcdsParquetSupport.query35(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query62()
     {
-        consume(TpcdsParquetSupport.query62(allocator, tables));
+        consume(TpcdsParquetSupport.query62(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
@@ -75,21 +81,39 @@ public class BenchmarkTpcdsParquet
     }
 
     @Benchmark
+    public void query69()
+    {
+        consume(TpcdsParquetSupport.query69(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query84()
+    {
+        consume(TpcdsParquetSupport.query84(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query90()
+    {
+        consume(TpcdsParquetSupport.query90(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query88()
     {
-        consume(TpcdsParquetSupport.query88(allocator, tables));
+        consume(TpcdsParquetSupport.query88(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
     public void query96()
     {
-        consume(TpcdsParquetSupport.query96(allocator, tables));
+        consume(TpcdsParquetSupport.query96(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
     public void query99()
     {
-        consume(TpcdsParquetSupport.query99(allocator, tables));
+        consume(TpcdsParquetSupport.query99(allocator, primitiveRegistry, tables));
     }
 
     private static void consume(Operator operator)

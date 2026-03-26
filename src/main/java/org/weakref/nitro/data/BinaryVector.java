@@ -221,13 +221,16 @@ public final class BinaryVector
         target.addTraits(traits);
         Arrays.fill(target.offsets(), 0);
 
+        int currentOffset = 0;
         for (int position : mask) {
+            target.offsets()[position] = currentOffset;
             int valueLength = length(position);
             if (valueLength == 0) {
                 target.setNull(position);
             }
             else {
                 target.setBytes(position, data, startOffset(position), valueLength);
+                currentOffset = target.endOffset(position);
             }
         }
         return target;
