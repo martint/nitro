@@ -61,7 +61,6 @@ public class HashJoinOperator
     private int currentMatchIndex;
     private int currentOutputCount;
     private Mask currentOutputMask;
-    private boolean outerConstrained;
 
     private boolean done;
 
@@ -109,11 +108,15 @@ public class HashJoinOperator
     {
         Mask batchMask = produceBatch();
         currentOutputMask = batchMask;
-        outerConstrained = false;
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = resultOutput(outputIndex);
+        }
+        if (!outer.supportsRetainedBatches() && currentOutputCount > 0) {
+            for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+                materializeOutput(outputIndex);
+            }
         }
         return new Batch(
                 batchMask,
@@ -181,6 +184,7 @@ public class HashJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
+            outputBuffer.captureOuterSchema(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 cacheOuterJoinInputs();
@@ -256,6 +260,9 @@ public class HashJoinOperator
 
     private JoinIndex createJoinIndex(Vector[] joinValues)
     {
+        if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
+            return new LongJoinIndex(Math.max(16, joinValues[0].length()));
+        }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues);
         if (layout != null) {
             return new FlatJoinIndex(layout);
@@ -339,7 +346,6 @@ public class HashJoinOperator
 
     private Streams materializeOuterOutput(int outputIndex)
     {
-        constrainOuterIfNecessary();
         Output sourceOutput = currentOuterBatch.output(outputIndex);
         if (currentOutputMask.all()) {
             return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
@@ -433,35 +439,6 @@ public class HashJoinOperator
                 innerBatch.retainedBatch().borrowMask().size()));
     }
 
-    private void constrainOuterIfNecessary()
-    {
-        if (outerConstrained || currentOuterBatch == null) {
-            return;
-        }
-        outerConstrained = true;
-        outer.constrain(matchedOuterMask());
-    }
-
-    private Mask matchedOuterMask()
-    {
-        if (currentOutputMask.none()) {
-            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], currentOuterMask.size());
-        }
-
-        int[] positions = new int[Math.min(currentOutputMask.count(), currentOuterMask.count())];
-        int selectedCount = 0;
-        int previous = -1;
-        for (int index = 0; index < currentOutputMask.count(); index++) {
-            int outputPosition = currentOutputMask.position(index);
-            int outerPosition = outputOuterPositions[outputPosition];
-            if (outerPosition != previous) {
-                positions[selectedCount++] = outerPosition;
-                previous = outerPosition;
-            }
-        }
-        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, java.util.Arrays.copyOf(positions, selectedCount), currentOuterMask.size());
-    }
-
     private static long packRowReference(int batchIndex, int position)
     {
         return ((long) batchIndex << Integer.SIZE) | (position & 0xFFFF_FFFFL);
@@ -477,6 +454,12 @@ public class HashJoinOperator
         return (int) rowReference;
     }
 
+    private static boolean isSingleLongJoinCandidate(Vector values)
+    {
+        FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
+        return handler != null && handler.kind() == FlatTypeHandler.Kind.LONG;
+    }
+
     private interface JoinIndex
     {
         boolean isEmpty();
@@ -484,6 +467,131 @@ public class HashJoinOperator
         void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference);
 
         LongList matches(Vector[] values, BooleanVector[] nulls, int position);
+    }
+
+    private static final class LongJoinIndex
+            implements JoinIndex
+    {
+        private static final float LOAD_FACTOR = 0.75f;
+
+        private long[] keys;
+        private LongArrayList[] rowsBySlot;
+        private int mask;
+        private int maxFill;
+        private int size;
+
+        private LongJoinIndex(int expectedSize)
+        {
+            int capacity = 16;
+            while (capacity < expectedSize / LOAD_FACTOR) {
+                capacity <<= 1;
+            }
+            keys = new long[capacity];
+            rowsBySlot = new LongArrayList[capacity];
+            mask = capacity - 1;
+            maxFill = (int) (capacity * LOAD_FACTOR);
+        }
+
+        @Override
+        public boolean isEmpty()
+        {
+            return size == 0;
+        }
+
+        @Override
+        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        {
+            if (FlatJoinIndex.hasNull(nulls, position)) {
+                return;
+            }
+
+            long key = OperatorVectorSupport.longValue(values[0], position);
+            int index = mix(key) & mask;
+            while (true) {
+                LongArrayList rows = rowsBySlot[index];
+                if (rows == null) {
+                    keys[index] = key;
+                    rows = new LongArrayList();
+                    rowsBySlot[index] = rows;
+                    size++;
+                    if (size >= maxFill) {
+                        rehash();
+                        index = findSlot(key);
+                        rows = rowsBySlot[index];
+                    }
+                    rows.add(rowReference);
+                    return;
+                }
+                if (keys[index] == key) {
+                    rows.add(rowReference);
+                    return;
+                }
+                index = (index + 1) & mask;
+            }
+        }
+
+        @Override
+        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            if (FlatJoinIndex.hasNull(nulls, position)) {
+                return LongLists.emptyList();
+            }
+
+            long key = OperatorVectorSupport.longValue(values[0], position);
+            int index = findSlot(key);
+            LongArrayList rows = rowsBySlot[index];
+            return rows == null ? LongLists.emptyList() : rows;
+        }
+
+        private int findSlot(long key)
+        {
+            int index = mix(key) & mask;
+            while (true) {
+                LongArrayList rows = rowsBySlot[index];
+                if (rows == null || keys[index] == key) {
+                    return index;
+                }
+                index = (index + 1) & mask;
+            }
+        }
+
+        private void rehash()
+        {
+            long[] previousKeys = keys;
+            LongArrayList[] previousRowsBySlot = rowsBySlot;
+            int capacity = previousRowsBySlot.length * 2;
+
+            keys = new long[capacity];
+            rowsBySlot = new LongArrayList[capacity];
+            mask = capacity - 1;
+            maxFill = (int) (capacity * LOAD_FACTOR);
+            size = 0;
+
+            for (int index = 0; index < previousRowsBySlot.length; index++) {
+                LongArrayList rows = previousRowsBySlot[index];
+                if (rows == null) {
+                    continue;
+                }
+
+                int newIndex = mix(previousKeys[index]) & mask;
+                while (rowsBySlot[newIndex] != null) {
+                    newIndex = (newIndex + 1) & mask;
+                }
+                keys[newIndex] = previousKeys[index];
+                rowsBySlot[newIndex] = rows;
+                size++;
+            }
+        }
+
+        private static int mix(long key)
+        {
+            long hash = key ^ (key >>> 33);
+            hash *= 0xFF51AFD7ED558CCDL;
+            hash ^= (hash >>> 33);
+            hash *= 0xC4CEB9FE1A85EC53L;
+            hash ^= (hash >>> 33);
+            return (int) hash;
+        }
     }
 
     private static final class FlatJoinIndex

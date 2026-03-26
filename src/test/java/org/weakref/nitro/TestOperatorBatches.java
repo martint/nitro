@@ -53,8 +53,10 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -464,6 +466,32 @@ public class TestOperatorBatches
         assertThat(Arrays.copyOf(((I32Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2, 3);
         assertThat(Arrays.copyOf(((I32Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(20, 30);
         assertThat(Arrays.copyOf(((I32Vector) batch.output(3).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(200, 300);
+    }
+
+    @Test
+    void testHashJoinOperatorSupportsI64EquiJoinWithDuplicateMatches()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(2L, 20L),
+                        row(3L, 30L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2L, 200L),
+                        row(2L, 201L),
+                        row(3L, 300L),
+                        row(4L, 400L))),
+                0);
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 2L, 3L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(20L, 20L, 30L);
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(3).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(200L, 201L, 300L);
     }
 
     @Test
@@ -976,6 +1004,46 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorPreservesLazyNonRetainedOuterPayloadAcrossOutputBatches()
+    {
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
+        for (int index = 0; index < 600; index++) {
+            innerRows.add(row(1L, 1000L + index));
+        }
+        for (int index = 0; index < 600; index++) {
+            innerRows.add(row(2L, 2000L + index));
+        }
+        innerRows.add(row(3L, 3000L));
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                new LazyNonRetainedOuterOperator(
+                        new long[] {1L, 2L, 3L},
+                        new long[] {10L, 20L, 30L}),
+                0,
+                new ConstantTableOperator(allocator, 2, innerRows),
+                0)) {
+            try (Batch first = join.next()) {
+                assertThat(first.borrowMask().count()).isEqualTo(1024);
+                assertThat(((I64Vector) first.output(1).borrow(Stream.VALUES)).values()[1023]).isEqualTo(20L);
+            }
+
+            try (Batch second = join.next()) {
+                assertThat(second.borrowMask().count()).isEqualTo(177);
+                I64Vector outerPayloads = (I64Vector) second.output(1).borrow(Stream.VALUES);
+                I64Vector innerPayloads = (I64Vector) second.output(3).borrow(Stream.VALUES);
+
+                for (int index = 0; index < 176; index++) {
+                    assertThat(outerPayloads.values()[index]).isEqualTo(20L);
+                }
+                assertThat(outerPayloads.values()[176]).isEqualTo(30L);
+                assertThat(innerPayloads.values()[176]).isEqualTo(3000L);
+            }
+        }
+    }
+
+    @Test
     void testHashJoinOperatorPreservesObservedSchemaOnEmptyResult()
     {
         Allocator allocator = new Allocator();
@@ -1162,6 +1230,71 @@ public class TestOperatorBatches
         private int nextCount()
         {
             return nextCount;
+        }
+    }
+
+    private static final class LazyNonRetainedOuterOperator
+            implements Operator
+    {
+        private final I64Vector keys;
+        private final long[] payloadValues;
+        private Mask currentMask;
+        private boolean emitted;
+
+        private LazyNonRetainedOuterOperator(long[] keys, long[] payloadValues)
+        {
+            this.keys = new I64Vector(keys);
+            this.payloadValues = Arrays.copyOf(payloadValues, payloadValues.length);
+            this.currentMask = Mask.all(keys.length);
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 2;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return !emitted;
+        }
+
+        @Override
+        public Batch next()
+        {
+            emitted = true;
+            return new Batch(
+                    currentMask,
+                    this::constrain,
+                    Function.identity(),
+                    new Output(Set.of(Stream.VALUES), ignored -> keys),
+                    new Output(Set.of(Stream.VALUES), ignored -> lazyPayload()));
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            currentMask = mask;
+        }
+
+        @Override
+        public void close()
+        {
+        }
+
+        private I64Vector lazyPayload()
+        {
+            I64Vector payload = new I64Vector(payloadValues.length);
+            if (currentMask.all()) {
+                System.arraycopy(payloadValues, 0, payload.values(), 0, payloadValues.length);
+                return payload;
+            }
+            for (int index = 0; index < currentMask.count(); index++) {
+                int position = currentMask.position(index);
+                payload.values()[position] = payloadValues[position];
+            }
+            return payload;
         }
     }
 }
