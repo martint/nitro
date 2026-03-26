@@ -821,6 +821,19 @@ the evaluator design:
   that dictionary peeling is not yet a generic evaluator capability and mask
   refinement still tends to happen after predicate evaluation rather than as the
   native control-flow shape of the filter path.
+- The evaluator should not encode knowledge of specific primitive names such as
+  `eq` or `lt` in order to get fast mask evaluation. If a primitive can answer
+  mask-oriented questions directly, that capability should live on the
+  primitive-function side and be discovered through a generic evaluator hook.
+  This keeps architectural responsibility aligned with the primitive contract
+  and avoids rebuilding function dispatch logic inside `PlanEvaluator`.
+- Mask-oriented primitive execution needs a more precise input contract than a
+  simple yes/no companion-stream flag. Some paths, such as `eq_utf8` over
+  dictionary data, can avoid fully completed row-wise companion streams while
+  still requiring semantically available `NULLS` and `ERRORS` inputs for
+  correct SQL three-valued logic. The evaluator should distinguish between
+  "available companion streams" and "fully completed companion streams" when
+  preparing inputs for mask-only primitive evaluation.
 - Dense/bitset mask forms are not the first missing representation for the
   current ClickBench string filters. For `Q11`, the real win comes from keeping
   dictionary remap information alive longer, not from replacing sparse masks
@@ -871,6 +884,10 @@ Two important constraints from current experiments:
 - the first useful version does not need a brand-new runtime selection type;
   it can keep `Mask` as the control-flow object and teach mask classification to
   operate on encoded boolean vectors efficiently
+- even with generic primitive mask hooks, encoded filter paths still need the
+  evaluator to provide semantically available companion streams when those
+  streams exist upstream; otherwise direct false-mask or true-mask evaluation
+  can become fast but wrong around null/error handling
 
 ## Target Operator Contract
 
@@ -1304,6 +1321,22 @@ availability. When a primitive consumes a referenced `VALUES` stream, the
 evaluator should still provide sibling input `NULLS` and `ERRORS` streams in
 the same input bundle when those streams exist for that producer, because
 row-local null and error state are part of the meaning of the input values.
+
+Mask-only primitive paths should refine that rule slightly:
+
+- some primitives may be able to evaluate masks without fully materialized or
+  completed companion streams
+- those same primitives may still require semantically available companion
+  streams from upstream inputs when they exist
+- the evaluator should therefore distinguish between:
+  - completed companion streams, meaning row-wise sibling bundles are fully
+    synthesized and ready for ordinary value-path execution
+  - available companion streams, meaning existing upstream `NULLS` and
+    `ERRORS` streams are attached when present, but unnecessary synthesis is
+    avoided
+
+This distinction lets mask-oriented paths stay cheap without dropping the
+three-valued semantics carried by the input bundle.
 
 The same bundle-selective rule should apply to non-primitive operations such as
 `Literal`, `Copy`, and `Merge`. If a downstream consumer requests only

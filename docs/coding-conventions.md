@@ -40,3 +40,40 @@ variants call it instead of duplicating the logic.
 
 This reduces the risk that one path drifts semantically from the others while
 still allowing the hot loops themselves to stay specialized and readable.
+
+## Keep evaluator dispatch capability-based
+
+The evaluator should not grow special cases for individual primitive function
+names such as `eq`, `lt`, or `contains_utf8`.
+
+Prefer:
+
+- generic capability interfaces such as mask-evaluable or encoding-aware
+  primitive hooks
+- function-local implementations of those capabilities
+- evaluator logic that asks "can this primitive do X?" instead of "is this the
+  `eq` function?"
+
+Avoid:
+
+- helper methods in `PlanEvaluator` named after particular primitive families
+- rebuilding primitive semantics in evaluator-side code
+- branching on function names inside the evaluator hot path
+
+This keeps scalar semantics with the primitive implementation and helps prevent
+the evaluator from becoming a second, harder-to-maintain dispatch layer.
+
+## Distinguish available vs completed companion streams
+
+When adding optimized mask-only or encoded execution paths, be explicit about
+whether a primitive needs:
+
+- completed companion streams
+- or merely available companion streams when they already exist upstream
+
+These are not the same thing.
+
+A mask-only path may legitimately avoid synthesizing full row-wise `NULLS` or
+`ERRORS` outputs while still requiring upstream null/error streams for correct
+three-valued semantics. In those cases, prefer reusing existing companion
+streams over forcing full completion, but do not silently drop them.
