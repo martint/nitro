@@ -78,7 +78,7 @@ public class ConstantTableOperator
     @Override
     public boolean supportsRetainedBatches()
     {
-        return true;
+        return false;
     }
 
     @Override
