@@ -25,10 +25,18 @@ import io.trino.operator.DriverContext;
 import io.trino.operator.FilterAndProjectOperator;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
+import io.trino.operator.HashArraySizeSupplier;
+import io.trino.operator.JoinOperatorType;
 import io.trino.operator.Operator;
 import io.trino.operator.OperatorFactory;
+import io.trino.operator.PagesIndex;
 import io.trino.operator.TopNOperator;
+import io.trino.operator.ValuesOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
+import io.trino.operator.join.JoinBridgeManager;
+import io.trino.operator.join.LookupSource;
+import io.trino.operator.join.unspilled.HashBuilderOperator.HashBuilderOperatorFactory;
+import io.trino.operator.join.unspilled.PartitionedLookupSourceFactory;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.connector.SortOrder;
@@ -187,14 +195,35 @@ public final class TrinoTpcdsParquetSupport
         Query10Lookup lookup = query10Lookup(tables);
         List<Type> groupTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
-        return execute(
+        return executeWithHashJoin(
                 tables.tableFiles("customer"),
                 List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"),
                 List.of(
-                        customerDemographicsProjectFactory(50, tableColumnTypes(tables, "customer", List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk")), lookup),
-                        hashAggregationFactory(51, groupTypes, List.of(0, 1, 2, 3, 4, 5, 6, 7), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        customerEligibilityProjectFactory(50, tableColumnTypes(tables, "customer", List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk")), lookup)),
+                new HashJoinSpec(
+                        51,
+                        List.of(BIGINT),
+                        List.of(0),
+                        customerDemographicsBuildPages(tables),
+                        List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT),
+                        List.of(0)),
+                List.of(
                         filterAndProjectFactory(
                                 52,
+                                Optional.empty(),
+                                List.of(
+                                        field(2, VARCHAR),
+                                        field(3, VARCHAR),
+                                        field(4, VARCHAR),
+                                        field(5, BIGINT),
+                                        field(6, VARCHAR),
+                                        field(7, BIGINT),
+                                        field(8, BIGINT),
+                                        field(9, BIGINT)),
+                                groupTypes),
+                        hashAggregationFactory(53, groupTypes, List.of(0, 1, 2, 3, 4, 5, 6, 7), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        filterAndProjectFactory(
+                                54,
                                 Optional.empty(),
                                 List.of(
                                         field(0, VARCHAR),
@@ -212,7 +241,7 @@ public final class TrinoTpcdsParquetSupport
                                         field(7, BIGINT),
                                         field(8, BIGINT)),
                                 outputTypes),
-                        topNFactory(53, outputTypes, 100, List.of(0, 1, 2, 4, 6, 8, 10, 12), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
+                        topNFactory(55, outputTypes, 100, List.of(0, 1, 2, 4, 6, 8, 10, 12), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
                 outputTypes);
     }
 
@@ -222,14 +251,33 @@ public final class TrinoTpcdsParquetSupport
         List<Type> inputTypes = tableColumnTypes(tables, "store_sales", List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"));
         List<Type> projectedTypes = List.of(BIGINT, BIGINT);
         List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT);
-        return execute(
+        return executeWithHashJoin(
                 tables.tableFiles("store_sales"),
                 List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"),
                 List.of(
                         ticketCustomerFilterProjectFactory(60, inputTypes, lookup),
                         hashAggregationFactory(61, projectedTypes, List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        customerTicketProjectFactory(62, List.of(BIGINT, BIGINT, BIGINT), lookup.customers()),
-                        topNFactory(63, outputTypes, 100, List.of(5, 0, 4), List.of(io.trino.spi.connector.SortOrder.DESC_NULLS_LAST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
+                        filterAndProjectFactory(62, Optional.of(and(greaterThan(2, 0, BIGINT), lessThan(2, 6, BIGINT))), identityProjections(List.of(BIGINT, BIGINT, BIGINT)), List.of(BIGINT, BIGINT, BIGINT))),
+                new HashJoinSpec(
+                        63,
+                        List.of(BIGINT, BIGINT, BIGINT),
+                        List.of(1),
+                        customerIdentityBuildPages(tables),
+                        List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR),
+                        List.of(0)),
+                List.of(
+                        filterAndProjectFactory(
+                                64,
+                                Optional.empty(),
+                                List.of(
+                                        field(4, VARCHAR),
+                                        field(5, VARCHAR),
+                                        field(6, VARCHAR),
+                                        field(7, VARCHAR),
+                                        field(0, BIGINT),
+                                        field(2, BIGINT)),
+                                outputTypes),
+                        topNFactory(65, outputTypes, 100, List.of(5, 0, 4), List.of(io.trino.spi.connector.SortOrder.DESC_NULLS_LAST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
                 outputTypes);
     }
 
@@ -296,8 +344,7 @@ public final class TrinoTpcdsParquetSupport
                 addressKeysForCounties(tables, "Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"),
                 customerKeysForDates(tables, "store_sales", List.of("ss_customer_sk", "ss_sold_date_sk"), eligibleDates),
                 customerKeysForDates(tables, "web_sales", List.of("ws_bill_customer_sk", "ws_sold_date_sk"), eligibleDates),
-                customerKeysForDates(tables, "catalog_sales", List.of("cs_ship_customer_sk", "cs_sold_date_sk"), eligibleDates),
-                customerDemographicsLookup(tables));
+                customerKeysForDates(tables, "catalog_sales", List.of("cs_ship_customer_sk", "cs_sold_date_sk"), eligibleDates));
     }
 
     private Query73Lookup query73Lookup(TpcdsParquetTables tables)
@@ -305,8 +352,7 @@ public final class TrinoTpcdsParquetSupport
         return new Query73Lookup(
                 dateKeysForDayOfMonthAndYears(tables, 1, 2, 1999, 2000, 2001),
                 storeKeysForCounties(tables, "Williamson County", "Franklin Parish", "Bronx County", "Orange County"),
-                householdKeysForQuery73(tables),
-                customerIdentityLookup(tables));
+                householdKeysForQuery73(tables));
     }
 
     @SuppressWarnings("unchecked")
@@ -375,6 +421,117 @@ public final class TrinoTpcdsParquetSupport
             }
             return result.build();
         }
+    }
+
+    private MaterializedResult executeWithHashJoin(
+            List<Path> probeFiles,
+            List<String> probeColumns,
+            List<OperatorFactory> preJoinFactories,
+            HashJoinSpec hashJoinSpec,
+            List<OperatorFactory> postJoinFactories,
+            List<Type> outputTypes)
+    {
+        List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
+        try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(probeFiles, probeColumns)) {
+            OperatorFactory joinFactory = createHashJoinFactory(taskContext, hashJoinSpec);
+            DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
+            List<Operator> operators = new ArrayList<>();
+            TrinoPageSequenceSourceOperator.Factory sourceFactory = new TrinoPageSequenceSourceOperator.Factory(0, new PlanNodeId("source"), reader);
+            operators.add(sourceFactory.createOperator(driverContext));
+
+            for (OperatorFactory factory : preJoinFactories) {
+                operators.add(factory.createOperator(driverContext));
+                factory.noMoreOperators();
+            }
+
+            operators.add(joinFactory.createOperator(driverContext));
+            joinFactory.noMoreOperators();
+
+            for (OperatorFactory factory : postJoinFactories) {
+                operators.add(factory.createOperator(driverContext));
+                factory.noMoreOperators();
+            }
+
+            operators.add(new PageConsumerOperator(
+                    driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                    outputPages::add,
+                    java.util.function.Function.identity()));
+
+            try (Driver driver = Driver.createDriver(driverContext, operators)) {
+                processDriver(driver, operators);
+            }
+            catch (Exception exception) {
+                throw new RuntimeException("Unable to execute Trino TPC-DS parquet join pipeline", exception);
+            }
+
+            MaterializedResult.Builder result = MaterializedResult.resultBuilder(driverContext.getSession(), outputTypes);
+            for (Page page : outputPages) {
+                result.page(page);
+            }
+            return result.build();
+        }
+    }
+
+    private OperatorFactory createHashJoinFactory(io.trino.operator.TaskContext taskContext, HashJoinSpec hashJoinSpec)
+    {
+        PartitionedLookupSourceFactory lookupSourceFactory = new PartitionedLookupSourceFactory(
+                hashJoinSpec.buildTypes(),
+                hashJoinSpec.buildTypes(),
+                hashJoinSpec.buildHashChannels().stream()
+                        .map(hashJoinSpec.buildTypes()::get)
+                        .toList(),
+                1,
+                false,
+                new TypeOperators());
+        JoinBridgeManager<PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
+                false,
+                lookupSourceFactory,
+                lookupSourceFactory.getOutputTypes());
+        OperatorFactory joinFactory = io.trino.operator.OperatorFactories.join(
+                JoinOperatorType.innerJoin(false, false),
+                hashJoinSpec.operatorId(),
+                new PlanNodeId("join-" + hashJoinSpec.operatorId()),
+                joinBridgeManager,
+                false,
+                hashJoinSpec.probeTypes(),
+                hashJoinSpec.probeJoinChannels(),
+                Optional.empty());
+        HashBuilderOperatorFactory buildOperatorFactory = new HashBuilderOperatorFactory(
+                9000 + hashJoinSpec.operatorId(),
+                new PlanNodeId("build-" + hashJoinSpec.operatorId()),
+                joinBridgeManager,
+                rangeList(hashJoinSpec.buildTypes().size()),
+                hashJoinSpec.buildHashChannels(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableList.of(),
+                100,
+                new PagesIndex.TestingFactory(false),
+                HashArraySizeSupplier.incrementalLoadFactorHashArraySizeSupplier(taskContext.getSession()));
+        ValuesOperator.ValuesOperatorFactory valuesOperatorFactory = new ValuesOperator.ValuesOperatorFactory(
+                8000 + hashJoinSpec.operatorId(),
+                new PlanNodeId("values-" + hashJoinSpec.operatorId()),
+                hashJoinSpec.buildPages());
+
+        DriverContext buildDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
+        try (Driver buildDriver = Driver.createDriver(
+                buildDriverContext,
+                valuesOperatorFactory.createOperator(buildDriverContext),
+                buildOperatorFactory.createOperator(buildDriverContext))) {
+            valuesOperatorFactory.noMoreOperators();
+            buildOperatorFactory.noMoreOperators();
+            java.util.concurrent.Future<LookupSource> lookupSource = joinBridgeManager.getJoinBridge().createLookupSource();
+            while (!lookupSource.isDone()) {
+                buildDriver.processForNumberOfIterations(1);
+            }
+            lookupSource.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS).close();
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to build Trino hash-join lookup source", exception);
+        }
+
+        return joinFactory;
     }
 
     private MaterializedResult scanTable(TpcdsParquetTables tables, String tableName, List<String> columns, List<Type> outputTypes)
@@ -510,42 +667,62 @@ public final class TrinoTpcdsParquetSupport
         return buckets;
     }
 
-    private Map<Integer, CustomerDemographicsRecord> customerDemographicsLookup(TpcdsParquetTables tables)
+    private List<Page> customerDemographicsBuildPages(TpcdsParquetTables tables)
     {
-        Map<Integer, CustomerDemographicsRecord> values = new HashMap<>();
-        scanTable(tables, "customer_demographics",
+        MaterializedResult result = scanTable(
+                tables,
+                "customer_demographics",
                 List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count"),
-                tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count")))
-                .getMaterializedRows()
-                .forEach(row -> values.put(
-                        ((Number) row.getField(0)).intValue(),
-                        new CustomerDemographicsRecord(
-                                (String) row.getField(1),
-                                (String) row.getField(2),
-                                (String) row.getField(3),
-                                ((Number) row.getField(4)).longValue(),
-                                (String) row.getField(5),
-                                ((Number) row.getField(6)).longValue(),
-                                ((Number) row.getField(7)).longValue(),
-                                ((Number) row.getField(8)).longValue())));
-        return values;
+                tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count")));
+        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT));
+        List<Page> pages = new ArrayList<>();
+        result.getMaterializedRows().forEach(row -> {
+            if (pageBuilder.isFull()) {
+                pages.add(pageBuilder.build());
+                pageBuilder.reset();
+            }
+            pageBuilder.declarePosition();
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), ((Number) row.getField(0)).longValue());
+            writeJoinVarchar(pageBuilder.getBlockBuilder(1), (String) row.getField(1));
+            writeJoinVarchar(pageBuilder.getBlockBuilder(2), (String) row.getField(2));
+            writeJoinVarchar(pageBuilder.getBlockBuilder(3), (String) row.getField(3));
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(4), ((Number) row.getField(4)).longValue());
+            writeJoinVarchar(pageBuilder.getBlockBuilder(5), (String) row.getField(5));
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(6), ((Number) row.getField(6)).longValue());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(7), ((Number) row.getField(7)).longValue());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(8), ((Number) row.getField(8)).longValue());
+        });
+        if (!pageBuilder.isEmpty()) {
+            pages.add(pageBuilder.build());
+        }
+        return pages;
     }
 
-    private Map<Integer, CustomerIdentityRecord> customerIdentityLookup(TpcdsParquetTables tables)
+    private List<Page> customerIdentityBuildPages(TpcdsParquetTables tables)
     {
-        Map<Integer, CustomerIdentityRecord> values = new HashMap<>();
-        scanTable(tables, "customer",
+        MaterializedResult result = scanTable(
+                tables,
+                "customer",
                 List.of("c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag"),
-                tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag")))
-                .getMaterializedRows()
-                .forEach(row -> values.put(
-                        ((Number) row.getField(0)).intValue(),
-                        new CustomerIdentityRecord(
-                                (String) row.getField(1),
-                                (String) row.getField(2),
-                                (String) row.getField(3),
-                                (String) row.getField(4))));
-        return values;
+                tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag")));
+        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR));
+        List<Page> pages = new ArrayList<>();
+        result.getMaterializedRows().forEach(row -> {
+            if (pageBuilder.isFull()) {
+                pages.add(pageBuilder.build());
+                pageBuilder.reset();
+            }
+            pageBuilder.declarePosition();
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), ((Number) row.getField(0)).longValue());
+            writeJoinVarchar(pageBuilder.getBlockBuilder(1), (String) row.getField(1));
+            writeJoinVarchar(pageBuilder.getBlockBuilder(2), (String) row.getField(2));
+            writeJoinVarchar(pageBuilder.getBlockBuilder(3), (String) row.getField(3));
+            writeJoinVarchar(pageBuilder.getBlockBuilder(4), (String) row.getField(4));
+        });
+        if (!pageBuilder.isEmpty()) {
+            pages.add(pageBuilder.build());
+        }
+        return pages;
     }
 
     private static long singleLongResult(MaterializedResult result)
@@ -648,19 +825,14 @@ public final class TrinoTpcdsParquetSupport
         return pageTransformFactory(operatorId, "shipping-buckets", page -> transformShippingBucketsPage(inputTypes, lookup, page));
     }
 
-    private OperatorFactory customerDemographicsProjectFactory(int operatorId, List<Type> inputTypes, Query10Lookup lookup)
+    private OperatorFactory customerEligibilityProjectFactory(int operatorId, List<Type> inputTypes, Query10Lookup lookup)
     {
-        return pageTransformFactory(operatorId, "customer-demographics", page -> transformCustomerDemographicsPage(inputTypes, lookup, page));
+        return pageTransformFactory(operatorId, "customer-eligibility", page -> transformCustomerEligibilityPage(inputTypes, lookup, page));
     }
 
     private OperatorFactory ticketCustomerFilterProjectFactory(int operatorId, List<Type> inputTypes, Query73Lookup lookup)
     {
         return pageTransformFactory(operatorId, "ticket-customer", page -> transformTicketCustomerPage(inputTypes, lookup, page));
-    }
-
-    private OperatorFactory customerTicketProjectFactory(int operatorId, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
-    {
-        return pageTransformFactory(operatorId, "customer-ticket", page -> transformCustomerTicketPage(inputTypes, customers, page));
     }
 
     private OperatorFactory pageTransformFactory(int operatorId, String name, PageTransform pageTransform)
@@ -688,9 +860,9 @@ public final class TrinoTpcdsParquetSupport
         return projections;
     }
 
-    private static Page transformCustomerDemographicsPage(List<Type> inputTypes, Query10Lookup lookup, Page page)
+    private static Page transformCustomerEligibilityPage(List<Type> inputTypes, Query10Lookup lookup, Page page)
     {
-        PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT));
+        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT));
         for (int position = 0; position < page.getPositionCount(); position++) {
             int addressKey = readInt(inputTypes.get(0), page, 0, position);
             int customerKey = readInt(inputTypes.get(1), page, 1, position);
@@ -700,20 +872,8 @@ public final class TrinoTpcdsParquetSupport
                 continue;
             }
 
-            CustomerDemographicsRecord demographics = lookup.demographics().get(readInt(inputTypes.get(2), page, 2, position));
-            if (demographics == null) {
-                continue;
-            }
-
             pageBuilder.declarePosition();
-            writeVarchar(pageBuilder.getBlockBuilder(0), demographics.gender());
-            writeVarchar(pageBuilder.getBlockBuilder(1), demographics.maritalStatus());
-            writeVarchar(pageBuilder.getBlockBuilder(2), demographics.educationStatus());
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(3), demographics.purchaseEstimate());
-            writeVarchar(pageBuilder.getBlockBuilder(4), demographics.creditRating());
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(5), demographics.dependentCount());
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(6), demographics.employedDependentCount());
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(7), demographics.collegeDependentCount());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(2), page, 2, position));
         }
 
         return pageBuilder.isEmpty() ? null : pageBuilder.build();
@@ -732,32 +892,6 @@ public final class TrinoTpcdsParquetSupport
             pageBuilder.declarePosition();
             BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(0), page, 0, position));
             BIGINT.writeLong(pageBuilder.getBlockBuilder(1), readLong(inputTypes.get(1), page, 1, position));
-        }
-
-        return pageBuilder.isEmpty() ? null : pageBuilder.build();
-    }
-
-    private static Page transformCustomerTicketPage(List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers, Page page)
-    {
-        PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT));
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            long count = readLong(inputTypes.get(2), page, 2, position);
-            if (count < 1 || count > 5) {
-                continue;
-            }
-
-            CustomerIdentityRecord customer = customers.get(toIntExact(readLong(inputTypes.get(1), page, 1, position)));
-            if (customer == null) {
-                continue;
-            }
-
-            pageBuilder.declarePosition();
-            writeVarchar(pageBuilder.getBlockBuilder(0), customer.lastName());
-            writeVarchar(pageBuilder.getBlockBuilder(1), customer.firstName());
-            writeVarchar(pageBuilder.getBlockBuilder(2), customer.salutation());
-            writeVarchar(pageBuilder.getBlockBuilder(3), customer.preferredCustomerFlag());
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(4), readLong(inputTypes.get(0), page, 0, position));
-            BIGINT.writeLong(pageBuilder.getBlockBuilder(5), count);
         }
 
         return pageBuilder.isEmpty() ? null : pageBuilder.build();
@@ -992,12 +1126,22 @@ public final class TrinoTpcdsParquetSupport
 
     private static RowExpression greaterThan(int inputChannel, long constantValue)
     {
-        return lessThan(constant(constantValue, INTEGER), field(inputChannel, INTEGER), INTEGER);
+        return greaterThan(inputChannel, constantValue, INTEGER);
     }
 
     private static RowExpression lessThan(int inputChannel, long constantValue)
     {
-        return lessThan(field(inputChannel, INTEGER), constant(constantValue, INTEGER), INTEGER);
+        return lessThan(inputChannel, constantValue, INTEGER);
+    }
+
+    private static RowExpression greaterThan(int inputChannel, long constantValue, Type type)
+    {
+        return lessThan(constant(constantValue, type), field(inputChannel, type), type);
+    }
+
+    private static RowExpression lessThan(int inputChannel, long constantValue, Type type)
+    {
+        return lessThan(field(inputChannel, type), constant(constantValue, type), type);
     }
 
     private static RowExpression lessThan(RowExpression left, RowExpression right, Type type)
@@ -1027,32 +1171,26 @@ public final class TrinoTpcdsParquetSupport
             IntSet eligibleAddressKeys,
             IntSet storeCustomerKeys,
             IntSet webCustomerKeys,
-            IntSet catalogCustomerKeys,
-            Map<Integer, CustomerDemographicsRecord> demographics) {}
+            IntSet catalogCustomerKeys) {}
 
     private record Query73Lookup(
             IntSet allowedDateKeys,
             IntSet allowedStoreKeys,
-            IntSet allowedHouseholdKeys,
-            Map<Integer, CustomerIdentityRecord> customers) {}
+            IntSet allowedHouseholdKeys) {}
 
     private record Query88Lookup(IntSet[] timeBucketKeys, IntSet allowedHouseholdKeys, IntSet allowedStoreKeys) {}
 
     private record Query96Lookup(IntSet timeKeys, IntSet householdKeys, IntSet storeKeys) {}
 
-    private record CustomerDemographicsRecord(
-            String gender,
-            String maritalStatus,
-            String educationStatus,
-            long purchaseEstimate,
-            String creditRating,
-            long dependentCount,
-            long employedDependentCount,
-            long collegeDependentCount) {}
-
-    private record CustomerIdentityRecord(String lastName, String firstName, String salutation, String preferredCustomerFlag) {}
-
     private record ShippingBucketsLookup(IntSet allowedShipDates, Map<Integer, String> firstNames, Map<Integer, String> secondNames, Map<Integer, String> thirdNames) {}
+
+    private record HashJoinSpec(
+            int operatorId,
+            List<Type> probeTypes,
+            List<Integer> probeJoinChannels,
+            List<Page> buildPages,
+            List<Type> buildTypes,
+            List<Integer> buildHashChannels) {}
 
     private static final class IntegerDimensionFilterOperator
             implements Operator
@@ -1211,6 +1349,18 @@ public final class TrinoTpcdsParquetSupport
             return;
         }
         VARCHAR.writeSlice(blockBuilder, Slices.utf8Slice(value));
+    }
+
+    private static void writeJoinVarchar(io.trino.spi.block.BlockBuilder blockBuilder, String value)
+    {
+        VARCHAR.writeSlice(blockBuilder, Slices.utf8Slice(value == null ? "" : value));
+    }
+
+    private static List<Integer> rangeList(int size)
+    {
+        return java.util.stream.IntStream.range(0, size)
+                .boxed()
+                .toList();
     }
 
     private static int blockedWaitTimeoutSeconds()
