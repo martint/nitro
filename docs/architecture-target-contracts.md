@@ -881,6 +881,32 @@ This means "selection-native" in Nitro should usually look like:
 That is the closest Nitro analogue to Velox's `SelectivityVector` model while
 preserving `Mask` as the control-flow abstraction.
 
+### Benchmarking note: parquet-backed benchmark batch size
+
+Parquet-backed Nitro-vs-Trino benchmark harnesses should use a large shared row
+batch size by default. The current default for `nitro.trino.scan.maxBatchRows`
+should be `10_000`, not the tiny debug-oriented values used in earlier
+experiments.
+
+Why this matters:
+
+- low defaults such as `128` rows exaggerate per-batch evaluator and operator
+  overhead
+- they distort side-by-side comparisons by measuring small-batch control-flow
+  costs more than steady-state scan and kernel throughput
+- the ClickBench benchmarking work already showed that a `10_000` row default
+  produces more representative performance for real parquet workloads
+
+This default applies to both:
+
+- Nitro parquet scans through `TrinoParquetScanOperator`
+- Trino-side parquet page readers used by the operator-assembly comparison
+  harnesses
+
+Smaller values are still useful for debugging, but benchmark code should have a
+representative large-batch default and let tests override it explicitly when
+needed.
+
 ### Future direction: evaluator-native dictionary peeling
 
 The evaluator should eventually make dictionary-aware execution a generic

@@ -58,7 +58,7 @@ final class TrinoClickBenchPageReader
         implements AutoCloseable
 {
     private static final String MAX_BATCH_ROWS_PROPERTY = "nitro.trino.scan.maxBatchRows";
-    private static final int DEFAULT_MAX_BATCH_ROWS = 128;
+    private static final int DEFAULT_MAX_BATCH_ROWS = 10_000;
     private static final int MAX_BATCH_ROWS = Integer.getInteger(MAX_BATCH_ROWS_PROPERTY, DEFAULT_MAX_BATCH_ROWS);
     private static final DataSize MAX_READ_BLOCK_SIZE = DataSize.of(2, MEGABYTE);
     private static final DataSize MAX_MERGE_DISTANCE = DataSize.of(1, MEGABYTE);
