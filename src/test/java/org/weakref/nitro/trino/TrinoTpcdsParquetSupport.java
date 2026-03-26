@@ -645,22 +645,27 @@ public final class TrinoTpcdsParquetSupport
 
     private OperatorFactory shippingBucketsProjectFactory(int operatorId, List<Type> inputTypes, ShippingBucketsLookup lookup)
     {
-        return new ShippingBucketsProjectOperator.Factory(operatorId, new PlanNodeId("shipping-buckets-" + operatorId), inputTypes, lookup);
+        return pageTransformFactory(operatorId, "shipping-buckets", page -> transformShippingBucketsPage(inputTypes, lookup, page));
     }
 
     private OperatorFactory customerDemographicsProjectFactory(int operatorId, List<Type> inputTypes, Query10Lookup lookup)
     {
-        return new CustomerDemographicsProjectOperator.Factory(operatorId, new PlanNodeId("customer-demographics-" + operatorId), inputTypes, lookup);
+        return pageTransformFactory(operatorId, "customer-demographics", page -> transformCustomerDemographicsPage(inputTypes, lookup, page));
     }
 
     private OperatorFactory ticketCustomerFilterProjectFactory(int operatorId, List<Type> inputTypes, Query73Lookup lookup)
     {
-        return new TicketCustomerFilterProjectOperator.Factory(operatorId, new PlanNodeId("ticket-customer-" + operatorId), inputTypes, lookup);
+        return pageTransformFactory(operatorId, "ticket-customer", page -> transformTicketCustomerPage(inputTypes, lookup, page));
     }
 
     private OperatorFactory customerTicketProjectFactory(int operatorId, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
     {
-        return new CustomerTicketProjectOperator.Factory(operatorId, new PlanNodeId("customer-ticket-" + operatorId), inputTypes, customers);
+        return pageTransformFactory(operatorId, "customer-ticket", page -> transformCustomerTicketPage(inputTypes, customers, page));
+    }
+
+    private OperatorFactory pageTransformFactory(int operatorId, String name, PageTransform pageTransform)
+    {
+        return new PageTransformOperator.Factory(operatorId, new PlanNodeId(name + "-" + operatorId), pageTransform);
     }
 
     private OperatorFactory filterAndProjectFactory(int operatorId, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
@@ -681,6 +686,231 @@ public final class TrinoTpcdsParquetSupport
             projections.add(field(index, types.get(index)));
         }
         return projections;
+    }
+
+    private static Page transformCustomerDemographicsPage(List<Type> inputTypes, Query10Lookup lookup, Page page)
+    {
+        PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT));
+        for (int position = 0; position < page.getPositionCount(); position++) {
+            int addressKey = readInt(inputTypes.get(0), page, 0, position);
+            int customerKey = readInt(inputTypes.get(1), page, 1, position);
+            if (!lookup.eligibleAddressKeys().contains(addressKey) ||
+                    !lookup.storeCustomerKeys().contains(customerKey) ||
+                    (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
+                continue;
+            }
+
+            CustomerDemographicsRecord demographics = lookup.demographics().get(readInt(inputTypes.get(2), page, 2, position));
+            if (demographics == null) {
+                continue;
+            }
+
+            pageBuilder.declarePosition();
+            writeVarchar(pageBuilder.getBlockBuilder(0), demographics.gender());
+            writeVarchar(pageBuilder.getBlockBuilder(1), demographics.maritalStatus());
+            writeVarchar(pageBuilder.getBlockBuilder(2), demographics.educationStatus());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(3), demographics.purchaseEstimate());
+            writeVarchar(pageBuilder.getBlockBuilder(4), demographics.creditRating());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(5), demographics.dependentCount());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(6), demographics.employedDependentCount());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(7), demographics.collegeDependentCount());
+        }
+
+        return pageBuilder.isEmpty() ? null : pageBuilder.build();
+    }
+
+    private static Page transformTicketCustomerPage(List<Type> inputTypes, Query73Lookup lookup, Page page)
+    {
+        PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, BIGINT));
+        for (int position = 0; position < page.getPositionCount(); position++) {
+            if (!lookup.allowedDateKeys().contains(readInt(inputTypes.get(2), page, 2, position)) ||
+                    !lookup.allowedStoreKeys().contains(readInt(inputTypes.get(3), page, 3, position)) ||
+                    !lookup.allowedHouseholdKeys().contains(readInt(inputTypes.get(4), page, 4, position))) {
+                continue;
+            }
+
+            pageBuilder.declarePosition();
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(0), page, 0, position));
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(1), readLong(inputTypes.get(1), page, 1, position));
+        }
+
+        return pageBuilder.isEmpty() ? null : pageBuilder.build();
+    }
+
+    private static Page transformCustomerTicketPage(List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers, Page page)
+    {
+        PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT));
+        for (int position = 0; position < page.getPositionCount(); position++) {
+            long count = readLong(inputTypes.get(2), page, 2, position);
+            if (count < 1 || count > 5) {
+                continue;
+            }
+
+            CustomerIdentityRecord customer = customers.get(toIntExact(readLong(inputTypes.get(1), page, 1, position)));
+            if (customer == null) {
+                continue;
+            }
+
+            pageBuilder.declarePosition();
+            writeVarchar(pageBuilder.getBlockBuilder(0), customer.lastName());
+            writeVarchar(pageBuilder.getBlockBuilder(1), customer.firstName());
+            writeVarchar(pageBuilder.getBlockBuilder(2), customer.salutation());
+            writeVarchar(pageBuilder.getBlockBuilder(3), customer.preferredCustomerFlag());
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(4), readLong(inputTypes.get(0), page, 0, position));
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(5), count);
+        }
+
+        return pageBuilder.isEmpty() ? null : pageBuilder.build();
+    }
+
+    private static Page transformShippingBucketsPage(List<Type> inputTypes, ShippingBucketsLookup lookup, Page page)
+    {
+        PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT));
+        for (int position = 0; position < page.getPositionCount(); position++) {
+            int shipDate = readInt(inputTypes.get(0), page, 0, position);
+            if (!lookup.allowedShipDates().contains(shipDate)) {
+                continue;
+            }
+
+            int firstKey = readInt(inputTypes.get(2), page, 2, position);
+            int secondKey = readInt(inputTypes.get(3), page, 3, position);
+            int thirdKey = readInt(inputTypes.get(4), page, 4, position);
+            if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
+                continue;
+            }
+            String first = lookup.firstNames().get(firstKey);
+            String second = lookup.secondNames().get(secondKey);
+            String third = lookup.thirdNames().get(thirdKey);
+
+            int days = shipDate - readInt(inputTypes.get(1), page, 1, position);
+
+            pageBuilder.declarePosition();
+            if (first == null) {
+                pageBuilder.getBlockBuilder(0).appendNull();
+            }
+            else {
+                VARCHAR.writeSlice(pageBuilder.getBlockBuilder(0), Slices.utf8Slice(first));
+            }
+            if (second == null) {
+                pageBuilder.getBlockBuilder(1).appendNull();
+            }
+            else {
+                VARCHAR.writeSlice(pageBuilder.getBlockBuilder(1), Slices.utf8Slice(second));
+            }
+            if (third == null) {
+                pageBuilder.getBlockBuilder(2).appendNull();
+            }
+            else {
+                VARCHAR.writeSlice(pageBuilder.getBlockBuilder(2), Slices.utf8Slice(third));
+            }
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(3), days <= 30 ? 1 : 0);
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(4), days > 30 && days <= 60 ? 1 : 0);
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(5), days > 60 && days <= 90 ? 1 : 0);
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(6), days > 90 && days <= 120 ? 1 : 0);
+            BIGINT.writeLong(pageBuilder.getBlockBuilder(7), days > 120 ? 1 : 0);
+        }
+
+        return pageBuilder.isEmpty() ? null : pageBuilder.build();
+    }
+
+    @FunctionalInterface
+    private interface PageTransform
+    {
+        Page transform(Page page);
+    }
+
+    private static final class PageTransformOperator
+            implements Operator
+    {
+        static final class Factory
+                implements OperatorFactory
+        {
+            private final int operatorId;
+            private final PlanNodeId planNodeId;
+            private final PageTransform pageTransform;
+            private boolean closed;
+
+            private Factory(int operatorId, PlanNodeId planNodeId, PageTransform pageTransform)
+            {
+                this.operatorId = operatorId;
+                this.planNodeId = planNodeId;
+                this.pageTransform = pageTransform;
+            }
+
+            @Override
+            public Operator createOperator(DriverContext driverContext)
+            {
+                if (closed) {
+                    throw new IllegalStateException("Factory is already closed");
+                }
+                return new PageTransformOperator(driverContext.addOperatorContext(operatorId, planNodeId, PageTransformOperator.class.getSimpleName()), pageTransform);
+            }
+
+            @Override
+            public void noMoreOperators()
+            {
+                closed = true;
+            }
+
+            @Override
+            public OperatorFactory duplicate()
+            {
+                return new Factory(operatorId, planNodeId, pageTransform);
+            }
+        }
+
+        private final io.trino.operator.OperatorContext operatorContext;
+        private final PageTransform pageTransform;
+
+        private Page outputPage;
+        private boolean finishing;
+
+        private PageTransformOperator(io.trino.operator.OperatorContext operatorContext, PageTransform pageTransform)
+        {
+            this.operatorContext = operatorContext;
+            this.pageTransform = pageTransform;
+        }
+
+        @Override
+        public io.trino.operator.OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finishing = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finishing && outputPage == null;
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return !finishing && outputPage == null;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            if (!needsInput()) {
+                throw new IllegalStateException("Operator does not need input");
+            }
+            outputPage = pageTransform.transform(page);
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            Page page = outputPage;
+            outputPage = null;
+            return page;
+        }
     }
 
     private static RowExpression query41EligibilityPredicate()
@@ -941,519 +1171,6 @@ public final class TrinoTpcdsParquetSupport
                 return;
             }
             outputPage = new Page(selectedCount);
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = outputPage;
-            outputPage = null;
-            return page;
-        }
-    }
-
-    private static final class CustomerDemographicsProjectOperator
-            implements Operator
-    {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final List<Type> inputTypes;
-            private final Query10Lookup lookup;
-            private boolean closed;
-
-            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, Query10Lookup lookup)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = planNodeId;
-                this.inputTypes = List.copyOf(inputTypes);
-                this.lookup = lookup;
-            }
-
-            @Override
-            public Operator createOperator(DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new CustomerDemographicsProjectOperator(
-                        driverContext.addOperatorContext(operatorId, planNodeId, CustomerDemographicsProjectOperator.class.getSimpleName()),
-                        inputTypes,
-                        lookup);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, inputTypes, lookup);
-            }
-        }
-
-        private final io.trino.operator.OperatorContext operatorContext;
-        private final List<Type> inputTypes;
-        private final Query10Lookup lookup;
-
-        private Page outputPage;
-        private boolean finishing;
-
-        private CustomerDemographicsProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, Query10Lookup lookup)
-        {
-            this.operatorContext = operatorContext;
-            this.inputTypes = List.copyOf(inputTypes);
-            this.lookup = lookup;
-        }
-
-        @Override
-        public io.trino.operator.OperatorContext getOperatorContext()
-        {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && outputPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && outputPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-
-            PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT));
-            for (int position = 0; position < page.getPositionCount(); position++) {
-                int addressKey = readInt(inputTypes.get(0), page, 0, position);
-                int customerKey = readInt(inputTypes.get(1), page, 1, position);
-                if (!lookup.eligibleAddressKeys().contains(addressKey) ||
-                        !lookup.storeCustomerKeys().contains(customerKey) ||
-                        (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
-                    continue;
-                }
-
-                CustomerDemographicsRecord demographics = lookup.demographics().get(readInt(inputTypes.get(2), page, 2, position));
-                if (demographics == null) {
-                    continue;
-                }
-
-                pageBuilder.declarePosition();
-                writeVarchar(pageBuilder.getBlockBuilder(0), demographics.gender());
-                writeVarchar(pageBuilder.getBlockBuilder(1), demographics.maritalStatus());
-                writeVarchar(pageBuilder.getBlockBuilder(2), demographics.educationStatus());
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(3), demographics.purchaseEstimate());
-                writeVarchar(pageBuilder.getBlockBuilder(4), demographics.creditRating());
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(5), demographics.dependentCount());
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(6), demographics.employedDependentCount());
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(7), demographics.collegeDependentCount());
-            }
-
-            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = outputPage;
-            outputPage = null;
-            return page;
-        }
-    }
-
-    private static final class TicketCustomerFilterProjectOperator
-            implements Operator
-    {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final List<Type> inputTypes;
-            private final Query73Lookup lookup;
-            private boolean closed;
-
-            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, Query73Lookup lookup)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = planNodeId;
-                this.inputTypes = List.copyOf(inputTypes);
-                this.lookup = lookup;
-            }
-
-            @Override
-            public Operator createOperator(DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new TicketCustomerFilterProjectOperator(
-                        driverContext.addOperatorContext(operatorId, planNodeId, TicketCustomerFilterProjectOperator.class.getSimpleName()),
-                        inputTypes,
-                        lookup);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, inputTypes, lookup);
-            }
-        }
-
-        private final io.trino.operator.OperatorContext operatorContext;
-        private final List<Type> inputTypes;
-        private final Query73Lookup lookup;
-
-        private Page outputPage;
-        private boolean finishing;
-
-        private TicketCustomerFilterProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, Query73Lookup lookup)
-        {
-            this.operatorContext = operatorContext;
-            this.inputTypes = List.copyOf(inputTypes);
-            this.lookup = lookup;
-        }
-
-        @Override
-        public io.trino.operator.OperatorContext getOperatorContext()
-        {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && outputPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && outputPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-
-            PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, BIGINT));
-            for (int position = 0; position < page.getPositionCount(); position++) {
-                if (!lookup.allowedDateKeys().contains(readInt(inputTypes.get(2), page, 2, position)) ||
-                        !lookup.allowedStoreKeys().contains(readInt(inputTypes.get(3), page, 3, position)) ||
-                        !lookup.allowedHouseholdKeys().contains(readInt(inputTypes.get(4), page, 4, position))) {
-                    continue;
-                }
-
-                pageBuilder.declarePosition();
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(0), page, 0, position));
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(1), readLong(inputTypes.get(1), page, 1, position));
-            }
-
-            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = outputPage;
-            outputPage = null;
-            return page;
-        }
-    }
-
-    private static final class CustomerTicketProjectOperator
-            implements Operator
-    {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final List<Type> inputTypes;
-            private final Map<Integer, CustomerIdentityRecord> customers;
-            private boolean closed;
-
-            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = planNodeId;
-                this.inputTypes = List.copyOf(inputTypes);
-                this.customers = customers;
-            }
-
-            @Override
-            public Operator createOperator(DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new CustomerTicketProjectOperator(
-                        driverContext.addOperatorContext(operatorId, planNodeId, CustomerTicketProjectOperator.class.getSimpleName()),
-                        inputTypes,
-                        customers);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, inputTypes, customers);
-            }
-        }
-
-        private final io.trino.operator.OperatorContext operatorContext;
-        private final List<Type> inputTypes;
-        private final Map<Integer, CustomerIdentityRecord> customers;
-
-        private Page outputPage;
-        private boolean finishing;
-
-        private CustomerTicketProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
-        {
-            this.operatorContext = operatorContext;
-            this.inputTypes = List.copyOf(inputTypes);
-            this.customers = customers;
-        }
-
-        @Override
-        public io.trino.operator.OperatorContext getOperatorContext()
-        {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && outputPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && outputPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-
-            PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT));
-            for (int position = 0; position < page.getPositionCount(); position++) {
-                long count = readLong(inputTypes.get(2), page, 2, position);
-                if (count < 1 || count > 5) {
-                    continue;
-                }
-
-                CustomerIdentityRecord customer = customers.get(toIntExact(readLong(inputTypes.get(1), page, 1, position)));
-                if (customer == null) {
-                    continue;
-                }
-
-                pageBuilder.declarePosition();
-                writeVarchar(pageBuilder.getBlockBuilder(0), customer.lastName());
-                writeVarchar(pageBuilder.getBlockBuilder(1), customer.firstName());
-                writeVarchar(pageBuilder.getBlockBuilder(2), customer.salutation());
-                writeVarchar(pageBuilder.getBlockBuilder(3), customer.preferredCustomerFlag());
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(4), readLong(inputTypes.get(0), page, 0, position));
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(5), count);
-            }
-
-            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = outputPage;
-            outputPage = null;
-            return page;
-        }
-    }
-
-    private static final class ShippingBucketsProjectOperator
-            implements Operator
-    {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final List<Type> inputTypes;
-            private final ShippingBucketsLookup lookup;
-            private boolean closed;
-
-            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, ShippingBucketsLookup lookup)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = planNodeId;
-                this.inputTypes = List.copyOf(inputTypes);
-                this.lookup = lookup;
-            }
-
-            @Override
-            public Operator createOperator(DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new ShippingBucketsProjectOperator(
-                        driverContext.addOperatorContext(operatorId, planNodeId, ShippingBucketsProjectOperator.class.getSimpleName()),
-                        inputTypes,
-                        lookup);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, inputTypes, lookup);
-            }
-        }
-
-        private final io.trino.operator.OperatorContext operatorContext;
-        private final List<Type> inputTypes;
-        private final ShippingBucketsLookup lookup;
-
-        private Page outputPage;
-        private boolean finishing;
-
-        private ShippingBucketsProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, ShippingBucketsLookup lookup)
-        {
-            this.operatorContext = operatorContext;
-            this.inputTypes = List.copyOf(inputTypes);
-            this.lookup = lookup;
-        }
-
-        @Override
-        public io.trino.operator.OperatorContext getOperatorContext()
-        {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && outputPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && outputPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-
-            PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT));
-            for (int position = 0; position < page.getPositionCount(); position++) {
-                int shipDate = readInt(inputTypes.get(0), page, 0, position);
-                if (!lookup.allowedShipDates().contains(shipDate)) {
-                    continue;
-                }
-
-                int firstKey = readInt(inputTypes.get(2), page, 2, position);
-                int secondKey = readInt(inputTypes.get(3), page, 3, position);
-                int thirdKey = readInt(inputTypes.get(4), page, 4, position);
-                if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
-                    continue;
-                }
-                String first = lookup.firstNames().get(firstKey);
-                String second = lookup.secondNames().get(secondKey);
-                String third = lookup.thirdNames().get(thirdKey);
-
-                int days = shipDate - readInt(inputTypes.get(1), page, 1, position);
-
-                pageBuilder.declarePosition();
-                if (first == null) {
-                    pageBuilder.getBlockBuilder(0).appendNull();
-                }
-                else {
-                    VARCHAR.writeSlice(pageBuilder.getBlockBuilder(0), Slices.utf8Slice(first));
-                }
-                if (second == null) {
-                    pageBuilder.getBlockBuilder(1).appendNull();
-                }
-                else {
-                    VARCHAR.writeSlice(pageBuilder.getBlockBuilder(1), Slices.utf8Slice(second));
-                }
-                if (third == null) {
-                    pageBuilder.getBlockBuilder(2).appendNull();
-                }
-                else {
-                    VARCHAR.writeSlice(pageBuilder.getBlockBuilder(2), Slices.utf8Slice(third));
-                }
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(3), days <= 30 ? 1 : 0);
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(4), days > 30 && days <= 60 ? 1 : 0);
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(5), days > 60 && days <= 90 ? 1 : 0);
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(6), days > 90 && days <= 120 ? 1 : 0);
-                BIGINT.writeLong(pageBuilder.getBlockBuilder(7), days > 120 ? 1 : 0);
-            }
-
-            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
         }
 
         @Override

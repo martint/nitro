@@ -67,6 +67,10 @@ import static java.lang.Math.toIntExact;
 final class TpcdsParquetSupport
 {
     private static final byte[] NULLS_LAST_SENTINEL = "\uFFFF".getBytes(StandardCharsets.UTF_8);
+    private static final Allocator.Context CUSTOMER_DEMOGRAPHICS_TRANSFORM_CONTEXT = new Allocator.Context("CustomerDemographicsTransform");
+    private static final Allocator.Context TICKET_CUSTOMER_TRANSFORM_CONTEXT = new Allocator.Context("TicketCustomerTransform");
+    private static final Allocator.Context CUSTOMER_TICKET_TRANSFORM_CONTEXT = new Allocator.Context("CustomerTicketTransform");
+    private static final Allocator.Context SHIPPING_BUCKETS_TRANSFORM_CONTEXT = new Allocator.Context("ShippingBucketsTransform");
 
     private TpcdsParquetSupport() {}
 
@@ -91,10 +95,12 @@ final class TpcdsParquetSupport
     public static Operator query62(Allocator allocator, TpcdsParquetTables tables)
     {
         ShippingBucketsLookup lookup = query62Lookup(allocator, tables);
-        Operator projected = new ShippingBucketsProjectOperator(
+        Operator projected = new BatchTransformOperator(
                 allocator,
                 factScan(allocator, tables, "web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk", "ws_ship_mode_sk", "ws_web_site_sk"),
-                lookup);
+                8,
+                sourceBatch -> shippingBucketsBatch(allocator, SHIPPING_BUCKETS_TRANSFORM_CONTEXT, lookup, sourceBatch),
+                SHIPPING_BUCKETS_TRANSFORM_CONTEXT);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
@@ -120,10 +126,12 @@ final class TpcdsParquetSupport
     public static Operator query99(Allocator allocator, TpcdsParquetTables tables)
     {
         ShippingBucketsLookup lookup = query99Lookup(allocator, tables);
-        Operator projected = new ShippingBucketsProjectOperator(
+        Operator projected = new BatchTransformOperator(
                 allocator,
                 factScan(allocator, tables, "catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk", "cs_ship_mode_sk", "cs_call_center_sk"),
-                lookup);
+                8,
+                sourceBatch -> shippingBucketsBatch(allocator, SHIPPING_BUCKETS_TRANSFORM_CONTEXT, lookup, sourceBatch),
+                SHIPPING_BUCKETS_TRANSFORM_CONTEXT);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
@@ -138,10 +146,12 @@ final class TpcdsParquetSupport
     public static Operator query10(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Query10Lookup lookup = query10Lookup(allocator, tables);
-        Operator projected = new CustomerDemographicsProjectOperator(
+        Operator projected = new BatchTransformOperator(
                 allocator,
                 customerScan(allocator, tables, "c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"),
-                lookup);
+                8,
+                sourceBatch -> customerDemographicsBatch(allocator, CUSTOMER_DEMOGRAPHICS_TRANSFORM_CONTEXT, lookup, sourceBatch),
+                CUSTOMER_DEMOGRAPHICS_TRANSFORM_CONTEXT);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7),
@@ -154,16 +164,23 @@ final class TpcdsParquetSupport
     public static Operator query73(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Query73Lookup lookup = query73Lookup(allocator, tables);
-        Operator projected = new TicketCustomerFilterProjectOperator(
+        Operator projected = new BatchTransformOperator(
                 allocator,
                 factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"),
-                lookup);
+                2,
+                sourceBatch -> ticketCustomerBatch(allocator, TICKET_CUSTOMER_TRANSFORM_CONTEXT, lookup, sourceBatch),
+                TICKET_CUSTOMER_TRANSFORM_CONTEXT);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new CountAll()),
                 projected);
-        Operator enriched = new CustomerTicketProjectOperator(allocator, aggregated, lookup.customers());
+        Operator enriched = new BatchTransformOperator(
+                allocator,
+                aggregated,
+                6,
+                sourceBatch -> customerTicketBatch(allocator, CUSTOMER_TICKET_TRANSFORM_CONTEXT, lookup.customers(), sourceBatch),
+                CUSTOMER_TICKET_TRANSFORM_CONTEXT);
         return new TopNOperator(allocator, 100, new int[] {5, 0, 4}, new boolean[] {true, false, false}, enriched);
     }
 
@@ -821,6 +838,441 @@ final class TpcdsParquetSupport
                         NULLS_LAST_SENTINEL.length) == -1;
     }
 
+    private static Batch customerDemographicsBatch(Allocator allocator, Allocator.Context context, Query10Lookup lookup, Batch sourceBatch)
+    {
+        Mask sourceMask = sourceBatch.borrowMask();
+        if (sourceMask.none()) {
+            return null;
+        }
+
+        Vector addressValues = sourceBatch.output(0).borrow(Stream.VALUES);
+        Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
+        Vector demographicsValues = sourceBatch.output(2).borrow(Stream.VALUES);
+
+        int selectedCount = 0;
+        int genderBytes = 0;
+        int maritalBytes = 0;
+        int educationBytes = 0;
+        int creditBytes = 0;
+        for (int position : sourceMask) {
+            int addressKey = integerValue(addressValues, position);
+            int customerKey = integerValue(customerValues, position);
+            if (!lookup.eligibleAddressKeys().contains(addressKey) ||
+                    !lookup.storeCustomerKeys().contains(customerKey) ||
+                    (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
+                continue;
+            }
+
+            CustomerDemographicsRecord demographics = lookup.demographics().get(integerValue(demographicsValues, position));
+            if (demographics == null) {
+                continue;
+            }
+            selectedCount++;
+            genderBytes += length(demographics.gender());
+            maritalBytes += length(demographics.maritalStatus());
+            educationBytes += length(demographics.educationStatus());
+            creditBytes += length(demographics.creditRating());
+        }
+
+        if (selectedCount == 0) {
+            return null;
+        }
+
+        BinaryVector gender = BinaryVector.allocate(allocator, context, selectedCount, genderBytes);
+        BinaryVector maritalStatus = BinaryVector.allocate(allocator, context, selectedCount, maritalBytes);
+        BinaryVector educationStatus = BinaryVector.allocate(allocator, context, selectedCount, educationBytes);
+        BinaryVector creditRating = BinaryVector.allocate(allocator, context, selectedCount, creditBytes);
+        gender.addTrait(BinaryVector.Trait.UTF8_STRING);
+        maritalStatus.addTrait(BinaryVector.Trait.UTF8_STRING);
+        educationStatus.addTrait(BinaryVector.Trait.UTF8_STRING);
+        creditRating.addTrait(BinaryVector.Trait.UTF8_STRING);
+
+        BooleanVector genderNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        BooleanVector maritalStatusNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        BooleanVector educationStatusNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        BooleanVector creditRatingNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        I64Vector purchaseEstimate = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector dependentCount = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector employedDependentCount = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector collegeDependentCount = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+
+        int outputPosition = 0;
+        for (int position : sourceMask) {
+            int addressKey = integerValue(addressValues, position);
+            int customerKey = integerValue(customerValues, position);
+            if (!lookup.eligibleAddressKeys().contains(addressKey) ||
+                    !lookup.storeCustomerKeys().contains(customerKey) ||
+                    (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
+                continue;
+            }
+
+            CustomerDemographicsRecord demographics = lookup.demographics().get(integerValue(demographicsValues, position));
+            if (demographics == null) {
+                continue;
+            }
+
+            setBytesOrNull(gender, genderNulls, outputPosition, demographics.gender());
+            setBytesOrNull(maritalStatus, maritalStatusNulls, outputPosition, demographics.maritalStatus());
+            setBytesOrNull(educationStatus, educationStatusNulls, outputPosition, demographics.educationStatus());
+            setBytesOrNull(creditRating, creditRatingNulls, outputPosition, demographics.creditRating());
+            purchaseEstimate.values()[outputPosition] = demographics.purchaseEstimate();
+            dependentCount.values()[outputPosition] = demographics.dependentCount();
+            employedDependentCount.values()[outputPosition] = demographics.employedDependentCount();
+            collegeDependentCount.values()[outputPosition] = demographics.collegeDependentCount();
+            outputPosition++;
+        }
+
+        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(context, takenMask),
+                releasedMask -> allocator.release(context, releasedMask),
+                sourceBatch::close,
+                valuesAndNullsOutput(allocator, context, gender, genderNulls),
+                valuesAndNullsOutput(allocator, context, maritalStatus, maritalStatusNulls),
+                valuesAndNullsOutput(allocator, context, educationStatus, educationStatusNulls),
+                valuesOnlyOutput(allocator, context, purchaseEstimate),
+                valuesAndNullsOutput(allocator, context, creditRating, creditRatingNulls),
+                valuesOnlyOutput(allocator, context, dependentCount),
+                valuesOnlyOutput(allocator, context, employedDependentCount),
+                valuesOnlyOutput(allocator, context, collegeDependentCount));
+    }
+
+    private static Batch ticketCustomerBatch(Allocator allocator, Allocator.Context context, Query73Lookup lookup, Batch sourceBatch)
+    {
+        Mask sourceMask = sourceBatch.borrowMask();
+        if (sourceMask.none()) {
+            return null;
+        }
+
+        Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
+        Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
+        Vector dateValues = sourceBatch.output(2).borrow(Stream.VALUES);
+        Vector storeValues = sourceBatch.output(3).borrow(Stream.VALUES);
+        Vector householdValues = sourceBatch.output(4).borrow(Stream.VALUES);
+
+        int selectedCount = 0;
+        for (int position : sourceMask) {
+            if (lookup.allowedDateKeys().contains(integerValue(dateValues, position)) &&
+                    lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) &&
+                    lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
+                selectedCount++;
+            }
+        }
+
+        if (selectedCount == 0) {
+            return null;
+        }
+
+        I64Vector ticketNumbers = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector customerKeys = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        int outputPosition = 0;
+        for (int position : sourceMask) {
+            if (!lookup.allowedDateKeys().contains(integerValue(dateValues, position)) ||
+                    !lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) ||
+                    !lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
+                continue;
+            }
+            ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
+            customerKeys.values()[outputPosition] = ((I64Vector) customerValues).values()[position];
+            outputPosition++;
+        }
+
+        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(context, takenMask),
+                releasedMask -> allocator.release(context, releasedMask),
+                sourceBatch::close,
+                valuesOnlyOutput(allocator, context, ticketNumbers),
+                valuesOnlyOutput(allocator, context, customerKeys));
+    }
+
+    private static Batch customerTicketBatch(Allocator allocator, Allocator.Context context, Map<Integer, CustomerIdentityRecord> customers, Batch sourceBatch)
+    {
+        Mask sourceMask = sourceBatch.borrowMask();
+        if (sourceMask.none()) {
+            return null;
+        }
+
+        Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
+        Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
+        Vector countValues = sourceBatch.output(2).borrow(Stream.VALUES);
+
+        int selectedCount = 0;
+        int lastNameBytes = 0;
+        int firstNameBytes = 0;
+        int salutationBytes = 0;
+        int preferredFlagBytes = 0;
+        for (int position : sourceMask) {
+            long count = ((I64Vector) countValues).values()[position];
+            if (count < 1 || count > 5) {
+                continue;
+            }
+            CustomerIdentityRecord customer = customers.get(integerValue(customerValues, position));
+            if (customer == null) {
+                continue;
+            }
+            selectedCount++;
+            lastNameBytes += length(customer.lastName());
+            firstNameBytes += length(customer.firstName());
+            salutationBytes += length(customer.salutation());
+            preferredFlagBytes += length(customer.preferredCustomerFlag());
+        }
+
+        if (selectedCount == 0) {
+            return null;
+        }
+
+        BinaryVector lastName = BinaryVector.allocate(allocator, context, selectedCount, lastNameBytes);
+        BinaryVector firstName = BinaryVector.allocate(allocator, context, selectedCount, firstNameBytes);
+        BinaryVector salutation = BinaryVector.allocate(allocator, context, selectedCount, salutationBytes);
+        BinaryVector preferredFlag = BinaryVector.allocate(allocator, context, selectedCount, preferredFlagBytes);
+        lastName.addTrait(BinaryVector.Trait.UTF8_STRING);
+        firstName.addTrait(BinaryVector.Trait.UTF8_STRING);
+        salutation.addTrait(BinaryVector.Trait.UTF8_STRING);
+        preferredFlag.addTrait(BinaryVector.Trait.UTF8_STRING);
+
+        BooleanVector lastNameNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        BooleanVector firstNameNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        BooleanVector salutationNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        BooleanVector preferredFlagNulls = allocator.allocate(context, BooleanVector.class, selectedCount, BooleanVector::new);
+        I64Vector ticketNumbers = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector counts = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+
+        int outputPosition = 0;
+        for (int position : sourceMask) {
+            long count = ((I64Vector) countValues).values()[position];
+            if (count < 1 || count > 5) {
+                continue;
+            }
+            CustomerIdentityRecord customer = customers.get(integerValue(customerValues, position));
+            if (customer == null) {
+                continue;
+            }
+
+            setBytesOrNull(lastName, lastNameNulls, outputPosition, customer.lastName());
+            setBytesOrNull(firstName, firstNameNulls, outputPosition, customer.firstName());
+            setBytesOrNull(salutation, salutationNulls, outputPosition, customer.salutation());
+            setBytesOrNull(preferredFlag, preferredFlagNulls, outputPosition, customer.preferredCustomerFlag());
+            ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
+            counts.values()[outputPosition] = count;
+            outputPosition++;
+        }
+
+        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(context, takenMask),
+                releasedMask -> allocator.release(context, releasedMask),
+                sourceBatch::close,
+                valuesAndNullsOutput(allocator, context, lastName, lastNameNulls),
+                valuesAndNullsOutput(allocator, context, firstName, firstNameNulls),
+                valuesAndNullsOutput(allocator, context, salutation, salutationNulls),
+                valuesAndNullsOutput(allocator, context, preferredFlag, preferredFlagNulls),
+                valuesOnlyOutput(allocator, context, ticketNumbers),
+                valuesOnlyOutput(allocator, context, counts));
+    }
+
+    private static Batch shippingBucketsBatch(Allocator allocator, Allocator.Context context, ShippingBucketsLookup lookup, Batch sourceBatch)
+    {
+        Mask sourceMask = sourceBatch.borrowMask();
+        if (sourceMask.none()) {
+            return null;
+        }
+
+        Vector shipDateValues = sourceBatch.output(0).borrow(Stream.VALUES);
+        Vector soldDateValues = sourceBatch.output(1).borrow(Stream.VALUES);
+        Vector firstKeyValues = sourceBatch.output(2).borrow(Stream.VALUES);
+        Vector secondKeyValues = sourceBatch.output(3).borrow(Stream.VALUES);
+        Vector thirdKeyValues = sourceBatch.output(4).borrow(Stream.VALUES);
+
+        int selectedCount = 0;
+        int firstBytes = 0;
+        int secondBytes = 0;
+        int thirdBytes = 0;
+        for (int position : sourceMask) {
+            int shipDate = integerValue(shipDateValues, position);
+            if (!lookup.allowedShipDates().contains(shipDate)) {
+                continue;
+            }
+
+            int firstKey = integerValue(firstKeyValues, position);
+            int secondKey = integerValue(secondKeyValues, position);
+            int thirdKey = integerValue(thirdKeyValues, position);
+            if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
+                continue;
+            }
+            byte[] first = lookup.firstNames().get(firstKey);
+            byte[] second = lookup.secondNames().get(secondKey);
+            byte[] third = lookup.thirdNames().get(thirdKey);
+            if (first == null) {
+                first = NULLS_LAST_SENTINEL;
+            }
+            if (second == null) {
+                second = NULLS_LAST_SENTINEL;
+            }
+            if (third == null) {
+                third = NULLS_LAST_SENTINEL;
+            }
+
+            selectedCount++;
+            firstBytes += first.length;
+            secondBytes += second.length;
+            thirdBytes += third.length;
+        }
+
+        if (selectedCount == 0) {
+            return null;
+        }
+
+        BinaryVector firstOutput = BinaryVector.allocate(allocator, context, selectedCount, firstBytes);
+        BinaryVector secondOutput = BinaryVector.allocate(allocator, context, selectedCount, secondBytes);
+        BinaryVector thirdOutput = BinaryVector.allocate(allocator, context, selectedCount, thirdBytes);
+        firstOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
+        secondOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
+        thirdOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
+        I64Vector bucket30 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector bucket31To60 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector bucket61To90 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector bucket91To120 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+        I64Vector bucketOver120 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
+
+        int outputPosition = 0;
+        for (int position : sourceMask) {
+            int shipDate = integerValue(shipDateValues, position);
+            if (!lookup.allowedShipDates().contains(shipDate)) {
+                continue;
+            }
+
+            int firstKey = integerValue(firstKeyValues, position);
+            int secondKey = integerValue(secondKeyValues, position);
+            int thirdKey = integerValue(thirdKeyValues, position);
+            if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
+                continue;
+            }
+            byte[] first = lookup.firstNames().get(firstKey);
+            byte[] second = lookup.secondNames().get(secondKey);
+            byte[] third = lookup.thirdNames().get(thirdKey);
+
+            firstOutput.setBytes(outputPosition, first == null ? NULLS_LAST_SENTINEL : first);
+            secondOutput.setBytes(outputPosition, second == null ? NULLS_LAST_SENTINEL : second);
+            thirdOutput.setBytes(outputPosition, third == null ? NULLS_LAST_SENTINEL : third);
+
+            int days = shipDate - integerValue(soldDateValues, position);
+            bucket30.values()[outputPosition] = days <= 30 ? 1 : 0;
+            bucket31To60.values()[outputPosition] = days > 30 && days <= 60 ? 1 : 0;
+            bucket61To90.values()[outputPosition] = days > 60 && days <= 90 ? 1 : 0;
+            bucket91To120.values()[outputPosition] = days > 90 && days <= 120 ? 1 : 0;
+            bucketOver120.values()[outputPosition] = days > 120 ? 1 : 0;
+            outputPosition++;
+        }
+
+        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(context, takenMask),
+                releasedMask -> allocator.release(context, releasedMask),
+                sourceBatch::close,
+                valuesOnlyOutput(allocator, context, firstOutput),
+                valuesOnlyOutput(allocator, context, secondOutput),
+                valuesOnlyOutput(allocator, context, thirdOutput),
+                valuesOnlyOutput(allocator, context, bucket30),
+                valuesOnlyOutput(allocator, context, bucket31To60),
+                valuesOnlyOutput(allocator, context, bucket61To90),
+                valuesOnlyOutput(allocator, context, bucket91To120),
+                valuesOnlyOutput(allocator, context, bucketOver120));
+    }
+
+    @FunctionalInterface
+    private interface BatchTransform
+    {
+        Batch apply(Batch sourceBatch);
+    }
+
+    private static final class BatchTransformOperator
+            implements Operator
+    {
+        private final Allocator allocator;
+        private final Operator source;
+        private final int outputCount;
+        private final BatchTransform transform;
+        private final Allocator.Context[] allocationContexts;
+
+        private Batch nextBatch;
+
+        private BatchTransformOperator(Allocator allocator, Operator source, int outputCount, BatchTransform transform, Allocator.Context... allocationContexts)
+        {
+            this.allocator = allocator;
+            this.source = source;
+            this.outputCount = outputCount;
+            this.transform = transform;
+            this.allocationContexts = allocationContexts.clone();
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return outputCount;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            loadNextBatch();
+            return nextBatch != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more parquet rows");
+            }
+            Batch batch = nextBatch;
+            nextBatch = null;
+            return batch;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (nextBatch != null) {
+                nextBatch.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (nextBatch != null) {
+                nextBatch.close();
+                nextBatch = null;
+            }
+            source.close();
+            for (Allocator.Context allocationContext : allocationContexts) {
+                allocator.release(allocationContext);
+            }
+        }
+
+        private void loadNextBatch()
+        {
+            while (nextBatch == null && source.hasNext()) {
+                Batch sourceBatch = source.next();
+                Batch transformed = transform.apply(sourceBatch);
+                if (transformed == null) {
+                    sourceBatch.close();
+                    continue;
+                }
+                nextBatch = transformed;
+            }
+        }
+    }
+
     private static final class MultiStageOperator
             implements Operator
     {
@@ -998,624 +1450,6 @@ final class TpcdsParquetSupport
                         takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
                         releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
                         sourceBatch::close);
-            }
-        }
-    }
-
-    private static final class CustomerDemographicsProjectOperator
-            implements Operator
-    {
-        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("CustomerDemographicsProjectOperator");
-
-        private final Allocator allocator;
-        private final Operator source;
-        private final Query10Lookup lookup;
-
-        private Batch nextBatch;
-
-        private CustomerDemographicsProjectOperator(Allocator allocator, Operator source, Query10Lookup lookup)
-        {
-            this.allocator = allocator;
-            this.source = source;
-            this.lookup = lookup;
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return 8;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            loadNextBatch();
-            return nextBatch != null;
-        }
-
-        @Override
-        public Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more parquet rows");
-            }
-            Batch batch = nextBatch;
-            nextBatch = null;
-            return batch;
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (nextBatch != null) {
-                nextBatch.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (nextBatch != null) {
-                nextBatch.close();
-                nextBatch = null;
-            }
-            source.close();
-            allocator.release(ALLOCATION_CONTEXT);
-        }
-
-        private void loadNextBatch()
-        {
-            while (nextBatch == null && source.hasNext()) {
-                Batch sourceBatch = source.next();
-                Mask sourceMask = sourceBatch.borrowMask();
-                if (sourceMask.none()) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                Vector addressValues = sourceBatch.output(0).borrow(Stream.VALUES);
-                Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
-                Vector demographicsValues = sourceBatch.output(2).borrow(Stream.VALUES);
-
-                int selectedCount = 0;
-                int genderBytes = 0;
-                int maritalBytes = 0;
-                int educationBytes = 0;
-                int creditBytes = 0;
-                for (int position : sourceMask) {
-                    int addressKey = integerValue(addressValues, position);
-                    int customerKey = integerValue(customerValues, position);
-                    if (!lookup.eligibleAddressKeys().contains(addressKey) ||
-                            !lookup.storeCustomerKeys().contains(customerKey) ||
-                            (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
-                        continue;
-                    }
-
-                    CustomerDemographicsRecord demographics = lookup.demographics().get(integerValue(demographicsValues, position));
-                    if (demographics == null) {
-                        continue;
-                    }
-                    selectedCount++;
-                    genderBytes += length(demographics.gender());
-                    maritalBytes += length(demographics.maritalStatus());
-                    educationBytes += length(demographics.educationStatus());
-                    creditBytes += length(demographics.creditRating());
-                }
-
-                if (selectedCount == 0) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                BinaryVector gender = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, genderBytes);
-                BinaryVector maritalStatus = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, maritalBytes);
-                BinaryVector educationStatus = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, educationBytes);
-                BinaryVector creditRating = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, creditBytes);
-                gender.addTrait(BinaryVector.Trait.UTF8_STRING);
-                maritalStatus.addTrait(BinaryVector.Trait.UTF8_STRING);
-                educationStatus.addTrait(BinaryVector.Trait.UTF8_STRING);
-                creditRating.addTrait(BinaryVector.Trait.UTF8_STRING);
-
-                BooleanVector genderNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                BooleanVector maritalStatusNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                BooleanVector educationStatusNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                BooleanVector creditRatingNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                I64Vector purchaseEstimate = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector dependentCount = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector employedDependentCount = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector collegeDependentCount = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-
-                int outputPosition = 0;
-                for (int position : sourceMask) {
-                    int addressKey = integerValue(addressValues, position);
-                    int customerKey = integerValue(customerValues, position);
-                    if (!lookup.eligibleAddressKeys().contains(addressKey) ||
-                            !lookup.storeCustomerKeys().contains(customerKey) ||
-                            (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
-                        continue;
-                    }
-
-                    CustomerDemographicsRecord demographics = lookup.demographics().get(integerValue(demographicsValues, position));
-                    if (demographics == null) {
-                        continue;
-                    }
-
-                    setBytesOrNull(gender, genderNulls, outputPosition, demographics.gender());
-                    setBytesOrNull(maritalStatus, maritalStatusNulls, outputPosition, demographics.maritalStatus());
-                    setBytesOrNull(educationStatus, educationStatusNulls, outputPosition, demographics.educationStatus());
-                    setBytesOrNull(creditRating, creditRatingNulls, outputPosition, demographics.creditRating());
-                    purchaseEstimate.values()[outputPosition] = demographics.purchaseEstimate();
-                    dependentCount.values()[outputPosition] = demographics.dependentCount();
-                    employedDependentCount.values()[outputPosition] = demographics.employedDependentCount();
-                    collegeDependentCount.values()[outputPosition] = demographics.collegeDependentCount();
-                    outputPosition++;
-                }
-
-                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
-                nextBatch = new Batch(
-                        outputMask,
-                        _ -> {},
-                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
-                        sourceBatch::close,
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, gender, genderNulls),
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, maritalStatus, maritalStatusNulls),
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, educationStatus, educationStatusNulls),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, purchaseEstimate),
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, creditRating, creditRatingNulls),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, dependentCount),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, employedDependentCount),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, collegeDependentCount));
-            }
-        }
-    }
-
-    private static final class TicketCustomerFilterProjectOperator
-            implements Operator
-    {
-        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TicketCustomerFilterProjectOperator");
-
-        private final Allocator allocator;
-        private final Operator source;
-        private final Query73Lookup lookup;
-
-        private Batch nextBatch;
-
-        private TicketCustomerFilterProjectOperator(Allocator allocator, Operator source, Query73Lookup lookup)
-        {
-            this.allocator = allocator;
-            this.source = source;
-            this.lookup = lookup;
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return 2;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            loadNextBatch();
-            return nextBatch != null;
-        }
-
-        @Override
-        public Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more parquet rows");
-            }
-            Batch batch = nextBatch;
-            nextBatch = null;
-            return batch;
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (nextBatch != null) {
-                nextBatch.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (nextBatch != null) {
-                nextBatch.close();
-                nextBatch = null;
-            }
-            source.close();
-            allocator.release(ALLOCATION_CONTEXT);
-        }
-
-        private void loadNextBatch()
-        {
-            while (nextBatch == null && source.hasNext()) {
-                Batch sourceBatch = source.next();
-                Mask sourceMask = sourceBatch.borrowMask();
-                if (sourceMask.none()) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
-                Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
-                Vector dateValues = sourceBatch.output(2).borrow(Stream.VALUES);
-                Vector storeValues = sourceBatch.output(3).borrow(Stream.VALUES);
-                Vector householdValues = sourceBatch.output(4).borrow(Stream.VALUES);
-
-                int selectedCount = 0;
-                for (int position : sourceMask) {
-                    if (lookup.allowedDateKeys().contains(integerValue(dateValues, position)) &&
-                            lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) &&
-                            lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
-                        selectedCount++;
-                    }
-                }
-
-                if (selectedCount == 0) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                I64Vector ticketNumbers = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector customerKeys = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                int outputPosition = 0;
-                for (int position : sourceMask) {
-                    if (!lookup.allowedDateKeys().contains(integerValue(dateValues, position)) ||
-                            !lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) ||
-                            !lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
-                        continue;
-                    }
-                    ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
-                    customerKeys.values()[outputPosition] = ((I64Vector) customerValues).values()[position];
-                    outputPosition++;
-                }
-
-                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
-                nextBatch = new Batch(
-                        outputMask,
-                        _ -> {},
-                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
-                        sourceBatch::close,
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, ticketNumbers),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, customerKeys));
-            }
-        }
-    }
-
-    private static final class CustomerTicketProjectOperator
-            implements Operator
-    {
-        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("CustomerTicketProjectOperator");
-
-        private final Allocator allocator;
-        private final Operator source;
-        private final Map<Integer, CustomerIdentityRecord> customers;
-
-        private Batch nextBatch;
-
-        private CustomerTicketProjectOperator(Allocator allocator, Operator source, Map<Integer, CustomerIdentityRecord> customers)
-        {
-            this.allocator = allocator;
-            this.source = source;
-            this.customers = customers;
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return 6;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            loadNextBatch();
-            return nextBatch != null;
-        }
-
-        @Override
-        public Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more parquet rows");
-            }
-            Batch batch = nextBatch;
-            nextBatch = null;
-            return batch;
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (nextBatch != null) {
-                nextBatch.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (nextBatch != null) {
-                nextBatch.close();
-                nextBatch = null;
-            }
-            source.close();
-            allocator.release(ALLOCATION_CONTEXT);
-        }
-
-        private void loadNextBatch()
-        {
-            while (nextBatch == null && source.hasNext()) {
-                Batch sourceBatch = source.next();
-                Mask sourceMask = sourceBatch.borrowMask();
-                if (sourceMask.none()) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
-                Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
-                Vector countValues = sourceBatch.output(2).borrow(Stream.VALUES);
-
-                int selectedCount = 0;
-                int lastNameBytes = 0;
-                int firstNameBytes = 0;
-                int salutationBytes = 0;
-                int preferredFlagBytes = 0;
-                for (int position : sourceMask) {
-                    long count = ((I64Vector) countValues).values()[position];
-                    if (count < 1 || count > 5) {
-                        continue;
-                    }
-                    CustomerIdentityRecord customer = customers.get(integerValue(customerValues, position));
-                    if (customer == null) {
-                        continue;
-                    }
-                    selectedCount++;
-                    lastNameBytes += length(customer.lastName());
-                    firstNameBytes += length(customer.firstName());
-                    salutationBytes += length(customer.salutation());
-                    preferredFlagBytes += length(customer.preferredCustomerFlag());
-                }
-
-                if (selectedCount == 0) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                BinaryVector lastName = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, lastNameBytes);
-                BinaryVector firstName = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, firstNameBytes);
-                BinaryVector salutation = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, salutationBytes);
-                BinaryVector preferredFlag = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, preferredFlagBytes);
-                lastName.addTrait(BinaryVector.Trait.UTF8_STRING);
-                firstName.addTrait(BinaryVector.Trait.UTF8_STRING);
-                salutation.addTrait(BinaryVector.Trait.UTF8_STRING);
-                preferredFlag.addTrait(BinaryVector.Trait.UTF8_STRING);
-
-                BooleanVector lastNameNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                BooleanVector firstNameNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                BooleanVector salutationNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                BooleanVector preferredFlagNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
-                I64Vector ticketNumbers = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector counts = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-
-                int outputPosition = 0;
-                for (int position : sourceMask) {
-                    long count = ((I64Vector) countValues).values()[position];
-                    if (count < 1 || count > 5) {
-                        continue;
-                    }
-                    CustomerIdentityRecord customer = customers.get(integerValue(customerValues, position));
-                    if (customer == null) {
-                        continue;
-                    }
-
-                    setBytesOrNull(lastName, lastNameNulls, outputPosition, customer.lastName());
-                    setBytesOrNull(firstName, firstNameNulls, outputPosition, customer.firstName());
-                    setBytesOrNull(salutation, salutationNulls, outputPosition, customer.salutation());
-                    setBytesOrNull(preferredFlag, preferredFlagNulls, outputPosition, customer.preferredCustomerFlag());
-                    ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
-                    counts.values()[outputPosition] = count;
-                    outputPosition++;
-                }
-
-                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
-                nextBatch = new Batch(
-                        outputMask,
-                        _ -> {},
-                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
-                        sourceBatch::close,
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, lastName, lastNameNulls),
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, firstName, firstNameNulls),
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, salutation, salutationNulls),
-                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, preferredFlag, preferredFlagNulls),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, ticketNumbers),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, counts));
-            }
-        }
-    }
-
-    private static final class ShippingBucketsProjectOperator
-            implements Operator
-    {
-        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ShippingBucketsProjectOperator");
-
-        private final Allocator allocator;
-        private final Operator source;
-        private final ShippingBucketsLookup lookup;
-
-        private Batch nextBatch;
-
-        private ShippingBucketsProjectOperator(Allocator allocator, Operator source, ShippingBucketsLookup lookup)
-        {
-            this.allocator = allocator;
-            this.source = source;
-            this.lookup = lookup;
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return 8;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            loadNextBatch();
-            return nextBatch != null;
-        }
-
-        @Override
-        public Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more parquet rows");
-            }
-            Batch batch = nextBatch;
-            nextBatch = null;
-            return batch;
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (nextBatch != null) {
-                nextBatch.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (nextBatch != null) {
-                nextBatch.close();
-                nextBatch = null;
-            }
-            source.close();
-            allocator.release(ALLOCATION_CONTEXT);
-        }
-
-        private void loadNextBatch()
-        {
-            while (nextBatch == null && source.hasNext()) {
-                Batch sourceBatch = source.next();
-                Mask sourceMask = sourceBatch.borrowMask();
-                if (sourceMask.none()) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                Vector shipDateValues = sourceBatch.output(0).borrow(Stream.VALUES);
-                Vector soldDateValues = sourceBatch.output(1).borrow(Stream.VALUES);
-                Vector firstKeyValues = sourceBatch.output(2).borrow(Stream.VALUES);
-                Vector secondKeyValues = sourceBatch.output(3).borrow(Stream.VALUES);
-                Vector thirdKeyValues = sourceBatch.output(4).borrow(Stream.VALUES);
-
-                int selectedCount = 0;
-                int firstBytes = 0;
-                int secondBytes = 0;
-                int thirdBytes = 0;
-                for (int position : sourceMask) {
-                    int shipDate = integerValue(shipDateValues, position);
-                    if (!lookup.allowedShipDates().contains(shipDate)) {
-                        continue;
-                    }
-
-                    int firstKey = integerValue(firstKeyValues, position);
-                    int secondKey = integerValue(secondKeyValues, position);
-                    int thirdKey = integerValue(thirdKeyValues, position);
-                    if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
-                        continue;
-                    }
-                    byte[] first = lookup.firstNames().get(firstKey);
-                    byte[] second = lookup.secondNames().get(secondKey);
-                    byte[] third = lookup.thirdNames().get(thirdKey);
-                    if (first == null) {
-                        first = NULLS_LAST_SENTINEL;
-                    }
-                    if (second == null) {
-                        second = NULLS_LAST_SENTINEL;
-                    }
-                    if (third == null) {
-                        third = NULLS_LAST_SENTINEL;
-                    }
-
-                    selectedCount++;
-                    firstBytes += first.length;
-                    secondBytes += second.length;
-                    thirdBytes += third.length;
-                }
-
-                if (selectedCount == 0) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                BinaryVector firstOutput = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, firstBytes);
-                BinaryVector secondOutput = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, secondBytes);
-                BinaryVector thirdOutput = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, thirdBytes);
-                firstOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
-                secondOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
-                thirdOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
-                I64Vector bucket30 = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector bucket31To60 = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector bucket61To90 = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector bucket91To120 = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-                I64Vector bucketOver120 = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
-
-                int outputPosition = 0;
-                for (int position : sourceMask) {
-                    int shipDate = integerValue(shipDateValues, position);
-                    if (!lookup.allowedShipDates().contains(shipDate)) {
-                        continue;
-                    }
-
-                    int firstKey = integerValue(firstKeyValues, position);
-                    int secondKey = integerValue(secondKeyValues, position);
-                    int thirdKey = integerValue(thirdKeyValues, position);
-                    if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
-                        continue;
-                    }
-                    byte[] first = lookup.firstNames().get(firstKey);
-                    byte[] second = lookup.secondNames().get(secondKey);
-                    byte[] third = lookup.thirdNames().get(thirdKey);
-
-                    firstOutput.setBytes(outputPosition, first == null ? NULLS_LAST_SENTINEL : first);
-                    secondOutput.setBytes(outputPosition, second == null ? NULLS_LAST_SENTINEL : second);
-                    thirdOutput.setBytes(outputPosition, third == null ? NULLS_LAST_SENTINEL : third);
-
-                    int days = shipDate - integerValue(soldDateValues, position);
-                    bucket30.values()[outputPosition] = days <= 30 ? 1 : 0;
-                    bucket31To60.values()[outputPosition] = days > 30 && days <= 60 ? 1 : 0;
-                    bucket61To90.values()[outputPosition] = days > 60 && days <= 90 ? 1 : 0;
-                    bucket91To120.values()[outputPosition] = days > 90 && days <= 120 ? 1 : 0;
-                    bucketOver120.values()[outputPosition] = days > 120 ? 1 : 0;
-                    outputPosition++;
-                }
-
-                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
-                nextBatch = new Batch(
-                        outputMask,
-                        _ -> {},
-                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
-                        sourceBatch::close,
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, firstOutput),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, secondOutput),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, thirdOutput),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, bucket30),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, bucket31To60),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, bucket61To90),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, bucket91To120),
-                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, bucketOver120));
             }
         }
     }
