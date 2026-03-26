@@ -181,6 +181,21 @@ public class Allocator
         return allocateSparseMask(context, activePositions, activePositions.length, totalPositions);
     }
 
+    public Mask copyMask(Context context, Mask source)
+    {
+        ContextState state = state(context);
+        Mask result = state.borrowMask(source.selectedCount());
+        boolean reused = result != null;
+        if (!reused) {
+            result = source.copy();
+        }
+        else {
+            copyMask(result, source);
+        }
+        state.trackMask(result, reused);
+        return result;
+    }
+
     public Mask allocateSparseMask(Context context, int[] activePositions, int selectedCount, int totalPositions)
     {
         ContextState state = state(context);

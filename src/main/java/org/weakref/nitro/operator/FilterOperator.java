@@ -70,7 +70,8 @@ public class FilterOperator
         Batch sourceBatch = source.next();
         BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
         currentBatchState = batchState;
-        Mask batchMask = allocator.transfer(ALLOCATION_CONTEXT, planEvaluator.evaluate(predicateMask, sourceBatch.borrowMask()));
+        Mask batchMask = allocator.copyMask(ALLOCATION_CONTEXT, sourceBatch.borrowMask());
+        batchMask = planEvaluator.evaluateInPlace(predicateMask, batchMask);
         source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
         planEvaluator.reset();

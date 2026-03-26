@@ -40,4 +40,14 @@ public interface MaskEvaluablePrimitiveFunction
     {
         return null;
     }
+
+    default boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return false;
+    }
+
+    default boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return false;
+    }
 }

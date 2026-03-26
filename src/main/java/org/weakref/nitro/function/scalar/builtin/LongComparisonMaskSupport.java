@@ -161,6 +161,50 @@ final class LongComparisonMaskSupport
         return context.allocator().allocateSparseMask(allocationContext, falsePositions, falseIndex, mask.size());
     }
 
+    public static boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel)
+    {
+        if (!supportsLongComparison(inputs)) {
+            return false;
+        }
+
+        Vector leftValues = inputs.get(0).values();
+        Vector rightValues = inputs.get(1).values();
+        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+
+        mask.retainIf(position -> {
+            if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
+                return false;
+            }
+            return kernel.test(integerValue(leftValues, position), integerValue(rightValues, position));
+        });
+        return true;
+    }
+
+    public static boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel)
+    {
+        if (!supportsLongComparison(inputs)) {
+            return false;
+        }
+
+        Vector leftValues = inputs.get(0).values();
+        Vector rightValues = inputs.get(1).values();
+        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+
+        mask.retainIf(position -> {
+            if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
+                return false;
+            }
+            return !kernel.test(integerValue(leftValues, position), integerValue(rightValues, position));
+        });
+        return true;
+    }
+
     private static boolean supportsLongComparison(List<Streams> inputs)
     {
         return inputs.size() == 2 && supportsLongValues(inputs.get(0).values()) && supportsLongValues(inputs.get(1).values());

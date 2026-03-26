@@ -27,6 +27,7 @@ import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
+import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -1850,6 +1851,51 @@ public class TestPlanEvaluator
         assertThat(dictionaryValues.values()).containsExactly(true, true, false);
     }
 
+    @Test
+    void testInUtf8DictionaryLiteralReferenceMaskUsesPrimitiveTrueMask()
+    {
+        Variable firstLiteral = new Variable(0);
+        Variable secondLiteral = new Variable(1);
+        Variable matches = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(firstLiteral, new Literal("apple"), AllMask.ALL),
+                        new Assignment(secondLiteral, new Literal("samsung"), AllMask.ALL),
+                        new Assignment(
+                                matches,
+                                new Call("in_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(firstLiteral, Stream.VALUES),
+                                        new Reference(secondLiteral, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector dictionary = new BinaryVector(4, 32);
+        dictionary.addTrait(BinaryVector.Trait.UTF8_STRING);
+        dictionary.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionary.setBytes(0, "apple".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(1, "pixel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(2, "samsung".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(3, "nokia".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 2}, dictionary);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Mask result = evaluator.evaluateInPlace(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(3);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
+        assertThat(result.position(2)).isEqualTo(4);
+    }
+
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);
@@ -1861,6 +1907,7 @@ public class TestPlanEvaluator
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         primitiveRegistry.register(scalarRegistry.register(AddI64.class));
         primitiveRegistry.register(scalarRegistry.register(EqualI64.class));
+        primitiveRegistry.register(scalarRegistry.register(InUtf8.class));
         primitiveRegistry.register(scalarRegistry.register(LessThanI64.class));
         return primitiveRegistry;
     }

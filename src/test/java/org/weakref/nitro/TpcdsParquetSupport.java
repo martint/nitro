@@ -186,12 +186,20 @@ final class TpcdsParquetSupport
         List<String> sortedValues = values.stream()
                 .sorted()
                 .toList();
-
-        FilterSpec result = equalUtf8(inputIndex, sortedValues.getFirst());
+        List<Assignment> assignments = new java.util.ArrayList<>();
+        assignments.add(new Assignment(new Variable(0), new Literal(sortedValues.getFirst()), AllMask.ALL));
         for (int index = 1; index < sortedValues.size(); index++) {
-            result = or(result, equalUtf8(inputIndex, sortedValues.get(index)));
+            assignments.add(new Assignment(new Variable(index), new Literal(sortedValues.get(index)), AllMask.ALL));
         }
-        return result;
+
+        Variable result = new Variable(sortedValues.size());
+        List<Reference> arguments = new java.util.ArrayList<>(sortedValues.size() + 1);
+        arguments.add(new Reference(new Input(inputIndex), Stream.VALUES));
+        for (int index = 0; index < sortedValues.size(); index++) {
+            arguments.add(new Reference(new Variable(index), Stream.VALUES));
+        }
+        assignments.add(new Assignment(result, new Call("in_utf8", arguments), AllMask.ALL));
+        return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(result, Stream.VALUES)));
     }
 
     private static List<Row> scanRows(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)

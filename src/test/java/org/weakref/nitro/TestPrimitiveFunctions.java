@@ -31,6 +31,7 @@ import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
 import org.weakref.nitro.function.scalar.builtin.IfUtf8;
+import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LengthUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
@@ -70,6 +71,7 @@ public final class TestPrimitiveFunctions
                 EqualUtf8.class,
                 HashUtf8.class,
                 IfUtf8.class,
+                InUtf8.class,
                 LessThanI64.class,
                 LessThanUtf8.class,
                 LengthUtf8.class,

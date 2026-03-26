@@ -66,6 +66,60 @@ public final class Utf8BinaryDispatch
         return tryEvaluateEqualsMask(functionName, allocationContext, inputs, mask, context, false);
     }
 
+    public static Streams applyInSet(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    {
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
+            return Streams.empty();
+        }
+
+        Vector left = inputs.getFirst().values();
+        BooleanVector leftNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        int requiredLength = mask.none() ? 0 : mask.maxPosition() + 1;
+        checkArgument(left.length() >= requiredLength, "%s left input length is too small for mask: left=%s required=%s", functionName, left.length(), requiredLength);
+
+        Streams result = Streams.empty();
+        int outputLength = Math.max(requiredLength, left.length());
+        if (requestedStreams.contains(Stream.NULLS) && leftNulls != null) {
+            result = result.with(Stream.NULLS, leftNulls);
+        }
+        if (requestedStreams.contains(Stream.VALUES)) {
+            Vector outputValues = tryApplyInSetSpecializedValues(functionName, allocationContext, inputs, mask, output == null ? null : output.getOrNull(Stream.VALUES), outputLength, context);
+            if (outputValues == null) {
+                BooleanVector booleanOutputValues = context.allocator().allocateOrGrow(
+                        allocationContext,
+                        output != null && output.has(Stream.VALUES) && output.values() instanceof BooleanVector vector ? vector : null,
+                        BooleanVector.class,
+                        outputLength,
+                        BooleanVector::new);
+                applyInSetValues(functionName, inputs, leftNulls, mask, booleanOutputValues);
+                outputValues = booleanOutputValues;
+            }
+            result = result.with(Stream.VALUES, outputValues);
+        }
+        return result;
+    }
+
+    public static Mask tryEvaluateInSetTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateInSetMask(functionName, allocationContext, inputs, mask, context, true);
+    }
+
+    public static Mask tryEvaluateInSetFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateInSetMask(functionName, allocationContext, inputs, mask, context, false);
+    }
+
+    public static boolean tryEvaluateInSetTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    {
+        return tryEvaluateInSetMaskInPlace(functionName, inputs, mask, true);
+    }
+
+    public static boolean tryEvaluateInSetFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    {
+        return tryEvaluateInSetMaskInPlace(functionName, inputs, mask, false);
+    }
+
     private static Streams apply(String functionName, Allocator.Context allocationContext, Operation operation, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
@@ -121,6 +175,18 @@ public final class Utf8BinaryDispatch
         return result;
     }
 
+    private static Mask tryEvaluateInSetMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    {
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
+        Vector left = inputs.getFirst().values();
+        BooleanVector leftNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+
+        if (left instanceof DictionaryVector leftDictionary && allSingleValueRle(functionName, inputs.subList(1, inputs.size()))) {
+            return evaluateInSetDictionaryMask(functionName, allocationContext, leftDictionary, leftNulls, inputs.subList(1, inputs.size()), mask, context, selectMatches);
+        }
+        return null;
+    }
+
     private static Mask tryEvaluateEqualsMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
@@ -161,6 +227,23 @@ public final class Utf8BinaryDispatch
             if (right instanceof DictionaryVector rightDictionary) {
                 return applyEqualsSingleValueDictionary(functionName, allocationContext, leftRle, rightDictionary, leftNulls, rightNulls, mask, existing, outputLength, context);
             }
+        }
+        return null;
+    }
+
+    private static Vector tryApplyInSetSpecializedValues(
+            String functionName,
+            Allocator.Context allocationContext,
+            List<Streams> inputs,
+            Mask mask,
+            Vector existing,
+            int outputLength,
+            PrimitiveExecutionContext context)
+    {
+        Vector left = inputs.getFirst().values();
+        BooleanVector leftNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        if (left instanceof DictionaryVector leftDictionary && allSingleValueRle(functionName, inputs.subList(1, inputs.size()))) {
+            return applyInSetDictionary(functionName, allocationContext, leftDictionary, leftNulls, inputs.subList(1, inputs.size()), mask, existing, outputLength, context);
         }
         return null;
     }
@@ -379,6 +462,141 @@ public final class Utf8BinaryDispatch
             }
         }
         return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
+    }
+
+    private static Vector applyInSetDictionary(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, BooleanVector leftNulls, List<Streams> literalInputs, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
+    {
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector[] literals = literalVectors(functionName, literalInputs);
+        boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
+
+        BooleanVector dictionaryValues = context.allocator().allocate(
+                allocationContext,
+                BooleanVector.class,
+                dictionaryMatches.length,
+                BooleanVector::new);
+        System.arraycopy(dictionaryMatches, 0, dictionaryValues.values(), 0, dictionaryMatches.length);
+        return context.allocator().allocateDictionary(allocationContext, leftDictionary.ids(), dictionaryValues);
+    }
+
+    private static Mask evaluateInSetDictionaryMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, BooleanVector leftNulls, List<Streams> literalInputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    {
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector[] literals = literalVectors(functionName, literalInputs);
+        boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
+
+        int[] ids = leftDictionary.ids();
+        int selectedCount = 0;
+        for (int position : mask) {
+            if (!isNull(leftNulls, position) && dictionaryMatches[ids[position]] == selectMatches) {
+                selectedCount++;
+            }
+        }
+
+        int[] positions = new int[selectedCount];
+        int outputIndex = 0;
+        for (int position : mask) {
+            if (!isNull(leftNulls, position) && dictionaryMatches[ids[position]] == selectMatches) {
+                positions[outputIndex++] = position;
+            }
+        }
+        return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
+    }
+
+    private static boolean tryEvaluateInSetMaskInPlace(String functionName, List<Streams> inputs, Mask mask, boolean selectMatches)
+    {
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
+        Vector leftValues = inputs.getFirst().values();
+        BooleanVector leftNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+
+        if (!(leftValues instanceof DictionaryVector leftDictionary) || !allSingleValueRle(functionName, inputs.subList(1, inputs.size()))) {
+            return false;
+        }
+
+        BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+        BinaryVector[] literals = literalVectors(functionName, inputs.subList(1, inputs.size()));
+        boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
+        int[] ids = leftDictionary.ids();
+        mask.retainIf(position -> !isNull(leftNulls, position) && dictionaryMatches[ids[position]] == selectMatches);
+        return true;
+    }
+
+    private static void applyInSetValues(String functionName, List<Streams> inputs, BooleanVector leftNulls, Mask mask, BooleanVector output)
+    {
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
+        Vector leftValues = inputs.getFirst().values();
+        BinaryVector[] literals = literalVectors(functionName, inputs.subList(1, inputs.size()));
+        boolean[] outputValues = output.values();
+
+        switch (leftValues) {
+            case BinaryVector left -> {
+                if (mask.all()) {
+                    for (int position = 0; position < mask.size(); position++) {
+                        outputValues[position] = !isNull(leftNulls, position) && matchesAny(left, position, literals);
+                    }
+                    return;
+                }
+                for (int position : mask) {
+                    outputValues[position] = !isNull(leftNulls, position) && matchesAny(left, position, literals);
+                }
+            }
+            case DictionaryVector leftDictionary -> {
+                BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
+                boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
+                int[] ids = leftDictionary.ids();
+                if (mask.all()) {
+                    for (int position = 0; position < mask.size(); position++) {
+                        outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[ids[position]];
+                    }
+                    return;
+                }
+                for (int position : mask) {
+                    outputValues[position] = !isNull(leftNulls, position) && dictionaryMatches[ids[position]];
+                }
+            }
+            default -> throw new IllegalArgumentException(functionName + " requires BinaryVector or DictionaryVector UTF-8 input");
+        }
+    }
+
+    private static boolean[] evaluateDictionaryMembership(BinaryVector dictionary, BinaryVector[] literals)
+    {
+        boolean[] dictionaryMatches = new boolean[dictionary.length()];
+        for (int index = 0; index < dictionaryMatches.length; index++) {
+            dictionaryMatches[index] = matchesAny(dictionary, index, literals);
+        }
+        return dictionaryMatches;
+    }
+
+    private static boolean matchesAny(BinaryVector values, int position, BinaryVector[] literals)
+    {
+        for (BinaryVector literal : literals) {
+            if (binaryEquals(values, position, literal, 0)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean allSingleValueRle(String functionName, List<Streams> literalInputs)
+    {
+        for (Streams input : literalInputs) {
+            if (!(input.values() instanceof RleVector rle) || rle.counts().length != 1) {
+                return false;
+            }
+            requireBinaryRle(functionName, rle);
+        }
+        return true;
+    }
+
+    private static BinaryVector[] literalVectors(String functionName, List<Streams> literalInputs)
+    {
+        BinaryVector[] literals = new BinaryVector[literalInputs.size()];
+        for (int index = 0; index < literalInputs.size(); index++) {
+            RleVector rle = (RleVector) literalInputs.get(index).values();
+            literals[index] = requireBinaryRle(functionName, rle);
+            requireUtf8Traits(functionName, literals[index], literals[index]);
+        }
+        return literals;
     }
 
     private static void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector output)

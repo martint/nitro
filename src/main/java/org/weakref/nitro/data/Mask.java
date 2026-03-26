@@ -16,6 +16,7 @@ package org.weakref.nitro.data;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.function.IntPredicate;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -246,6 +247,42 @@ public class Mask
         if (allSelected) {
             positions = EMPTY_POSITIONS;
         }
+    }
+
+    public void retainIf(IntPredicate predicate)
+    {
+        if (none()) {
+            return;
+        }
+
+        if (allSelected) {
+            int[] positions = positionsArray(size);
+            int outputIndex = 0;
+            for (int position = 0; position < size; position++) {
+                if (predicate.test(position)) {
+                    positions[outputIndex++] = position;
+                }
+            }
+            if (outputIndex == size) {
+                selectAll(size);
+                return;
+            }
+            setSelection(size, outputIndex, false);
+            return;
+        }
+
+        int outputIndex = 0;
+        for (int index = 0; index < selectedCount; index++) {
+            int position = positions[index];
+            if (predicate.test(position)) {
+                positions[outputIndex++] = position;
+            }
+        }
+        if (outputIndex == size) {
+            selectAll(size);
+            return;
+        }
+        setSelection(size, outputIndex, false);
     }
 
     public boolean anyTrue(int start, int end)
@@ -557,7 +594,7 @@ public class Mask
         return union(other);
     }
 
-    private Mask copy()
+    Mask copy()
     {
         if (allSelected) {
             return all(size);

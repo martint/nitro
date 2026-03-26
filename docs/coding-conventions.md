@@ -77,3 +77,26 @@ A mask-only path may legitimately avoid synthesizing full row-wise `NULLS` or
 `ERRORS` outputs while still requiring upstream null/error streams for correct
 three-valued semantics. In those cases, prefer reusing existing companion
 streams over forcing full completion, but do not silently drop them.
+
+## Prefer single predicate kernels over evaluator-built OR trees
+
+When a query shape naturally means "value is one of these literals", prefer a
+single primitive kernel such as `in_utf8` over lowering that condition into a
+wide `OR` tree of repeated `eq_*` calls.
+
+Prefer:
+
+- one primitive call that can evaluate dictionary values once
+- one mask-capable predicate that can narrow an owned mask in place
+- query lowering that preserves the semantic shape of membership tests
+
+Avoid:
+
+- constructing large `OR(eq(...), eq(...), ...)` trees for hot filters
+- relying on the evaluator to reorder and combine many nearly identical terms
+- repeating dictionary/literal comparison setup per term when the condition is
+  semantically one membership test
+
+This keeps filter execution flatter, makes mask-native evaluation easier, and
+avoids spending evaluator CPU on expression bookkeeping instead of predicate
+work.

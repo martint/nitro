@@ -859,6 +859,28 @@ The intended direction is:
 This keeps the existing conceptual split while still allowing Velox-like
 selection-native execution in the hot filter path.
 
+Recent TPC-DS `Q41` work sharpened this direction:
+
+- the first high-value step is owned-mask narrowing in the filter path, not a
+  brand-new selection type
+- `FilterOperator` can take a copy of the upstream mask, hand ownership to the
+  evaluator, and let predicate-capable primitives narrow that mask in place
+- large membership filters should prefer one mask-capable primitive such as
+  `in_utf8` over expanding to an `OR` tree of many `eq_utf8` terms
+- the current in-place path is most valuable for `AND`-dominated filters;
+  `OR` still tends to fall back to ordinary mask materialization, so flattening
+  wide disjunctions into a single predicate remains important
+
+This means "selection-native" in Nitro should usually look like:
+
+- copy or take an owned `Mask`
+- evaluate only over rows currently selected by that mask
+- let the primitive compact the mask in place when semantics allow
+- pass the same narrowed mask forward
+
+That is the closest Nitro analogue to Velox's `SelectivityVector` model while
+preserving `Mask` as the control-flow abstraction.
+
 ### Future direction: evaluator-native dictionary peeling
 
 The evaluator should eventually make dictionary-aware execution a generic

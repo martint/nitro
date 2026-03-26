@@ -136,6 +136,14 @@ public final class PlanEvaluator
         return evaluateTrueMask(expression, mask);
     }
 
+    public Mask evaluateInPlace(MaskExpression expression, Mask mask)
+    {
+        if (mask.none()) {
+            return mask;
+        }
+        return evaluateTrueMaskInPlace(expression, mask);
+    }
+
     public void reset()
     {
         memoizedMasks.clear();
@@ -838,6 +846,16 @@ public final class PlanEvaluator
         return tryEvaluatePrimitiveMask(reference, mask, false);
     }
 
+    private boolean tryEvaluatePrimitiveTrueMaskInPlace(Reference reference, Mask mask)
+    {
+        return tryEvaluatePrimitiveMaskInPlace(reference, mask, true);
+    }
+
+    private boolean tryEvaluatePrimitiveFalseMaskInPlace(Reference reference, Mask mask)
+    {
+        return tryEvaluatePrimitiveMaskInPlace(reference, mask, false);
+    }
+
     private MaskOutcome tryEvaluatePrimitiveMaskOutcome(Reference reference, Mask mask)
     {
         PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
@@ -856,6 +874,17 @@ public final class PlanEvaluator
         return selectTrue
                 ? invocation.function().tryEvaluateTrueMask(invocation.inputs(), mask, executionContext)
                 : invocation.function().tryEvaluateFalseMask(invocation.inputs(), mask, executionContext);
+    }
+
+    private boolean tryEvaluatePrimitiveMaskInPlace(Reference reference, Mask mask, boolean selectTrue)
+    {
+        PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
+        if (invocation == null) {
+            return false;
+        }
+        return selectTrue
+                ? invocation.function().tryEvaluateTrueMaskInPlace(invocation.inputs(), mask, executionContext)
+                : invocation.function().tryEvaluateFalseMaskInPlace(invocation.inputs(), mask, executionContext);
     }
 
     private PrimitiveMaskInvocation resolveMaskPrimitiveInvocation(Reference reference, Mask mask)
@@ -1167,6 +1196,81 @@ public final class PlanEvaluator
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
             case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOrTrueMask(terms, mask);
         };
+    }
+
+    private Mask evaluateTrueMaskInPlace(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> mask;
+            case ReferenceMask(Reference reference) -> {
+                if (!tryEvaluatePrimitiveTrueMaskInPlace(reference, mask)) {
+                    Mask result = evaluateTrueReferenceMask(reference, mask);
+                    if (result != mask) {
+                        mask.copyFrom(result);
+                    }
+                }
+                yield mask;
+            }
+            case NotMask(MaskExpression source) -> {
+                if (!evaluateFalseMaskInPlace(source, mask)) {
+                    Mask result = evaluateFalseMask(source, mask);
+                    if (result != mask) {
+                        mask.copyFrom(result);
+                    }
+                }
+                yield mask;
+            }
+            case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMaskInPlace(terms, mask);
+            case OrMask(List<MaskExpression> terms) -> {
+                Mask result = evaluateAdaptiveOrTrueMask(terms, mask);
+                if (result != mask) {
+                    mask.copyFrom(result);
+                }
+                yield mask;
+            }
+        };
+    }
+
+    private boolean evaluateFalseMaskInPlace(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> {
+                mask.clear(mask.size());
+                yield true;
+            }
+            case ReferenceMask(Reference reference) -> tryEvaluatePrimitiveFalseMaskInPlace(reference, mask);
+            case NotMask(MaskExpression source) -> {
+                evaluateTrueMaskInPlace(source, mask);
+                yield true;
+            }
+            default -> false;
+        };
+    }
+
+    private Mask evaluateAdaptiveAndTrueMaskInPlace(List<MaskExpression> terms, Mask mask)
+    {
+        terms = orderTerms(terms, BooleanOperator.AND);
+        for (MaskExpression term : terms) {
+            if (mask.none()) {
+                break;
+            }
+            evaluateMeasuredTrueMaskInPlace(term, mask, BooleanOperator.AND);
+        }
+        return mask;
+    }
+
+    private Mask evaluateMeasuredTrueMaskInPlace(MaskExpression term, Mask mask, BooleanOperator operator)
+    {
+        int rowsBefore = mask.selectedCount();
+        long start = System.nanoTime();
+        evaluateTrueMaskInPlace(term, mask);
+        long elapsed = System.nanoTime() - start;
+        int decisiveRows = switch (operator) {
+            case AND -> rowsBefore - mask.selectedCount();
+            case OR -> mask.selectedCount();
+        };
+        maskTermStats.computeIfAbsent(term, _ -> new MaskTermStats()).record(rowsBefore, decisiveRows, elapsed, operator);
+        return mask;
     }
 
     private List<MaskExpression> orderTerms(List<MaskExpression> terms, BooleanOperator operator)

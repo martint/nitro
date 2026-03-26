@@ -27,11 +27,11 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "eq_utf8")
-public final class EqualUtf8
+@ScalarFunction(name = "in_utf8")
+public final class InUtf8
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualUtf8");
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("InUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -54,35 +54,35 @@ public final class EqualUtf8
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.applyEquals("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
+        return Utf8BinaryDispatch.applyInSet("in_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
     }
 
     @Override
     public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.tryEvaluateEqualsTrueMask("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
+        return Utf8BinaryDispatch.tryEvaluateInSetTrueMask("in_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
     }
 
     @Override
     public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.tryEvaluateEqualsFalseMask("eq_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
+        return Utf8BinaryDispatch.tryEvaluateInSetFalseMask("in_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
     }
 
     @Override
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.tryEvaluateInSetTrueMaskInPlace("eq_utf8", inputs, mask);
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
+        return Utf8BinaryDispatch.tryEvaluateInSetTrueMaskInPlace("in_utf8", inputs, mask);
     }
 
     @Override
     public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.tryEvaluateInSetFalseMaskInPlace("eq_utf8", inputs, mask);
+        checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
+        return Utf8BinaryDispatch.tryEvaluateInSetFalseMaskInPlace("in_utf8", inputs, mask);
     }
 }

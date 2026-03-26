@@ -86,6 +86,18 @@ public final class EqualI64
         return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
     }
 
+    @Override
+    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, EqualI64::compareEqual);
+    }
+
+    @Override
+    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, EqualI64::compareEqual);
+    }
+
     private static void applyIntegerEquality(Vector left, Vector right, Mask mask, BooleanVector output)
     {
         BinaryDispatchSupport.validateLength(left, mask);
