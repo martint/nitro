@@ -100,3 +100,22 @@ Avoid:
 This keeps filter execution flatter, makes mask-native evaluation easier, and
 avoids spending evaluator CPU on expression bookkeeping instead of predicate
 work.
+
+## Do not add bespoke benchmark operators
+
+Benchmark and query harnesses should be assembled from standard operators and
+reusable primitive functions. If a query needs special logic, first ask whether
+it belongs in:
+
+- a reusable primitive function
+- a constant lookup table plus a standard join
+- a normal `FilterOperator` / `ProjectOperator` / aggregation combination
+
+Avoid adding query-specific operators such as `SomeQueryProjectOperator` or
+`SomeQueryFilterOperator` in benchmark support code. Those operators hide the
+real engine shape, make side-by-side comparisons less faithful, and tend to
+push optimization work into harness code instead of core execution paths.
+
+If a harness looks like it needs a bespoke operator, treat that as a design
+warning and look for a more general operator-assembly or primitive-function
+solution first.
