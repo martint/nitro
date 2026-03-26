@@ -32,6 +32,8 @@ import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -184,7 +186,12 @@ final class TpcdsParquetSupport
                 allocator,
                 filtered,
                 1,
-                new ConstantTableOperator(allocator, 5, customerIdentityRows(allocator, tables)),
+                scannedTable(allocator, tables, "customer",
+                        "c_customer_sk",
+                        "c_last_name",
+                        "c_first_name",
+                        "c_salutation",
+                        "c_preferred_cust_flag"),
                 0);
         Operator enriched = projectInputs(allocator, primitiveRegistry, joined, 4, 5, 6, 7, 0, 2);
         return new TopNOperator(allocator, 100, new int[] {5, 0, 4}, new boolean[] {true, false, false}, enriched);
@@ -410,23 +417,6 @@ final class TpcdsParquetSupport
                 .toList();
     }
 
-    private static List<Row> customerIdentityRows(Allocator allocator, TpcdsParquetTables tables)
-    {
-        return scanRows(allocator, tables, "customer",
-                "c_customer_sk",
-                "c_last_name",
-                "c_first_name",
-                "c_salutation",
-                "c_preferred_cust_flag").stream()
-                .map(row -> new Row(
-                        ((Number) row.values()[0]).longValue(),
-                        stringField(row, 1),
-                        stringField(row, 2),
-                        stringField(row, 3),
-                        stringField(row, 4)))
-                .toList();
-    }
-
     @SuppressWarnings("unchecked")
     private static Query88Lookup query88Lookup(Allocator allocator, TpcdsParquetTables tables)
     {
@@ -485,6 +475,32 @@ final class TpcdsParquetSupport
                 tables.tableFiles("customer"),
                 columns.length,
                 path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+    }
+
+    private static Operator scannedTable(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
+    {
+        List<TableOperator.Page> pages = new ArrayList<>();
+        Allocator.Context allocationContext = new Allocator.Context("TpcdsParquetSupport");
+        try (Operator scan = multiFileScan(
+                tables.tableFiles(tableName),
+                columns.length,
+                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)))) {
+            while (scan.hasNext()) {
+                try (Batch batch = scan.next()) {
+                    int rowCount = batch.borrowMask().count();
+                    if (rowCount == 0) {
+                        continue;
+                    }
+                    int[] positions = positions(batch.borrowMask());
+                    Streams[] pageColumns = new Streams[columns.length];
+                    for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
+                        pageColumns[outputIndex] = allocator.copyStreams(allocationContext, borrowedStreams(batch.output(outputIndex)), positions);
+                    }
+                    pages.add(new TableOperator.Page(rowCount, pageColumns, Mask.all(rowCount)));
+                }
+            }
+        }
+        return new TableOperator(columns.length, pages);
     }
 
     private static IntSet dateKeysForMonthSequence(Allocator allocator, TpcdsParquetTables tables, int minimumMonthSequence, int maximumMonthSequence)
@@ -1195,5 +1211,29 @@ final class TpcdsParquetSupport
                     sourceBatch::close,
                     outputs);
         }
+    }
+
+    private static int[] positions(Mask mask)
+    {
+        int[] positions = new int[mask.count()];
+        if (mask.all()) {
+            for (int index = 0; index < positions.length; index++) {
+                positions[index] = index;
+            }
+            return positions;
+        }
+        for (int index = 0; index < positions.length; index++) {
+            positions[index] = mask.position(index);
+        }
+        return positions;
+    }
+
+    private static Streams borrowedStreams(Output output)
+    {
+        Streams.Builder streams = Streams.builder();
+        for (Stream stream : output.streams()) {
+            streams.put(stream, output.borrow(stream));
+        }
+        return streams.build();
     }
 }
