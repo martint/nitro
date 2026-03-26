@@ -20,6 +20,8 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
+import org.weakref.nitro.operator.evaluator.MaskOutcome;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -31,7 +33,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "lt")
 public final class LessThanI64
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanI64");
 
@@ -66,6 +68,24 @@ public final class LessThanI64
                 BooleanVector::new);
         I64BinaryDispatch.applyBoolean(left, right, mask, result, LessThanI64::apply);
         return Streams.of(Stream.VALUES, result);
+    }
+
+    @Override
+    public MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, ALLOCATION_CONTEXT, LessThanI64::apply);
+    }
+
+    @Override
+    public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, ALLOCATION_CONTEXT, LessThanI64::apply);
+    }
+
+    @Override
+    public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, ALLOCATION_CONTEXT, LessThanI64::apply);
     }
 
     private static boolean apply(long leftValue, long rightValue)

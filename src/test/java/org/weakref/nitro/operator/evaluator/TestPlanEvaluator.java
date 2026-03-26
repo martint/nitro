@@ -26,6 +26,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -140,7 +141,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testReferenceMaskOptimizesSimpleLongComparisonsWithoutPrimitiveCalls()
+    void testReferenceMaskOptimizesSimpleLongComparisonsViaPrimitiveMaskEvaluation()
     {
         Variable sixtyTwo = new Variable(0);
         Variable refreshZero = new Variable(1);
@@ -174,7 +175,7 @@ public class TestPlanEvaluator
 
         PlanEvaluator evaluator = new PlanEvaluator(
                 plan,
-                new PrimitiveRegistry(),
+                builtinPrimitiveRegistry(),
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {62, 62, 63, 62}),
                         new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1_372_636_800L, 1_373_000_000L, 1_373_000_000L, 1_375_315_200L}),
@@ -1859,6 +1860,7 @@ public class TestPlanEvaluator
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         primitiveRegistry.register(scalarRegistry.register(AddI64.class));
+        primitiveRegistry.register(scalarRegistry.register(EqualI64.class));
         primitiveRegistry.register(scalarRegistry.register(LessThanI64.class));
         return primitiveRegistry;
     }

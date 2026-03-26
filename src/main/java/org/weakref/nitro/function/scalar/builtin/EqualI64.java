@@ -23,6 +23,8 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
+import org.weakref.nitro.operator.evaluator.MaskOutcome;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -34,7 +36,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "eq")
 public final class EqualI64
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualI64");
 
@@ -66,6 +68,24 @@ public final class EqualI64
         return Streams.of(Stream.VALUES, result);
     }
 
+    @Override
+    public MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
+    }
+
+    @Override
+    public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
+    }
+
+    @Override
+    public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
+    }
+
     private static void applyIntegerEquality(Vector left, Vector right, Mask mask, BooleanVector output)
     {
         BinaryDispatchSupport.validateLength(left, mask);
@@ -94,5 +114,10 @@ public final class EqualI64
             case RleVector values -> integerValue(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected integer vector but got " + vector.getClass().getSimpleName());
         };
+    }
+
+    private static boolean compareEqual(long leftValue, long rightValue)
+    {
+        return leftValue == rightValue;
     }
 }
