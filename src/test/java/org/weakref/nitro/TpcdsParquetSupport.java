@@ -13,18 +13,15 @@
  */
 package org.weakref.nitro;
 
+import it.unimi.dsi.fastutil.ints.Int2IntMap;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -55,6 +52,7 @@ import org.weakref.nitro.tpcds.TpcdsParquetTables;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -63,16 +61,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
-import static java.lang.Math.toIntExact;
-
 final class TpcdsParquetSupport
 {
+    private static final String NULLS_LAST_SENTINEL_STRING = "\uFFFF";
     private static final byte[] NULLS_LAST_SENTINEL = "\uFFFF".getBytes(StandardCharsets.UTF_8);
-    private static final Allocator.Context CUSTOMER_ELIGIBILITY_TRANSFORM_CONTEXT = new Allocator.Context("CustomerEligibilityTransform");
-    private static final Allocator.Context CUSTOMER_DEMOGRAPHICS_TRANSFORM_CONTEXT = new Allocator.Context("CustomerDemographicsTransform");
-    private static final Allocator.Context TICKET_CUSTOMER_TRANSFORM_CONTEXT = new Allocator.Context("TicketCustomerTransform");
-    private static final Allocator.Context CUSTOMER_TICKET_TRANSFORM_CONTEXT = new Allocator.Context("CustomerTicketTransform");
-    private static final Allocator.Context SHIPPING_BUCKETS_TRANSFORM_CONTEXT = new Allocator.Context("ShippingBucketsTransform");
 
     private TpcdsParquetSupport() {}
 
@@ -94,73 +86,78 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, 0, false, distinct);
     }
 
-    public static Operator query62(Allocator allocator, TpcdsParquetTables tables)
+    public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         ShippingBucketsLookup lookup = query62Lookup(allocator, tables);
-        Operator projected = new BatchTransformOperator(
-                allocator,
-                factScan(allocator, tables, "web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk", "ws_ship_mode_sk", "ws_web_site_sk"),
-                8,
-                sourceBatch -> shippingBucketsBatch(allocator, SHIPPING_BUCKETS_TRANSFORM_CONTEXT, lookup, sourceBatch),
-                SHIPPING_BUCKETS_TRANSFORM_CONTEXT);
+        Operator joined = factScan(allocator, tables, "web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk", "ws_ship_mode_sk", "ws_web_site_sk");
+        joined = new HashJoinOperator(allocator, joined, 0, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedShipDates())), 0);
+        joined = new HashJoinOperator(allocator, joined, 2, new ConstantTableOperator(allocator, 2, keyGroupRows(lookup.firstNames())), 0);
+        joined = new HashJoinOperator(allocator, joined, 3, new ConstantTableOperator(allocator, 2, keyGroupRows(lookup.secondNames())), 0);
+        joined = new HashJoinOperator(allocator, joined, 4, new ConstantTableOperator(allocator, 2, keyGroupRows(lookup.thirdNames())), 0);
+        Operator projected = projectShippingBuckets(allocator, primitiveRegistry, joined, 7, 9, 11, 0, 1);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
                 List.of(new Sum(3), new Sum(4), new Sum(5), new Sum(6), new Sum(7)),
                 projected);
+        Operator namesJoined = new HashJoinOperator(allocator, aggregated, 0, new ConstantTableOperator(allocator, 2, lookupRows(lookup.firstNames().namesByGroupId())), 0);
+        namesJoined = new HashJoinOperator(allocator, namesJoined, 1, new ConstantTableOperator(allocator, 2, lookupRows(lookup.secondNames().namesByGroupId())), 0);
+        namesJoined = new HashJoinOperator(allocator, namesJoined, 2, new ConstantTableOperator(allocator, 2, lookupRows(lookup.thirdNames().namesByGroupId())), 0);
+        Operator named = projectInputs(allocator, primitiveRegistry, namesJoined, 9, 11, 13, 3, 4, 5, 6, 7);
         return new SentinelNullRestoringOperator(
                 allocator,
                 new int[] {0, 1, 2},
-                new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, aggregated));
+                new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, named));
     }
 
-    public static Operator query96(Allocator allocator, TpcdsParquetTables tables)
+    public static Operator query96(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Query96Lookup lookup = query96Lookup(allocator, tables);
-        Operator filtered = new IntegerDimensionFilterOperator(
-                allocator,
-                factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
-                new int[] {0, 1, 2},
-                new IntSet[] {lookup.timeKeys(), lookup.householdKeys(), lookup.storeKeys()});
+        Operator filtered = factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk");
+        filtered = new HashJoinOperator(allocator, filtered, 0, new ConstantTableOperator(allocator, 1, keyRows(lookup.timeKeys())), 0);
+        filtered = new HashJoinOperator(allocator, filtered, 1, new ConstantTableOperator(allocator, 1, keyRows(lookup.householdKeys())), 0);
+        filtered = new HashJoinOperator(allocator, filtered, 2, new ConstantTableOperator(allocator, 1, keyRows(lookup.storeKeys())), 0);
         return new AggregationOperator(allocator, List.of(new CountAll()), filtered);
     }
 
-    public static Operator query99(Allocator allocator, TpcdsParquetTables tables)
+    public static Operator query99(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         ShippingBucketsLookup lookup = query99Lookup(allocator, tables);
-        Operator projected = new BatchTransformOperator(
-                allocator,
-                factScan(allocator, tables, "catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk", "cs_ship_mode_sk", "cs_call_center_sk"),
-                8,
-                sourceBatch -> shippingBucketsBatch(allocator, SHIPPING_BUCKETS_TRANSFORM_CONTEXT, lookup, sourceBatch),
-                SHIPPING_BUCKETS_TRANSFORM_CONTEXT);
+        Operator joined = factScan(allocator, tables, "catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk", "cs_ship_mode_sk", "cs_call_center_sk");
+        joined = new HashJoinOperator(allocator, joined, 0, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedShipDates())), 0);
+        joined = new HashJoinOperator(allocator, joined, 2, new ConstantTableOperator(allocator, 2, keyGroupRows(lookup.firstNames())), 0);
+        joined = new HashJoinOperator(allocator, joined, 3, new ConstantTableOperator(allocator, 2, keyGroupRows(lookup.secondNames())), 0);
+        joined = new HashJoinOperator(allocator, joined, 4, new ConstantTableOperator(allocator, 2, keyGroupRows(lookup.thirdNames())), 0);
+        Operator projected = projectShippingBuckets(allocator, primitiveRegistry, joined, 7, 9, 11, 0, 1);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
                 List.of(new Sum(3), new Sum(4), new Sum(5), new Sum(6), new Sum(7)),
                 projected);
+        Operator namesJoined = new HashJoinOperator(allocator, aggregated, 0, new ConstantTableOperator(allocator, 2, lookupRows(lookup.firstNames().namesByGroupId())), 0);
+        namesJoined = new HashJoinOperator(allocator, namesJoined, 1, new ConstantTableOperator(allocator, 2, lookupRows(lookup.secondNames().namesByGroupId())), 0);
+        namesJoined = new HashJoinOperator(allocator, namesJoined, 2, new ConstantTableOperator(allocator, 2, lookupRows(lookup.thirdNames().namesByGroupId())), 0);
+        Operator named = projectInputs(allocator, primitiveRegistry, namesJoined, 9, 11, 13, 3, 4, 5, 6, 7);
         return new SentinelNullRestoringOperator(
                 allocator,
                 new int[] {0, 1, 2},
-                new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, aggregated));
+                new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, named));
     }
 
     public static Operator query10(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Query10Lookup lookup = query10Lookup(allocator, tables);
-        Operator eligibleCustomers = new BatchTransformOperator(
-                allocator,
-                customerScan(allocator, tables, "c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"),
-                1,
-                sourceBatch -> customerEligibilityBatch(allocator, CUSTOMER_ELIGIBILITY_TRANSFORM_CONTEXT, lookup, sourceBatch),
-                CUSTOMER_ELIGIBILITY_TRANSFORM_CONTEXT);
+        Operator eligibleCustomers = customerScan(allocator, tables, "c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk");
+        eligibleCustomers = new HashJoinOperator(allocator, eligibleCustomers, 0, new ConstantTableOperator(allocator, 1, keyRows(lookup.eligibleAddressKeys())), 0);
+        eligibleCustomers = new HashJoinOperator(allocator, eligibleCustomers, 1, new ConstantTableOperator(allocator, 1, keyRows(lookup.storeCustomerKeys())), 0);
+        eligibleCustomers = new HashJoinOperator(allocator, eligibleCustomers, 1, new ConstantTableOperator(allocator, 1, keyRows(unionKeys(lookup.webCustomerKeys(), lookup.catalogCustomerKeys()))), 0);
         Operator joined = new HashJoinOperator(
                 allocator,
                 eligibleCustomers,
-                0,
+                2,
                 new ConstantTableOperator(allocator, 9, customerDemographicsRows(allocator, tables)),
                 0);
-        Operator projected = projectInputs(allocator, primitiveRegistry, joined, 2, 3, 4, 5, 6, 7, 8, 9);
+        Operator projected = projectInputs(allocator, primitiveRegistry, joined, 7, 8, 9, 10, 11, 12, 13, 14);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7),
@@ -173,12 +170,10 @@ final class TpcdsParquetSupport
     public static Operator query73(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Query73Lookup lookup = query73Lookup(allocator, tables);
-        Operator projected = new BatchTransformOperator(
-                allocator,
-                factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"),
-                2,
-                sourceBatch -> ticketCustomerBatch(allocator, TICKET_CUSTOMER_TRANSFORM_CONTEXT, lookup, sourceBatch),
-                TICKET_CUSTOMER_TRANSFORM_CONTEXT);
+        Operator projected = factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk");
+        projected = new HashJoinOperator(allocator, projected, 2, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedDateKeys())), 0);
+        projected = new HashJoinOperator(allocator, projected, 3, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedStoreKeys())), 0);
+        projected = new HashJoinOperator(allocator, projected, 4, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedHouseholdKeys())), 0);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -195,16 +190,12 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {5, 0, 4}, new boolean[] {true, false, false}, enriched);
     }
 
-    public static Operator query88(Allocator allocator, TpcdsParquetTables tables)
+    public static Operator query88(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Query88Lookup lookup = query88Lookup(allocator, tables);
         long[] counts = new long[8];
         for (int bucket = 0; bucket < counts.length; bucket++) {
-            try (Operator filtered = new IntegerDimensionFilterOperator(
-                    allocator,
-                    factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
-                    new int[] {0, 1, 2},
-                    new IntSet[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()});
+            try (Operator filtered = query88Bucket(allocator, primitiveRegistry, tables, lookup, bucket);
                     Operator aggregated = new AggregationOperator(allocator, List.of(new CountAll()), filtered)) {
                 counts[bucket] = singleLongResult(aggregated);
             }
@@ -222,17 +213,27 @@ final class TpcdsParquetSupport
 
     static Set<String> query41EligibleManufacturers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
+        return query41EligibleManufacturers(allocator, primitiveRegistry, tables, query41EligibilityPredicate(1, 2, 3, 4));
+    }
+
+    private static Set<String> query41EligibleManufacturers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, FilterSpec filterSpec)
+    {
+        Set<String> result = new HashSet<>();
+        for (Row row : query41EligibleRows(allocator, primitiveRegistry, tables, filterSpec)) {
+            result.add((String) row.values()[0]);
+        }
+        return result;
+    }
+
+    private static List<Row> query41EligibleRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, FilterSpec filterSpec)
+    {
         Operator filtered = filter(
                 allocator,
                 primitiveRegistry,
                 itemScan(allocator, tables, "i_manufact", "i_category", "i_color", "i_units", "i_size"),
-                query41EligibilityPredicate(1, 2, 3, 4));
-        try (Operator manufacturers = new MarkDistinctOperator(allocator, 0, filtered)) {
-            Set<String> result = new HashSet<>();
-            for (Row row : OperatorAssertions.OperatorAssert.toRows(manufacturers)) {
-                result.add((String) row.values()[0]);
-            }
-            return result;
+                filterSpec);
+        try (filtered) {
+            return OperatorAssertions.OperatorAssert.toRows(filtered);
         }
     }
 
@@ -240,9 +241,9 @@ final class TpcdsParquetSupport
     {
         return new ShippingBucketsLookup(
                 dateKeysForMonthSequence(allocator, tables, 1200, 1211),
-                prefixedUtf8Map(scanRows(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"), 0, 1, 20),
-                utf8Map(scanRows(allocator, tables, "ship_mode", "sm_ship_mode_sk", "sm_type"), 0, 1),
-                utf8Map(scanRows(allocator, tables, "web_site", "web_site_sk", "web_name"), 0, 1));
+                canonicalNameLookup(prefixedUtf8Map(scanRows(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"), 0, 1, 20)),
+                canonicalNameLookup(utf8Map(scanRows(allocator, tables, "ship_mode", "sm_ship_mode_sk", "sm_type"), 0, 1)),
+                canonicalNameLookup(utf8Map(scanRows(allocator, tables, "web_site", "web_site_sk", "web_name"), 0, 1)));
     }
 
     private static Query96Lookup query96Lookup(Allocator allocator, TpcdsParquetTables tables)
@@ -260,9 +261,9 @@ final class TpcdsParquetSupport
     {
         return new ShippingBucketsLookup(
                 dateKeysForMonthSequence(allocator, tables, 1200, 1211),
-                prefixedUtf8Map(scanRows(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"), 0, 1, 20),
-                utf8Map(scanRows(allocator, tables, "ship_mode", "sm_ship_mode_sk", "sm_type"), 0, 1),
-                utf8Map(scanRows(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"), 0, 1));
+                canonicalNameLookup(prefixedUtf8Map(scanRows(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"), 0, 1, 20)),
+                canonicalNameLookup(utf8Map(scanRows(allocator, tables, "ship_mode", "sm_ship_mode_sk", "sm_type"), 0, 1)),
+                canonicalNameLookup(utf8Map(scanRows(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"), 0, 1)));
     }
 
     private static IntSet dateKeysForYearMonthRange(Allocator allocator, TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
@@ -505,22 +506,22 @@ final class TpcdsParquetSupport
         return result;
     }
 
-    private static Map<Integer, byte[]> utf8Map(List<Row> rows, int keyIndex, int valueIndex)
+    private static Map<Integer, String> utf8Map(List<Row> rows, int keyIndex, int valueIndex)
     {
-        Map<Integer, byte[]> result = new HashMap<>();
+        Map<Integer, String> result = new HashMap<>();
         for (Row row : rows) {
             String value = stringField(row, valueIndex);
-            result.put(integerField(row, keyIndex), value == null ? null : utf8(value));
+            result.put(integerField(row, keyIndex), value);
         }
         return result;
     }
 
-    private static Map<Integer, byte[]> prefixedUtf8Map(List<Row> rows, int keyIndex, int valueIndex, int prefixLength)
+    private static Map<Integer, String> prefixedUtf8Map(List<Row> rows, int keyIndex, int valueIndex, int prefixLength)
     {
-        Map<Integer, byte[]> result = new HashMap<>();
+        Map<Integer, String> result = new HashMap<>();
         for (Row row : rows) {
             String value = stringField(row, valueIndex);
-            result.put(integerField(row, keyIndex), value == null ? null : utf8(value.substring(0, Math.min(prefixLength, value.length()))));
+            result.put(integerField(row, keyIndex), value == null ? null : value.substring(0, Math.min(prefixLength, value.length())));
         }
         return result;
     }
@@ -551,7 +552,161 @@ final class TpcdsParquetSupport
         return new ProjectOperator(allocator, new EvaluationPlan(List.of(), outputs), primitiveRegistry, source);
     }
 
+    private static Operator projectShippingBuckets(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int firstNameIndex, int secondNameIndex, int thirdNameIndex, int shipDateIndex, int soldDateIndex)
+    {
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable thirty = new Variable(2);
+        Variable thirtyOne = new Variable(3);
+        Variable sixty = new Variable(4);
+        Variable sixtyOne = new Variable(5);
+        Variable ninety = new Variable(6);
+        Variable ninetyOne = new Variable(7);
+        Variable oneHundredTwenty = new Variable(8);
+        Variable oneHundredTwentyOne = new Variable(9);
+        Variable days = new Variable(10);
+        Variable bucket30Condition = new Variable(11);
+        Variable greaterThanThirty = new Variable(12);
+        Variable lessThanSixtyOne = new Variable(13);
+        Variable bucket31To60Condition = new Variable(14);
+        Variable greaterThanSixty = new Variable(15);
+        Variable lessThanNinetyOne = new Variable(16);
+        Variable bucket61To90Condition = new Variable(17);
+        Variable greaterThanNinety = new Variable(18);
+        Variable lessThanOneHundredTwentyOne = new Variable(19);
+        Variable bucket91To120Condition = new Variable(20);
+        Variable greaterThanOneHundredTwenty = new Variable(21);
+        Variable bucket30 = new Variable(22);
+        Variable bucket31To60 = new Variable(23);
+        Variable bucket61To90 = new Variable(24);
+        Variable bucket91To120 = new Variable(25);
+        Variable bucketOver120 = new Variable(26);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(one, new Literal(1L), AllMask.ALL),
+                new Assignment(thirty, new Literal(30L), AllMask.ALL),
+                new Assignment(thirtyOne, new Literal(31L), AllMask.ALL),
+                new Assignment(sixty, new Literal(60L), AllMask.ALL),
+                new Assignment(sixtyOne, new Literal(61L), AllMask.ALL),
+                new Assignment(ninety, new Literal(90L), AllMask.ALL),
+                new Assignment(ninetyOne, new Literal(91L), AllMask.ALL),
+                new Assignment(oneHundredTwenty, new Literal(120L), AllMask.ALL),
+                new Assignment(oneHundredTwentyOne, new Literal(121L), AllMask.ALL),
+                new Assignment(days, new Call("subtract", List.of(
+                        new Reference(new Input(shipDateIndex), Stream.VALUES),
+                        new Reference(new Input(soldDateIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket30Condition, new Call("lt", List.of(
+                        new Reference(days, Stream.VALUES),
+                        new Reference(thirtyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThanThirty, new Call("lt", List.of(
+                        new Reference(thirty, Stream.VALUES),
+                        new Reference(days, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lessThanSixtyOne, new Call("lt", List.of(
+                        new Reference(days, Stream.VALUES),
+                        new Reference(sixtyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket31To60Condition, new Call("and", List.of(
+                        new Reference(greaterThanThirty, Stream.VALUES),
+                        new Reference(lessThanSixtyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThanSixty, new Call("lt", List.of(
+                        new Reference(sixty, Stream.VALUES),
+                        new Reference(days, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lessThanNinetyOne, new Call("lt", List.of(
+                        new Reference(days, Stream.VALUES),
+                        new Reference(ninetyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket61To90Condition, new Call("and", List.of(
+                        new Reference(greaterThanSixty, Stream.VALUES),
+                        new Reference(lessThanNinetyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThanNinety, new Call("lt", List.of(
+                        new Reference(ninety, Stream.VALUES),
+                        new Reference(days, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lessThanOneHundredTwentyOne, new Call("lt", List.of(
+                        new Reference(days, Stream.VALUES),
+                        new Reference(oneHundredTwentyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket91To120Condition, new Call("and", List.of(
+                        new Reference(greaterThanNinety, Stream.VALUES),
+                        new Reference(lessThanOneHundredTwentyOne, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThanOneHundredTwenty, new Call("lt", List.of(
+                        new Reference(oneHundredTwenty, Stream.VALUES),
+                        new Reference(days, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket30, new Call("if_i64", List.of(
+                        new Reference(bucket30Condition, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket31To60, new Call("if_i64", List.of(
+                        new Reference(bucket31To60Condition, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket61To90, new Call("if_i64", List.of(
+                        new Reference(bucket61To90Condition, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucket91To120, new Call("if_i64", List.of(
+                        new Reference(bucket91To120Condition, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(bucketOver120, new Call("if_i64", List.of(
+                        new Reference(greaterThanOneHundredTwenty, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL));
+
+        List<Reference> outputs = List.of(
+                new Reference(new Input(firstNameIndex), Stream.VALUES),
+                new Reference(new Input(secondNameIndex), Stream.VALUES),
+                new Reference(new Input(thirdNameIndex), Stream.VALUES),
+                new Reference(bucket30, Stream.VALUES),
+                new Reference(bucket31To60, Stream.VALUES),
+                new Reference(bucket61To90, Stream.VALUES),
+                new Reference(bucket91To120, Stream.VALUES),
+                new Reference(bucketOver120, Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static Operator projectJoinedShippingNames(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int firstNameIndex, int secondNameIndex, int thirdNameIndex, int firstCountIndex, int secondCountIndex, int thirdCountIndex, int fourthCountIndex, int fifthCountIndex)
+    {
+        Variable alwaysTrue = new Variable(0);
+        Variable firstName = new Variable(1);
+        Variable secondName = new Variable(2);
+        Variable thirdName = new Variable(3);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(alwaysTrue, new Literal(true), AllMask.ALL),
+                new Assignment(firstName, new Call("if_utf8", List.of(
+                        new Reference(alwaysTrue, Stream.VALUES),
+                        new Reference(new Input(firstNameIndex), Stream.VALUES),
+                        new Reference(new Input(firstNameIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(secondName, new Call("if_utf8", List.of(
+                        new Reference(alwaysTrue, Stream.VALUES),
+                        new Reference(new Input(secondNameIndex), Stream.VALUES),
+                        new Reference(new Input(secondNameIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(thirdName, new Call("if_utf8", List.of(
+                        new Reference(alwaysTrue, Stream.VALUES),
+                        new Reference(new Input(thirdNameIndex), Stream.VALUES),
+                        new Reference(new Input(thirdNameIndex), Stream.VALUES))), AllMask.ALL));
+
+        List<Reference> outputs = List.of(
+                new Reference(firstName, Stream.VALUES),
+                new Reference(secondName, Stream.VALUES),
+                new Reference(thirdName, Stream.VALUES),
+                new Reference(new Input(firstCountIndex), Stream.VALUES),
+                new Reference(new Input(secondCountIndex), Stream.VALUES),
+                new Reference(new Input(thirdCountIndex), Stream.VALUES),
+                new Reference(new Input(fourthCountIndex), Stream.VALUES),
+                new Reference(new Input(fifthCountIndex), Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
     private static FilterSpec query41EligibilityPredicate(int categoryIndex, int colorIndex, int unitsIndex, int sizeIndex)
+    {
+        java.util.Iterator<FilterSpec> iterator = query41EligibilityBranches(categoryIndex, colorIndex, unitsIndex, sizeIndex).values().iterator();
+        FilterSpec result = iterator.next();
+        while (iterator.hasNext()) {
+            result = or(result, iterator.next());
+        }
+        return result;
+    }
+
+    private static Map<String, FilterSpec> query41EligibilityBranches(int categoryIndex, int colorIndex, int unitsIndex, int sizeIndex)
     {
         FilterSpec womenPowderKhaki = and(
                 equalUtf8(categoryIndex, "Women"),
@@ -594,15 +749,16 @@ final class TpcdsParquetSupport
                 or(equalUtf8(unitsIndex, "Lb"), equalUtf8(unitsIndex, "Bundle")),
                 or(equalUtf8(sizeIndex, "medium"), equalUtf8(sizeIndex, "extra large")));
 
-        return or(
-                womenPowderKhaki,
-                womenBrownHoneydew,
-                menFloralDeep,
-                menLightCornflower,
-                womenMidnightSnow,
-                womenCyanPapaya,
-                menOrangeFrosted,
-                menForestGhost);
+        Map<String, FilterSpec> branches = new java.util.LinkedHashMap<>();
+        branches.put("womenPowderKhaki", womenPowderKhaki);
+        branches.put("womenBrownHoneydew", womenBrownHoneydew);
+        branches.put("menFloralDeep", menFloralDeep);
+        branches.put("menLightCornflower", menLightCornflower);
+        branches.put("womenMidnightSnow", womenMidnightSnow);
+        branches.put("womenCyanPapaya", womenCyanPapaya);
+        branches.put("menOrangeFrosted", menOrangeFrosted);
+        branches.put("menForestGhost", menForestGhost);
+        return branches;
     }
 
     private static FilterSpec equalUtf8(int inputIndex, String constant)
@@ -744,7 +900,9 @@ final class TpcdsParquetSupport
 
     private record Query96Lookup(IntSet timeKeys, IntSet householdKeys, IntSet storeKeys) {}
 
-    private record ShippingBucketsLookup(IntSet allowedShipDates, Map<Integer, byte[]> firstNames, Map<Integer, byte[]> secondNames, Map<Integer, byte[]> thirdNames) {}
+    private record CanonicalNameLookup(Int2IntMap keyToGroupId, Map<Integer, String> namesByGroupId) {}
+
+    private record ShippingBucketsLookup(IntSet allowedShipDates, CanonicalNameLookup firstNames, CanonicalNameLookup secondNames, CanonicalNameLookup thirdNames) {}
 
     private static int integerField(Row row, int index)
     {
@@ -756,16 +914,6 @@ final class TpcdsParquetSupport
         return (String) row.values()[index];
     }
 
-    private static byte[] utf8(String value)
-    {
-        return value.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static byte[] utf8OrNull(String value)
-    {
-        return value == null ? null : utf8(value);
-    }
-
     private static long singleLongResult(Operator operator)
     {
         List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
@@ -773,35 +921,6 @@ final class TpcdsParquetSupport
             throw new IllegalStateException("Expected exactly one row but found " + rows.size());
         }
         return ((Number) rows.getFirst().values()[0]).longValue();
-    }
-
-    private static int integerValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I32Vector values -> values.values()[position];
-            case I64Vector values -> toIntExact(values.values()[position]);
-            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
-            case RleVector values -> integerValue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static Output valuesOnlyOutput(Allocator allocator, Allocator.Context context, Vector values)
-    {
-        return new Output(
-                java.util.Set.of(Stream.VALUES),
-                _ -> values,
-                (stream, vector) -> allocator.transfer(context, vector),
-                (stream, vector) -> allocator.discard(context, vector));
-    }
-
-    private static Output valuesAndNullsOutput(Allocator allocator, Allocator.Context context, Vector values, BooleanVector nulls)
-    {
-        return new Output(
-                java.util.Set.of(Stream.VALUES, Stream.NULLS),
-                stream -> stream == Stream.VALUES ? values : nulls,
-                (stream, vector) -> allocator.transfer(context, vector),
-                (stream, vector) -> allocator.discard(context, vector));
     }
 
     private static boolean isNullsLastSentinel(BinaryVector values, int position)
@@ -816,301 +935,93 @@ final class TpcdsParquetSupport
                         NULLS_LAST_SENTINEL.length) == -1;
     }
 
-    private static Batch customerEligibilityBatch(Allocator allocator, Allocator.Context context, Query10Lookup lookup, Batch sourceBatch)
+    private static Output valuesAndNullsOutput(Allocator allocator, Allocator.Context context, BinaryVector values, BooleanVector nulls)
     {
-        Mask sourceMask = sourceBatch.borrowMask();
-        if (sourceMask.none()) {
-            return null;
-        }
-
-        Vector addressValues = sourceBatch.output(0).borrow(Stream.VALUES);
-        Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
-        Vector demographicsValues = sourceBatch.output(2).borrow(Stream.VALUES);
-
-        int selectedCount = 0;
-        for (int position : sourceMask) {
-            int addressKey = integerValue(addressValues, position);
-            int customerKey = integerValue(customerValues, position);
-            if (lookup.eligibleAddressKeys().contains(addressKey) &&
-                    lookup.storeCustomerKeys().contains(customerKey) &&
-                    (lookup.webCustomerKeys().contains(customerKey) || lookup.catalogCustomerKeys().contains(customerKey))) {
-                selectedCount++;
-            }
-        }
-
-        if (selectedCount == 0) {
-            return null;
-        }
-
-        I64Vector demographicsKeys = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        int outputPosition = 0;
-        for (int position : sourceMask) {
-            int addressKey = integerValue(addressValues, position);
-            int customerKey = integerValue(customerValues, position);
-            if (!lookup.eligibleAddressKeys().contains(addressKey) ||
-                    !lookup.storeCustomerKeys().contains(customerKey) ||
-                    (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
-                continue;
-            }
-            demographicsKeys.values()[outputPosition] = integerValue(demographicsValues, position);
-            outputPosition++;
-        }
-
-        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
-        return new Batch(
-                outputMask,
-                _ -> {},
-                takenMask -> allocator.transfer(context, takenMask),
-                releasedMask -> allocator.release(context, releasedMask),
-                sourceBatch::close,
-                valuesOnlyOutput(allocator, context, demographicsKeys));
+        return new Output(
+                java.util.Set.of(Stream.VALUES, Stream.NULLS),
+                stream -> stream == Stream.VALUES ? values : nulls,
+                (stream, vector) -> allocator.transfer(context, vector),
+                (stream, vector) -> allocator.discard(context, vector));
     }
 
-    private static Batch ticketCustomerBatch(Allocator allocator, Allocator.Context context, Query73Lookup lookup, Batch sourceBatch)
+    private static List<Row> keyRows(IntSet keys)
     {
-        Mask sourceMask = sourceBatch.borrowMask();
-        if (sourceMask.none()) {
-            return null;
+        int[] values = keys.toIntArray();
+        Arrays.sort(values);
+        List<Row> rows = new ArrayList<>(values.length);
+        for (int value : values) {
+            rows.add(new Row((long) value));
         }
-
-        Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
-        Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
-        Vector dateValues = sourceBatch.output(2).borrow(Stream.VALUES);
-        Vector storeValues = sourceBatch.output(3).borrow(Stream.VALUES);
-        Vector householdValues = sourceBatch.output(4).borrow(Stream.VALUES);
-
-        int selectedCount = 0;
-        for (int position : sourceMask) {
-            if (lookup.allowedDateKeys().contains(integerValue(dateValues, position)) &&
-                    lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) &&
-                    lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
-                selectedCount++;
-            }
-        }
-
-        if (selectedCount == 0) {
-            return null;
-        }
-
-        I64Vector ticketNumbers = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        I64Vector customerKeys = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        int outputPosition = 0;
-        for (int position : sourceMask) {
-            if (!lookup.allowedDateKeys().contains(integerValue(dateValues, position)) ||
-                    !lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) ||
-                    !lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
-                continue;
-            }
-            ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
-            customerKeys.values()[outputPosition] = ((I64Vector) customerValues).values()[position];
-            outputPosition++;
-        }
-
-        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
-        return new Batch(
-                outputMask,
-                _ -> {},
-                takenMask -> allocator.transfer(context, takenMask),
-                releasedMask -> allocator.release(context, releasedMask),
-                sourceBatch::close,
-                valuesOnlyOutput(allocator, context, ticketNumbers),
-                valuesOnlyOutput(allocator, context, customerKeys));
+        return rows;
     }
 
-    private static Batch shippingBucketsBatch(Allocator allocator, Allocator.Context context, ShippingBucketsLookup lookup, Batch sourceBatch)
+    private static List<Row> lookupRows(Map<Integer, String> values)
     {
-        Mask sourceMask = sourceBatch.borrowMask();
-        if (sourceMask.none()) {
-            return null;
+        int[] keys = values.keySet().stream()
+                .mapToInt(Integer::intValue)
+                .toArray();
+        Arrays.sort(keys);
+        List<Row> rows = new ArrayList<>(keys.length);
+        for (int key : keys) {
+            rows.add(new Row((long) key, sentinelValue(values.get(key))));
         }
-
-        Vector shipDateValues = sourceBatch.output(0).borrow(Stream.VALUES);
-        Vector soldDateValues = sourceBatch.output(1).borrow(Stream.VALUES);
-        Vector firstKeyValues = sourceBatch.output(2).borrow(Stream.VALUES);
-        Vector secondKeyValues = sourceBatch.output(3).borrow(Stream.VALUES);
-        Vector thirdKeyValues = sourceBatch.output(4).borrow(Stream.VALUES);
-
-        int selectedCount = 0;
-        int firstBytes = 0;
-        int secondBytes = 0;
-        int thirdBytes = 0;
-        for (int position : sourceMask) {
-            int shipDate = integerValue(shipDateValues, position);
-            if (!lookup.allowedShipDates().contains(shipDate)) {
-                continue;
-            }
-
-            int firstKey = integerValue(firstKeyValues, position);
-            int secondKey = integerValue(secondKeyValues, position);
-            int thirdKey = integerValue(thirdKeyValues, position);
-            if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
-                continue;
-            }
-            byte[] first = lookup.firstNames().get(firstKey);
-            byte[] second = lookup.secondNames().get(secondKey);
-            byte[] third = lookup.thirdNames().get(thirdKey);
-            if (first == null) {
-                first = NULLS_LAST_SENTINEL;
-            }
-            if (second == null) {
-                second = NULLS_LAST_SENTINEL;
-            }
-            if (third == null) {
-                third = NULLS_LAST_SENTINEL;
-            }
-
-            selectedCount++;
-            firstBytes += first.length;
-            secondBytes += second.length;
-            thirdBytes += third.length;
-        }
-
-        if (selectedCount == 0) {
-            return null;
-        }
-
-        BinaryVector firstOutput = BinaryVector.allocate(allocator, context, selectedCount, firstBytes);
-        BinaryVector secondOutput = BinaryVector.allocate(allocator, context, selectedCount, secondBytes);
-        BinaryVector thirdOutput = BinaryVector.allocate(allocator, context, selectedCount, thirdBytes);
-        firstOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
-        secondOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
-        thirdOutput.addTrait(BinaryVector.Trait.UTF8_STRING);
-        I64Vector bucket30 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        I64Vector bucket31To60 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        I64Vector bucket61To90 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        I64Vector bucket91To120 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-        I64Vector bucketOver120 = allocator.allocate(context, I64Vector.class, selectedCount, I64Vector::new);
-
-        int outputPosition = 0;
-        for (int position : sourceMask) {
-            int shipDate = integerValue(shipDateValues, position);
-            if (!lookup.allowedShipDates().contains(shipDate)) {
-                continue;
-            }
-
-            int firstKey = integerValue(firstKeyValues, position);
-            int secondKey = integerValue(secondKeyValues, position);
-            int thirdKey = integerValue(thirdKeyValues, position);
-            if (!lookup.firstNames().containsKey(firstKey) || !lookup.secondNames().containsKey(secondKey) || !lookup.thirdNames().containsKey(thirdKey)) {
-                continue;
-            }
-            byte[] first = lookup.firstNames().get(firstKey);
-            byte[] second = lookup.secondNames().get(secondKey);
-            byte[] third = lookup.thirdNames().get(thirdKey);
-
-            firstOutput.setBytes(outputPosition, first == null ? NULLS_LAST_SENTINEL : first);
-            secondOutput.setBytes(outputPosition, second == null ? NULLS_LAST_SENTINEL : second);
-            thirdOutput.setBytes(outputPosition, third == null ? NULLS_LAST_SENTINEL : third);
-
-            int days = shipDate - integerValue(soldDateValues, position);
-            bucket30.values()[outputPosition] = days <= 30 ? 1 : 0;
-            bucket31To60.values()[outputPosition] = days > 30 && days <= 60 ? 1 : 0;
-            bucket61To90.values()[outputPosition] = days > 60 && days <= 90 ? 1 : 0;
-            bucket91To120.values()[outputPosition] = days > 90 && days <= 120 ? 1 : 0;
-            bucketOver120.values()[outputPosition] = days > 120 ? 1 : 0;
-            outputPosition++;
-        }
-
-        Mask outputMask = allocator.allocateRangeMask(context, 0, selectedCount);
-        return new Batch(
-                outputMask,
-                _ -> {},
-                takenMask -> allocator.transfer(context, takenMask),
-                releasedMask -> allocator.release(context, releasedMask),
-                sourceBatch::close,
-                valuesOnlyOutput(allocator, context, firstOutput),
-                valuesOnlyOutput(allocator, context, secondOutput),
-                valuesOnlyOutput(allocator, context, thirdOutput),
-                valuesOnlyOutput(allocator, context, bucket30),
-                valuesOnlyOutput(allocator, context, bucket31To60),
-                valuesOnlyOutput(allocator, context, bucket61To90),
-                valuesOnlyOutput(allocator, context, bucket91To120),
-                valuesOnlyOutput(allocator, context, bucketOver120));
+        return rows;
     }
 
-    @FunctionalInterface
-    private interface BatchTransform
+    private static List<Row> keyGroupRows(CanonicalNameLookup lookup)
     {
-        Batch apply(Batch sourceBatch);
+        int[] keys = lookup.keyToGroupId().keySet().toIntArray();
+        Arrays.sort(keys);
+        List<Row> rows = new ArrayList<>(keys.length);
+        for (int key : keys) {
+            rows.add(new Row((long) key, (long) lookup.keyToGroupId().get(key)));
+        }
+        return rows;
     }
 
-    private static final class BatchTransformOperator
-            implements Operator
+    private static String sentinelValue(String value)
     {
-        private final Allocator allocator;
-        private final Operator source;
-        private final int outputCount;
-        private final BatchTransform transform;
-        private final Allocator.Context[] allocationContexts;
+        return value == null ? NULLS_LAST_SENTINEL_STRING : value;
+    }
 
-        private Batch nextBatch;
+    private static IntSet unionKeys(IntSet first, IntSet second)
+    {
+        IntOpenHashSet union = new IntOpenHashSet(first);
+        union.addAll(second);
+        return union;
+    }
 
-        private BatchTransformOperator(Allocator allocator, Operator source, int outputCount, BatchTransform transform, Allocator.Context... allocationContexts)
-        {
-            this.allocator = allocator;
-            this.source = source;
-            this.outputCount = outputCount;
-            this.transform = transform;
-            this.allocationContexts = allocationContexts.clone();
-        }
+    private static CanonicalNameLookup canonicalNameLookup(Map<Integer, String> values)
+    {
+        Map<String, Integer> groupsByName = new HashMap<>();
+        Int2IntMap keyToGroupId = new Int2IntOpenHashMap();
+        keyToGroupId.defaultReturnValue(-1);
+        Map<Integer, String> namesByGroupId = new HashMap<>();
 
-        @Override
-        public int outputCount()
-        {
-            return outputCount;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            loadNextBatch();
-            return nextBatch != null;
-        }
-
-        @Override
-        public Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more parquet rows");
+        int nextGroupId = 0;
+        int[] keys = values.keySet().stream()
+                .mapToInt(Integer::intValue)
+                .toArray();
+        Arrays.sort(keys);
+        for (int key : keys) {
+            String name = values.get(key);
+            Integer groupId = groupsByName.get(name);
+            if (groupId == null) {
+                groupId = nextGroupId++;
+                groupsByName.put(name, groupId);
+                namesByGroupId.put(groupId.intValue(), name);
             }
-            Batch batch = nextBatch;
-            nextBatch = null;
-            return batch;
+            keyToGroupId.put(key, groupId.intValue());
         }
+        return new CanonicalNameLookup(keyToGroupId, namesByGroupId);
+    }
 
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (nextBatch != null) {
-                nextBatch.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (nextBatch != null) {
-                nextBatch.close();
-                nextBatch = null;
-            }
-            source.close();
-            for (Allocator.Context allocationContext : allocationContexts) {
-                allocator.release(allocationContext);
-            }
-        }
-
-        private void loadNextBatch()
-        {
-            while (nextBatch == null && source.hasNext()) {
-                Batch sourceBatch = source.next();
-                Batch transformed = transform.apply(sourceBatch);
-                if (transformed == null) {
-                    sourceBatch.close();
-                    continue;
-                }
-                nextBatch = transformed;
-            }
-        }
+    private static Operator query88Bucket(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, Query88Lookup lookup, int bucket)
+    {
+        Operator filtered = factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk");
+        filtered = new HashJoinOperator(allocator, filtered, 0, new ConstantTableOperator(allocator, 1, keyRows(lookup.timeBucketKeys()[bucket])), 0);
+        filtered = new HashJoinOperator(allocator, filtered, 1, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedHouseholdKeys())), 0);
+        return new HashJoinOperator(allocator, filtered, 2, new ConstantTableOperator(allocator, 1, keyRows(lookup.allowedStoreKeys())), 0);
     }
 
     private static final class MultiStageOperator
@@ -1176,120 +1087,6 @@ final class TpcdsParquetSupport
                     current.close();
                 }
                 current = operatorFactory.apply(files.get(fileIndex++));
-            }
-        }
-    }
-
-    private static final class IntegerDimensionFilterOperator
-            implements Operator
-    {
-        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IntegerDimensionFilterOperator");
-
-        private final Allocator allocator;
-        private final Operator source;
-        private final int[] inputChannels;
-        private final IntSet[] allowedValues;
-
-        private int[] selectedPositions = new int[0];
-        private Batch nextBatch;
-
-        @SuppressWarnings("unchecked")
-        private IntegerDimensionFilterOperator(Allocator allocator, Operator source, int[] inputChannels, IntSet[] allowedValues)
-        {
-            this.allocator = allocator;
-            this.source = source;
-            this.inputChannels = Arrays.copyOf(inputChannels, inputChannels.length);
-            this.allowedValues = Arrays.copyOf(allowedValues, allowedValues.length);
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return 0;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            loadNextBatch();
-            return nextBatch != null;
-        }
-
-        @Override
-        public Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more parquet rows");
-            }
-            Batch batch = nextBatch;
-            nextBatch = null;
-            return batch;
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (nextBatch != null) {
-                nextBatch.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            if (nextBatch != null) {
-                nextBatch.close();
-                nextBatch = null;
-            }
-            source.close();
-            allocator.release(ALLOCATION_CONTEXT);
-        }
-
-        private void loadNextBatch()
-        {
-            while (nextBatch == null && source.hasNext()) {
-                Batch sourceBatch = source.next();
-                Mask sourceMask = sourceBatch.borrowMask();
-                if (sourceMask.none()) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                if (selectedPositions.length < sourceMask.selectedCount()) {
-                    selectedPositions = new int[sourceMask.selectedCount()];
-                }
-
-                Vector[] values = new Vector[inputChannels.length];
-                for (int index = 0; index < inputChannels.length; index++) {
-                    values[index] = sourceBatch.output(inputChannels[index]).borrow(Stream.VALUES);
-                }
-
-                int selectedCount = 0;
-                for (int position : sourceMask) {
-                    boolean keep = true;
-                    for (int index = 0; index < values.length; index++) {
-                        if (!allowedValues[index].contains(integerValue(values[index], position))) {
-                            keep = false;
-                            break;
-                        }
-                    }
-                    if (keep) {
-                        selectedPositions[selectedCount++] = position;
-                    }
-                }
-
-                if (selectedCount == 0) {
-                    sourceBatch.close();
-                    continue;
-                }
-
-                Mask outputMask = allocator.allocateSparseMask(ALLOCATION_CONTEXT, selectedPositions, selectedCount, sourceMask.size());
-                nextBatch = new Batch(
-                        outputMask,
-                        _ -> {},
-                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
-                        sourceBatch::close);
             }
         }
     }

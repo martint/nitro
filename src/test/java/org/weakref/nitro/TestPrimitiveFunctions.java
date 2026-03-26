@@ -30,6 +30,7 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
+import org.weakref.nitro.function.scalar.builtin.IfI64;
 import org.weakref.nitro.function.scalar.builtin.IfUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LengthUtf8;
@@ -44,6 +45,7 @@ import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
+import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.util.List;
@@ -70,6 +72,7 @@ public final class TestPrimitiveFunctions
                 EqualI64.class,
                 EqualUtf8.class,
                 HashUtf8.class,
+                IfI64.class,
                 IfUtf8.class,
                 InUtf8.class,
                 LessThanI64.class,
@@ -79,6 +82,7 @@ public final class TestPrimitiveFunctions
                 MapKeys.class,
                 MapValues.class,
                 AddExactI64.class,
+                SubtractI64.class,
                 SubtractExactI64.class,
                 MultiplyI64.class,
                 DivideI64.class,
