@@ -907,6 +907,15 @@ Smaller values are still useful for debugging, but benchmark code should have a
 representative large-batch default and let tests override it explicitly when
 needed.
 
+Join-heavy benchmark paths should follow the same principle for downstream
+operator batching. In particular, `HashJoinOperator` should not emit tiny fixed
+output chunks by default when the scan side is already running at large parquet
+batches. The current benchmark-oriented default for
+`nitro.hash.join.maxBatchRows` should stay in the same rough range as the scan
+batch size rather than at legacy values like `1024`, because small join output
+batches reintroduce control-flow overhead and can materially distort join-heavy
+TPC-DS comparisons such as `Q99`.
+
 ### Future direction: evaluator-native dictionary peeling
 
 The evaluator should eventually make dictionary-aware execution a generic

@@ -31,7 +31,7 @@ public class HashJoinOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("HashJoinOperator");
-    private static final int BATCH_SIZE = 1024;
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
 
     private final Allocator allocator;
     private final Operator outer;
