@@ -54,6 +54,8 @@ final class TpcdsParquetSupport
 
     public static Operator query41ProductNames(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
+        // q41's correlated count(*) > 0 predicate is an existence check, so we lower it as:
+        // build distinct qualifying manufacturers, then filter outer item rows by that set.
         Set<String> eligibleManufacturers = query41EligibleManufacturers(allocator, primitiveRegistry, tables);
         Operator eligibleItems = filter(
                 allocator,

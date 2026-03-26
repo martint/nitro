@@ -24,11 +24,9 @@ import io.trino.operator.FilterAndProjectOperator;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import io.trino.operator.Operator;
-import io.trino.operator.OperatorContext;
 import io.trino.operator.OperatorFactory;
 import io.trino.operator.TopNOperator;
 import io.trino.spi.Page;
-import io.trino.spi.block.Block;
 import io.trino.spi.connector.SortOrder;
 import io.trino.spi.function.OperatorType;
 import io.trino.spi.type.Type;
@@ -67,7 +65,6 @@ import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
-import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 
@@ -87,21 +84,23 @@ public final class TrinoTpcdsParquetSupport
     public MaterializedResult query41ProductNames(TpcdsParquetTables tables)
     {
         List<Path> itemFiles = tables.tableFiles("item");
-        Set<Slice> eligibleManufacturers = query41EligibleManufacturerSlices(itemFiles);
+        // Keep the same lowering as the Nitro harness so the side-by-side benchmark compares
+        // equivalent operator assemblies, not different subquery rewrites.
+        Set<String> eligibleManufacturers = query41EligibleManufacturerSlices(itemFiles).stream()
+                .map(Slice::toStringUtf8)
+                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
         return execute(
                 itemFiles,
                 List.of("i_product_name", "i_manufact_id", "i_manufact"),
                 List.of(
                         filterAndProjectFactory(
                                 10,
-                                Optional.of(and(greaterThan(1, 737), lessThan(1, 779))),
+                                Optional.of(and(
+                                        greaterThan(1, 737),
+                                        lessThan(1, 779),
+                                        varcharAnyOf(2, eligibleManufacturers))),
                                 identityProjections(List.of(VARCHAR, INTEGER, VARCHAR)),
                                 List.of(VARCHAR, INTEGER, VARCHAR)),
-                        new VarcharMembershipFilterOperator.Factory(
-                                11,
-                                new PlanNodeId("membership-filter"),
-                                2,
-                                eligibleManufacturers),
                         hashAggregationFactory(12, List.of(VARCHAR), List.of(0)),
                         topNFactory(13, List.of(VARCHAR), 100, List.of(0), List.of(ASC_NULLS_LAST))),
                 List.of(VARCHAR));
@@ -295,6 +294,23 @@ public final class TrinoTpcdsParquetSupport
                 menForestGhost);
     }
 
+    private static RowExpression varcharAnyOf(int inputChannel, Set<String> values)
+    {
+        if (values.isEmpty()) {
+            throw new IllegalArgumentException("values is empty");
+        }
+
+        List<String> sortedValues = values.stream()
+                .sorted()
+                .toList();
+
+        RowExpression result = equal(inputChannel, VARCHAR, sortedValues.getFirst());
+        for (int index = 1; index < sortedValues.size(); index++) {
+            result = or(result, equal(inputChannel, VARCHAR, sortedValues.get(index)));
+        }
+        return result;
+    }
+
     private static RowExpression equal(int inputChannel, Type type, String constantValue)
     {
         return new CallExpression(
@@ -363,116 +379,5 @@ public final class TrinoTpcdsParquetSupport
             thread.setDaemon(true);
             return thread;
         };
-    }
-
-    static final class VarcharMembershipFilterOperator
-            implements Operator
-    {
-        static final class Factory
-                implements OperatorFactory
-        {
-            private final int operatorId;
-            private final PlanNodeId planNodeId;
-            private final int inputChannel;
-            private final Set<Slice> allowedValues;
-            private boolean closed;
-
-            Factory(int operatorId, PlanNodeId planNodeId, int inputChannel, Set<Slice> allowedValues)
-            {
-                this.operatorId = operatorId;
-                this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
-                this.inputChannel = inputChannel;
-                this.allowedValues = Set.copyOf(allowedValues);
-            }
-
-            @Override
-            public Operator createOperator(io.trino.operator.DriverContext driverContext)
-            {
-                if (closed) {
-                    throw new IllegalStateException("Factory is already closed");
-                }
-                return new VarcharMembershipFilterOperator(
-                        driverContext.addOperatorContext(operatorId, planNodeId, VarcharMembershipFilterOperator.class.getSimpleName()),
-                        inputChannel,
-                        allowedValues);
-            }
-
-            @Override
-            public void noMoreOperators()
-            {
-                closed = true;
-            }
-
-            @Override
-            public OperatorFactory duplicate()
-            {
-                return new Factory(operatorId, planNodeId, inputChannel, allowedValues);
-            }
-        }
-
-        private final OperatorContext operatorContext;
-        private final int inputChannel;
-        private final Set<Slice> allowedValues;
-
-        private Page nextPage;
-        private boolean finishing;
-
-        private VarcharMembershipFilterOperator(OperatorContext operatorContext, int inputChannel, Set<Slice> allowedValues)
-        {
-            this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
-            this.inputChannel = inputChannel;
-            this.allowedValues = allowedValues;
-        }
-
-        @Override
-        public OperatorContext getOperatorContext()
-        {
-            return operatorContext;
-        }
-
-        @Override
-        public void finish()
-        {
-            finishing = true;
-        }
-
-        @Override
-        public boolean isFinished()
-        {
-            return finishing && nextPage == null;
-        }
-
-        @Override
-        public boolean needsInput()
-        {
-            return !finishing && nextPage == null;
-        }
-
-        @Override
-        public void addInput(Page page)
-        {
-            if (!needsInput()) {
-                throw new IllegalStateException("Operator does not need input");
-            }
-
-            Block block = page.getBlock(inputChannel);
-            int[] selectedPositions = new int[page.getPositionCount()];
-            int selectedCount = 0;
-            for (int position = 0; position < page.getPositionCount(); position++) {
-                if (!block.isNull(position) && allowedValues.contains(VARCHAR.getSlice(block, position))) {
-                    selectedPositions[selectedCount++] = position;
-                }
-            }
-
-            nextPage = selectedCount == 0 ? new Page(0) : page.getPositions(selectedPositions, 0, selectedCount);
-        }
-
-        @Override
-        public Page getOutput()
-        {
-            Page page = nextPage;
-            nextPage = null;
-            return page;
-        }
     }
 }

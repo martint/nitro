@@ -58,6 +58,29 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
+    void testNitroQuery41MatchesTrinoSqlReference()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        List<String> nitroRows;
+        try (Operator query = TpcdsParquetSupport.query41ProductNames(new Allocator(), primitiveRegistry, tables)) {
+            nitroRows = OperatorAssertions.OperatorAssert.toRows(query).stream()
+                    .map(row -> normalize((String) row.values()[0]))
+                    .toList();
+        }
+
+        try (TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
+            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery("41", "sf10");
+            assertThat(nitroRows)
+                    .containsExactlyElementsOf(sqlResult.getMaterializedRows().stream()
+                            .map(row -> normalize(Objects.toString(row.getField(0))))
+                            .toList());
+        }
+    }
+
+    @Test
     void testQuery41MatchesTrinoSqlReference()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
