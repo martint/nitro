@@ -277,6 +277,33 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorCanFuseThreeLongGroupingKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new CountAll()),
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(10L, 100L, 1000L),
+                        row(10L, 100L, 1000L),
+                        row(10L, 100L, 2000L),
+                        row(20L, 100L, 1000L))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        I64Vector firstKeys = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        I64Vector secondKeys = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector thirdKeys = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+        I64Vector counts = (I64Vector) batch.output(3).borrow(Stream.VALUES);
+
+        assertThat(Arrays.copyOf(firstKeys.values(), rowCount)).containsExactly(10L, 10L, 20L);
+        assertThat(Arrays.copyOf(secondKeys.values(), rowCount)).containsExactly(100L, 100L, 100L);
+        assertThat(Arrays.copyOf(thirdKeys.values(), rowCount)).containsExactly(1000L, 2000L, 1000L);
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L, 1L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorPreservesEmptyUtf8GroupingKeys()
     {
         Allocator allocator = new Allocator();
