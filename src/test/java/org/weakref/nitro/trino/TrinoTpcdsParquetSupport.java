@@ -49,6 +49,7 @@ import org.weakref.nitro.tpcds.TpcdsParquetTables;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -65,6 +66,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.trino.spi.connector.SortOrder.ASC_NULLS_FIRST;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_LAST;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
@@ -179,6 +181,77 @@ public final class TrinoTpcdsParquetSupport
                 projectedTypes);
     }
 
+    public MaterializedResult query10(TpcdsParquetTables tables)
+    {
+        Query10Lookup lookup = query10Lookup(tables);
+        List<Type> groupTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
+        return execute(
+                tables.tableFiles("customer"),
+                List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"),
+                List.of(
+                        customerDemographicsProjectFactory(50, tableColumnTypes(tables, "customer", List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk")), lookup),
+                        hashAggregationFactory(51, groupTypes, List.of(0, 1, 2, 3, 4, 5, 6, 7), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        filterAndProjectFactory(
+                                52,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, VARCHAR),
+                                        field(1, VARCHAR),
+                                        field(2, VARCHAR),
+                                        field(8, BIGINT),
+                                        field(3, BIGINT),
+                                        field(8, BIGINT),
+                                        field(4, VARCHAR),
+                                        field(8, BIGINT),
+                                        field(5, BIGINT),
+                                        field(8, BIGINT),
+                                        field(6, BIGINT),
+                                        field(8, BIGINT),
+                                        field(7, BIGINT),
+                                        field(8, BIGINT)),
+                                outputTypes),
+                        topNFactory(53, outputTypes, 100, List.of(0, 1, 2, 4, 6, 8, 10, 12), List.of(ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query73(TpcdsParquetTables tables)
+    {
+        Query73Lookup lookup = query73Lookup(tables);
+        List<Type> inputTypes = tableColumnTypes(tables, "store_sales", List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"));
+        List<Type> projectedTypes = List.of(BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT);
+        return execute(
+                tables.tableFiles("store_sales"),
+                List.of("ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"),
+                List.of(
+                        ticketCustomerFilterProjectFactory(60, inputTypes, lookup),
+                        hashAggregationFactory(61, projectedTypes, List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        customerTicketProjectFactory(62, List.of(BIGINT, BIGINT, BIGINT), lookup.customers()),
+                        topNFactory(63, outputTypes, 100, List.of(5, 0, 4), List.of(io.trino.spi.connector.SortOrder.DESC_NULLS_LAST, ASC_NULLS_FIRST, ASC_NULLS_FIRST))),
+                outputTypes);
+    }
+
+    public MaterializedResult query88(TpcdsParquetTables tables)
+    {
+        Query88Lookup lookup = query88Lookup(tables);
+        long[] counts = new long[8];
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"));
+        for (int bucket = 0; bucket < counts.length; bucket++) {
+            counts[bucket] = singleLongResult(execute(
+                    tables.tableFiles("store_sales"),
+                    List.of("ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
+                    List.of(
+                            integerDimensionFilterFactory(70 + (bucket * 2), factTypes, new int[] {0, 1, 2}, new Set[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()}),
+                            aggregationFactory(71 + (bucket * 2), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                    List.of(BIGINT)));
+        }
+
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(TestingSession.testSessionBuilder().build(), List.of(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT));
+        result.row(counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6], counts[7]);
+        return result.build();
+    }
+
     public Set<String> query41EligibleManufacturers(TpcdsParquetTables tables)
     {
         return query41EligibleManufacturerSlices(tables.tableFiles("item")).stream()
@@ -213,6 +286,35 @@ public final class TrinoTpcdsParquetSupport
                 prefixedUtf8Map(scanTable(tables, "warehouse", List.of("w_warehouse_sk", "w_warehouse_name"), tableColumnTypes(tables, "warehouse", List.of("w_warehouse_sk", "w_warehouse_name"))), 0, 1, 20),
                 utf8Map(scanTable(tables, "ship_mode", List.of("sm_ship_mode_sk", "sm_type"), tableColumnTypes(tables, "ship_mode", List.of("sm_ship_mode_sk", "sm_type"))), 0, 1),
                 utf8Map(scanTable(tables, "call_center", List.of("cc_call_center_sk", "cc_name"), tableColumnTypes(tables, "call_center", List.of("cc_call_center_sk", "cc_name"))), 0, 1));
+    }
+
+    private Query10Lookup query10Lookup(TpcdsParquetTables tables)
+    {
+        Set<Integer> eligibleDates = dateKeysForYearMonthRange(tables, 2002, 1, 4);
+        return new Query10Lookup(
+                addressKeysForCounties(tables, "Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"),
+                customerKeysForDates(tables, "store_sales", List.of("ss_customer_sk", "ss_sold_date_sk"), eligibleDates),
+                customerKeysForDates(tables, "web_sales", List.of("ws_bill_customer_sk", "ws_sold_date_sk"), eligibleDates),
+                customerKeysForDates(tables, "catalog_sales", List.of("cs_ship_customer_sk", "cs_sold_date_sk"), eligibleDates),
+                customerDemographicsLookup(tables));
+    }
+
+    private Query73Lookup query73Lookup(TpcdsParquetTables tables)
+    {
+        return new Query73Lookup(
+                dateKeysForDayOfMonthAndYears(tables, 1, 2, 1999, 2000, 2001),
+                storeKeysForCounties(tables, "Williamson County", "Franklin Parish", "Bronx County", "Orange County"),
+                householdKeysForQuery73(tables),
+                customerIdentityLookup(tables));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Query88Lookup query88Lookup(TpcdsParquetTables tables)
+    {
+        return new Query88Lookup(
+                timeBucketKeysForQuery88(tables),
+                householdKeysForQuery88(tables),
+                storeKeysByName(tables, "ese"));
     }
 
     @Override
@@ -292,6 +394,165 @@ public final class TrinoTpcdsParquetSupport
                     int monthSequence = ((Number) row.getField(1)).intValue();
                     return monthSequence >= minimumMonthSequence && monthSequence <= maximumMonthSequence;
                 });
+    }
+
+    private Set<Integer> dateKeysForYearMonthRange(TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
+    {
+        return integerKeySet(
+                scanTable(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"))),
+                row -> ((Number) row.getField(1)).intValue() == year &&
+                        ((Number) row.getField(2)).intValue() >= minimumMonthOfYear &&
+                        ((Number) row.getField(2)).intValue() <= maximumMonthOfYear);
+    }
+
+    private Set<Integer> dateKeysForDayOfMonthAndYears(TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
+    {
+        Set<Integer> allowedYears = Arrays.stream(years).boxed().collect(java.util.stream.Collectors.toSet());
+        return integerKeySet(
+                scanTable(tables, "date_dim", List.of("d_date_sk", "d_dom", "d_year"), tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_dom", "d_year"))),
+                row -> ((Number) row.getField(1)).intValue() >= minimumDayOfMonth &&
+                        ((Number) row.getField(1)).intValue() <= maximumDayOfMonth &&
+                        allowedYears.contains(((Number) row.getField(2)).intValue()));
+    }
+
+    private Set<Integer> customerKeysForDates(TpcdsParquetTables tables, String tableName, List<String> columns, Set<Integer> allowedDates)
+    {
+        return integerKeySet(
+                scanTable(tables, tableName, columns, tableColumnTypes(tables, tableName, columns)),
+                row -> row.getField(0) != null &&
+                        row.getField(1) != null &&
+                        allowedDates.contains(((Number) row.getField(1)).intValue()));
+    }
+
+    private Set<Integer> addressKeysForCounties(TpcdsParquetTables tables, String... counties)
+    {
+        Set<String> allowedCounties = Set.of(counties);
+        return integerKeySet(
+                scanTable(tables, "customer_address", List.of("ca_address_sk", "ca_county"), tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_county"))),
+                row -> {
+                    String county = (String) row.getField(1);
+                    return county != null && allowedCounties.contains(county);
+                });
+    }
+
+    private Set<Integer> storeKeysForCounties(TpcdsParquetTables tables, String... counties)
+    {
+        Set<String> allowedCounties = Set.of(counties);
+        return integerKeySet(
+                scanTable(tables, "store", List.of("s_store_sk", "s_county"), tableColumnTypes(tables, "store", List.of("s_store_sk", "s_county"))),
+                row -> {
+                    String county = (String) row.getField(1);
+                    return county != null && allowedCounties.contains(county);
+                });
+    }
+
+    private Set<Integer> storeKeysByName(TpcdsParquetTables tables, String storeName)
+    {
+        return integerKeySet(
+                scanTable(tables, "store", List.of("s_store_sk", "s_store_name"), tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_name"))),
+                row -> {
+                    String name = (String) row.getField(1);
+                    return name != null && storeName.equals(name);
+                });
+    }
+
+    private Set<Integer> householdKeysForQuery73(TpcdsParquetTables tables)
+    {
+        return integerKeySet(
+                scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"))),
+                row -> {
+                    String buyPotential = (String) row.getField(1);
+                    int vehicleCount = ((Number) row.getField(2)).intValue();
+                    int dependentCount = ((Number) row.getField(3)).intValue();
+                    return (">10000".equals(buyPotential) || "Unknown".equals(buyPotential)) &&
+                            vehicleCount > 0 &&
+                            ((double) dependentCount / vehicleCount) > 1.0;
+                });
+    }
+
+    private Set<Integer> householdKeysForQuery88(TpcdsParquetTables tables)
+    {
+        return integerKeySet(
+                scanTable(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"), tableColumnTypes(tables, "household_demographics", List.of("hd_demo_sk", "hd_dep_count", "hd_vehicle_count"))),
+                row -> {
+                    int dependentCount = ((Number) row.getField(1)).intValue();
+                    int vehicleCount = ((Number) row.getField(2)).intValue();
+                    return (dependentCount == 4 || dependentCount == 2 || dependentCount == 0) &&
+                            vehicleCount <= (dependentCount + 2);
+                });
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Integer>[] timeBucketKeysForQuery88(TpcdsParquetTables tables)
+    {
+        Set<Integer>[] buckets = new Set[8];
+        for (int bucket = 0; bucket < buckets.length; bucket++) {
+            buckets[bucket] = new HashSet<>();
+        }
+        scanTable(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute"), tableColumnTypes(tables, "time_dim", List.of("t_time_sk", "t_hour", "t_minute")))
+                .getMaterializedRows()
+                .forEach(row -> {
+                    int hour = ((Number) row.getField(1)).intValue();
+                    int minute = ((Number) row.getField(2)).intValue();
+                    int bucket = switch (hour) {
+                        case 8 -> minute >= 30 ? 0 : -1;
+                        case 9 -> minute < 30 ? 1 : 2;
+                        case 10 -> minute < 30 ? 3 : 4;
+                        case 11 -> minute < 30 ? 5 : 6;
+                        case 12 -> minute < 30 ? 7 : -1;
+                        default -> -1;
+                    };
+                    if (bucket >= 0) {
+                        buckets[bucket].add(((Number) row.getField(0)).intValue());
+                    }
+                });
+        return buckets;
+    }
+
+    private Map<Integer, CustomerDemographicsRecord> customerDemographicsLookup(TpcdsParquetTables tables)
+    {
+        Map<Integer, CustomerDemographicsRecord> values = new HashMap<>();
+        scanTable(tables, "customer_demographics",
+                List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count"),
+                tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count")))
+                .getMaterializedRows()
+                .forEach(row -> values.put(
+                        ((Number) row.getField(0)).intValue(),
+                        new CustomerDemographicsRecord(
+                                (String) row.getField(1),
+                                (String) row.getField(2),
+                                (String) row.getField(3),
+                                ((Number) row.getField(4)).longValue(),
+                                (String) row.getField(5),
+                                ((Number) row.getField(6)).longValue(),
+                                ((Number) row.getField(7)).longValue(),
+                                ((Number) row.getField(8)).longValue())));
+        return values;
+    }
+
+    private Map<Integer, CustomerIdentityRecord> customerIdentityLookup(TpcdsParquetTables tables)
+    {
+        Map<Integer, CustomerIdentityRecord> values = new HashMap<>();
+        scanTable(tables, "customer",
+                List.of("c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag"),
+                tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag")))
+                .getMaterializedRows()
+                .forEach(row -> values.put(
+                        ((Number) row.getField(0)).intValue(),
+                        new CustomerIdentityRecord(
+                                (String) row.getField(1),
+                                (String) row.getField(2),
+                                (String) row.getField(3),
+                                (String) row.getField(4))));
+        return values;
+    }
+
+    private static long singleLongResult(MaterializedResult result)
+    {
+        if (result.getMaterializedRows().size() != 1) {
+            throw new IllegalStateException("Expected exactly one row but found " + result.getMaterializedRows().size());
+        }
+        return ((Number) result.getMaterializedRows().getFirst().getField(0)).longValue();
     }
 
     private static Set<Integer> integerKeySet(MaterializedResult result, java.util.function.Predicate<io.trino.testing.MaterializedRow> predicate)
@@ -384,6 +645,21 @@ public final class TrinoTpcdsParquetSupport
     private OperatorFactory shippingBucketsProjectFactory(int operatorId, List<Type> inputTypes, ShippingBucketsLookup lookup)
     {
         return new ShippingBucketsProjectOperator.Factory(operatorId, new PlanNodeId("shipping-buckets-" + operatorId), inputTypes, lookup);
+    }
+
+    private OperatorFactory customerDemographicsProjectFactory(int operatorId, List<Type> inputTypes, Query10Lookup lookup)
+    {
+        return new CustomerDemographicsProjectOperator.Factory(operatorId, new PlanNodeId("customer-demographics-" + operatorId), inputTypes, lookup);
+    }
+
+    private OperatorFactory ticketCustomerFilterProjectFactory(int operatorId, List<Type> inputTypes, Query73Lookup lookup)
+    {
+        return new TicketCustomerFilterProjectOperator.Factory(operatorId, new PlanNodeId("ticket-customer-" + operatorId), inputTypes, lookup);
+    }
+
+    private OperatorFactory customerTicketProjectFactory(int operatorId, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
+    {
+        return new CustomerTicketProjectOperator.Factory(operatorId, new PlanNodeId("customer-ticket-" + operatorId), inputTypes, customers);
     }
 
     private OperatorFactory filterAndProjectFactory(int operatorId, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
@@ -516,7 +792,34 @@ public final class TrinoTpcdsParquetSupport
         return result;
     }
 
+    private record Query10Lookup(
+            Set<Integer> eligibleAddressKeys,
+            Set<Integer> storeCustomerKeys,
+            Set<Integer> webCustomerKeys,
+            Set<Integer> catalogCustomerKeys,
+            Map<Integer, CustomerDemographicsRecord> demographics) {}
+
+    private record Query73Lookup(
+            Set<Integer> allowedDateKeys,
+            Set<Integer> allowedStoreKeys,
+            Set<Integer> allowedHouseholdKeys,
+            Map<Integer, CustomerIdentityRecord> customers) {}
+
+    private record Query88Lookup(Set<Integer>[] timeBucketKeys, Set<Integer> allowedHouseholdKeys, Set<Integer> allowedStoreKeys) {}
+
     private record Query96Lookup(Set<Integer> timeKeys, Set<Integer> householdKeys, Set<Integer> storeKeys) {}
+
+    private record CustomerDemographicsRecord(
+            String gender,
+            String maritalStatus,
+            String educationStatus,
+            long purchaseEstimate,
+            String creditRating,
+            long dependentCount,
+            long employedDependentCount,
+            long collegeDependentCount) {}
+
+    private record CustomerIdentityRecord(String lastName, String firstName, String salutation, String preferredCustomerFlag) {}
 
     private record ShippingBucketsLookup(Set<Integer> allowedShipDates, Map<Integer, String> firstNames, Map<Integer, String> secondNames, Map<Integer, String> thirdNames) {}
 
@@ -637,6 +940,372 @@ public final class TrinoTpcdsParquetSupport
                 return;
             }
             outputPage = new Page(selectedCount);
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            Page page = outputPage;
+            outputPage = null;
+            return page;
+        }
+    }
+
+    private static final class CustomerDemographicsProjectOperator
+            implements Operator
+    {
+        static final class Factory
+                implements OperatorFactory
+        {
+            private final int operatorId;
+            private final PlanNodeId planNodeId;
+            private final List<Type> inputTypes;
+            private final Query10Lookup lookup;
+            private boolean closed;
+
+            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, Query10Lookup lookup)
+            {
+                this.operatorId = operatorId;
+                this.planNodeId = planNodeId;
+                this.inputTypes = List.copyOf(inputTypes);
+                this.lookup = lookup;
+            }
+
+            @Override
+            public Operator createOperator(DriverContext driverContext)
+            {
+                if (closed) {
+                    throw new IllegalStateException("Factory is already closed");
+                }
+                return new CustomerDemographicsProjectOperator(
+                        driverContext.addOperatorContext(operatorId, planNodeId, CustomerDemographicsProjectOperator.class.getSimpleName()),
+                        inputTypes,
+                        lookup);
+            }
+
+            @Override
+            public void noMoreOperators()
+            {
+                closed = true;
+            }
+
+            @Override
+            public OperatorFactory duplicate()
+            {
+                return new Factory(operatorId, planNodeId, inputTypes, lookup);
+            }
+        }
+
+        private final io.trino.operator.OperatorContext operatorContext;
+        private final List<Type> inputTypes;
+        private final Query10Lookup lookup;
+
+        private Page outputPage;
+        private boolean finishing;
+
+        private CustomerDemographicsProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, Query10Lookup lookup)
+        {
+            this.operatorContext = operatorContext;
+            this.inputTypes = List.copyOf(inputTypes);
+            this.lookup = lookup;
+        }
+
+        @Override
+        public io.trino.operator.OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finishing = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finishing && outputPage == null;
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return !finishing && outputPage == null;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            if (!needsInput()) {
+                throw new IllegalStateException("Operator does not need input");
+            }
+
+            PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT));
+            for (int position = 0; position < page.getPositionCount(); position++) {
+                int addressKey = readInt(inputTypes.get(0), page, 0, position);
+                int customerKey = readInt(inputTypes.get(1), page, 1, position);
+                if (!lookup.eligibleAddressKeys().contains(addressKey) ||
+                        !lookup.storeCustomerKeys().contains(customerKey) ||
+                        (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
+                    continue;
+                }
+
+                CustomerDemographicsRecord demographics = lookup.demographics().get(readInt(inputTypes.get(2), page, 2, position));
+                if (demographics == null) {
+                    continue;
+                }
+
+                pageBuilder.declarePosition();
+                writeVarchar(pageBuilder.getBlockBuilder(0), demographics.gender());
+                writeVarchar(pageBuilder.getBlockBuilder(1), demographics.maritalStatus());
+                writeVarchar(pageBuilder.getBlockBuilder(2), demographics.educationStatus());
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(3), demographics.purchaseEstimate());
+                writeVarchar(pageBuilder.getBlockBuilder(4), demographics.creditRating());
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(5), demographics.dependentCount());
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(6), demographics.employedDependentCount());
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(7), demographics.collegeDependentCount());
+            }
+
+            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            Page page = outputPage;
+            outputPage = null;
+            return page;
+        }
+    }
+
+    private static final class TicketCustomerFilterProjectOperator
+            implements Operator
+    {
+        static final class Factory
+                implements OperatorFactory
+        {
+            private final int operatorId;
+            private final PlanNodeId planNodeId;
+            private final List<Type> inputTypes;
+            private final Query73Lookup lookup;
+            private boolean closed;
+
+            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, Query73Lookup lookup)
+            {
+                this.operatorId = operatorId;
+                this.planNodeId = planNodeId;
+                this.inputTypes = List.copyOf(inputTypes);
+                this.lookup = lookup;
+            }
+
+            @Override
+            public Operator createOperator(DriverContext driverContext)
+            {
+                if (closed) {
+                    throw new IllegalStateException("Factory is already closed");
+                }
+                return new TicketCustomerFilterProjectOperator(
+                        driverContext.addOperatorContext(operatorId, planNodeId, TicketCustomerFilterProjectOperator.class.getSimpleName()),
+                        inputTypes,
+                        lookup);
+            }
+
+            @Override
+            public void noMoreOperators()
+            {
+                closed = true;
+            }
+
+            @Override
+            public OperatorFactory duplicate()
+            {
+                return new Factory(operatorId, planNodeId, inputTypes, lookup);
+            }
+        }
+
+        private final io.trino.operator.OperatorContext operatorContext;
+        private final List<Type> inputTypes;
+        private final Query73Lookup lookup;
+
+        private Page outputPage;
+        private boolean finishing;
+
+        private TicketCustomerFilterProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, Query73Lookup lookup)
+        {
+            this.operatorContext = operatorContext;
+            this.inputTypes = List.copyOf(inputTypes);
+            this.lookup = lookup;
+        }
+
+        @Override
+        public io.trino.operator.OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finishing = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finishing && outputPage == null;
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return !finishing && outputPage == null;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            if (!needsInput()) {
+                throw new IllegalStateException("Operator does not need input");
+            }
+
+            PageBuilder pageBuilder = new PageBuilder(List.of(BIGINT, BIGINT));
+            for (int position = 0; position < page.getPositionCount(); position++) {
+                if (!lookup.allowedDateKeys().contains(readInt(inputTypes.get(2), page, 2, position)) ||
+                        !lookup.allowedStoreKeys().contains(readInt(inputTypes.get(3), page, 3, position)) ||
+                        !lookup.allowedHouseholdKeys().contains(readInt(inputTypes.get(4), page, 4, position))) {
+                    continue;
+                }
+
+                pageBuilder.declarePosition();
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(0), readLong(inputTypes.get(0), page, 0, position));
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(1), readLong(inputTypes.get(1), page, 1, position));
+            }
+
+            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            Page page = outputPage;
+            outputPage = null;
+            return page;
+        }
+    }
+
+    private static final class CustomerTicketProjectOperator
+            implements Operator
+    {
+        static final class Factory
+                implements OperatorFactory
+        {
+            private final int operatorId;
+            private final PlanNodeId planNodeId;
+            private final List<Type> inputTypes;
+            private final Map<Integer, CustomerIdentityRecord> customers;
+            private boolean closed;
+
+            private Factory(int operatorId, PlanNodeId planNodeId, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
+            {
+                this.operatorId = operatorId;
+                this.planNodeId = planNodeId;
+                this.inputTypes = List.copyOf(inputTypes);
+                this.customers = customers;
+            }
+
+            @Override
+            public Operator createOperator(DriverContext driverContext)
+            {
+                if (closed) {
+                    throw new IllegalStateException("Factory is already closed");
+                }
+                return new CustomerTicketProjectOperator(
+                        driverContext.addOperatorContext(operatorId, planNodeId, CustomerTicketProjectOperator.class.getSimpleName()),
+                        inputTypes,
+                        customers);
+            }
+
+            @Override
+            public void noMoreOperators()
+            {
+                closed = true;
+            }
+
+            @Override
+            public OperatorFactory duplicate()
+            {
+                return new Factory(operatorId, planNodeId, inputTypes, customers);
+            }
+        }
+
+        private final io.trino.operator.OperatorContext operatorContext;
+        private final List<Type> inputTypes;
+        private final Map<Integer, CustomerIdentityRecord> customers;
+
+        private Page outputPage;
+        private boolean finishing;
+
+        private CustomerTicketProjectOperator(io.trino.operator.OperatorContext operatorContext, List<Type> inputTypes, Map<Integer, CustomerIdentityRecord> customers)
+        {
+            this.operatorContext = operatorContext;
+            this.inputTypes = List.copyOf(inputTypes);
+            this.customers = customers;
+        }
+
+        @Override
+        public io.trino.operator.OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finishing = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finishing && outputPage == null;
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return !finishing && outputPage == null;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            if (!needsInput()) {
+                throw new IllegalStateException("Operator does not need input");
+            }
+
+            PageBuilder pageBuilder = new PageBuilder(List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT));
+            for (int position = 0; position < page.getPositionCount(); position++) {
+                long count = readLong(inputTypes.get(2), page, 2, position);
+                if (count < 1 || count > 5) {
+                    continue;
+                }
+
+                CustomerIdentityRecord customer = customers.get(toIntExact(readLong(inputTypes.get(1), page, 1, position)));
+                if (customer == null) {
+                    continue;
+                }
+
+                pageBuilder.declarePosition();
+                writeVarchar(pageBuilder.getBlockBuilder(0), customer.lastName());
+                writeVarchar(pageBuilder.getBlockBuilder(1), customer.firstName());
+                writeVarchar(pageBuilder.getBlockBuilder(2), customer.salutation());
+                writeVarchar(pageBuilder.getBlockBuilder(3), customer.preferredCustomerFlag());
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(4), readLong(inputTypes.get(0), page, 0, position));
+                BIGINT.writeLong(pageBuilder.getBlockBuilder(5), count);
+            }
+
+            outputPage = pageBuilder.isEmpty() ? null : pageBuilder.build();
         }
 
         @Override
@@ -804,6 +1473,26 @@ public final class TrinoTpcdsParquetSupport
             return toIntExact(BIGINT.getLong(page.getBlock(channel), position));
         }
         throw new IllegalArgumentException("Expected integer-like type but found " + type);
+    }
+
+    private static long readLong(Type type, Page page, int channel, int position)
+    {
+        if (type.equals(BIGINT)) {
+            return BIGINT.getLong(page.getBlock(channel), position);
+        }
+        if (type.equals(INTEGER)) {
+            return INTEGER.getInt(page.getBlock(channel), position);
+        }
+        throw new IllegalArgumentException("Expected bigint-like type but found " + type);
+    }
+
+    private static void writeVarchar(io.trino.spi.block.BlockBuilder blockBuilder, String value)
+    {
+        if (value == null) {
+            blockBuilder.appendNull();
+            return;
+        }
+        VARCHAR.writeSlice(blockBuilder, Slices.utf8Slice(value));
     }
 
     private static int blockedWaitTimeoutSeconds()

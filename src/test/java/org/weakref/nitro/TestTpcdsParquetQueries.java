@@ -106,6 +106,24 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
+    void testQuery10MatchesTrinoOperatorAssembly()
+    {
+        assertOperatorMatches("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
+    void testNitroQuery10MatchesTrinoSqlReference()
+    {
+        assertNitroMatchesSql("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void testQuery10MatchesTrinoSqlReference()
+    {
+        assertTrinoOperatorMatchesSql("10", support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
     void testNitroQuery62MatchesTrinoSqlReference()
     {
         assertNitroMatchesSql("62", tables -> TpcdsParquetSupport.query62(new Allocator(), tables));
@@ -124,6 +142,24 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
+    void testQuery73MatchesTrinoOperatorAssembly()
+    {
+        assertOperatorMatches("73", tables -> TpcdsParquetSupport.query73(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query73(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
+    void testNitroQuery73MatchesTrinoSqlReference()
+    {
+        assertNitroMatchesSql("73", tables -> TpcdsParquetSupport.query73(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void testQuery73MatchesTrinoSqlReference()
+    {
+        assertTrinoOperatorMatchesSql("73", support -> support.query73(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
     void testNitroQuery96MatchesTrinoSqlReference()
     {
         assertNitroMatchesSql("96", tables -> TpcdsParquetSupport.query96(new Allocator(), tables));
@@ -139,6 +175,24 @@ public class TestTpcdsParquetQueries
     void testQuery99MatchesTrinoOperatorAssembly()
     {
         assertOperatorMatches("99", tables -> TpcdsParquetSupport.query99(new Allocator(), tables), support -> support.query99(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
+    void testQuery88MatchesTrinoOperatorAssembly()
+    {
+        assertOperatorMatches("88", tables -> TpcdsParquetSupport.query88(new Allocator(), tables), support -> support.query88(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
+    void testNitroQuery88MatchesTrinoSqlReference()
+    {
+        assertNitroMatchesSql("88", tables -> TpcdsParquetSupport.query88(new Allocator(), tables));
+    }
+
+    @Test
+    void testQuery88MatchesTrinoSqlReference()
+    {
+        assertTrinoOperatorMatchesSql("88", support -> support.query88(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test

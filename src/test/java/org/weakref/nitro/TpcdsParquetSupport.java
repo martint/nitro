@@ -25,6 +25,7 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
@@ -132,6 +133,63 @@ final class TpcdsParquetSupport
                 new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, aggregated));
     }
 
+    public static Operator query10(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Query10Lookup lookup = query10Lookup(allocator, tables);
+        Operator projected = new CustomerDemographicsProjectOperator(
+                allocator,
+                customerScan(allocator, tables, "c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"),
+                lookup);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 4, 5, 6, 7),
+                List.of(new CountAll()),
+                projected);
+        Operator reordered = projectInputs(allocator, primitiveRegistry, aggregated, 0, 1, 2, 8, 3, 8, 4, 8, 5, 8, 6, 8, 7, 8);
+        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 4, 6, 8, 10, 12}, new boolean[] {false, false, false, false, false, false, false, false}, reordered);
+    }
+
+    public static Operator query73(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Query73Lookup lookup = query73Lookup(allocator, tables);
+        Operator projected = new TicketCustomerFilterProjectOperator(
+                allocator,
+                factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk"),
+                lookup);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new CountAll()),
+                projected);
+        Operator enriched = new CustomerTicketProjectOperator(allocator, aggregated, lookup.customers());
+        return new TopNOperator(allocator, 100, new int[] {5, 0, 4}, new boolean[] {true, false, false}, enriched);
+    }
+
+    public static Operator query88(Allocator allocator, TpcdsParquetTables tables)
+    {
+        Query88Lookup lookup = query88Lookup(allocator, tables);
+        long[] counts = new long[8];
+        for (int bucket = 0; bucket < counts.length; bucket++) {
+            try (Operator filtered = new IntegerDimensionFilterOperator(
+                    allocator,
+                    factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk"),
+                    new int[] {0, 1, 2},
+                    new Set[] {lookup.timeBucketKeys()[bucket], lookup.allowedHouseholdKeys(), lookup.allowedStoreKeys()});
+                    Operator aggregated = new AggregationOperator(allocator, List.of(new CountAll()), filtered)) {
+                counts[bucket] = singleLongResult(aggregated);
+            }
+        }
+        return new ConstantTableOperator(allocator, 8, List.of(new Row(
+                counts[0],
+                counts[1],
+                counts[2],
+                counts[3],
+                counts[4],
+                counts[5],
+                counts[6],
+                counts[7])));
+    }
+
     static Set<String> query41EligibleManufacturers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator filtered = filter(
@@ -177,6 +235,180 @@ final class TpcdsParquetSupport
                 utf8Map(scanRows(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"), 0, 1));
     }
 
+    private static Set<Integer> dateKeysForYearMonthRange(Allocator allocator, TpcdsParquetTables tables, int year, int minimumMonthOfYear, int maximumMonthOfYear)
+    {
+        return integerKeySet(scanRows(allocator, tables, "date_dim", "d_date_sk", "d_year", "d_moy"), row ->
+                integerField(row, 1) == year &&
+                        integerField(row, 2) >= minimumMonthOfYear &&
+                        integerField(row, 2) <= maximumMonthOfYear);
+    }
+
+    private static Set<Integer> dateKeysForDayOfMonthAndYears(Allocator allocator, TpcdsParquetTables tables, int minimumDayOfMonth, int maximumDayOfMonth, int... years)
+    {
+        Set<Integer> allowedYears = Arrays.stream(years).boxed().collect(java.util.stream.Collectors.toSet());
+        return integerKeySet(scanRows(allocator, tables, "date_dim", "d_date_sk", "d_dom", "d_year"), row ->
+                integerField(row, 1) >= minimumDayOfMonth &&
+                        integerField(row, 1) <= maximumDayOfMonth &&
+                        allowedYears.contains(integerField(row, 2)));
+    }
+
+    private static Set<Integer> customerKeysForDates(Allocator allocator, TpcdsParquetTables tables, String tableName, String customerColumn, String dateColumn, Set<Integer> allowedDates)
+    {
+        return integerKeySet(scanRows(allocator, tables, tableName, customerColumn, dateColumn), row -> {
+            Object customerKey = row.values()[0];
+            Object dateKey = row.values()[1];
+            return customerKey != null &&
+                    dateKey != null &&
+                    allowedDates.contains(((Number) dateKey).intValue());
+        });
+    }
+
+    private static Set<Integer> addressKeysForCounties(Allocator allocator, TpcdsParquetTables tables, String... counties)
+    {
+        Set<String> allowedCounties = Set.of(counties);
+        return integerKeySet(scanRows(allocator, tables, "customer_address", "ca_address_sk", "ca_county"), row -> {
+            String county = stringField(row, 1);
+            return county != null && allowedCounties.contains(county);
+        });
+    }
+
+    private static Set<Integer> storeKeysForCounties(Allocator allocator, TpcdsParquetTables tables, String... counties)
+    {
+        Set<String> allowedCounties = Set.of(counties);
+        return integerKeySet(scanRows(allocator, tables, "store", "s_store_sk", "s_county"), row -> {
+            String county = stringField(row, 1);
+            return county != null && allowedCounties.contains(county);
+        });
+    }
+
+    private static Set<Integer> storeKeysByName(Allocator allocator, TpcdsParquetTables tables, String storeName)
+    {
+        return integerKeySet(scanRows(allocator, tables, "store", "s_store_sk", "s_store_name"), row -> {
+            String name = stringField(row, 1);
+            return name != null && storeName.equals(name);
+        });
+    }
+
+    private static Set<Integer> householdKeysForQuery73(Allocator allocator, TpcdsParquetTables tables)
+    {
+        return integerKeySet(scanRows(allocator, tables, "household_demographics", "hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"), row -> {
+            String buyPotential = stringField(row, 1);
+            int vehicleCount = integerField(row, 2);
+            int dependentCount = integerField(row, 3);
+            return (">10000".equals(buyPotential) || "Unknown".equals(buyPotential)) &&
+                    vehicleCount > 0 &&
+                    ((double) dependentCount / vehicleCount) > 1.0;
+        });
+    }
+
+    private static Set<Integer> householdKeysForQuery88(Allocator allocator, TpcdsParquetTables tables)
+    {
+        return integerKeySet(scanRows(allocator, tables, "household_demographics", "hd_demo_sk", "hd_dep_count", "hd_vehicle_count"), row -> {
+            int dependentCount = integerField(row, 1);
+            int vehicleCount = integerField(row, 2);
+            return (dependentCount == 4 || dependentCount == 2 || dependentCount == 0) &&
+                    vehicleCount <= (dependentCount + 2);
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Integer>[] timeBucketKeysForQuery88(Allocator allocator, TpcdsParquetTables tables)
+    {
+        Set<Integer>[] buckets = new Set[8];
+        for (int bucket = 0; bucket < buckets.length; bucket++) {
+            buckets[bucket] = new HashSet<>();
+        }
+        for (Row row : scanRows(allocator, tables, "time_dim", "t_time_sk", "t_hour", "t_minute")) {
+            int hour = integerField(row, 1);
+            int minute = integerField(row, 2);
+            int bucket = switch (hour) {
+                case 8 -> minute >= 30 ? 0 : -1;
+                case 9 -> minute < 30 ? 1 : 2;
+                case 10 -> minute < 30 ? 3 : 4;
+                case 11 -> minute < 30 ? 5 : 6;
+                case 12 -> minute < 30 ? 7 : -1;
+                default -> -1;
+            };
+            if (bucket >= 0) {
+                buckets[bucket].add(integerField(row, 0));
+            }
+        }
+        return buckets;
+    }
+
+    private static Map<Integer, CustomerDemographicsRecord> customerDemographicsLookup(Allocator allocator, TpcdsParquetTables tables)
+    {
+        Map<Integer, CustomerDemographicsRecord> result = new HashMap<>();
+        for (Row row : scanRows(allocator, tables, "customer_demographics",
+                "cd_demo_sk",
+                "cd_gender",
+                "cd_marital_status",
+                "cd_education_status",
+                "cd_purchase_estimate",
+                "cd_credit_rating",
+                "cd_dep_count",
+                "cd_dep_employed_count",
+                "cd_dep_college_count")) {
+            result.put(integerField(row, 0), new CustomerDemographicsRecord(
+                    utf8OrNull(stringField(row, 1)),
+                    utf8OrNull(stringField(row, 2)),
+                    utf8OrNull(stringField(row, 3)),
+                    ((Number) row.values()[4]).longValue(),
+                    utf8OrNull(stringField(row, 5)),
+                    ((Number) row.values()[6]).longValue(),
+                    ((Number) row.values()[7]).longValue(),
+                    ((Number) row.values()[8]).longValue()));
+        }
+        return result;
+    }
+
+    private static Map<Integer, CustomerIdentityRecord> customerIdentityLookup(Allocator allocator, TpcdsParquetTables tables)
+    {
+        Map<Integer, CustomerIdentityRecord> result = new HashMap<>();
+        for (Row row : scanRows(allocator, tables, "customer",
+                "c_customer_sk",
+                "c_last_name",
+                "c_first_name",
+                "c_salutation",
+                "c_preferred_cust_flag")) {
+            result.put(integerField(row, 0), new CustomerIdentityRecord(
+                    utf8OrNull(stringField(row, 1)),
+                    utf8OrNull(stringField(row, 2)),
+                    utf8OrNull(stringField(row, 3)),
+                    utf8OrNull(stringField(row, 4))));
+        }
+        return result;
+    }
+
+    private static Query10Lookup query10Lookup(Allocator allocator, TpcdsParquetTables tables)
+    {
+        Set<Integer> eligibleDates = dateKeysForYearMonthRange(allocator, tables, 2002, 1, 4);
+        return new Query10Lookup(
+                addressKeysForCounties(allocator, tables, "Rush County", "Toole County", "Jefferson County", "Dona Ana County", "La Porte County"),
+                customerKeysForDates(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", eligibleDates),
+                customerKeysForDates(allocator, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", eligibleDates),
+                customerKeysForDates(allocator, tables, "catalog_sales", "cs_ship_customer_sk", "cs_sold_date_sk", eligibleDates),
+                customerDemographicsLookup(allocator, tables));
+    }
+
+    private static Query73Lookup query73Lookup(Allocator allocator, TpcdsParquetTables tables)
+    {
+        return new Query73Lookup(
+                dateKeysForDayOfMonthAndYears(allocator, tables, 1, 2, 1999, 2000, 2001),
+                storeKeysForCounties(allocator, tables, "Williamson County", "Franklin Parish", "Bronx County", "Orange County"),
+                householdKeysForQuery73(allocator, tables),
+                customerIdentityLookup(allocator, tables));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Query88Lookup query88Lookup(Allocator allocator, TpcdsParquetTables tables)
+    {
+        return new Query88Lookup(
+                timeBucketKeysForQuery88(allocator, tables),
+                householdKeysForQuery88(allocator, tables),
+                storeKeysByName(allocator, tables, "ese"));
+    }
+
     private static FilterSpec utf8AnyOf(int inputIndex, Set<String> values)
     {
         if (values.isEmpty()) {
@@ -216,6 +448,14 @@ final class TpcdsParquetSupport
     {
         return multiFileScan(
                 tables.tableFiles(tableName),
+                columns.length,
+                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+    }
+
+    private static Operator customerScan(Allocator allocator, TpcdsParquetTables tables, String... columns)
+    {
+        return multiFileScan(
+                tables.tableFiles("customer"),
                 columns.length,
                 path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
     }
@@ -463,7 +703,34 @@ final class TpcdsParquetSupport
 
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate) {}
 
+    private record Query10Lookup(
+            Set<Integer> eligibleAddressKeys,
+            Set<Integer> storeCustomerKeys,
+            Set<Integer> webCustomerKeys,
+            Set<Integer> catalogCustomerKeys,
+            Map<Integer, CustomerDemographicsRecord> demographics) {}
+
+    private record Query73Lookup(
+            Set<Integer> allowedDateKeys,
+            Set<Integer> allowedStoreKeys,
+            Set<Integer> allowedHouseholdKeys,
+            Map<Integer, CustomerIdentityRecord> customers) {}
+
+    private record Query88Lookup(Set<Integer>[] timeBucketKeys, Set<Integer> allowedHouseholdKeys, Set<Integer> allowedStoreKeys) {}
+
     private record Query96Lookup(Set<Integer> timeKeys, Set<Integer> householdKeys, Set<Integer> storeKeys) {}
+
+    private record CustomerDemographicsRecord(
+            byte[] gender,
+            byte[] maritalStatus,
+            byte[] educationStatus,
+            long purchaseEstimate,
+            byte[] creditRating,
+            long dependentCount,
+            long employedDependentCount,
+            long collegeDependentCount) {}
+
+    private record CustomerIdentityRecord(byte[] lastName, byte[] firstName, byte[] salutation, byte[] preferredCustomerFlag) {}
 
     private record ShippingBucketsLookup(Set<Integer> allowedShipDates, Map<Integer, byte[]> firstNames, Map<Integer, byte[]> secondNames, Map<Integer, byte[]> thirdNames) {}
 
@@ -480,6 +747,35 @@ final class TpcdsParquetSupport
     private static byte[] utf8(String value)
     {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] utf8OrNull(String value)
+    {
+        return value == null ? null : utf8(value);
+    }
+
+    private static int length(byte[] bytes)
+    {
+        return bytes == null ? 0 : bytes.length;
+    }
+
+    private static void setBytesOrNull(BinaryVector values, BooleanVector nulls, int position, byte[] bytes)
+    {
+        if (bytes == null) {
+            nulls.values()[position] = true;
+            values.setNull(position);
+            return;
+        }
+        values.setBytes(position, bytes);
+    }
+
+    private static long singleLongResult(Operator operator)
+    {
+        List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
+        if (rows.size() != 1) {
+            throw new IllegalStateException("Expected exactly one row but found " + rows.size());
+        }
+        return ((Number) rows.getFirst().values()[0]).longValue();
     }
 
     private static int integerValue(Vector vector, int position)
@@ -700,6 +996,446 @@ final class TpcdsParquetSupport
                         takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
                         releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
                         sourceBatch::close);
+            }
+        }
+    }
+
+    private static final class CustomerDemographicsProjectOperator
+            implements Operator
+    {
+        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("CustomerDemographicsProjectOperator");
+
+        private final Allocator allocator;
+        private final Operator source;
+        private final Query10Lookup lookup;
+
+        private Batch nextBatch;
+
+        private CustomerDemographicsProjectOperator(Allocator allocator, Operator source, Query10Lookup lookup)
+        {
+            this.allocator = allocator;
+            this.source = source;
+            this.lookup = lookup;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 8;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            loadNextBatch();
+            return nextBatch != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more parquet rows");
+            }
+            Batch batch = nextBatch;
+            nextBatch = null;
+            return batch;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (nextBatch != null) {
+                nextBatch.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (nextBatch != null) {
+                nextBatch.close();
+                nextBatch = null;
+            }
+            source.close();
+            allocator.release(ALLOCATION_CONTEXT);
+        }
+
+        private void loadNextBatch()
+        {
+            while (nextBatch == null && source.hasNext()) {
+                Batch sourceBatch = source.next();
+                Mask sourceMask = sourceBatch.borrowMask();
+                if (sourceMask.none()) {
+                    sourceBatch.close();
+                    continue;
+                }
+
+                Vector addressValues = sourceBatch.output(0).borrow(Stream.VALUES);
+                Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
+                Vector demographicsValues = sourceBatch.output(2).borrow(Stream.VALUES);
+
+                int selectedCount = 0;
+                int genderBytes = 0;
+                int maritalBytes = 0;
+                int educationBytes = 0;
+                int creditBytes = 0;
+                for (int position : sourceMask) {
+                    int addressKey = integerValue(addressValues, position);
+                    int customerKey = integerValue(customerValues, position);
+                    if (!lookup.eligibleAddressKeys().contains(addressKey) ||
+                            !lookup.storeCustomerKeys().contains(customerKey) ||
+                            (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
+                        continue;
+                    }
+
+                    CustomerDemographicsRecord demographics = lookup.demographics().get(integerValue(demographicsValues, position));
+                    if (demographics == null) {
+                        continue;
+                    }
+                    selectedCount++;
+                    genderBytes += length(demographics.gender());
+                    maritalBytes += length(demographics.maritalStatus());
+                    educationBytes += length(demographics.educationStatus());
+                    creditBytes += length(demographics.creditRating());
+                }
+
+                if (selectedCount == 0) {
+                    sourceBatch.close();
+                    continue;
+                }
+
+                BinaryVector gender = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, genderBytes);
+                BinaryVector maritalStatus = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, maritalBytes);
+                BinaryVector educationStatus = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, educationBytes);
+                BinaryVector creditRating = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, creditBytes);
+                gender.addTrait(BinaryVector.Trait.UTF8_STRING);
+                maritalStatus.addTrait(BinaryVector.Trait.UTF8_STRING);
+                educationStatus.addTrait(BinaryVector.Trait.UTF8_STRING);
+                creditRating.addTrait(BinaryVector.Trait.UTF8_STRING);
+
+                BooleanVector genderNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                BooleanVector maritalStatusNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                BooleanVector educationStatusNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                BooleanVector creditRatingNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                I64Vector purchaseEstimate = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+                I64Vector dependentCount = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+                I64Vector employedDependentCount = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+                I64Vector collegeDependentCount = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+
+                int outputPosition = 0;
+                for (int position : sourceMask) {
+                    int addressKey = integerValue(addressValues, position);
+                    int customerKey = integerValue(customerValues, position);
+                    if (!lookup.eligibleAddressKeys().contains(addressKey) ||
+                            !lookup.storeCustomerKeys().contains(customerKey) ||
+                            (!lookup.webCustomerKeys().contains(customerKey) && !lookup.catalogCustomerKeys().contains(customerKey))) {
+                        continue;
+                    }
+
+                    CustomerDemographicsRecord demographics = lookup.demographics().get(integerValue(demographicsValues, position));
+                    if (demographics == null) {
+                        continue;
+                    }
+
+                    setBytesOrNull(gender, genderNulls, outputPosition, demographics.gender());
+                    setBytesOrNull(maritalStatus, maritalStatusNulls, outputPosition, demographics.maritalStatus());
+                    setBytesOrNull(educationStatus, educationStatusNulls, outputPosition, demographics.educationStatus());
+                    setBytesOrNull(creditRating, creditRatingNulls, outputPosition, demographics.creditRating());
+                    purchaseEstimate.values()[outputPosition] = demographics.purchaseEstimate();
+                    dependentCount.values()[outputPosition] = demographics.dependentCount();
+                    employedDependentCount.values()[outputPosition] = demographics.employedDependentCount();
+                    collegeDependentCount.values()[outputPosition] = demographics.collegeDependentCount();
+                    outputPosition++;
+                }
+
+                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
+                nextBatch = new Batch(
+                        outputMask,
+                        _ -> {},
+                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
+                        sourceBatch::close,
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, gender, genderNulls),
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, maritalStatus, maritalStatusNulls),
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, educationStatus, educationStatusNulls),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, purchaseEstimate),
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, creditRating, creditRatingNulls),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, dependentCount),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, employedDependentCount),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, collegeDependentCount));
+            }
+        }
+    }
+
+    private static final class TicketCustomerFilterProjectOperator
+            implements Operator
+    {
+        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TicketCustomerFilterProjectOperator");
+
+        private final Allocator allocator;
+        private final Operator source;
+        private final Query73Lookup lookup;
+
+        private Batch nextBatch;
+
+        private TicketCustomerFilterProjectOperator(Allocator allocator, Operator source, Query73Lookup lookup)
+        {
+            this.allocator = allocator;
+            this.source = source;
+            this.lookup = lookup;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 2;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            loadNextBatch();
+            return nextBatch != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more parquet rows");
+            }
+            Batch batch = nextBatch;
+            nextBatch = null;
+            return batch;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (nextBatch != null) {
+                nextBatch.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (nextBatch != null) {
+                nextBatch.close();
+                nextBatch = null;
+            }
+            source.close();
+            allocator.release(ALLOCATION_CONTEXT);
+        }
+
+        private void loadNextBatch()
+        {
+            while (nextBatch == null && source.hasNext()) {
+                Batch sourceBatch = source.next();
+                Mask sourceMask = sourceBatch.borrowMask();
+                if (sourceMask.none()) {
+                    sourceBatch.close();
+                    continue;
+                }
+
+                Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
+                Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
+                Vector dateValues = sourceBatch.output(2).borrow(Stream.VALUES);
+                Vector storeValues = sourceBatch.output(3).borrow(Stream.VALUES);
+                Vector householdValues = sourceBatch.output(4).borrow(Stream.VALUES);
+
+                int selectedCount = 0;
+                for (int position : sourceMask) {
+                    if (lookup.allowedDateKeys().contains(integerValue(dateValues, position)) &&
+                            lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) &&
+                            lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
+                        selectedCount++;
+                    }
+                }
+
+                if (selectedCount == 0) {
+                    sourceBatch.close();
+                    continue;
+                }
+
+                I64Vector ticketNumbers = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+                I64Vector customerKeys = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+                int outputPosition = 0;
+                for (int position : sourceMask) {
+                    if (!lookup.allowedDateKeys().contains(integerValue(dateValues, position)) ||
+                            !lookup.allowedStoreKeys().contains(integerValue(storeValues, position)) ||
+                            !lookup.allowedHouseholdKeys().contains(integerValue(householdValues, position))) {
+                        continue;
+                    }
+                    ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
+                    customerKeys.values()[outputPosition] = ((I64Vector) customerValues).values()[position];
+                    outputPosition++;
+                }
+
+                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
+                nextBatch = new Batch(
+                        outputMask,
+                        _ -> {},
+                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
+                        sourceBatch::close,
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, ticketNumbers),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, customerKeys));
+            }
+        }
+    }
+
+    private static final class CustomerTicketProjectOperator
+            implements Operator
+    {
+        private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("CustomerTicketProjectOperator");
+
+        private final Allocator allocator;
+        private final Operator source;
+        private final Map<Integer, CustomerIdentityRecord> customers;
+
+        private Batch nextBatch;
+
+        private CustomerTicketProjectOperator(Allocator allocator, Operator source, Map<Integer, CustomerIdentityRecord> customers)
+        {
+            this.allocator = allocator;
+            this.source = source;
+            this.customers = customers;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 6;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            loadNextBatch();
+            return nextBatch != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more parquet rows");
+            }
+            Batch batch = nextBatch;
+            nextBatch = null;
+            return batch;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (nextBatch != null) {
+                nextBatch.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (nextBatch != null) {
+                nextBatch.close();
+                nextBatch = null;
+            }
+            source.close();
+            allocator.release(ALLOCATION_CONTEXT);
+        }
+
+        private void loadNextBatch()
+        {
+            while (nextBatch == null && source.hasNext()) {
+                Batch sourceBatch = source.next();
+                Mask sourceMask = sourceBatch.borrowMask();
+                if (sourceMask.none()) {
+                    sourceBatch.close();
+                    continue;
+                }
+
+                Vector ticketValues = sourceBatch.output(0).borrow(Stream.VALUES);
+                Vector customerValues = sourceBatch.output(1).borrow(Stream.VALUES);
+                Vector countValues = sourceBatch.output(2).borrow(Stream.VALUES);
+
+                int selectedCount = 0;
+                int lastNameBytes = 0;
+                int firstNameBytes = 0;
+                int salutationBytes = 0;
+                int preferredFlagBytes = 0;
+                for (int position : sourceMask) {
+                    long count = ((I64Vector) countValues).values()[position];
+                    if (count < 1 || count > 5) {
+                        continue;
+                    }
+                    CustomerIdentityRecord customer = customers.get(integerValue(customerValues, position));
+                    if (customer == null) {
+                        continue;
+                    }
+                    selectedCount++;
+                    lastNameBytes += length(customer.lastName());
+                    firstNameBytes += length(customer.firstName());
+                    salutationBytes += length(customer.salutation());
+                    preferredFlagBytes += length(customer.preferredCustomerFlag());
+                }
+
+                if (selectedCount == 0) {
+                    sourceBatch.close();
+                    continue;
+                }
+
+                BinaryVector lastName = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, lastNameBytes);
+                BinaryVector firstName = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, firstNameBytes);
+                BinaryVector salutation = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, salutationBytes);
+                BinaryVector preferredFlag = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, selectedCount, preferredFlagBytes);
+                lastName.addTrait(BinaryVector.Trait.UTF8_STRING);
+                firstName.addTrait(BinaryVector.Trait.UTF8_STRING);
+                salutation.addTrait(BinaryVector.Trait.UTF8_STRING);
+                preferredFlag.addTrait(BinaryVector.Trait.UTF8_STRING);
+
+                BooleanVector lastNameNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                BooleanVector firstNameNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                BooleanVector salutationNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                BooleanVector preferredFlagNulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, selectedCount, BooleanVector::new);
+                I64Vector ticketNumbers = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+                I64Vector counts = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, selectedCount, I64Vector::new);
+
+                int outputPosition = 0;
+                for (int position : sourceMask) {
+                    long count = ((I64Vector) countValues).values()[position];
+                    if (count < 1 || count > 5) {
+                        continue;
+                    }
+                    CustomerIdentityRecord customer = customers.get(integerValue(customerValues, position));
+                    if (customer == null) {
+                        continue;
+                    }
+
+                    setBytesOrNull(lastName, lastNameNulls, outputPosition, customer.lastName());
+                    setBytesOrNull(firstName, firstNameNulls, outputPosition, customer.firstName());
+                    setBytesOrNull(salutation, salutationNulls, outputPosition, customer.salutation());
+                    setBytesOrNull(preferredFlag, preferredFlagNulls, outputPosition, customer.preferredCustomerFlag());
+                    ticketNumbers.values()[outputPosition] = ((I64Vector) ticketValues).values()[position];
+                    counts.values()[outputPosition] = count;
+                    outputPosition++;
+                }
+
+                Mask outputMask = allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, selectedCount);
+                nextBatch = new Batch(
+                        outputMask,
+                        _ -> {},
+                        takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                        releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
+                        sourceBatch::close,
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, lastName, lastNameNulls),
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, firstName, firstNameNulls),
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, salutation, salutationNulls),
+                        valuesAndNullsOutput(allocator, ALLOCATION_CONTEXT, preferredFlag, preferredFlagNulls),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, ticketNumbers),
+                        valuesOnlyOutput(allocator, ALLOCATION_CONTEXT, counts));
             }
         }
     }
