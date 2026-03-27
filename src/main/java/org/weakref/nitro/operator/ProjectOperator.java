@@ -112,6 +112,9 @@ public class ProjectOperator
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
         }
         Streams bundle = batchState.evaluatedOutputBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.mask()));
+        if (!bundle.has(stream) && batchState.mask().none() && !batchState.schemaMask().none()) {
+            bundle = batchState.schemaBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.schemaMask()));
+        }
         return bundle.get(stream);
     }
 
@@ -139,12 +142,15 @@ public class ProjectOperator
         private final Batch sourceBatch;
         private final PlanEvaluator planEvaluator;
         private final Map<Producer, Streams> evaluatedOutputBundles = new HashMap<>();
+        private final Map<Producer, Streams> schemaBundles = new HashMap<>();
+        private final Mask schemaMask;
         private Mask mask;
 
         private BatchState(Batch sourceBatch)
         {
             this.sourceBatch = sourceBatch;
             this.mask = sourceBatch.borrowMask();
+            this.schemaMask = this.mask.size() == 0 ? this.mask : allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, 1);
             this.planEvaluator = new PlanEvaluator(
                     evaluationPlan,
                     primitiveRegistry,
@@ -170,10 +176,21 @@ public class ProjectOperator
             return evaluatedOutputBundles;
         }
 
+        private Map<Producer, Streams> schemaBundles()
+        {
+            return schemaBundles;
+        }
+
+        private Mask schemaMask()
+        {
+            return schemaMask;
+        }
+
         private void constrain(Mask mask)
         {
             planEvaluator.reset();
             evaluatedOutputBundles.clear();
+            schemaBundles.clear();
             this.mask = mask;
             sourceBatch.constrain(mask);
         }
@@ -182,6 +199,7 @@ public class ProjectOperator
         {
             planEvaluator.reset();
             evaluatedOutputBundles.clear();
+            schemaBundles.clear();
             sourceBatch.close();
         }
     }

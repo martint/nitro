@@ -126,6 +126,12 @@ public class TestQueries
     }
 
     @Test
+    void testQuery45()
+    {
+        assertOperatorMatches("45", tables -> TpcdsParquetSupport.query45(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query45(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
     void testQuery10()
     {
         assertOperatorMatches("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
@@ -171,6 +177,18 @@ public class TestQueries
     void testQuery62TrinoSql()
     {
         assertTrinoOperatorMatchesSql("62", support -> support.query62(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
+    void testQuery45Sql()
+    {
+        assertNitroMatchesSql("45", tables -> TpcdsParquetSupport.query45(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery45TrinoSql()
+    {
+        assertTrinoOperatorMatchesSql("45", support -> support.query45(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
     }
 
     @Test
@@ -301,16 +319,21 @@ public class TestQueries
 
     private static void assertOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery)
     {
+        assertOperatorMatches(queryId, nitroQuery, trinoQuery, TestQueries::normalizeValue);
+    }
+
+    private static void assertOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
+    {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         List<org.weakref.nitro.data.Row> nitroRows;
         try (Operator query = nitroQuery.apply(tables)) {
-            nitroRows = normalizeNitroRows(OperatorAssertions.OperatorAssert.toRows(query));
+            nitroRows = normalizeNitroRows(OperatorAssertions.OperatorAssert.toRows(query), valueNormalizer);
         }
 
         try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
-            assertThat(normalizeTrinoRows(trinoQuery.apply(support)))
+            assertThat(normalizeTrinoRows(trinoQuery.apply(support), valueNormalizer))
                     .as("TPC-DS Q%s operator assembly result", queryId)
                     .containsExactlyElementsOf(nitroRows);
         }
@@ -457,5 +480,16 @@ public class TestQueries
             return normalized;
         }
         return normalize(normalized.substring(0, delimiter)) + ", " + normalize(normalized.substring(delimiter + 2));
+    }
+
+    private static Object normalizeDecimalCentsValue(Object value)
+    {
+        if (value instanceof SqlDecimal decimal) {
+            return decimal.toBigDecimal().unscaledValue().longValueExact();
+        }
+        if (value instanceof BigDecimal decimal) {
+            return decimal.unscaledValue().longValueExact();
+        }
+        return normalizeValue(value);
     }
 }

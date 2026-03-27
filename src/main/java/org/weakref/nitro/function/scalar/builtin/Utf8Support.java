@@ -15,9 +15,39 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.BinaryVector;
 
+import static java.lang.Math.toIntExact;
+
 final class Utf8Support
 {
     private Utf8Support() {}
+
+    public static byte[] substring(BinaryVector vector, int position, long start, long length)
+    {
+        return substring(vector.data(), vector.startOffset(position), vector.length(position), start, length);
+    }
+
+    public static byte[] substring(byte[] data, int offset, int length, long start, long count)
+    {
+        if (count <= 0 || length <= 0) {
+            return new byte[0];
+        }
+
+        int end = offset + length;
+        int startCodePoint = Math.max(0, toIntExact(start - 1));
+        int startOffset = offset;
+        for (int index = 0; index < startCodePoint && startOffset < end; index++) {
+            startOffset = nextCodePointOffset(data, startOffset, end);
+        }
+        if (startOffset >= end) {
+            return new byte[0];
+        }
+
+        int endOffset = startOffset;
+        for (long index = 0; index < count && endOffset < end; index++) {
+            endOffset = nextCodePointOffset(data, endOffset, end);
+        }
+        return java.util.Arrays.copyOfRange(data, startOffset, endOffset);
+    }
 
     public static int javaStringHash(BinaryVector vector, int position)
     {
@@ -75,5 +105,33 @@ final class Utf8Support
             throw new IllegalArgumentException("Invalid UTF-8 continuation byte: " + value);
         }
         return value & 0x3F;
+    }
+
+    private static int nextCodePointOffset(byte[] data, int offset, int end)
+    {
+        if (offset >= end) {
+            return end;
+        }
+
+        int firstByte = Byte.toUnsignedInt(data[offset]);
+        if (firstByte < 0x80) {
+            return offset + 1;
+        }
+        if ((firstByte & 0xE0) == 0xC0) {
+            continuation(data, offset + 1, end);
+            return offset + 2;
+        }
+        if ((firstByte & 0xF0) == 0xE0) {
+            continuation(data, offset + 1, end);
+            continuation(data, offset + 2, end);
+            return offset + 3;
+        }
+        if ((firstByte & 0xF8) == 0xF0) {
+            continuation(data, offset + 1, end);
+            continuation(data, offset + 2, end);
+            continuation(data, offset + 3, end);
+            return offset + 4;
+        }
+        throw new IllegalArgumentException("Invalid UTF-8 leading byte: " + firstByte);
     }
 }

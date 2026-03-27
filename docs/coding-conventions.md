@@ -86,6 +86,54 @@ If a benchmark reveals a hot pattern, optimize the general mechanism that
 implements that pattern. Do not encode benchmark-specific assumptions into the
 function itself.
 
+## Do not materialize Java strings in engine code
+
+UTF-8 string semantics in Nitro should operate on raw bytes, vector offsets,
+and UTF-8-aware helpers. Engine code should not decode values to Java
+`String` just to implement scalar semantics.
+
+Prefer:
+
+- byte-native UTF-8 helpers that work from `BinaryVector` offsets and byte
+  arrays
+- code-point-aware logic implemented over UTF-8 bytes
+- comparing expected string literals in tests by converting the literal to
+  bytes, not by adding engine helpers that decode vectors to `String`
+
+Avoid:
+
+- convenience helpers such as `BinaryVector.utf8Value(...)`
+- scalar functions that decode to `String`, call Java string methods, then
+  encode back to UTF-8 bytes
+- introducing new hot-path APIs that expose Java `String` values from vectors
+
+If a feature cannot currently be implemented without host string machinery,
+that should be treated as technical debt and called out explicitly, not hidden
+behind a convenience helper.
+
+## Route mask allocation through the allocator
+
+`Mask` is part of Nitro's managed execution data, not an ad hoc helper type.
+New mask instances in engine code should be borrowed, copied, or transferred
+through `Allocator` so they participate in pooling and lifetime tracking.
+
+Prefer:
+
+- `allocator.allocateAllMask(...)`
+- `allocator.allocateRangeMask(...)`
+- `allocator.allocateSparseMask(...)`
+- `allocator.copyMask(...)`
+- `allocator.intersectMask(...)`, `differenceMask(...)`, and `unionMask(...)`
+
+Avoid:
+
+- direct `Mask.all(...)`, `Mask.range(...)`, or `Mask.sparse(...)` calls in
+  operator and evaluator hot paths
+- constructing temporary masks outside an allocator context when a context is
+  already available
+- hiding allocator ownership by mixing managed and unmanaged masks in the same
+  execution path
+
 ## Keep evaluator dispatch capability-based
 
 The evaluator should not grow special cases for individual primitive function

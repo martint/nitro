@@ -92,6 +92,65 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, 0, false, distinct);
     }
 
+    public static Operator query45(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator filtered = factScan(allocator, tables, "web_sales", "ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price");
+        filtered = new HashJoinOperator(
+                allocator,
+                filtered,
+                2,
+                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk"),
+                0);
+        filtered = new HashJoinOperator(
+                allocator,
+                filtered,
+                5,
+                scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_city", "ca_zip"),
+                0);
+        filtered = new HashJoinOperator(
+                allocator,
+                filtered,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(equal(1, 2), equal(2, 2001)),
+                        new String[] {"d_date_sk", "d_qoy", "d_year"},
+                        0),
+                0);
+        filtered = new HashJoinOperator(
+                allocator,
+                filtered,
+                0,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id"),
+                0);
+        filtered = new SemiJoinOperator(
+                allocator,
+                filtered,
+                11,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query45ItemPredicate(),
+                        new String[] {"i_item_sk", "i_item_id"},
+                        1),
+                0,
+                true,
+                true);
+        filtered = filter(allocator, primitiveRegistry, filtered, query45ZipOrItemPredicate(8, 12));
+        Operator projected = projectInputs(allocator, primitiveRegistry, filtered, 8, 7, 3);
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new Sum(2)),
+                projected);
+        return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, aggregated);
+    }
+
     public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator allowedShipDates = materializedTable(
@@ -427,6 +486,55 @@ final class TpcdsParquetSupport
         return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(result, Stream.VALUES)));
     }
 
+    private static FilterSpec query45ItemPredicate()
+    {
+        return or(
+                equal(0, 2),
+                equal(0, 3),
+                equal(0, 5),
+                equal(0, 7),
+                equal(0, 11),
+                equal(0, 13),
+                equal(0, 17),
+                equal(0, 19),
+                equal(0, 23),
+                equal(0, 29));
+    }
+
+    private static FilterSpec query45ZipOrItemPredicate(int zipIndex, int itemMatchIndex)
+    {
+        List<String> zipValues = List.of("80348", "81792", "83405", "85392", "85460", "85669", "86197", "86475", "88274");
+        List<Assignment> assignments = new ArrayList<>();
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        assignments.add(new Assignment(start, new Literal(1L), AllMask.ALL));
+        assignments.add(new Assignment(length, new Literal(5L), AllMask.ALL));
+
+        Variable zipPrefix = new Variable(2);
+        assignments.add(new Assignment(zipPrefix, new Call("substring_utf8", List.of(
+                new Reference(new Input(zipIndex), Stream.VALUES),
+                new Reference(start, Stream.VALUES),
+                new Reference(length, Stream.VALUES))), AllMask.ALL));
+
+        int nextVariable = 3;
+        List<Reference> zipArguments = new ArrayList<>(zipValues.size() + 1);
+        zipArguments.add(new Reference(zipPrefix, Stream.VALUES));
+        for (String zipValue : zipValues) {
+            Variable literal = new Variable(nextVariable++);
+            assignments.add(new Assignment(literal, new Literal(zipValue), AllMask.ALL));
+            zipArguments.add(new Reference(literal, Stream.VALUES));
+        }
+
+        Variable zipMatch = new Variable(nextVariable++);
+        assignments.add(new Assignment(zipMatch, new Call("in_utf8", zipArguments), AllMask.ALL));
+
+        Variable matches = new Variable(nextVariable);
+        assignments.add(new Assignment(matches, new Call("or", List.of(
+                new Reference(zipMatch, Stream.VALUES),
+                new Reference(new Input(itemMatchIndex), Stream.VALUES))), AllMask.ALL));
+        return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(matches, Stream.VALUES)));
+    }
+
     private static List<Row> scanRows(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
         try (Operator scan = multiFileScan(
@@ -467,10 +575,9 @@ final class TpcdsParquetSupport
                     if (rowCount == 0) {
                         continue;
                     }
-                    int[] positions = positions(batch.borrowMask());
                     Streams[] pageColumns = new Streams[columns.length];
                     for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
-                        pageColumns[outputIndex] = allocator.copyStreams(allocationContext, borrowedStreams(batch.output(outputIndex)), positions);
+                        pageColumns[outputIndex] = allocator.copyStreams(allocationContext, borrowedStreams(batch.output(outputIndex)), batch.borrowMask());
                     }
                     pages.add(new TableOperator.Page(rowCount, pageColumns, Mask.all(rowCount)));
                 }
@@ -1302,21 +1409,6 @@ final class TpcdsParquetSupport
                     sourceBatch::close,
                     outputs);
         }
-    }
-
-    private static int[] positions(Mask mask)
-    {
-        int[] positions = new int[mask.count()];
-        if (mask.all()) {
-            for (int index = 0; index < positions.length; index++) {
-                positions[index] = index;
-            }
-            return positions;
-        }
-        for (int index = 0; index < positions.length; index++) {
-            positions[index] = mask.position(index);
-        }
-        return positions;
     }
 
     private static Streams borrowedStreams(Output output)

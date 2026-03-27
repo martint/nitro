@@ -92,7 +92,13 @@ public class MinUtf8
     @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
-        return result(maxGroup, state, Mask.all(maxGroup + 1), output, allocator, allocationContext);
+        Mask allGroups = allocator.allocateAllMask(allocationContext, maxGroup + 1);
+        try {
+            return result(maxGroup, state, allGroups, output, allocator, allocationContext);
+        }
+        finally {
+            allocator.release(allocationContext, allGroups);
+        }
     }
 
     @Override

@@ -232,8 +232,13 @@ public final class PlanEvaluator
             return null;
         }
 
-        Streams baseResult = function.apply(inputsForPeeling(peeling), peeling.baseMask(), requestedStreams, null, executionContext);
-        return wrapDictionaryPeeledStreams(peeling.ids(), baseResult);
+        try {
+            Streams baseResult = function.apply(inputsForPeeling(peeling), peeling.baseMask(), requestedStreams, null, executionContext);
+            return wrapDictionaryPeeledStreams(peeling.ids(), baseResult);
+        }
+        finally {
+            allocator.release(ALLOCATION_CONTEXT, peeling.baseMask());
+        }
     }
 
     private static List<Streams> inputsForPeeling(DictionaryPeeling peeling)
@@ -265,12 +270,13 @@ public final class PlanEvaluator
         for (int id : sharedIds) {
             baseLength = Math.max(baseLength, id + 1);
         }
-        Mask baseMask = Mask.all(baseLength);
+        Mask baseMask = allocator.allocateAllMask(ALLOCATION_CONTEXT, baseLength);
 
         List<Streams> peeledInputs = new ArrayList<>(inputs.size());
         for (Streams inputStreams : inputs) {
             Streams peeled = peelDictionaryCompatibleStreams(inputStreams, sharedIds, rowCount, baseLength);
             if (peeled == null) {
+                allocator.release(ALLOCATION_CONTEXT, baseMask);
                 return null;
             }
             peeledInputs.add(peeled);

@@ -572,6 +572,9 @@ final class FlatTypeHandlers
                 if (key instanceof OperatorKeySemantics.BinaryKey value) {
                     result.setBytes(index, value.bytes());
                 }
+                else {
+                    result.setNull(index);
+                }
             }
             return Streams.ofValues(result);
         }

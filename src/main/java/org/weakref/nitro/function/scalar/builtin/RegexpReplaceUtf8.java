@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import io.airlift.slice.DynamicSliceOutput;
+import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
+import io.trino.re2j.Pattern;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -25,14 +29,11 @@ import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -103,7 +104,7 @@ public final class RegexpReplaceUtf8
             BooleanVector outputNulls)
     {
         byte[][] rewritten = new byte[mask.selectedCount()][];
-        Map<String, Pattern> patterns = new HashMap<>();
+        Map<Slice, Pattern> patterns = new HashMap<>();
         int totalBytes = 0;
         boolean asciiOnly = true;
         int index = 0;
@@ -113,14 +114,11 @@ public final class RegexpReplaceUtf8
                 continue;
             }
 
-            String input = utf8Value(values, position);
-            String patternValue = utf8Value(patternValues, position);
-            String replacementValue = utf8Value(replacementValues, position);
-            Pattern pattern = patterns.computeIfAbsent(patternValue, Pattern::compile);
-            String javaReplacement = toJavaReplacement(replacementValue);
-            byte[] bytes = pattern.matcher(input)
-                    .replaceAll(javaReplacement)
-                    .getBytes(StandardCharsets.UTF_8);
+            Slice input = utf8Slice(values, position);
+            Slice patternValue = utf8Slice(patternValues, position);
+            Slice replacementValue = translateReplacement(utf8Slice(replacementValues, position));
+            Pattern pattern = patterns.computeIfAbsent(patternValue, value -> Pattern.compile(value.toStringUtf8()));
+            byte[] bytes = pattern.matcher(input).replaceAll(replacementValue).getBytes();
             rewritten[index++] = bytes;
             totalBytes += bytes.length;
             asciiOnly &= isAscii(bytes);
@@ -174,12 +172,12 @@ public final class RegexpReplaceUtf8
         return length;
     }
 
-    private static String utf8Value(Vector values, int position)
+    private static Slice utf8Slice(Vector values, int position)
     {
         return switch (values) {
-            case BinaryVector binary -> binary.utf8Value(position);
-            case RleVector rle -> utf8Value(rle.values(), rle.runIndex(position));
-            case org.weakref.nitro.data.DictionaryVector dictionary -> utf8Value(dictionary.values(), dictionary.ids()[position]);
+            case BinaryVector binary -> Slices.wrappedBuffer(binary.data(), binary.startOffset(position), binary.length(position));
+            case RleVector rle -> utf8Slice(rle.values(), rle.runIndex(position));
+            case org.weakref.nitro.data.DictionaryVector dictionary -> utf8Slice(dictionary.values(), dictionary.ids()[position]);
             default -> throw new IllegalArgumentException("Unsupported regexp_replace_utf8 vector type: " + values.getClass().getSimpleName());
         };
     }
@@ -189,26 +187,36 @@ public final class RegexpReplaceUtf8
         return nulls != null && nulls.values()[position];
     }
 
-    private static String toJavaReplacement(String replacement)
+    private static Slice translateReplacement(Slice replacement)
     {
-        StringBuilder translated = new StringBuilder(replacement.length());
-        for (int index = 0; index < replacement.length(); index++) {
-            char current = replacement.charAt(index);
-            if (current == '\\' && index + 1 < replacement.length()) {
-                char escaped = replacement.charAt(index + 1);
-                if (Character.isDigit(escaped)) {
-                    translated.append('$');
-                    translated.append(escaped);
+        DynamicSliceOutput translated = new DynamicSliceOutput(replacement.length());
+        int index = 0;
+        while (index < replacement.length()) {
+            byte current = replacement.getByte(index++);
+            if (current == '\\') {
+                if (index == replacement.length()) {
+                    throw new IllegalArgumentException("Illegal replacement sequence");
                 }
-                else {
-                    translated.append(Matcher.quoteReplacement(String.valueOf(escaped)));
+                byte escaped = replacement.getByte(index++);
+                if (escaped >= '0' && escaped <= '9') {
+                    translated.appendByte('$');
+                    translated.appendByte(escaped);
+                    continue;
                 }
-                index++;
+                appendLiteralByte(translated, escaped);
                 continue;
             }
-            translated.append(Matcher.quoteReplacement(String.valueOf(current)));
+            appendLiteralByte(translated, current);
         }
-        return translated.toString();
+        return translated.slice();
+    }
+
+    private static void appendLiteralByte(DynamicSliceOutput output, byte value)
+    {
+        if (value == '\\' || value == '$') {
+            output.appendByte('\\');
+        }
+        output.appendByte(value);
     }
 
     private static boolean isAscii(byte[] bytes)

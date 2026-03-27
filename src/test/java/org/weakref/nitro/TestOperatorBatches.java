@@ -275,8 +275,8 @@ public class TestOperatorBatches
         I64Vector counts = (I64Vector) batch.output(1).borrow(Stream.VALUES);
 
         assertThat(keys.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
-        assertThat(keys.utf8Value(0)).isEqualTo("alpha");
-        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(utf8(keys, 0)).isEqualTo("alpha");
+        assertThat(utf8(keys, 1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
     }
 
@@ -301,9 +301,9 @@ public class TestOperatorBatches
         I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(leftKeys.values(), rowCount)).containsExactly(10L, 10L, 20L);
-        assertThat(rightKeys.utf8Value(0)).isEqualTo("alpha");
-        assertThat(rightKeys.utf8Value(1)).isEqualTo("beta");
-        assertThat(rightKeys.utf8Value(2)).isEqualTo("alpha");
+        assertThat(utf8(rightKeys, 0)).isEqualTo("alpha");
+        assertThat(utf8(rightKeys, 1)).isEqualTo("beta");
+        assertThat(utf8(rightKeys, 2)).isEqualTo("alpha");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L, 1L);
     }
 
@@ -359,9 +359,9 @@ public class TestOperatorBatches
 
         assertThat(rowCount).isEqualTo(2);
         assertThat(nulls.values()).containsExactly(false, false);
-        assertThat(keys.utf8Value(0)).isEqualTo("");
+        assertThat(utf8(keys, 0)).isEqualTo("");
         assertThat(keys.endOffset(0)).isZero();
-        assertThat(keys.utf8Value(1)).isEqualTo("alpha");
+        assertThat(utf8(keys, 1)).isEqualTo("alpha");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
     }
 
@@ -390,10 +390,41 @@ public class TestOperatorBatches
         I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(leftKeys.values(), rowCount)).containsExactly(10L, 10L, 20L);
-        assertThat(rightKeys.utf8Value(0)).isEqualTo("alpha");
-        assertThat(rightKeys.utf8Value(1)).isEqualTo("beta");
-        assertThat(rightKeys.utf8Value(2)).isEqualTo("alpha");
+        assertThat(utf8(rightKeys, 0)).isEqualTo("alpha");
+        assertThat(utf8(rightKeys, 1)).isEqualTo("beta");
+        assertThat(utf8(rightKeys, 2)).isEqualTo("alpha");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L, 1L);
+    }
+
+    @Test
+    void testGroupedAggregationOperatorPreservesNullableCompositeKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new CountAll()),
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("80348", "Lakeside"),
+                        row((Object) null, "Edgewood"),
+                        row((Object) null, (Object) null),
+                        row((Object) null, "Edgewood"))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector firstKeys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        BooleanVector firstNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+        BinaryVector secondKeys = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        BooleanVector secondNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+        I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(3);
+        assertThat(firstNulls.values()).containsExactly(false, true, true);
+        assertThat(secondNulls.values()).containsExactly(false, false, true);
+        assertThat(utf8(firstKeys, 0)).isEqualTo("80348");
+        assertThat(utf8(secondKeys, 0)).isEqualTo("Lakeside");
+        assertThat(utf8(secondKeys, 1)).isEqualTo("Edgewood");
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(1L, 2L, 1L);
     }
 
     @Test
@@ -420,7 +451,7 @@ public class TestOperatorBatches
         BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
 
         assertThat(nulls.values()).containsExactly(true, false);
-        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(utf8(keys, 1)).isEqualTo("beta");
         assertThat(keys.endOffset(1)).isEqualTo("beta".length());
     }
 
@@ -597,6 +628,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSemiJoinOperatorCanProjectMatchColumn()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("alpha", 10L),
+                        row("beta", 20L),
+                        row("gamma", 30L))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row("beta"),
+                        row("gamma"),
+                        row("gamma"))),
+                0,
+                true,
+                true)) {
+            Batch batch = operator.next();
+            assertThat(Arrays.copyOf(((BooleanVector) batch.output(2).borrow(Stream.VALUES)).values(), 3))
+                    .containsExactly(false, true, true);
+            batch.close();
+        }
+    }
+
+    @Test
     void testTopNOperatorPreservesBinaryOutputColumn()
     {
         BinaryVector names = new BinaryVector(4, 19);
@@ -628,8 +684,8 @@ public class TestOperatorBatches
         assertThat(Arrays.copyOf(ranks.values(), batch.borrowMask().count())).containsExactly(5L, 4L);
         assertThat(resultNames.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
         assertThat(resultNames.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
-        assertThat(resultNames.utf8Value(0)).isEqualTo("beta");
-        assertThat(resultNames.utf8Value(1)).isEqualTo("delta");
+        assertThat(utf8(resultNames, 0)).isEqualTo("beta");
+        assertThat(utf8(resultNames, 1)).isEqualTo("delta");
     }
 
     @Test
@@ -682,9 +738,31 @@ public class TestOperatorBatches
         BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
         I64Vector payload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
 
-        assertThat(keys.utf8Value(0)).isEqualTo("pear");
-        assertThat(keys.utf8Value(1)).isEqualTo("banana");
+        assertThat(utf8(keys, 0)).isEqualTo("pear");
+        assertThat(utf8(keys, 1)).isEqualTo("banana");
         assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(2L, 3L);
+    }
+
+    @Test
+    void testTopNOperatorOrdersNullsLastForAscendingUtf8Keys()
+    {
+        List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
+                new Allocator(),
+                3,
+                0,
+                false,
+                new ConstantTableOperator(
+                        new Allocator(),
+                        1,
+                        List.of(
+                                row("beta"),
+                                row((Object) null),
+                                row("alpha")))));
+
+        assertThat(rows).containsExactly(
+                row("alpha"),
+                row("beta"),
+                row((Object) null));
     }
 
     @Test
@@ -733,9 +811,9 @@ public class TestOperatorBatches
         I64Vector payload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(first.values(), batch.borrowMask().count())).containsExactly(10L, 10L, 10L);
-        assertThat(second.utf8Value(0)).isEqualTo("apple");
-        assertThat(second.utf8Value(1)).isEqualTo("banana");
-        assertThat(second.utf8Value(2)).isEqualTo("pear");
+        assertThat(utf8(second, 0)).isEqualTo("apple");
+        assertThat(utf8(second, 1)).isEqualTo("banana");
+        assertThat(utf8(second, 2)).isEqualTo("pear");
         assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(3L, 4L, 2L);
     }
 
@@ -796,7 +874,7 @@ public class TestOperatorBatches
         assertThat(payload.length()).isEqualTo(3);
         assertThat(payload.length(0)).isZero();
         assertThat(payload.length(1)).isZero();
-        assertThat(payload.utf8Value(2)).isEqualTo("a");
+        assertThat(utf8(payload, 2)).isEqualTo("a");
     }
 
     @Test
@@ -900,8 +978,8 @@ public class TestOperatorBatches
         assertThat(Arrays.copyOf(ids.values(), rowCount)).containsExactly(1L, 2L);
         assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
         assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
-        assertThat(payload.utf8Value(0)).isEqualTo("red");
-        assertThat(payload.utf8Value(1)).isEqualTo("red");
+        assertThat(utf8(payload, 0)).isEqualTo("red");
+        assertThat(utf8(payload, 1)).isEqualTo("red");
     }
 
     @Test
@@ -952,8 +1030,8 @@ public class TestOperatorBatches
         I64Vector leftPayload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
         I64Vector rightPayload = (I64Vector) batch.output(3).borrow(Stream.VALUES);
 
-        assertThat(keys.utf8Value(0)).isEqualTo("alpha");
-        assertThat(keys.utf8Value(1)).isEqualTo("beta");
+        assertThat(utf8(keys, 0)).isEqualTo("alpha");
+        assertThat(utf8(keys, 1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
         assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
     }
@@ -983,8 +1061,8 @@ public class TestOperatorBatches
         I64Vector rightPayload = (I64Vector) batch.output(5).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(leftIds.values(), rowCount)).containsExactly(1L, 1L);
-        assertThat(leftNames.utf8Value(0)).isEqualTo("alpha");
-        assertThat(leftNames.utf8Value(1)).isEqualTo("beta");
+        assertThat(utf8(leftNames, 0)).isEqualTo("alpha");
+        assertThat(utf8(leftNames, 1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
         assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
     }
@@ -1014,8 +1092,8 @@ public class TestOperatorBatches
         I64Vector rightPayload = (I64Vector) batch.output(5).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(leftIds.values(), rowCount)).containsExactly(1L, 1L);
-        assertThat(leftNames.utf8Value(0)).isEqualTo("alpha");
-        assertThat(leftNames.utf8Value(1)).isEqualTo("beta");
+        assertThat(utf8(leftNames, 0)).isEqualTo("alpha");
+        assertThat(utf8(leftNames, 1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
         assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
     }
@@ -1333,6 +1411,11 @@ public class TestOperatorBatches
         {
             return nextCount;
         }
+    }
+
+    private static String utf8(BinaryVector vector, int position)
+    {
+        return new String(vector.copyBytes(position), UTF_8);
     }
 
     private static final class LazyNonRetainedOuterOperator

@@ -129,6 +129,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case LongKey other -> value == other.value();
                 case LongProbeKey other -> value == other.value;
@@ -171,6 +174,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case BooleanKey other -> value == other.value();
                 case BooleanProbeKey other -> value == other.value;
@@ -213,6 +219,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case DoubleKey other -> bits == other.bits();
                 case DoubleProbeKey other -> bits == other.bits;
@@ -247,6 +256,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case BinaryKey other -> Arrays.equals(bytes, other.bytes);
                 case BinaryProbeKey other -> OperatorVectorSupport.binaryEquals(other.values(), other.position(), bytes);
@@ -293,6 +305,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case BinaryKey other -> OperatorVectorSupport.binaryEquals(values, position, other.bytes());
                 case BinaryProbeKey other -> OperatorVectorSupport.binaryEquals(values, position, other.values, other.position);
@@ -320,6 +335,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case CompositeKey other -> Arrays.equals(keys, other.keys);
                 case CompositeProbeKey other -> Arrays.equals(keys, other.keys());
@@ -364,6 +382,9 @@ final class OperatorKeySemantics
         @Override
         public boolean equals(Object object)
         {
+            if (object == null) {
+                return false;
+            }
             return switch (object) {
                 case CompositeKey other -> Arrays.equals(keys, other.keys);
                 case CompositeProbeKey other -> Arrays.equals(keys, other.keys);

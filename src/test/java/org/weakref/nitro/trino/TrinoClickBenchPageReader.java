@@ -31,6 +31,7 @@ import io.trino.spi.connector.SourcePage;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
+import org.apache.parquet.schema.LogicalTypeAnnotation.DecimalLogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
@@ -50,6 +51,7 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.trino.spi.type.DecimalType.createDecimalType;
 import static java.util.Objects.requireNonNull;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
@@ -304,6 +306,10 @@ final class TrinoClickBenchPageReader
 
         private static io.trino.spi.type.Type parquetType(PrimitiveType primitive)
         {
+            if (primitive.getLogicalTypeAnnotation() instanceof DecimalLogicalTypeAnnotation decimal) {
+                checkArgument(decimal.getPrecision() <= 18, "Only short decimals are supported by Trino comparison harness: %s", primitive);
+                return createDecimalType(decimal.getPrecision(), decimal.getScale());
+            }
             return switch (primitive.getPrimitiveTypeName()) {
                 case INT32 -> io.trino.spi.type.IntegerType.INTEGER;
                 case INT64 -> io.trino.spi.type.BigintType.BIGINT;
@@ -341,6 +347,10 @@ final class TrinoClickBenchPageReader
 
     private static io.trino.spi.type.Type parquetType(PrimitiveType primitive)
     {
+        if (primitive.getLogicalTypeAnnotation() instanceof DecimalLogicalTypeAnnotation decimal) {
+            checkArgument(decimal.getPrecision() <= 18, "Only short decimals are supported by Trino comparison harness: %s", primitive);
+            return createDecimalType(decimal.getPrecision(), decimal.getScale());
+        }
         return switch (primitive.getPrimitiveTypeName()) {
             case INT32 -> io.trino.spi.type.IntegerType.INTEGER;
             case INT64 -> io.trino.spi.type.BigintType.BIGINT;

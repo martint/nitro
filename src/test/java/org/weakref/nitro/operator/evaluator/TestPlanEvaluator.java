@@ -55,6 +55,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry;
 
@@ -269,7 +270,7 @@ public class TestPlanEvaluator
         assertThat(((BooleanVector) lengths.get(Stream.NULLS)).values()).containsExactly(false, true);
 
         Streams projectedInput = evaluator.evaluate(new Reference(new Input(0), Stream.VALUES), Mask.all(2));
-        assertThat(((BinaryVector) projectedInput.get(Stream.VALUES)).utf8Value(0)).isEqualTo("alpha");
+        assertThat(utf8((BinaryVector) projectedInput.get(Stream.VALUES), 0)).isEqualTo("alpha");
         assertThat(((BooleanVector) projectedInput.get(Stream.NULLS)).values()).containsExactly(false, true);
     }
 
@@ -345,9 +346,9 @@ public class TestPlanEvaluator
         DictionaryVector hosts = (DictionaryVector) result.values();
         assertThat(hosts.ids()).containsExactly(0, 1, 2, 0);
         BinaryVector extractedValues = (BinaryVector) hosts.values();
-        assertThat(extractedValues.utf8Value(0)).isEqualTo("google.com");
-        assertThat(extractedValues.utf8Value(1)).isEqualTo("news.ycombinator.com");
-        assertThat(extractedValues.utf8Value(2)).isEqualTo("google.com");
+        assertThat(utf8(extractedValues, 0)).isEqualTo("google.com");
+        assertThat(utf8(extractedValues, 1)).isEqualTo("news.ycombinator.com");
+        assertThat(utf8(extractedValues, 2)).isEqualTo("google.com");
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
     }
@@ -391,10 +392,10 @@ public class TestPlanEvaluator
 
         DictionaryVector hosts = (DictionaryVector) result.values();
         BinaryVector rewrittenValues = (BinaryVector) hosts.values();
-        assertThat(rewrittenValues.utf8Value(hosts.ids()[0])).isEqualTo("google.com");
-        assertThat(rewrittenValues.utf8Value(hosts.ids()[1])).isEqualTo("news.ycombinator.com");
-        assertThat(rewrittenValues.utf8Value(hosts.ids()[2])).isEqualTo("https://example.com");
-        assertThat(rewrittenValues.utf8Value(hosts.ids()[3])).isEqualTo("mailto:test@example.com");
+        assertThat(utf8(rewrittenValues, hosts.ids()[0])).isEqualTo("google.com");
+        assertThat(utf8(rewrittenValues, hosts.ids()[1])).isEqualTo("news.ycombinator.com");
+        assertThat(utf8(rewrittenValues, hosts.ids()[2])).isEqualTo("https://example.com");
+        assertThat(utf8(rewrittenValues, hosts.ids()[3])).isEqualTo("mailto:test@example.com");
     }
 
     @Test
@@ -432,8 +433,8 @@ public class TestPlanEvaluator
         BinaryVector values = (BinaryVector) result.get(Stream.VALUES);
         BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
 
-        assertThat(values.utf8Value(0)).isEqualTo("alice");
-        assertThat(values.utf8Value(3)).isEqualTo("carol");
+        assertThat(utf8(values, 0)).isEqualTo("alice");
+        assertThat(utf8(values, 3)).isEqualTo("carol");
         assertThat(nulls.values()).containsExactly(false, true, true, false);
     }
 
@@ -707,9 +708,9 @@ public class TestPlanEvaluator
         BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
 
         assertThat(arrays.offsets()).containsExactly(0, 0, 1, 1, 3);
-        assertThat(keys.utf8Value(0)).isEqualTo("gamma");
-        assertThat(keys.utf8Value(1)).isEqualTo("delta");
-        assertThat(keys.utf8Value(2)).isEqualTo("epsilon");
+        assertThat(utf8(keys, 0)).isEqualTo("gamma");
+        assertThat(utf8(keys, 1)).isEqualTo("delta");
+        assertThat(utf8(keys, 2)).isEqualTo("epsilon");
         assertThat(nulls.values()).containsExactly(false, true, false, false);
     }
 
@@ -1970,5 +1971,10 @@ public class TestPlanEvaluator
         BooleanVector valueNulls = new BooleanVector(new boolean[] {false, false, true, false, false});
         maps.setEntries(Streams.ofValues(keys), Streams.ofValues(values).with(Stream.NULLS, valueNulls));
         return maps;
+    }
+
+    private static String utf8(BinaryVector vector, int position)
+    {
+        return new String(vector.copyBytes(position), UTF_8);
     }
 }

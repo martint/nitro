@@ -81,7 +81,13 @@ public final class MapKeys
         DictionaryVector existing = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector vector ? vector : null;
         int[] ids = existing != null ? existing.ids() : new int[requiredLength];
         System.arraycopy(dictionary.ids(), 0, ids, 0, dictionary.length());
-        return context.allocator().allocateDictionary(ALLOCATION_CONTEXT, ids, arrayKeys(maps, null, context, Mask.all(maps.length()), maps.length()));
+        Mask allEntries = context.allocator().allocateAllMask(ALLOCATION_CONTEXT, maps.length());
+        try {
+            return context.allocator().allocateDictionary(ALLOCATION_CONTEXT, ids, arrayKeys(maps, null, context, allEntries, maps.length()));
+        }
+        finally {
+            context.allocator().release(ALLOCATION_CONTEXT, allEntries);
+        }
     }
 
     private static ArrayVector arrayKeys(MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)

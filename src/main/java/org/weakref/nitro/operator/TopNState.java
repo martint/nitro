@@ -31,6 +31,8 @@ import java.util.Set;
 
 final class TopNState
 {
+    private final Allocator allocator;
+    private final Allocator.Context allocationContext;
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
     private final boolean[] orderingColumnFlags;
@@ -49,6 +51,8 @@ final class TopNState
     @SuppressWarnings("unchecked")
     TopNState(int[] orderingColumns, boolean[] descendingByColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
     {
+        this.allocator = allocator;
+        this.allocationContext = allocationContext;
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
         this.orderingColumnFlags = new boolean[outputCount];
@@ -187,7 +191,7 @@ final class TopNState
     public void setOrderedSlots(List<Integer> orderedSlots)
     {
         this.orderedSlots = orderedSlots;
-        this.outputMask = Mask.all(orderedSlots.size());
+        this.outputMask = allocator.allocateAllMask(allocationContext, orderedSlots.size());
         this.materialized = new Streams[schema.length];
     }
 
@@ -260,7 +264,7 @@ final class TopNState
                     .mapToInt(Integer::intValue)
                     .sorted()
                     .toArray();
-            entry.getKey().constrain(Mask.sparse(positions, entry.getKey().borrowMask().size()));
+            entry.getKey().constrain(allocator.allocateSparseMask(allocationContext, positions, entry.getKey().borrowMask().size()));
         }
     }
 

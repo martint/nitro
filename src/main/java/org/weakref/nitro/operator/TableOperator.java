@@ -65,7 +65,7 @@ public class TableOperator
     @Override
     public boolean supportsRetainedBatches()
     {
-        return true;
+        return false;
     }
 
     @Override

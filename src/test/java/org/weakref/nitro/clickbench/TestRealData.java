@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.nio.file.Path;
 import java.util.List;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -591,7 +592,7 @@ public class TestRealData
     private static String binaryValue(Object vector, int position)
     {
         return switch (vector) {
-            case BinaryVector typed -> typed.utf8Value(position);
+            case BinaryVector typed -> new String(typed.copyBytes(position), UTF_8);
             case DictionaryVector typed -> binaryValue(typed.values(), typed.ids()[position]);
             case RleVector typed -> binaryValue(typed.values(), typed.runIndex(position));
             default -> throw new AssertionError("Expected binary vector but got " + vector.getClass().getSimpleName());

@@ -491,6 +491,9 @@ execution buffers, not disposable values.
 ### Principles
 
 - Masks should be reusable across batches where possible.
+- Operator and evaluator code should allocate masks through `Allocator` when a
+  context is available, rather than calling `Mask.all(...)`, `Mask.range(...)`,
+  or `Mask.sparse(...)` directly.
 - Derived masks should prefer writing into owned output buffers rather than
   allocating fresh arrays for every set operation.
 - Mask operations should continue to support sparse and dense-friendly

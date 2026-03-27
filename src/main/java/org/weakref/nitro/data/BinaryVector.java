@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.data;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -208,11 +207,6 @@ public final class BinaryVector
     public byte[] copyBytes(int position)
     {
         return Arrays.copyOfRange(data, startOffset(position), endOffset(position));
-    }
-
-    public String utf8Value(int position)
-    {
-        return new String(data, startOffset(position), length(position), StandardCharsets.UTF_8);
     }
 
     public void setBytes(int position, byte[] source)

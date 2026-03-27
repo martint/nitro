@@ -80,7 +80,7 @@ final class GroupingState
 
     public boolean contains(Vector values, BooleanVector nulls, int position)
     {
-        initializeIfNecessary(new Vector[] {values});
+        initializeIfNecessary(new Vector[] {values}, new BooleanVector[] {nulls});
         if (OperatorVectorSupport.isNull(nulls, position)) {
             return false;
         }
@@ -98,7 +98,7 @@ final class GroupingState
     @SuppressWarnings("unchecked")
     public void assignGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
     {
-        initializeIfNecessary(values);
+        initializeIfNecessary(values, nulls);
         if (useLongGrouping) {
             assignLongGroups(values[0], nulls[0], mask, result);
             return;
@@ -126,20 +126,14 @@ final class GroupingState
 
         OperatorKeySemantics.Key[] probeKeys = new OperatorKeySemantics.Key[values.length];
         for (int position : mask) {
-            boolean hasNull = false;
             for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
-                OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
-                if (key == null) {
-                    hasNull = true;
-                    break;
-                }
-                probeKeys[keyIndex] = key;
+                probeKeys[keyIndex] = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
             }
-            result.values()[position] = hasNull ? nullGroup() : groupForKeys(probeKeys);
+            result.values()[position] = groupForKeys(probeKeys);
         }
     }
 
-    private void initializeIfNecessary(Vector[] values)
+    private void initializeIfNecessary(Vector[] values, BooleanVector[] nulls)
     {
         if (initialized) {
             return;
@@ -157,12 +151,13 @@ final class GroupingState
             useLongGrouping = true;
             return;
         }
-        if (values.length == 2 && isSingleLongGroupingCandidate(values[0]) && isSingleLongGroupingCandidate(values[1])) {
+        boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
+        if (!nullableCompositeKeys && values.length == 2 && isSingleLongGroupingCandidate(values[0]) && isSingleLongGroupingCandidate(values[1])) {
             useLongPairGrouping = true;
             longPairGroupingTable = new LongPairGroupingTable(Math.max(16, values[0].length()));
             return;
         }
-        if (values.length == 3 &&
+        if (!nullableCompositeKeys && values.length == 3 &&
                 isSingleLongGroupingCandidate(values[0]) &&
                 isSingleLongGroupingCandidate(values[1]) &&
                 isSingleLongGroupingCandidate(values[2])) {
@@ -170,7 +165,7 @@ final class GroupingState
             longTripleGroupingTable = new LongTripleGroupingTable(Math.max(16, values[0].length()));
             return;
         }
-        if (values.length == 4 &&
+        if (!nullableCompositeKeys && values.length == 4 &&
                 isSingleLongGroupingCandidate(values[0]) &&
                 isSingleLongGroupingCandidate(values[1]) &&
                 isSingleLongGroupingCandidate(values[2]) &&
@@ -180,7 +175,7 @@ final class GroupingState
             return;
         }
 
-        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values);
+        FlatKeyLayout flatKeyLayout = nullableCompositeKeys ? null : FlatKeyLayout.tryCreate(values);
         if (flatKeyLayout != null) {
             useFlatGrouping = true;
             flatGroupingTable = new FlatGroupingTable(flatKeyLayout, Math.max(16, values[0].length()));
@@ -489,6 +484,23 @@ final class GroupingState
             return groupForSingleKey(probeKeys[0]);
         }
 
+        if (containsNullKey(probeKeys)) {
+            OperatorKeySemantics.Key[] ownedKeys = new OperatorKeySemantics.Key[probeKeys.length];
+            for (int index = 0; index < probeKeys.length; index++) {
+                ownedKeys[index] = OperatorKeySemantics.ownedKey(probeKeys[index]);
+            }
+            OperatorKeySemantics.CompositeKey compositeKey = new OperatorKeySemantics.CompositeKey(ownedKeys);
+            long group = groups.getLong(compositeKey);
+            if (group != -1) {
+                return group;
+            }
+            for (int index = 0; index < probeKeys.length; index++) {
+                keysByGroupColumns.get(index).add(ownedKeys[index]);
+            }
+            groups.put(compositeKey, nextGroupId);
+            return nextGroupId++;
+        }
+
         OperatorKeySemantics.Key compositeKey = OperatorKeySemantics.probeCompositeKey(probeKeys, reusableCompositeProbeKey);
         long group = groups.getLong(compositeKey);
         if (group != -1) {
@@ -534,6 +546,26 @@ final class GroupingState
     {
         for (BooleanVector nullVector : nulls) {
             if (OperatorVectorSupport.isNull(nullVector, position)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasNullableKeys(BooleanVector[] nulls)
+    {
+        for (BooleanVector nullVector : nulls) {
+            if (nullVector != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsNullKey(OperatorKeySemantics.Key[] keys)
+    {
+        for (OperatorKeySemantics.Key key : keys) {
+            if (key == null) {
                 return true;
             }
         }

@@ -27,13 +27,11 @@ import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static java.lang.Math.toIntExact;
 
 @ScalarFunction(name = "substring_utf8")
 public final class SubstringUtf8
@@ -152,27 +150,11 @@ public final class SubstringUtf8
 
     private static byte[] substringValue(Vector values, Vector startValues, Vector lengthValues, int position)
     {
-        String value = utf8Value(values, position);
         long start = longValue(startValues, position);
-        long length = longValue(lengthValues, position);
-        if (length <= 0) {
-            return new byte[0];
-        }
-
-        int beginIndex = Math.max(0, toIntExact(start - 1));
-        if (beginIndex >= value.length()) {
-            return new byte[0];
-        }
-        int endIndex = Math.min(value.length(), beginIndex + toIntExact(length));
-        return value.substring(beginIndex, endIndex).getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static String utf8Value(Vector values, int position)
-    {
         return switch (values) {
-            case BinaryVector vector -> vector.utf8Value(position);
-            case DictionaryVector vector -> utf8Value(vector.values(), vector.ids()[position]);
-            case RleVector vector -> utf8Value(vector.values(), vector.runIndex(position));
+            case BinaryVector vector -> Utf8Support.substring(vector, position, start, longValue(lengthValues, position));
+            case DictionaryVector vector -> substringValue(vector.values(), startValues, lengthValues, vector.ids()[position]);
+            case RleVector vector -> substringValue(vector.values(), startValues, lengthValues, vector.runIndex(position));
             default -> throw new IllegalArgumentException("Unsupported substring_utf8 vector type: " + values.getClass().getSimpleName());
         };
     }

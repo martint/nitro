@@ -148,6 +148,76 @@ public final class TrinoTpcdsParquetSupport
                 List.of(VARCHAR));
     }
 
+    public MaterializedResult query45(TpcdsParquetTables tables)
+    {
+        List<String> columns = List.of("ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price");
+        List<Type> factTypes = tableColumnTypes(tables, "web_sales", columns);
+        List<Type> afterCustomerTypes = concatTypes(factTypes, List.of(BIGINT, BIGINT));
+        List<Type> afterAddressTypes = concatTypes(afterCustomerTypes, List.of(BIGINT, VARCHAR, VARCHAR));
+        List<Type> afterDateTypes = concatTypes(afterAddressTypes, List.of(BIGINT));
+        List<Type> afterItemTypes = concatTypes(afterDateTypes, List.of(BIGINT, VARCHAR));
+        List<Type> afterSemiJoinTypes = concatTypes(afterItemTypes, List.of(BOOLEAN));
+        List<Type> filteredTypes = List.of(factTypes.get(3), VARCHAR, VARCHAR);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(factTypes.get(3)));
+
+        List<Page> customerRows = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_current_addr_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, BIGINT)),
+                List.of(BIGINT, BIGINT));
+        List<Page> addressRows = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_city", "ca_zip"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR), field(2, VARCHAR)),
+                List.of(BIGINT, VARCHAR, VARCHAR));
+        List<Page> allowedDates = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_qoy", "d_year"),
+                Optional.of(and(equal(1, 2, INTEGER), equal(2, 2001, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> itemRows = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_item_id"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(hashJoinStep(new HashJoinSpec(45_0, factTypes, List.of(2), customerRows, List.of(BIGINT, BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(45_1, afterCustomerTypes, List.of(5), addressRows, List.of(BIGINT, VARCHAR, VARCHAR), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(45_2, afterAddressTypes, List.of(1), allowedDates, List.of(BIGINT), List.of(0))));
+        steps.add(hashJoinStep(new HashJoinSpec(45_3, afterDateTypes, List.of(0), itemRows, List.of(BIGINT, VARCHAR), List.of(0))));
+        steps.add(semiJoinStep(new SemiJoinSpec(
+                45_4,
+                afterItemTypes,
+                11,
+                Optional.empty(),
+                tables.tableFiles("item"),
+                List.of("i_item_sk", "i_item_id"),
+                List.of(factoryStep(filterAndProjectFactory(
+                        45_5,
+                        Optional.of(query45ItemPredicate()),
+                        List.of(field(1, VARCHAR)),
+                        List.of(VARCHAR)))),
+                List.of(VARCHAR),
+                0)));
+        steps.add(factoryStep(filterAndProjectFactory(
+                45_6,
+                Optional.of(query45FilterPredicate()),
+                List.of(field(3, factTypes.get(3)), field(7, VARCHAR), field(8, VARCHAR)),
+                filteredTypes)));
+        steps.add(factoryStep(hashAggregationFactory(45_7, List.of(VARCHAR, VARCHAR), List.of(2, 1), salesSum.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()))));
+        steps.add(factoryStep(topNFactory(45_8, List.of(VARCHAR, VARCHAR, salesSum.getFinalType()), 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))));
+        return executePipeline(tables.tableFiles("web_sales"), columns, steps, List.of(VARCHAR, VARCHAR, salesSum.getFinalType()));
+    }
+
     public MaterializedResult query62(TpcdsParquetTables tables)
     {
         List<String> columns = List.of("ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk", "ws_ship_mode_sk", "ws_web_site_sk");
@@ -1352,6 +1422,11 @@ public final class TrinoTpcdsParquetSupport
 
     private static RowExpression varcharAnyOf(int inputChannel, Set<String> values)
     {
+        return varcharAnyOf(field(inputChannel, VARCHAR), values);
+    }
+
+    private static RowExpression varcharAnyOf(RowExpression value, Set<String> values)
+    {
         if (values.isEmpty()) {
             throw new IllegalArgumentException("values is empty");
         }
@@ -1360,9 +1435,9 @@ public final class TrinoTpcdsParquetSupport
                 .sorted()
                 .toList();
 
-        RowExpression result = equal(inputChannel, VARCHAR, sortedValues.getFirst());
+        RowExpression result = equal(value, constant(Slices.utf8Slice(sortedValues.getFirst()), VARCHAR), VARCHAR);
         for (int index = 1; index < sortedValues.size(); index++) {
-            result = or(result, equal(inputChannel, VARCHAR, sortedValues.get(index)));
+            result = or(result, equal(value, constant(Slices.utf8Slice(sortedValues.get(index)), VARCHAR), VARCHAR));
         }
         return result;
     }
@@ -1429,6 +1504,28 @@ public final class TrinoTpcdsParquetSupport
         return new CallExpression(
                 FUNCTION_RESOLUTION.resolveFunction("substring", fromTypes(VARCHAR, BIGINT, BIGINT)),
                 List.of(value, constant(start, BIGINT), constant(length, BIGINT)));
+    }
+
+    private static RowExpression query45ItemPredicate()
+    {
+        return or(
+                equal(0, 2, BIGINT),
+                equal(0, 3, BIGINT),
+                equal(0, 5, BIGINT),
+                equal(0, 7, BIGINT),
+                equal(0, 11, BIGINT),
+                equal(0, 13, BIGINT),
+                equal(0, 17, BIGINT),
+                equal(0, 19, BIGINT),
+                equal(0, 23, BIGINT),
+                equal(0, 29, BIGINT));
+    }
+
+    private static RowExpression query45FilterPredicate()
+    {
+        return or(
+                varcharAnyOf(substring(field(8, VARCHAR), 1, 5), Set.of("80348", "81792", "83405", "85392", "85460", "85669", "86197", "86475", "88274")),
+                field(12, BOOLEAN));
     }
 
     private static RowExpression greaterThan(RowExpression left, RowExpression right, Type type)

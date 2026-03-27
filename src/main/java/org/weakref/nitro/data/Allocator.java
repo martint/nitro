@@ -616,6 +616,15 @@ public class Allocator
         return copied.build();
     }
 
+    public Streams copyStreams(Context context, Streams streams, Mask mask)
+    {
+        Streams.Builder copied = Streams.builder();
+        for (Map.Entry<org.weakref.nitro.operator.evaluator.ir.Stream, Vector> entry : streams.asMap().entrySet()) {
+            copied.put(entry.getKey(), copyVector(context, entry.getValue(), mask));
+        }
+        return copied.build();
+    }
+
     public Vector copyVector(Context context, Vector vector)
     {
         return vector.copy(this, context);
@@ -624,6 +633,25 @@ public class Allocator
     public Vector copyVector(Context context, Vector vector, int[] positions)
     {
         return vector.copy(this, context, positions);
+    }
+
+    public Vector copyVector(Context context, Vector vector, Mask mask)
+    {
+        if (mask.none()) {
+            return vector.emptyLike(this, context);
+        }
+        if (mask.all() && mask.selectedCount() == vector.length()) {
+            return vector.copy(this, context);
+        }
+
+        Vector copy = null;
+        int outputPosition = 0;
+        int outputSize = mask.selectedCount();
+        for (int sourcePosition : mask) {
+            copy = vector.copySinglePositionInto(this, context, copy, sourcePosition, outputPosition, outputSize);
+            outputPosition++;
+        }
+        return copy == null ? vector.emptyLike(this, context) : copy;
     }
 
     private void transferMask(Mask mask, Context preferredContext)

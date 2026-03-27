@@ -20,6 +20,8 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.Arrays;
+import java.util.Set;
 import java.util.function.Function;
 
 public class SemiJoinOperator
@@ -33,6 +35,7 @@ public class SemiJoinOperator
     private final int innerJoinColumn;
     private final Allocator allocator;
     private final boolean includeMatches;
+    private final boolean outputMatches;
     private final GroupingState membership = new GroupingState();
 
     private boolean loaded;
@@ -46,18 +49,24 @@ public class SemiJoinOperator
 
     public SemiJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn, boolean includeMatches)
     {
+        this(allocator, outer, outerJoinColumn, inner, innerJoinColumn, includeMatches, false);
+    }
+
+    public SemiJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn, boolean includeMatches, boolean outputMatches)
+    {
         this.outer = outer;
         this.inner = inner;
         this.outerJoinColumn = outerJoinColumn;
         this.innerJoinColumn = innerJoinColumn;
         this.allocator = allocator;
         this.includeMatches = includeMatches;
+        this.outputMatches = outputMatches;
     }
 
     @Override
     public int outputCount()
     {
-        return outer.outputCount();
+        return outer.outputCount() + (outputMatches ? 1 : 0);
     }
 
     @Override
@@ -76,13 +85,16 @@ public class SemiJoinOperator
         BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
         currentBatchState = batchState;
 
-        Mask batchMask = selectRows(sourceBatch);
-        outer.constrain(batchMask);
-        sourceBatch.constrain(batchMask);
-        batchState.constrain(batchMask);
+        Mask batchMask = sourceBatch.borrowMask();
+        if (!outputMatches) {
+            batchMask = selectRows(sourceBatch);
+            outer.constrain(batchMask);
+            sourceBatch.constrain(batchMask);
+            batchState.constrain(batchMask);
+        }
 
         Output[] outputs = new Output[outputCount()];
-        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+        for (int outputIndex = 0; outputIndex < outer.outputCount(); outputIndex++) {
             Output sourceOutput = sourceBatch.output(outputIndex);
             outputs[outputIndex] = new Output(
                     sourceOutput.streams(),
@@ -90,6 +102,24 @@ public class SemiJoinOperator
                     (stream, vector) -> sourceOutput.take(stream),
                     (_, _) -> {},
                     sourceOutput::copySinglePosition);
+        }
+        if (outputMatches) {
+            outputs[outer.outputCount()] = new Output(
+                    Set.of(Stream.VALUES),
+                    stream -> {
+                        if (stream != Stream.VALUES) {
+                            throw new IllegalArgumentException("Unsupported stream: " + stream);
+                        }
+                        return batchState.borrowMatchValues(this);
+                    },
+                    (stream, vector) -> vector,
+                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector),
+                    (existing, sourcePosition, outputPosition, size) -> {
+                        BooleanVector matchValues = batchState.borrowMatchValues(this);
+                        BooleanVector outputValues = allocator.allocateOrGrow(ALLOCATION_CONTEXT, existing == null ? null : (BooleanVector) existing.getOrNull(Stream.VALUES), BooleanVector.class, size, BooleanVector::new);
+                        outputValues.values()[outputPosition] = matchValues.values()[sourcePosition];
+                        return Streams.ofValues(outputValues);
+                    });
         }
         return new Batch(
                 batchMask,
@@ -190,17 +220,59 @@ public class SemiJoinOperator
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, positions, selectedCount, sourceMask.size());
     }
 
-    private record BatchState(Batch sourceBatch, Mask[] maskHolder)
+    private BooleanVector computeMatchValues(BatchState batchState)
     {
+        Mask mask = batchState.mask();
+        BooleanVector matchValues = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask.size(), BooleanVector::new);
+        Arrays.fill(matchValues.values(), false);
+
+        if (mask.none()) {
+            return matchValues;
+        }
+
+        Output output = batchState.sourceBatch().output(outerJoinColumn);
+        Vector values = output.borrow(Stream.VALUES);
+        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        for (int position : mask) {
+            matchValues.values()[position] = membership.contains(values, nulls, position);
+        }
+        return matchValues;
+    }
+
+    private static final class BatchState
+    {
+        private final Batch sourceBatch;
+        private final Mask[] maskHolder;
+        private BooleanVector matchValues;
+
         private BatchState(Batch sourceBatch, Mask mask)
         {
-            this(sourceBatch, new Mask[] {mask});
+            this.sourceBatch = sourceBatch;
+            this.maskHolder = new Mask[] {mask};
         }
 
         private void constrain(Mask mask)
         {
             maskHolder[0] = mask;
             sourceBatch.constrain(mask);
+        }
+
+        private Batch sourceBatch()
+        {
+            return sourceBatch;
+        }
+
+        private Mask mask()
+        {
+            return maskHolder[0];
+        }
+
+        private BooleanVector borrowMatchValues(SemiJoinOperator operator)
+        {
+            if (matchValues == null) {
+                matchValues = operator.computeMatchValues(this);
+            }
+            return matchValues;
         }
     }
 }

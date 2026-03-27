@@ -258,9 +258,9 @@ public class TestBatchRuntime
 
         BinaryVector copy = (BinaryVector) values.copyMasked(allocator, context, null, Mask.sparse(new int[] {1, 3, 4}, 5));
 
-        assertThat(copy.utf8Value(1)).isEqualTo("one");
-        assertThat(copy.utf8Value(3)).isEqualTo("three");
-        assertThat(copy.utf8Value(4)).isEqualTo("four");
+        assertThat(copy.copyBytes(1)).isEqualTo("one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(copy.copyBytes(3)).isEqualTo("three".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(copy.copyBytes(4)).isEqualTo("four".getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Test

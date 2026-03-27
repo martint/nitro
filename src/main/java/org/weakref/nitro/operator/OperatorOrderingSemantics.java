@@ -32,7 +32,7 @@ final class OperatorOrderingSemantics
             if (leftNull == rightNull) {
                 return 0;
             }
-            return leftNull ? -1 : 1;
+            return leftNull ? 1 : -1;
         }
 
         Vector left = OperatorVectorSupport.flatten(leftValues);

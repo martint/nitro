@@ -77,6 +77,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
@@ -297,9 +298,9 @@ public class TestOperators
                                 row(false, "wrong-again", "false-branch"))))) {
             try (Batch batch = operator.next()) {
                 BinaryVector values = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
-                assertThat(values.utf8Value(0)).isEqualTo("left");
-                assertThat(values.utf8Value(1)).isEqualTo("fallback");
-                assertThat(values.utf8Value(2)).isEqualTo("false-branch");
+                assertThat(new String(values.copyBytes(0), UTF_8)).isEqualTo("left");
+                assertThat(new String(values.copyBytes(1), UTF_8)).isEqualTo("fallback");
+                assertThat(new String(values.copyBytes(2), UTF_8)).isEqualTo("false-branch");
             }
         }
     }

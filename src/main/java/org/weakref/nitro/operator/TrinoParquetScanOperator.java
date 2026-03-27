@@ -36,6 +36,7 @@ import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.block.VariableWidthBlock;
 import io.trino.spi.connector.SourcePage;
 import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.schema.LogicalTypeAnnotation.DecimalLogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
@@ -68,6 +69,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.trino.spi.type.DecimalType.createDecimalType;
 import static java.util.Objects.requireNonNull;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
@@ -334,18 +336,29 @@ public final class TrinoParquetScanOperator
 
                 PrimitiveType primitive = field.asPrimitiveType();
                 ColumnDescriptor descriptor = requireNonNull(descriptorsByPath.get(List.of(field.getName())), "descriptor is null for " + name);
-                ColumnKind kind = switch (primitive.getPrimitiveTypeName()) {
-                    case INT32 -> ColumnKind.I32;
-                    case INT64 -> ColumnKind.I64;
-                    case BOOLEAN -> ColumnKind.BOOLEAN;
-                    case BINARY, FIXED_LEN_BYTE_ARRAY -> ColumnKind.BINARY;
-                    default -> throw new IllegalArgumentException("Unsupported Trino Parquet primitive type for column %s: %s".formatted(name, primitive.getPrimitiveTypeName()));
-                };
+                ColumnKind kind;
+                io.trino.spi.type.Type trinoType;
+                if (primitive.getLogicalTypeAnnotation() instanceof DecimalLogicalTypeAnnotation decimal) {
+                    checkArgument(decimal.getPrecision() <= 18, "Only short decimals are supported by TrinoParquetScanOperator: %s", primitive);
+                    kind = ColumnKind.SHORT_DECIMAL;
+                    trinoType = createDecimalType(decimal.getPrecision(), decimal.getScale());
+                }
+                else {
+                    kind = switch (primitive.getPrimitiveTypeName()) {
+                        case INT32 -> ColumnKind.I32;
+                        case INT64 -> ColumnKind.I64;
+                        case BOOLEAN -> ColumnKind.BOOLEAN;
+                        case BINARY, FIXED_LEN_BYTE_ARRAY -> ColumnKind.BINARY;
+                        default -> throw new IllegalArgumentException("Unsupported Trino Parquet primitive type for column %s: %s".formatted(name, primitive.getPrimitiveTypeName()));
+                    };
+                    trinoType = kind.trinoType();
+                }
 
-                PrimitiveField primitiveField = new PrimitiveField(kind.trinoType(), field.getRepetition() == REQUIRED, descriptor, columnIndex);
+                PrimitiveField primitiveField = new PrimitiveField(trinoType, field.getRepetition() == REQUIRED, descriptor, columnIndex);
                 resolvedColumns.add(new ColumnSpec(
                         name,
                         kind,
+                        trinoType,
                         field.getRepetition() != REQUIRED,
                         binaryTraits(primitive),
                         new Column(name, primitiveField)));
@@ -385,9 +398,19 @@ public final class TrinoParquetScanOperator
 
         private ColumnBuffer readFullColumn(ColumnSpec column, Block block)
         {
+            Mask fullMask = allocator.allocateAllMask(ALLOCATION_CONTEXT, block.getPositionCount());
+            BooleanVector nulls = null;
+            try {
+                if (column.nullable()) {
+                    nulls = copyNulls(block, fullMask);
+                }
+            }
+            finally {
+                allocator.release(ALLOCATION_CONTEXT, fullMask);
+            }
             return new ColumnBuffer(
                     convertValues(column, block, true),
-                    column.nullable() ? copyNulls(block, Mask.all(block.getPositionCount())) : null);
+                    nulls);
         }
 
         private ColumnBuffer readMaskedColumn(ColumnSpec column, Block block, Mask mask)
@@ -425,6 +448,7 @@ public final class TrinoParquetScanOperator
         return switch (column.kind()) {
             case I32 -> copyI32(block);
             case I64 -> copyI64(block);
+            case SHORT_DECIMAL -> copyI64(block);
             case BOOLEAN -> copyBoolean(block);
             case BINARY -> copyBinary(column, block);
         };
@@ -435,6 +459,7 @@ public final class TrinoParquetScanOperator
         return switch (column.kind()) {
             case I32 -> copyMaskedI32(block, mask);
             case I64 -> copyMaskedI64(block, mask);
+            case SHORT_DECIMAL -> copyMaskedI64(block, mask);
             case BOOLEAN -> copyMaskedBoolean(block, mask);
             case BINARY -> copyMaskedBinary(column, block, mask);
         };
@@ -688,6 +713,7 @@ public final class TrinoParquetScanOperator
     private static long readLong(Block block, int position)
     {
         return switch (block) {
+            case IntArrayBlock intArrayBlock -> intArrayBlock.getInt(position);
             case LongArrayBlock longArrayBlock -> longArrayBlock.getLong(position);
             case DictionaryBlock dictionaryBlock -> readLong(dictionaryBlock.getDictionary(), dictionaryBlock.getId(position));
             case RunLengthEncodedBlock runLengthEncodedBlock -> readLong(runLengthEncodedBlock.getValue(), 0);
@@ -857,6 +883,7 @@ public final class TrinoParquetScanOperator
     {
         I32(io.trino.spi.type.IntegerType.INTEGER),
         I64(io.trino.spi.type.BigintType.BIGINT),
+        SHORT_DECIMAL(io.trino.spi.type.BigintType.BIGINT),
         BOOLEAN(io.trino.spi.type.BooleanType.BOOLEAN),
         BINARY(io.trino.spi.type.VarbinaryType.VARBINARY);
 
@@ -873,7 +900,7 @@ public final class TrinoParquetScanOperator
         }
     }
 
-    private record ColumnSpec(String name, ColumnKind kind, boolean nullable, Set<BinaryVector.Trait> binaryTraits, Column column)
+    private record ColumnSpec(String name, ColumnKind kind, io.trino.spi.type.Type trinoType, boolean nullable, Set<BinaryVector.Trait> binaryTraits, Column column)
     {
         private ColumnSpec
         {
