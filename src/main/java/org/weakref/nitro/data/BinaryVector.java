@@ -303,7 +303,7 @@ public final class BinaryVector
     {
         int byteCapacity = 0;
         if (existing instanceof BinaryVector output && outputStart > 0) {
-            byteCapacity = output.offsets()[outputStart];
+            byteCapacity = prepareWriteOffset(output, outputStart);
         }
         for (int index = 0; index < sourceCount; index++) {
             byteCapacity += length(sourcePositions[index]);
@@ -316,7 +316,7 @@ public final class BinaryVector
         }
         target.addTraits(traits);
 
-        int currentOffset = target.offsets()[outputStart];
+        int currentOffset = prepareWriteOffset(target, outputStart);
         for (int index = 0; index < sourceCount; index++) {
             int targetPosition = outputStart + index;
             target.offsets()[targetPosition] = currentOffset;
@@ -338,7 +338,7 @@ public final class BinaryVector
     {
         int byteCapacity = length(sourcePosition);
         if (existing instanceof BinaryVector output && outputPosition > 0) {
-            byteCapacity += output.offsets()[outputPosition];
+            byteCapacity += prepareWriteOffset(output, outputPosition);
         }
 
         BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, size, byteCapacity);
@@ -348,8 +348,7 @@ public final class BinaryVector
         }
         target.addTraits(traits);
 
-        int currentOffset = target.offsets()[outputPosition];
-        target.offsets()[outputPosition] = currentOffset;
+        int currentOffset = prepareWriteOffset(target, outputPosition);
         int valueLength = length(sourcePosition);
         if (valueLength == 0) {
             target.setNull(outputPosition);
@@ -358,6 +357,24 @@ public final class BinaryVector
             target.setBytes(outputPosition, data, startOffset(sourcePosition), valueLength);
         }
         return target;
+    }
+
+    private static int prepareWriteOffset(BinaryVector target, int outputPosition)
+    {
+        if (outputPosition == 0) {
+            return 0;
+        }
+
+        int[] offsets = target.offsets();
+        int search = outputPosition;
+        while (search > 0 && offsets[search] == 0) {
+            search--;
+        }
+        int currentOffset = offsets[search];
+        for (int index = search + 1; index <= outputPosition; index++) {
+            offsets[index] = currentOffset;
+        }
+        return currentOffset;
     }
 
     @Override

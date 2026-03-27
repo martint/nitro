@@ -117,6 +117,12 @@
 
         <dependency>
             <groupId>io.airlift</groupId>
+            <artifactId>http-client</artifactId>
+            <version>386</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
             <artifactId>slice</artifactId>
         </dependency>
 
@@ -183,6 +189,26 @@
 
         <dependency>
             <groupId>io.trino</groupId>
+            <artifactId>trino-hdfs</artifactId>
+            <version>${dep.trino.operator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-hive</artifactId>
+            <version>${dep.trino.operator.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-slf4j-impl</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>io.trino</groupId>
             <artifactId>trino-main</artifactId>
             <version>${dep.trino.operator.version}</version>
             <scope>test</scope>
@@ -208,64 +234,6 @@
             <artifactId>junit</artifactId>
             <version>4.13.2</version>
             <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-common</artifactId>
-            <version>3.4.1</version>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>com.github.pjfanning</groupId>
-                    <artifactId>jersey-json</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>com.sun.jersey</groupId>
-                    <artifactId>jersey-core</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>com.sun.jersey</groupId>
-                    <artifactId>jersey-server</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>com.sun.jersey</groupId>
-                    <artifactId>jersey-servlet</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>javax.activation</groupId>
-                    <artifactId>activation</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>javax.servlet</groupId>
-                    <artifactId>javax.servlet-api</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-mapreduce-client-core</artifactId>
-            <version>3.4.1</version>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>com.github.pjfanning</groupId>
-                    <artifactId>jersey-json</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>javax.servlet</groupId>
-                    <artifactId>javax.servlet-api</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.hadoop</groupId>
-                    <artifactId>hadoop-yarn-client</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.apache.hadoop</groupId>
-                    <artifactId>hadoop-yarn-common</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <dependency>
@@ -341,6 +309,9 @@
             <plugin>
                 <artifactId>maven-dependency-plugin</artifactId>
                 <configuration>
+                    <ignoredUnusedDeclaredDependencies>
+                        <ignoredUnusedDeclaredDependency>io.airlift:http-client</ignoredUnusedDeclaredDependency>
+                    </ignoredUnusedDeclaredDependencies>
                     <ignoredUsedUndeclaredDependencies>
                         <ignoredUsedUndeclaredDependency>org.apache.parquet:parquet-column</ignoredUsedUndeclaredDependency>
                         <ignoredUsedUndeclaredDependency>org.apache.parquet:parquet-common</ignoredUsedUndeclaredDependency>
@@ -369,9 +340,71 @@
                             <groupId>org.slf4j</groupId>
                             <artifactId>log4j-over-slf4j</artifactId>
                         </dependency>
+                        <dependency>
+                            <groupId>io.trino</groupId>
+                            <artifactId>trino-hdfs</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.trino</groupId>
+                            <artifactId>trino-hive</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.grpc</groupId>
+                            <artifactId>grpc-core</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.grpc</groupId>
+                            <artifactId>grpc-inprocess</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.grpc</groupId>
+                            <artifactId>grpc-util</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.netty</groupId>
+                            <artifactId>netty-codec</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.netty</groupId>
+                            <artifactId>netty-codec-base</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>com.squareup.okhttp3</groupId>
+                            <artifactId>okhttp</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>com.squareup.okhttp3</groupId>
+                            <artifactId>okhttp-jvm</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>com.squareup.okio</groupId>
+                            <artifactId>okio</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>com.squareup.okio</groupId>
+                            <artifactId>okio-jvm</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.alluxio</groupId>
+                            <artifactId>alluxio-core-client-fs</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.alluxio</groupId>
+                            <artifactId>alluxio-core-common</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.alluxio</groupId>
+                            <artifactId>alluxio-core-transport</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>com.google.cloud.bigdataoss</groupId>
+                            <artifactId>gcs-connector</artifactId>
+                        </dependency>
                     </ignoredDependencies>
                     <ignoredResourcePatterns>
                         <ignoredResourcePattern>about.html</ignoredResourcePattern>
+                        <ignoredResourcePattern>mime.types</ignoredResourcePattern>
+                        <ignoredResourcePattern>mozilla/public-suffix-list.txt</ignoredResourcePattern>
                         <ignoredResourcePattern>yarn-default.xml</ignoredResourcePattern>
                     </ignoredResourcePatterns>
                 </configuration>

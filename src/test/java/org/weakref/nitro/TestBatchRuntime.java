@@ -264,6 +264,28 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testBinaryVectorCopySinglePositionPreservesSparseOutputOffsets()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("BinaryCopySingleSparse");
+
+        BinaryVector values = new BinaryVector(3, 32);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(2, "gamma".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        BinaryVector copy = null;
+        copy = (BinaryVector) values.copySinglePositionInto(allocator, context, copy, 0, 2, 8);
+        copy = (BinaryVector) values.copySinglePositionInto(allocator, context, copy, 1, 5, 8);
+        copy = (BinaryVector) values.copySinglePositionInto(allocator, context, copy, 2, 7, 8);
+
+        assertThat(new String(copy.copyBytes(2), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("alpha");
+        assertThat(new String(copy.copyBytes(5), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("beta");
+        assertThat(new String(copy.copyBytes(7), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("gamma");
+    }
+
+    @Test
     void testMinUtf8StateVectorRetainedBytesAreCachedIncrementally()
     {
         MinUtf8StateVector state = new MinUtf8StateVector(4);

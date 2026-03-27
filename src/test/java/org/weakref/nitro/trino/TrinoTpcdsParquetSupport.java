@@ -108,6 +108,94 @@ public final class TrinoTpcdsParquetSupport
     private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
     private final int blockedWaitTimeoutSeconds = blockedWaitTimeoutSeconds();
 
+    public MaterializedResult query01(TpcdsParquetTables tables)
+    {
+        return executePagesPipeline(
+                query01CustomerIdsPages(tables),
+                List.of(factoryStep(topNFactory(7, List.of(VARCHAR), 100, List.of(0), List.of(ASC_NULLS_LAST)))),
+                List.of(VARCHAR));
+    }
+
+    private List<Page> query01CustomerIdsPages(TpcdsParquetTables tables)
+    {
+        return executePipelinePages(
+                query01FilteredRowsPages(tables),
+                List.of(factoryStep(filterAndProjectFactory(
+                        6,
+                        Optional.empty(),
+                        List.of(field(5, VARCHAR)),
+                        List.of(VARCHAR)))));
+    }
+
+    private List<Page> query01FilteredRowsPages(TpcdsParquetTables tables)
+    {
+        List<Page> storeTotals = executeStoreTotalsPages(tables);
+        List<Type> afterCustomerTypes = List.of(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR);
+        List<Type> afterStoreTotalsTypes = concatTypes(afterCustomerTypes, List.of(BIGINT, BIGINT, BIGINT));
+
+        return executePipelinePages(
+                query01CustomerJoinedRowsPages(tables),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(5, afterCustomerTypes, List.of(1), storeTotals, List.of(BIGINT, BIGINT, BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                6,
+                                Optional.of(query01ReturnThresholdPredicate()),
+                                identityProjections(afterStoreTotalsTypes),
+                                afterStoreTotalsTypes))));
+    }
+
+    private List<Page> query01CustomerJoinedRowsPages(TpcdsParquetTables tables)
+    {
+        List<Page> customerStoreReturns = query01CustomerStoreReturnsPages(tables);
+        List<Page> tnStores = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_state"),
+                Optional.of(equal(1, VARCHAR, "TN")),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> customers = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_customer_id"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+
+        List<Type> customerStoreReturnTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> afterStoreTypes = concatTypes(customerStoreReturnTypes, List.of(BIGINT));
+        return executePipelinePages(
+                customerStoreReturns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(3, customerStoreReturnTypes, List.of(1), tnStores, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(4, afterStoreTypes, List.of(0), customers, List.of(BIGINT, VARCHAR), List.of(0)))));
+    }
+
+    private List<Page> executeStoreTotalsPages(TpcdsParquetTables tables)
+    {
+        return executePipelinePages(
+                query01CustomerStoreReturnsWithValueCountsPages(tables),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                1,
+                                Optional.empty(),
+                                List.of(
+                                        field(1, BIGINT),
+                                        field(2, BIGINT),
+                                        ifExpression(
+                                                greaterThan(field(3, BIGINT), constant(0L, BIGINT), BIGINT),
+                                                constant(1L, BIGINT),
+                                                constant(0L, BIGINT),
+                                                BIGINT)),
+                                List.of(BIGINT, BIGINT, BIGINT))),
+                        factoryStep(hashAggregationFactory(
+                                2,
+                                List.of(BIGINT),
+                                List.of(0),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
     public MaterializedResult query41(TpcdsParquetTables tables)
     {
         List<Path> itemFiles = tables.tableFiles("item");
@@ -879,6 +967,16 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    private MaterializedResult executePagesPipeline(List<Page> inputPages, List<PipelineStep> steps, List<Type> outputTypes)
+    {
+        List<Page> outputPages = executePipelinePages(inputPages, steps);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(taskContext().getSession(), outputTypes);
+        for (Page page : outputPages) {
+            result.page(page);
+        }
+        return result.build();
+    }
+
     private MaterializedResult executePipeline(List<Path> files, List<String> columns, List<PipelineStep> steps, List<Type> outputTypes)
     {
         List<Page> outputPages = executePipelinePages(files, columns, steps);
@@ -917,6 +1015,37 @@ public final class TrinoTpcdsParquetSupport
                 throw new RuntimeException("Unable to execute Trino TPC-DS parquet pipeline", exception);
             }
         }
+        return outputPages;
+    }
+
+    private List<Page> executePipelinePages(List<Page> inputPages, List<PipelineStep> steps)
+    {
+        List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
+        List<Operator> operators = new ArrayList<>();
+        ValuesOperator.ValuesOperatorFactory sourceFactory = new ValuesOperator.ValuesOperatorFactory(0, new PlanNodeId("values-source"), inputPages);
+        operators.add(sourceFactory.createOperator(driverContext));
+        sourceFactory.noMoreOperators();
+
+        for (PipelineStep step : steps) {
+            OperatorFactory factory = step.createOperatorFactory(taskContext, this);
+            operators.add(factory.createOperator(driverContext));
+            factory.noMoreOperators();
+        }
+
+        operators.add(new PageConsumerOperator(
+                driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                outputPages::add,
+                java.util.function.Function.identity()));
+
+        try (Driver driver = Driver.createDriver(driverContext, operators)) {
+            processDriver(driver, operators);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to execute Trino TPC-DS parquet pages pipeline", exception);
+        }
+
         return outputPages;
     }
 
@@ -1133,7 +1262,53 @@ public final class TrinoTpcdsParquetSupport
                                 operatorIdBase + 1,
                                 Optional.of(greaterThan(field(0, BIGINT), constant(0L, BIGINT), BIGINT)),
                                 List.of(field(0, BIGINT)),
-                                List.of(BIGINT)))));
+                List.of(BIGINT)))));
+    }
+
+    private List<Page> query01CustomerStoreReturnsPages(TpcdsParquetTables tables)
+    {
+        return executePipelinePages(
+                query01CustomerStoreReturnsWithValueCountsPages(tables),
+                List.of(factoryStep(filterAndProjectFactory(
+                        9_1,
+                        Optional.empty(),
+                        List.of(field(0, BIGINT), field(1, BIGINT), field(2, BIGINT)),
+                        List.of(BIGINT, BIGINT, BIGINT)))));
+    }
+
+    private List<Page> query01CustomerStoreReturnsWithValueCountsPages(TpcdsParquetTables tables)
+    {
+        List<Page> year2000DateKeys = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_year"),
+                Optional.of(equal(1, 2000, INTEGER)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        return executePipelinePages(
+                tables.tableFiles("store_returns"),
+                List.of("sr_customer_sk", "sr_store_sk", "sr_return_amt", "sr_returned_date_sk"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(8, List.of(BIGINT, BIGINT, BIGINT, BIGINT), List.of(3), year2000DateKeys, List.of(BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                8_1,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, BIGINT),
+                                        field(1, BIGINT),
+                                        field(2, BIGINT),
+                                        ifExpression(
+                                                new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(field(2, BIGINT)), List.of()),
+                                                constant(0L, BIGINT),
+                                                constant(1L, BIGINT),
+                                                BIGINT)),
+                                List.of(BIGINT, BIGINT, BIGINT, BIGINT))),
+                        factoryStep(hashAggregationFactory(
+                                9,
+                                List.of(BIGINT, BIGINT),
+                                List.of(0, 1),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))));
     }
 
     private List<Type> tableColumnTypes(TpcdsParquetTables tables, String tableName, List<String> columns)
@@ -1528,14 +1703,39 @@ public final class TrinoTpcdsParquetSupport
                 field(12, BOOLEAN));
     }
 
+    private static RowExpression query01ReturnThresholdPredicate()
+    {
+        RowExpression scaledReturn = multiply(
+                multiply(field(8, BIGINT), field(2, BIGINT), BIGINT),
+                constant(5L, BIGINT),
+                BIGINT);
+        RowExpression scaledAverage = multiply(field(7, BIGINT), constant(6L, BIGINT), BIGINT);
+        return greaterThan(scaledReturn, scaledAverage, BIGINT);
+    }
+
     private static RowExpression greaterThan(RowExpression left, RowExpression right, Type type)
     {
         return lessThan(right, left, type);
     }
 
+    private static RowExpression multiply(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression add(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.ADD, List.of(type, type)), List.of(left, right));
+    }
+
     private static RowExpression subtract(RowExpression left, RowExpression right, Type type)
     {
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.SUBTRACT, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression divide(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.DIVIDE, List.of(type, type)), List.of(left, right));
     }
 
     private static RowExpression ifExpression(RowExpression condition, RowExpression whenTrue, RowExpression whenFalse, Type outputType)

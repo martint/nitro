@@ -4,7 +4,7 @@ This note captures what the unsupported parquet-backed TPC-DS queries currently
 need, based on Trino logical `EXPLAIN` output dumped by
 `org.weakref.nitro.tpcds.ExplainUnsupportedQueries`.
 
-The dump currently lives under `target/tpcds-explain/` and covers the `88`
+The dump currently lives under `target/tpcds-explain/` and covers the `86`
 benchmark queries that are not yet implemented in the parquet-backed Nitro and
 Trino operator harnesses.
 
@@ -12,9 +12,11 @@ Trino operator harnesses.
 
 Supported parquet-backed queries today:
 
+- `Q01`
 - `Q10`
 - `Q35`
 - `Q41`
+- `Q45`
 - `Q62`
 - `Q69`
 - `Q73`
@@ -45,12 +47,12 @@ is the source of truth for the operator topology we need to reproduce.
 Most unsupported queries already lower into plan shapes that are largely within
 the current Nitro vocabulary:
 
-- `88/88` use `Aggregate`
-- `86/88` use joins
-- `82/88` use `ScanFilter`
-- `79/88` use `ScanFilterProject`
-- `76/88` use `Project`
-- `66/88` use `TopN`
+- `86/86` use `Aggregate`
+- `84/86` use joins
+- `80/86` use `ScanFilter`
+- `77/86` use `ScanFilterProject`
+- `74/86` use `Project`
+- `64/86` use `TopN`
 
 That means a large fraction of the remaining work is not "invent a whole new
 engine", but rather:
@@ -176,19 +178,18 @@ These do appear in unsupported plans, but we already have a basis to build on:
 
 Queries:
 
-- `Q45`
+- queries with `IN` / existence filtering beyond the currently supported set
 
 Status:
 
 - Nitro and the Trino harness already have semi-join support
-- `Q45` should be a good early unsupported query once the surrounding assembly
-  is wired
+- this operator family is no longer a blocker for the next expansion batch
 
 ### CrossJoin
 
 Queries include:
 
-- `Q01`, `Q06`, `Q09`, `Q14`, `Q23`, `Q24`, `Q28`, `Q30`, `Q32`, `Q44`,
+- `Q06`, `Q09`, `Q14`, `Q23`, `Q24`, `Q28`, `Q30`, `Q32`, `Q44`,
   `Q54`, `Q61`, `Q77`, `Q81`, `Q92`
 
 Status:
@@ -252,11 +253,6 @@ This is a smaller query count, but currently blocks `Q51` and `Q97`.
 
 Good first unsupported queries after this explain pass:
 
-- `Q45`
-  - has `SemiJoin`, but not the larger missing operator families
-- `Q01`
-  - complex, but still mostly aggregate/join/topN without missing advanced
-    operators
 - `Q44`
   - good design target for `TopNRanking` plus `EnforceSingleRow`
 - `Q80`

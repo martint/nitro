@@ -21,8 +21,8 @@ import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.trino.TrinoTpcdsParquetSqlSupport;
 import org.weakref.nitro.trino.TrinoTpcdsParquetSupport;
-import org.weakref.nitro.trino.TrinoTpcdsSupport;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -35,6 +35,24 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 public class TestQueries
 {
+    @Test
+    void testQuery01()
+    {
+        assertOperatorMatches("01", tables -> TpcdsParquetSupport.query01(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query01(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
+    void testQuery01Sql()
+    {
+        assertNitroMatchesSql("01", tables -> TpcdsParquetSupport.query01(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void testQuery01TrinoSql()
+    {
+        assertTrinoOperatorMatchesSql("01", support -> support.query01(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
     @Test
     void testQuery41()
     {
@@ -91,8 +109,8 @@ public class TestQueries
                     .toList();
         }
 
-        try (TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
-            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery("41", "sf10");
+        try (TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
+            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery("41");
             assertThat(nitroRows)
                     .containsExactlyElementsOf(sqlResult.getMaterializedRows().stream()
                             .map(row -> normalize(Objects.toString(row.getField(0))))
@@ -107,9 +125,9 @@ public class TestQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         try (TrinoTpcdsParquetSupport operatorSupport = new TrinoTpcdsParquetSupport();
-                TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
+                TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
             MaterializedResult operatorResult = operatorSupport.query41(tables);
-            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery("41", "sf10");
+            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery("41");
             assertThat(operatorResult.getMaterializedRows().stream()
                     .map(row -> normalize((String) row.getField(0)))
                     .toList())
@@ -354,10 +372,10 @@ public class TestQueries
             nitroRows = normalizeNitroRows(OperatorAssertions.OperatorAssert.toRows(query), valueNormalizer);
         }
 
-        try (TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
+        try (TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
             assertThat(nitroRows)
                     .as("TPC-DS Q%s Nitro vs SQL", queryId)
-                    .containsExactlyElementsOf(normalizeTrinoRows(sqlSupport.executeBenchmarkQuery(queryId, "sf10"), valueNormalizer));
+                    .containsExactlyElementsOf(normalizeTrinoRows(sqlSupport.executeBenchmarkQuery(queryId), valueNormalizer));
         }
     }
 
@@ -372,10 +390,10 @@ public class TestQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         try (TrinoTpcdsParquetSupport operatorSupport = new TrinoTpcdsParquetSupport();
-                TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
+                TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
             assertThat(normalizeTrinoRows(trinoQuery.apply(operatorSupport), valueNormalizer))
                     .as("TPC-DS Q%s Trino operator vs SQL", queryId)
-                    .containsExactlyElementsOf(normalizeTrinoRows(sqlSupport.executeBenchmarkQuery(queryId, "sf10"), valueNormalizer));
+                    .containsExactlyElementsOf(normalizeTrinoRows(sqlSupport.executeBenchmarkQuery(queryId), valueNormalizer));
         }
     }
 
@@ -391,8 +409,8 @@ public class TestQueries
             actual = ((Number) rows.getFirst().values()[0]).doubleValue();
         }
 
-        try (TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
-            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery(queryId, "sf10");
+        try (TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
+            MaterializedResult sqlResult = sqlSupport.executeBenchmarkQuery(queryId);
             assertThat(actual)
                     .as("TPC-DS Q%s Nitro vs SQL", queryId)
                     .isCloseTo(bigDecimalValue(sqlResult).doubleValue(), within(1e-9));
@@ -405,13 +423,13 @@ public class TestQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         try (TrinoTpcdsParquetSupport operatorSupport = new TrinoTpcdsParquetSupport();
-                TrinoTpcdsSupport sqlSupport = new TrinoTpcdsSupport("sf10")) {
+                TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
             MaterializedResult operatorResult = trinoQuery.apply(operatorSupport);
             assertThat(operatorResult.getMaterializedRows()).hasSize(1);
             double actual = ((Number) operatorResult.getMaterializedRows().getFirst().getField(0)).doubleValue();
             assertThat(actual)
                     .as("TPC-DS Q%s Trino operator vs SQL", queryId)
-                    .isCloseTo(bigDecimalValue(sqlSupport.executeBenchmarkQuery(queryId, "sf10")).doubleValue(), within(1e-9));
+                    .isCloseTo(bigDecimalValue(sqlSupport.executeBenchmarkQuery(queryId)).doubleValue(), within(1e-9));
         }
     }
 

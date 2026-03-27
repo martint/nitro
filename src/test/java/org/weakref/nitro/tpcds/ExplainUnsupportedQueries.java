@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 
 public final class ExplainUnsupportedQueries
 {
-    private static final Set<String> SUPPORTED_QUERY_IDS = Set.of("10", "35", "41", "62", "69", "73", "84", "88", "90", "96", "99");
+    private static final Set<String> SUPPORTED_QUERY_IDS = Set.of("1", "10", "35", "41", "45", "62", "69", "73", "84", "88", "90", "96", "99");
     private static final List<String> PLAN_MARKERS = List.of(
             "CorrelatedJoin",
             "EnforceSingleRow",

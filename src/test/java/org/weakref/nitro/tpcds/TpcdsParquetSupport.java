@@ -71,6 +71,30 @@ final class TpcdsParquetSupport
 
     private TpcdsParquetSupport() {}
 
+    public static Operator query01(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator customerStoreReturns = query01CustomerStoreReturns(allocator, primitiveRegistry, tables);
+        Operator storeTotals = query01StoreTotals(allocator, primitiveRegistry, tables);
+        Operator tnStores = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store",
+                equalUtf8(1, "TN"),
+                new String[] {"s_store_sk", "s_state"},
+                0);
+        Operator customers = scannedTable(allocator, tables, "customer", "c_customer_sk", "c_customer_id");
+
+        Operator joined = new HashJoinOperator(allocator, customerStoreReturns, 1, tnStores, 0);
+        joined = new HashJoinOperator(allocator, joined, 0, customers, 0);
+        joined = materializedTable(allocator, joined);
+        joined = new HashJoinOperator(allocator, joined, 1, storeTotals, 0);
+        joined = filter(allocator, primitiveRegistry, joined, query01ReturnThresholdPredicate(2, 7, 8));
+
+        Operator customerIds = projectInputs(allocator, primitiveRegistry, joined, 5);
+        return new TopNOperator(allocator, 100, 0, false, customerIds);
+    }
+
     public static Operator query41(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator eligibleManufacturers = filter(
@@ -981,6 +1005,32 @@ final class TpcdsParquetSupport
         return and(equal(1, 20), greaterThan(2, 29));
     }
 
+    private static FilterSpec query01ReturnThresholdPredicate(int returnSumIndex, int storeTotalSumIndex, int storeCountIndex)
+    {
+        Variable five = new Variable(0);
+        Variable six = new Variable(1);
+        Variable countTimesReturn = new Variable(2);
+        Variable scaledReturn = new Variable(3);
+        Variable scaledAverage = new Variable(4);
+        Variable greaterThan = new Variable(5);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(five, new Literal(5L), AllMask.ALL),
+                new Assignment(six, new Literal(6L), AllMask.ALL),
+                new Assignment(countTimesReturn, new Call("multiply", List.of(
+                        new Reference(new Input(storeCountIndex), Stream.VALUES),
+                        new Reference(new Input(returnSumIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledReturn, new Call("multiply", List.of(
+                        new Reference(countTimesReturn, Stream.VALUES),
+                        new Reference(five, Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledAverage, new Call("multiply", List.of(
+                        new Reference(new Input(storeTotalSumIndex), Stream.VALUES),
+                        new Reference(six, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(scaledAverage, Stream.VALUES),
+                        new Reference(scaledReturn, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES)));
+    }
+
     private static FilterSpec query73HouseholdPredicate()
     {
         Variable greaterThan = new Variable(0);
@@ -1041,6 +1091,96 @@ final class TpcdsParquetSupport
                 primitiveRegistry,
                 customersForEligibleDates(allocator, primitiveRegistry, tables, salesTable, customerColumn, dateColumn, eligibleDateFilter),
                 0);
+    }
+
+    private static Operator query01CustomerStoreReturns(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        return projectInputs(
+                allocator,
+                primitiveRegistry,
+                query01CustomerStoreReturnsWithValueCounts(allocator, primitiveRegistry, tables),
+                0,
+                1,
+                2);
+    }
+
+    private static Operator query01CustomerStoreReturnsWithValueCounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator returns = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store_returns",
+                null,
+                new String[] {"sr_customer_sk", "sr_store_sk", "sr_return_amt", "sr_returned_date_sk"});
+        Operator year2000Dates = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                equal(1, 2000),
+                new String[] {"d_date_sk", "d_year"},
+                0);
+        returns = new HashJoinOperator(allocator, returns, 3, year2000Dates, 0);
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable isNull = new Variable(2);
+        Variable hasReturnValue = new Variable(3);
+        returns = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(isNull, new Call("is_null_i64", List.of(
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(hasReturnValue, new Call("if_i64", List.of(
+                                new Reference(isNull, Stream.VALUES),
+                                new Reference(zero, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(hasReturnValue, Stream.VALUES))),
+                primitiveRegistry,
+                returns);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new Sum(2), new Sum(3)),
+                returns);
+    }
+
+    private static Operator query01StoreTotals(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator customerStoreReturns = query01CustomerStoreReturnsWithValueCounts(allocator, primitiveRegistry, tables);
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable hasValueCondition = new Variable(2);
+        Variable hasReturnValue = new Variable(3);
+        List<Assignment> assignments = List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(one, new Literal(1L), AllMask.ALL),
+                new Assignment(hasValueCondition, new Call("lt", List.of(
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                new Assignment(hasReturnValue, new Call("if_i64", List.of(
+                        new Reference(hasValueCondition, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL));
+        Operator projected = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(assignments, List.of(
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(hasReturnValue, Stream.VALUES))),
+                primitiveRegistry,
+                customerStoreReturns);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new Sum(2)),
+                projected);
     }
 
     private static FilterSpec equalUtf8(int inputIndex, String constant)
