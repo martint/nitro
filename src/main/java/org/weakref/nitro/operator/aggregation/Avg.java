@@ -67,7 +67,7 @@ public class Avg
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
         Vector inputValues = streams.values(inputColumn);
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
 
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -88,7 +88,7 @@ public class Avg
         AvgStateVector stateVector = (AvgStateVector) state.values();
         I64Vector groupVector = (I64Vector) groups;
         Vector inputValues = streams.values(inputColumn);
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -145,7 +145,7 @@ public class Avg
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static void accumulate(AvgStateVector stateVector, int group, Vector inputValues, boolean[] inputNulls, int position)
+    private static void accumulate(AvgStateVector stateVector, int group, Vector inputValues, Vector inputNulls, int position)
     {
         if (isNull(inputNulls, position)) {
             return;
@@ -164,13 +164,14 @@ public class Avg
         };
     }
 
-    private static boolean[] nulls(Vector vector)
+    private static boolean isNull(Vector nulls, int position)
     {
-        return vector == null ? null : ((org.weakref.nitro.data.BooleanVector) vector).values();
-    }
-
-    private static boolean isNull(boolean[] nulls, int position)
-    {
-        return nulls != null && nulls[position];
+        return switch (nulls) {
+            case null -> false;
+            case org.weakref.nitro.data.BooleanVector vector -> vector.values()[position];
+            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
+            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
+        };
     }
 }

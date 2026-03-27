@@ -123,6 +123,53 @@ A mask-only path may legitimately avoid synthesizing full row-wise `NULLS` or
 three-valued semantics. In those cases, prefer reusing existing companion
 streams over forcing full completion, but do not silently drop them.
 
+## Do not assume companion streams are flat
+
+`NULLS` and `ERRORS` are logical boolean streams, not a promise that the
+runtime has already flattened them to `BooleanVector`.
+
+Prefer:
+
+- helper code that accepts boolean-encoded vectors such as flat, dictionary,
+  or RLE
+- one dispatch point that unwraps the supported encodings before the hot loop
+- aggregate and scalar code that treats companion streams as ordinary encoded
+  inputs
+
+Avoid:
+
+- direct casts from `stream(..., Stream.NULLS)` or `stream(..., Stream.ERRORS)`
+  to `BooleanVector` unless the surrounding code has already proven that shape
+- using flat `boolean[]` helpers as the only representation of null/error
+  state
+- reintroducing eager flattening requirements at aggregation or evaluator
+  boundaries
+
+If a code path truly requires a flat boolean buffer, make that flattening step
+explicit and local, rather than letting a hidden cast encode the assumption.
+
+## Treat input loading separately from stream completion
+
+When working in the evaluator, loading source input streams and completing a
+derived stream bundle are different operations.
+
+Prefer:
+
+- loading all requested input streams directly from the input/source resolver
+- using stream completion only after a primitive, merge, copy, or other
+  derived operation has already produced its partial bundle
+
+Avoid:
+
+- loading one input stream and then expecting generic completion logic to
+  synthesize or discover the rest of the requested input bundle
+- treating missing input `VALUES` as optional when the consumer explicitly
+  requested them
+
+This keeps the source boundary honest and avoids bugs where projected input
+values work in isolation but fail once a sibling expression also needs the
+same input's companion streams.
+
 ## Prefer single predicate kernels over evaluator-built OR trees
 
 When a query shape naturally means "value is one of these literals", prefer a

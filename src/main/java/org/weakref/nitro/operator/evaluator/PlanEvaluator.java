@@ -164,10 +164,15 @@ public final class PlanEvaluator
 
     private Streams evaluateInput(Reference reference, int inputIndex, Mask mask)
     {
-        Vector inputVector = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), reference.stream()), mask);
-        checkArgument(inputVector != null || reference.stream() != Stream.VALUES, "Missing VALUES stream for input %s", reference);
-        Streams result = inputVector == null ? Streams.empty() : Streams.of(reference.stream(), inputVector);
-        return completeRequestedStreams(computeRequestedStreams(reference), result, mask);
+        Set<Stream> requestedStreams = computeRequestedStreams(reference);
+        Streams.Builder result = Streams.builder();
+        for (Stream stream : requestedStreams) {
+            Vector inputVector = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), stream), mask);
+            if (inputVector != null) {
+                result.put(stream, inputVector);
+            }
+        }
+        return completeRequestedStreams(requestedStreams, result.build(), mask);
     }
 
     private Streams evaluateVariable(Reference reference, Variable variable, Mask mask, Streams output)

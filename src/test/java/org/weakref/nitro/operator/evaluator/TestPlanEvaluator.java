@@ -238,6 +238,42 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testProjectedInputValuesCanStillLoadCompanionInputStreams()
+    {
+        Variable length = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        length,
+                        new Call("length_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(length, Stream.VALUES),
+                        new Reference(new Input(0), Stream.VALUES)));
+
+        BinaryVector inputValues = new BinaryVector(2, 16);
+        inputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        inputValues.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        inputValues.setNull(1);
+        BooleanVector inputNulls = new BooleanVector(new boolean[] {false, true});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), inputValues,
+                        new Reference(new Input(0), Stream.NULLS), inputNulls)),
+                new Allocator());
+
+        Streams lengths = evaluator.evaluate(new Reference(length, Stream.VALUES), Mask.all(2));
+        assertThat(((I64Vector) lengths.get(Stream.VALUES)).values()).containsExactly(5L, 0L);
+        assertThat(((BooleanVector) lengths.get(Stream.NULLS)).values()).containsExactly(false, true);
+
+        Streams projectedInput = evaluator.evaluate(new Reference(new Input(0), Stream.VALUES), Mask.all(2));
+        assertThat(((BinaryVector) projectedInput.get(Stream.VALUES)).utf8Value(0)).isEqualTo("alpha");
+        assertThat(((BooleanVector) projectedInput.get(Stream.NULLS)).values()).containsExactly(false, true);
+    }
+
+    @Test
     void testContainsUtf8HandlesVectorCandidatesAcrossBoundaries()
     {
         Variable needle = new Variable(0);

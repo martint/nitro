@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -40,6 +41,7 @@ import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -178,6 +180,34 @@ public class TestOperatorBatches
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
         assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+    }
+
+    @Test
+    void testAvgAccumulatorHandlesDictionaryEncodedNullStream()
+    {
+        Allocator allocator = new Allocator();
+        Avg accumulator = new Avg(0);
+        Streams state = accumulator.allocate(allocator, new Allocator.Context("test"), 1);
+        accumulator.initialize(state, 0, 1);
+
+        I64Vector values = new I64Vector(new long[] {10, 20, 30});
+        DictionaryVector nulls = new DictionaryVector(new int[] {0, 1, 0}, new BooleanVector(new boolean[] {false, true}));
+        accumulator.accumulate(
+                state,
+                0,
+                Mask.all(3),
+                (column, stream) -> {
+                    assertThat(column).isEqualTo(0);
+                    return switch (stream) {
+                        case VALUES -> values;
+                        case NULLS -> nulls;
+                        case ERRORS -> null;
+                    };
+                });
+
+        Streams result = accumulator.result(0, state, null, allocator, new Allocator.Context("testResult"));
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()[0]).isFalse();
+        assertThat(((org.weakref.nitro.data.F64Vector) result.get(Stream.VALUES)).values()[0]).isEqualTo(20.0);
     }
 
     @Test

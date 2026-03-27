@@ -155,6 +155,14 @@ should become faster because the evaluator recognizes and specializes them
 while preserving the ordinary batch and stream contract, not because those
 filters are peeled out into one-off operator types.
 
+The evaluator should also distinguish between input stream loading and derived
+stream completion. For source inputs, if an expression requests `VALUES`,
+`NULLS`, and `ERRORS` from the same producer, the evaluator should load the
+available input streams directly rather than loading one stream and trying to
+"complete" the rest afterward. Stream completion is appropriate for derived
+results whose producing primitive has already run; it is not a substitute for
+loading multiple requested input streams from the source/operator boundary.
+
 ### Streams are semantic outputs
 
 For any logical expression or logical column, Nitro should model separate
@@ -183,6 +191,15 @@ This keeps stream absence a valid fast path instead of forcing operators to
 synthesize explicit all-false vectors eagerly, while still giving the evaluator
 and operator boundary a precise semantic contract when those streams are
 requested explicitly.
+
+Companion streams should also preserve physical encodings when possible. A
+`NULLS` or `ERRORS` stream may legitimately arrive as a dictionary-backed or
+RLE-backed boolean vector rather than as a flat `BooleanVector`. Consumers such
+as aggregations and scalar functions should therefore treat companion streams as
+boolean-encoded vectors, not as flat arrays by default. Flat-only assumptions
+at stream boundaries are architectural bugs because they quietly reintroduce
+eager flattening requirements into code that is supposed to remain
+encoding-aware.
 
 ### Vectors are physical encodings
 
