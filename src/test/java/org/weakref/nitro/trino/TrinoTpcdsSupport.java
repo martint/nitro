@@ -82,6 +82,7 @@ import static io.trino.spi.connector.DynamicFilter.EMPTY;
 import static io.trino.spiller.PartitioningSpillerFactory.unsupportedPartitioningSpillerFactory;
 import static io.trino.spiller.SingleStreamSpillerFactory.unsupportedSingleStreamSpillerFactory;
 import static io.trino.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
+import static io.trino.sql.planner.planprinter.PlanPrinter.textLogicalPlan;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 
 public final class TrinoTpcdsSupport
@@ -104,6 +105,11 @@ public final class TrinoTpcdsSupport
         return executeSql(TpcdsQueryCatalog.benchmarkQuerySql(queryId, "tpcds", schema));
     }
 
+    public String explainBenchmarkQuery(String queryId, String schema)
+    {
+        return explainSql(TpcdsQueryCatalog.benchmarkQuerySql(queryId, "tpcds", schema));
+    }
+
     public MaterializedResult executeReferenceQuery(String queryId)
     {
         return executeSql(TpcdsQueryCatalog.referenceQuerySql(queryId));
@@ -120,6 +126,22 @@ public final class TrinoTpcdsSupport
         return executePlanWithLargeTaskMemory(
                 session -> planTester.createPlan(session, sql),
                 new PlanTester.MaterializedResultOutput());
+    }
+
+    private String explainSql(String sql)
+    {
+        planTester.getAccessControl().checkCanExecuteQuery(planTester.getDefaultSession().getIdentity(), planTester.getDefaultSession().getQueryId());
+        return planTester.inTransaction(planTester.getDefaultSession(), session -> {
+            Plan plan = planTester.createPlan(session, sql);
+            return textLogicalPlan(
+                    plan.getRoot(),
+                    planTester.getPlannerContext().getMetadata(),
+                    planTester.getPlannerContext().getFunctionManager(),
+                    plan.getStatsAndCosts(),
+                    session,
+                    0,
+                    false);
+        });
     }
 
     private <T> T executePlanWithLargeTaskMemory(Function<Session, Plan> planFactory, PlanTester.Output<T> output)

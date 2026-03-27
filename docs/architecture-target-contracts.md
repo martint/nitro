@@ -100,6 +100,21 @@ but it should remain query-agnostic.
 but it should not introduce alternate execution mechanisms or host-side
 shortcuts that bypass the engine contracts being measured.
 
+TPC-DS support should follow the same rule. For complex benchmark queries, the
+source of truth for the lowered operator shape should be Trino's logical
+`EXPLAIN` plan rather than the surface SQL text alone. The job of the test
+layer is to:
+
+- obtain the optimized logical plan shape
+- inline `WITH` queries as a tree at each use site
+- map that shape onto Nitro and Trino operator assemblies with equivalent
+  topology
+- record any missing Nitro/Trino operator or lowering capability before
+  implementing the query
+
+This keeps the benchmark harness close to the SQL engine's real lowering
+behavior and makes missing execution features explicit.
+
 ## Architectural Principles
 
 ### Operators orchestrate batches

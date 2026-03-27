@@ -235,3 +235,25 @@ Avoid:
 Constant tables are still fine for small literal relations that are part of the
 lowered query itself. The problem is host-side extraction of dynamic query
 subresults, not literal build-side data.
+
+## Use logical EXPLAIN to drive complex benchmark lowerings
+
+For complex benchmark queries, especially unsupported TPC-DS queries, derive
+the intended operator topology from Trino's optimized logical `EXPLAIN` plan.
+
+Prefer:
+
+- reading the logical plan first
+- treating `WITH` clauses as inline subplan trees at each use site
+- implementing the same lowered topology in Nitro and Trino harnesses
+- using the plan to identify missing operators such as `Window`, `GroupId`,
+  `TopNRanking`, `FullJoin`, or `EnforceSingleRow`
+
+Avoid:
+
+- guessing the lowering directly from the SQL text when the optimizer is doing
+  important shape changes
+- implementing a query before checking whether Trino lowered it to a different
+  operator family
+- letting Nitro and Trino benchmark harnesses drift because the lowering was
+  reverse-engineered informally instead of from the same plan
