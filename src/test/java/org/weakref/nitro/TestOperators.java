@@ -851,8 +851,8 @@ public class TestOperators
         expected.put("score", 7L);
 
         BinaryVector names = new BinaryVector(1, 5);
-        names.addTrait(BinaryVector.Trait.UTF8_STRING);
-        names.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        names.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         names.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         org.weakref.nitro.data.StructVector struct = new org.weakref.nitro.data.StructVector(1);

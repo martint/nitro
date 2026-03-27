@@ -577,9 +577,9 @@ public final class PlanEvaluator
     {
         byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, 1, bytes.length);
-        values.addTrait(BinaryVector.Trait.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         if (bytes.length == value.length()) {
-            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+            values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
         values.setBytes(0, bytes);
         return allocator.allocateRle(ALLOCATION_CONTEXT, new int[] {length}, values);

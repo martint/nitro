@@ -28,9 +28,6 @@ public final class BinaryVector
 {
     public static final class Trait
     {
-        public static final Trait UTF8_STRING = flag("utf8_string");
-        public static final Trait ASCII_ONLY = flag("ascii_only");
-
         private final String name;
         private final Object value;
 

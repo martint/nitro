@@ -883,13 +883,13 @@ public final class Utf8BinaryDispatch
     private static boolean useAsciiFastPath(BinaryVector left, BinaryVector right)
     {
         return hasUtf8Traits(left) && hasUtf8Traits(right) &&
-                left.hasTrait(BinaryVector.Trait.ASCII_ONLY) &&
-                right.hasTrait(BinaryVector.Trait.ASCII_ONLY);
+                left.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) &&
+                right.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
     }
 
     private static boolean hasUtf8Traits(BinaryVector vector)
     {
-        return vector.hasTrait(BinaryVector.Trait.UTF8_STRING);
+        return vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
     }
 
     private static boolean isNull(BooleanVector nulls, int position)

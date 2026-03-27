@@ -175,9 +175,9 @@ public class ConstantTableOperator
         }
 
         BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rows.size(), byteCapacity);
-        values.addTrait(BinaryVector.Trait.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         if (asciiOnly) {
-            values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+            values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
         BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rows.size(), BooleanVector::new);
         for (int position = 0; position < rows.size(); position++) {

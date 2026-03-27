@@ -245,12 +245,15 @@ by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
 
 Traits should be open metadata, not a closed enum of framework-known cases.
-The runtime may ship common built-in traits such as UTF-8 or ASCII hints, but
-the trait model should allow callers and future libraries to attach additional
-name/value metadata without changing the base `BinaryVector` contract. Traits
-describe situational properties of a specific use of a vector; they should not
-be treated as a closed type system or as a complete list of all possible
-semantic interpretations of a byte sequence.
+`BinaryVector` itself should only provide generic trait storage and queries. If
+the runtime wants to share common trait names such as UTF-8 or ASCII hints,
+those names should live in separate producer/consumer-owned catalogs rather
+than inside the core vector type. The trait model should allow callers and
+future libraries to attach additional name/value metadata without changing the
+base `BinaryVector` contract. Traits describe situational properties of a
+specific use of a vector; they should not be treated as a closed type system
+or as a complete list of all possible semantic interpretations of a byte
+sequence.
 
 Trait-aware dispatch should also matter in core operators, not only in scalar
 functions. Core operators such as grouping should be able to consume

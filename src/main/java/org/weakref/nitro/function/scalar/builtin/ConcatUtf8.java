@@ -94,9 +94,9 @@ public final class ConcatUtf8
                     requiredLength,
                     totalBytes);
             outputValues.clearTraits();
-            outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
             if (isAsciiOnly(leftValues) && isAsciiOnly(rightValues)) {
-                outputValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+                outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
             }
             applyValues(leftValues, rightValues, leftNulls, rightNulls, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
@@ -172,7 +172,7 @@ public final class ConcatUtf8
     private static boolean isAsciiOnly(Vector values)
     {
         return switch (values) {
-            case BinaryVector vector -> vector.hasTrait(BinaryVector.Trait.ASCII_ONLY);
+            case BinaryVector vector -> vector.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
             case DictionaryVector vector -> isAsciiOnly(vector.values());
             case RleVector vector -> isAsciiOnly(vector.values());
             default -> false;

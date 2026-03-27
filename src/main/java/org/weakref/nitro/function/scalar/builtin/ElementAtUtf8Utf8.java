@@ -110,7 +110,7 @@ public final class ElementAtUtf8Utf8
 
     private static int requiredByteCapacity(MapVector maps, Vector mapInput, BinaryVector mapKeys, BinaryVector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask)
     {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
+        boolean ascii = mapKeys.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) && keys.values().hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         int byteCapacity = 0;
         for (int position : mask) {
             if (isNull(mapNulls, position) || isNull(keyNulls, position)) {
@@ -126,7 +126,7 @@ public final class ElementAtUtf8Utf8
 
     private static void applyValues(MapVector maps, Vector mapInput, BinaryVector mapKeys, BinaryVector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BinaryVector output)
     {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
+        boolean ascii = mapKeys.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) && keys.values().hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         int outputPosition = 0;
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
@@ -162,7 +162,7 @@ public final class ElementAtUtf8Utf8
 
     private static void applyNulls(MapVector maps, Vector mapInput, BinaryVector mapKeys, BinaryVector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
     {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
+        boolean ascii = mapKeys.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) && keys.values().hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
@@ -218,7 +218,7 @@ public final class ElementAtUtf8Utf8
     {
         checkArgument(vector instanceof BinaryVector, "%s requires BinaryVector inputs", functionName);
         BinaryVector values = (BinaryVector) vector;
-        checkArgument(values.hasTrait(BinaryVector.Trait.UTF8_STRING), "%s requires UTF8_STRING inputs", functionName);
+        checkArgument(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING), "%s requires UTF8_STRING inputs", functionName);
         return values;
     }
 

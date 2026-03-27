@@ -106,7 +106,7 @@ public final class MapContainsKeyUtf8
 
     private static void applyValues(MapVector maps, Vector mapInput, BinaryVector mapKeys, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
     {
-        boolean ascii = mapKeys.hasTrait(BinaryVector.Trait.ASCII_ONLY) && keys.values().hasTrait(BinaryVector.Trait.ASCII_ONLY);
+        boolean ascii = mapKeys.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) && keys.values().hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
@@ -183,7 +183,7 @@ public final class MapContainsKeyUtf8
     {
         checkArgument(vector instanceof BinaryVector, "%s requires BinaryVector inputs", functionName);
         BinaryVector values = (BinaryVector) vector;
-        checkArgument(values.hasTrait(BinaryVector.Trait.UTF8_STRING), "%s requires UTF8_STRING inputs", functionName);
+        checkArgument(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING), "%s requires UTF8_STRING inputs", functionName);
         return values;
     }
 

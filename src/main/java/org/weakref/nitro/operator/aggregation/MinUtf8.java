@@ -153,7 +153,7 @@ public class MinUtf8
                 totalBytes);
         Arrays.fill(outputValues.offsets(), 0);
         outputValues.clearTraits();
-        outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
 
         BooleanVector outputNulls = allocator.allocateOrGrow(
                 allocationContext,

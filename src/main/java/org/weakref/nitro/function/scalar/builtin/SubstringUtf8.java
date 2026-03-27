@@ -102,7 +102,7 @@ public final class SubstringUtf8
                     requiredLength,
                     totalBytes);
             outputValues.clearTraits();
-            outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
             applyValues(values, startValues, lengthValues, valueNulls, startNulls, lengthNulls, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
         }
@@ -146,7 +146,7 @@ public final class SubstringUtf8
         }
         fillOffsets(outputValues, lastPosition + 1, outputValues.length(), currentOffset);
         if (asciiOnly) {
-            outputValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
     }
 

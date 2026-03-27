@@ -809,7 +809,7 @@ public final class TrinoParquetScanOperator
     private static Set<BinaryVector.Trait> binaryTraits(PrimitiveType primitive)
     {
         if (stringType().equals(primitive.getLogicalTypeAnnotation())) {
-            return Set.of(BinaryVector.Trait.UTF8_STRING);
+            return Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         }
         return Set.of();
     }

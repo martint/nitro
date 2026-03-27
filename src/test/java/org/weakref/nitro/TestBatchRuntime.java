@@ -248,8 +248,8 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("BinaryCopyMasked");
 
         BinaryVector values = new BinaryVector(5, 64);
-        values.addTrait(BinaryVector.Trait.UTF8_STRING);
-        values.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         values.setBytes(0, "zero".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(1, "one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(2, "two".getBytes(java.nio.charset.StandardCharsets.UTF_8));

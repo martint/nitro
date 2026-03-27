@@ -262,7 +262,7 @@ public final class HardwoodParquetScanOperator
     private static Set<BinaryVector.Trait> binaryTraits(LogicalType logicalType)
     {
         if (logicalType instanceof LogicalType.StringType) {
-            return Set.of(BinaryVector.Trait.UTF8_STRING);
+            return Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         }
         return Set.of();
     }

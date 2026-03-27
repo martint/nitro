@@ -49,7 +49,7 @@ framework-known cases.
 Prefer:
 
 - open trait objects or name/value metadata
-- builtin trait constants only as conveniences
+- producer/consumer-owned trait catalogs when a shared vocabulary is helpful
 - code that checks for the specific traits it understands and ignores the rest
 
 Avoid:
@@ -57,6 +57,8 @@ Avoid:
 - enums that imply the framework knows every valid trait ahead of time
 - treating traits as a closed logical type system
 - baking assumptions about all possible trait names into shared vector APIs
+- putting string-specific or domain-specific trait constants inside
+  `BinaryVector` itself
 
 For example, a binary vector may represent UTF-8 strings in one query, opaque
 bytes in another, and an application-specific encoded payload elsewhere. Traits

@@ -144,8 +144,8 @@ public final class HashUtf8
 
     private static boolean requireUtf8AndCheckAscii(BinaryVector vector)
     {
-        checkArgument(vector.hasTrait(BinaryVector.Trait.UTF8_STRING), "hash_utf8 requires UTF8_STRING inputs");
-        return vector.hasTrait(BinaryVector.Trait.ASCII_ONLY);
+        checkArgument(vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING), "hash_utf8 requires UTF8_STRING inputs");
+        return vector.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
     }
 
     private static long hash(BinaryVector vector, int position, boolean ascii)

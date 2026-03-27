@@ -1372,7 +1372,7 @@ public final class ParquetScanOperator
             return Set.of();
         }
         if (stringType().equals(primitiveType.getLogicalTypeAnnotation())) {
-            return Set.of(BinaryVector.Trait.UTF8_STRING);
+            return Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         }
         return Set.of();
     }

@@ -213,7 +213,7 @@ public class TestParquetOperator
         try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
-            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(names.utf8Value(0)).isEqualTo("alice");
         }
     }
@@ -305,7 +305,7 @@ public class TestParquetOperator
             BinaryVector payloads = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
             BooleanVector payloadNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
 
-            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(payloads.traits()).isEmpty();
             assertThat(names.utf8Value(0)).isEqualTo("alice");
             assertThat(names.utf8Value(1)).isEqualTo("bob");
@@ -385,7 +385,7 @@ public class TestParquetOperator
             DictionaryVector names = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
             assertThat(names.values()).isInstanceOf(BinaryVector.class);
             BinaryVector dictionaryValues = (BinaryVector) names.values();
-            assertThat(dictionaryValues.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(dictionaryValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(dictionaryValues.utf8Value(names.ids()[0])).isEqualTo("alpha");
             assertThat(dictionaryValues.utf8Value(names.ids()[1])).isEqualTo("beta");
         }
@@ -438,8 +438,8 @@ public class TestParquetOperator
             BinaryVector right = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
             BooleanVector rightNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
 
-            assertThat(left.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(right.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(left.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+            assertThat(right.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
 
             Streams result = eqUtf8().apply(
                     List.of(
@@ -476,10 +476,10 @@ public class TestParquetOperator
             BinaryVector left = binaryValues(leftValues);
             BinaryVector right = binaryValues(rightValues);
 
-            assertThat(left.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(left.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isFalse();
-            assertThat(right.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(right.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isFalse();
+            assertThat(left.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+            assertThat(left.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isFalse();
+            assertThat(right.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+            assertThat(right.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isFalse();
 
             Streams result = eqUtf8().apply(
                     List.of(Streams.ofValues((org.weakref.nitro.data.Vector) leftValues), Streams.ofValues((org.weakref.nitro.data.Vector) rightValues)),
@@ -498,8 +498,8 @@ public class TestParquetOperator
     void testEqualUtf8SupportsDictionaryAgainstSingleLiteral()
     {
         BinaryVector dictionaryValues = new BinaryVector(3, 32);
-        dictionaryValues.addTrait(BinaryVector.Trait.UTF8_STRING);
-        dictionaryValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(2, "nokia".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -508,8 +508,8 @@ public class TestParquetOperator
         BooleanVector leftNulls = new BooleanVector(new boolean[] {false, false, true, false, false});
 
         BinaryVector literal = new BinaryVector(1, 1);
-        literal.addTrait(BinaryVector.Trait.UTF8_STRING);
-        literal.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        literal.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        literal.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         literal.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         Streams result = eqUtf8().apply(
@@ -542,8 +542,8 @@ public class TestParquetOperator
     void testEqualUtf8PreservesExistingValuesWhenLiteralIsNull()
     {
         BinaryVector dictionaryValues = new BinaryVector(2, 16);
-        dictionaryValues.addTrait(BinaryVector.Trait.UTF8_STRING);
-        dictionaryValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -551,8 +551,8 @@ public class TestParquetOperator
         BooleanVector existingValues = new BooleanVector(new boolean[] {true, false, true, false});
 
         BinaryVector literal = new BinaryVector(1, 1);
-        literal.addTrait(BinaryVector.Trait.UTF8_STRING);
-        literal.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        literal.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        literal.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         literal.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         Streams result = eqUtf8().apply(
@@ -753,7 +753,7 @@ public class TestParquetOperator
             assertThat(names).isInstanceOf(DictionaryVector.class);
             DictionaryVector dictionary = (DictionaryVector) names;
             BinaryVector values = (BinaryVector) dictionary.values();
-            assertThat(values.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
         }
     }
 
@@ -777,8 +777,8 @@ public class TestParquetOperator
             BinaryVector names = binaryValues(batch.output(1).borrow(Stream.VALUES));
 
             assertThat(groups.values()).containsExactly(0L, 1L, 0L, 2L, 1L);
-            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
-            assertThat(names.hasTrait(BinaryVector.Trait.ASCII_ONLY)).isFalse();
+            assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isFalse();
         }
     }
 
@@ -1019,7 +1019,7 @@ public class TestParquetOperator
             assertThat(struct.fieldNames()).containsExactlyInAnyOrder("id", "name", "active");
             assertThat(ids.values()).startsWith(11L, 12L, 13L);
 
-            assertThat(names.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(names.utf8Value(0)).isEqualTo("alice");
             assertThat(names.utf8Value(2)).isEqualTo("carol");
             assertThat(nameNulls.values()).startsWith(false, true, false);
@@ -1110,7 +1110,7 @@ public class TestParquetOperator
             assertThat(maps.length(2)).isEqualTo(0);
             assertThat(maps.length(3)).isEqualTo(1);
 
-            assertThat(keys.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(keys.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(keys.utf8Value(0)).isEqualTo("alpha");
             assertThat(keys.utf8Value(1)).isEqualTo("beta");
             assertThat(keys.utf8Value(2)).isEqualTo("gamma");
@@ -1338,7 +1338,7 @@ public class TestParquetOperator
             assertThat(arrays.length(1)).isEqualTo(0);
             assertThat(arrays.length(2)).isEqualTo(0);
             assertThat(arrays.length(3)).isEqualTo(1);
-            assertThat(keysVector.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(keysVector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(keysVector.utf8Value(0)).isEqualTo("alpha");
             assertThat(keysVector.utf8Value(1)).isEqualTo("beta");
             assertThat(keysVector.utf8Value(2)).isEqualTo("gamma");
@@ -1506,7 +1506,7 @@ public class TestParquetOperator
             assertThat(arrays.length(1)).isEqualTo(0);
             assertThat(arrays.length(2)).isEqualTo(0);
             assertThat(arrays.length(3)).isEqualTo(1);
-            assertThat(values.hasTrait(BinaryVector.Trait.UTF8_STRING)).isTrue();
+            assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(values.utf8Value(0)).isEqualTo("one");
             assertThat(values.utf8Value(2)).isEqualTo("three");
             assertThat(elementNulls.values()).startsWith(false, true, false);

@@ -133,9 +133,9 @@ public final class RegexpReplaceUtf8
                 requiredLength,
                 totalBytes);
         outputValues.clearTraits();
-        outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
+        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         if (asciiOnly) {
-            outputValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
 
         index = 0;

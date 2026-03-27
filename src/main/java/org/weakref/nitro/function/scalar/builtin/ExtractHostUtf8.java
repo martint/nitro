@@ -105,9 +105,9 @@ public final class ExtractHostUtf8
                 requiredLength,
                 totalBytes);
         outputValues.clearTraits();
-        outputValues.addTrait(BinaryVector.Trait.UTF8_STRING);
-        if (values instanceof BinaryVector binaryValues && binaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)) {
-            outputValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        if (values instanceof BinaryVector binaryValues && binaryValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)) {
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
         applyFlatValues(values, inputNulls, mask, outputValues);
         return outputValues;
@@ -136,9 +136,9 @@ public final class ExtractHostUtf8
                 dictionaryValues.length(),
                 totalBytes);
         extractedValues.clearTraits();
-        extractedValues.addTrait(BinaryVector.Trait.UTF8_STRING);
-        if (dictionaryValues.hasTrait(BinaryVector.Trait.ASCII_ONLY)) {
-            extractedValues.addTrait(BinaryVector.Trait.ASCII_ONLY);
+        extractedValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        if (dictionaryValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)) {
+            extractedValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
         for (int position = 0; position < dictionaryValues.length(); position++) {
             writeExtracted(dictionaryValues, position, extractedValues, position);
