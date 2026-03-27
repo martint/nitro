@@ -15,7 +15,9 @@ package org.weakref.nitro.data;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.EnumSet;
+import java.util.LinkedHashSet;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -24,16 +26,69 @@ import static java.util.Objects.requireNonNull;
 public final class BinaryVector
         implements FlatVector
 {
-    public enum Trait
+    public static final class Trait
     {
-        UTF8_STRING,
-        ASCII_ONLY,
+        public static final Trait UTF8_STRING = flag("utf8_string");
+        public static final Trait ASCII_ONLY = flag("ascii_only");
+
+        private final String name;
+        private final Object value;
+
+        private Trait(String name, Object value)
+        {
+            this.name = requireNonNull(name, "name is null");
+            this.value = value;
+        }
+
+        public static Trait flag(String name)
+        {
+            return new Trait(name, null);
+        }
+
+        public static Trait of(String name, Object value)
+        {
+            return new Trait(name, value);
+        }
+
+        public String name()
+        {
+            return name;
+        }
+
+        public Optional<Object> value()
+        {
+            return Optional.ofNullable(value);
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof Trait other)) {
+                return false;
+            }
+            return name.equals(other.name) && Objects.equals(value, other.value);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(name, value);
+        }
+
+        @Override
+        public String toString()
+        {
+            return value == null ? name : name + "=" + value;
+        }
     }
 
     private final int positionCount;
     private final int[] offsets;
     private final byte[] data;
-    private final EnumSet<Trait> traits = EnumSet.noneOf(Trait.class);
+    private final Set<Trait> traits = new LinkedHashSet<>();
 
     public BinaryVector(int positionCount, int byteCapacity)
     {
@@ -100,6 +155,22 @@ public final class BinaryVector
     public boolean hasTrait(Trait trait)
     {
         return traits.contains(requireNonNull(trait, "trait is null"));
+    }
+
+    public boolean hasTrait(String name)
+    {
+        requireNonNull(name, "name is null");
+        return traits.stream()
+                .anyMatch(trait -> trait.name().equals(name));
+    }
+
+    public Optional<Object> traitValue(String name)
+    {
+        requireNonNull(name, "name is null");
+        return traits.stream()
+                .filter(trait -> trait.name().equals(name))
+                .findFirst()
+                .flatMap(Trait::value);
     }
 
     public void addTrait(Trait trait)

@@ -54,7 +54,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -1573,7 +1572,7 @@ public final class ParquetScanOperator
     {
         private ColumnSpec
         {
-            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
+            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(binaryTraits);
             structFields = List.copyOf(structFields);
         }
     }
@@ -1584,7 +1583,7 @@ public final class ParquetScanOperator
     {
         private MapComponentSpec
         {
-            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
+            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(binaryTraits);
         }
     }
 
@@ -1592,7 +1591,7 @@ public final class ParquetScanOperator
     {
         private StructFieldSpec
         {
-            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(EnumSet.copyOf(binaryTraits));
+            binaryTraits = binaryTraits.isEmpty() ? Set.of() : Set.copyOf(binaryTraits);
         }
     }
 

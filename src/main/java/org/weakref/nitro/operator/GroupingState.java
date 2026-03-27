@@ -78,6 +78,23 @@ final class GroupingState
         assignGroups(new Vector[] {values}, new BooleanVector[] {(BooleanVector) nulls}, mask, result);
     }
 
+    public boolean contains(Vector values, BooleanVector nulls, int position)
+    {
+        initializeIfNecessary(new Vector[] {values});
+        if (OperatorVectorSupport.isNull(nulls, position)) {
+            return false;
+        }
+        if (useLongGrouping) {
+            return longGroups.containsKey(OperatorVectorSupport.longValue(values, position));
+        }
+        if (useFlatGrouping) {
+            return flatGroupingTable.findGroup(new Vector[] {values}, position) != -1;
+        }
+
+        OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKeys[0]);
+        return key != null && groups.getLong(key) != -1;
+    }
+
     @SuppressWarnings("unchecked")
     public void assignGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
     {

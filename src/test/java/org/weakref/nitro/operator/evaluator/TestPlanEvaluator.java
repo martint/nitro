@@ -317,7 +317,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testRegexpReplaceUtf8MatchesClickBenchHostPattern()
+    void testRegexpReplaceUtf8SupportsCaptureGroupReplacement()
     {
         Variable pattern = new Variable(0);
         Variable replacement = new Variable(1);

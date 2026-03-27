@@ -41,6 +41,49 @@ variants call it instead of duplicating the logic.
 This reduces the risk that one path drifts semantically from the others while
 still allowing the hot loops themselves to stay specialized and readable.
 
+## Keep traits open and extensible
+
+Traits describe situational metadata about a vector use, not a closed list of
+framework-known cases.
+
+Prefer:
+
+- open trait objects or name/value metadata
+- builtin trait constants only as conveniences
+- code that checks for the specific traits it understands and ignores the rest
+
+Avoid:
+
+- enums that imply the framework knows every valid trait ahead of time
+- treating traits as a closed logical type system
+- baking assumptions about all possible trait names into shared vector APIs
+
+For example, a binary vector may represent UTF-8 strings in one query, opaque
+bytes in another, and an application-specific encoded payload elsewhere. Traits
+should let those uses attach the metadata they need without modifying the base
+vector contract.
+
+## Keep benchmark quirks out of generic functions
+
+Generic operators and scalar functions must implement their declared semantics,
+not the special cases of a particular benchmark corpus.
+
+Prefer:
+
+- generic implementations driven by the function contract
+- specialization by encoding, trait, or reusable capability
+- benchmark-specific lowering in the test/benchmark layer when needed
+
+Avoid:
+
+- hard-coded special handling for named benchmark queries or literals
+- helpers such as "fast path for the ClickBench regex"
+- generic functions whose semantics quietly depend on a particular workload
+
+If a benchmark reveals a hot pattern, optimize the general mechanism that
+implements that pattern. Do not encode benchmark-specific assumptions into the
+function itself.
+
 ## Keep evaluator dispatch capability-based
 
 The evaluator should not grow special cases for individual primitive function

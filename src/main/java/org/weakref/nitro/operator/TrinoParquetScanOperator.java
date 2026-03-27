@@ -61,7 +61,6 @@ import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -810,7 +809,7 @@ public final class TrinoParquetScanOperator
     private static Set<BinaryVector.Trait> binaryTraits(PrimitiveType primitive)
     {
         if (stringType().equals(primitive.getLogicalTypeAnnotation())) {
-            return EnumSet.of(BinaryVector.Trait.UTF8_STRING);
+            return Set.of(BinaryVector.Trait.UTF8_STRING);
         }
         return Set.of();
     }

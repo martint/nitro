@@ -37,7 +37,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.BitSet;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
@@ -263,7 +262,7 @@ public final class HardwoodParquetScanOperator
     private static Set<BinaryVector.Trait> binaryTraits(LogicalType logicalType)
     {
         if (logicalType instanceof LogicalType.StringType) {
-            return EnumSet.of(BinaryVector.Trait.UTF8_STRING);
+            return Set.of(BinaryVector.Trait.UTF8_STRING);
         }
         return Set.of();
     }

@@ -14,16 +14,12 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.HashSet;
-import java.util.Set;
 import java.util.function.Function;
 
 public class SemiJoinOperator
@@ -37,10 +33,11 @@ public class SemiJoinOperator
     private final int innerJoinColumn;
     private final Allocator allocator;
     private final boolean includeMatches;
-    private final Set<Object> membership = new HashSet<>();
+    private final GroupingState membership = new GroupingState();
 
     private boolean loaded;
     private BatchState currentBatchState;
+    private I64Vector membershipScratch;
 
     public SemiJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
@@ -153,12 +150,13 @@ public class SemiJoinOperator
                 Output output = batch.output(innerJoinColumn);
                 Vector values = output.borrow(Stream.VALUES);
                 BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
-                for (int position : mask) {
-                    if (nulls != null && nulls.values()[position]) {
-                        continue;
-                    }
-                    membership.add(decodeKey(values, position));
-                }
+                membershipScratch = allocator.allocateOrGrow(
+                        ALLOCATION_CONTEXT,
+                        membershipScratch,
+                        I64Vector.class,
+                        values.length(),
+                        I64Vector::new);
+                membership.assignGroups(values, nulls, mask, membershipScratch);
             }
             finally {
                 batch.close();
@@ -181,10 +179,7 @@ public class SemiJoinOperator
         int[] positions = new int[sourceMask.count()];
         int selectedCount = 0;
         for (int position : sourceMask) {
-            if (nulls != null && nulls.values()[position]) {
-                continue;
-            }
-            if (membership.contains(decodeKey(values, position)) == includeMatches) {
+            if (membership.contains(values, nulls, position) == includeMatches) {
                 positions[selectedCount++] = position;
             }
         }
@@ -193,30 +188,6 @@ public class SemiJoinOperator
             return allocator.copyMask(ALLOCATION_CONTEXT, sourceMask);
         }
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, positions, selectedCount, sourceMask.size());
-    }
-
-    private static Object decodeKey(Vector values, int position)
-    {
-        return switch (values) {
-            case org.weakref.nitro.data.I32Vector vector -> vector.values()[position];
-            case org.weakref.nitro.data.I64Vector vector -> vector.values()[position];
-            case BinaryVector vector -> vector.hasTrait(BinaryVector.Trait.UTF8_STRING) ? vector.utf8Value(position) : vector.copyBytes(position);
-            case DictionaryVector vector -> decodeKey(vector.values(), vector.ids()[position]);
-            case RleVector vector -> decodeRleKey(vector, position);
-            default -> throw new IllegalArgumentException("Unsupported semi-join key vector: " + values.getClass().getSimpleName());
-        };
-    }
-
-    private static Object decodeRleKey(RleVector vector, int position)
-    {
-        int count = 0;
-        for (int index = 0; index < vector.counts().length; index++) {
-            count += vector.counts()[index];
-            if (position < count) {
-                return decodeKey(vector.values(), index);
-            }
-        }
-        throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + vector.length());
     }
 
     private record BatchState(Batch sourceBatch, Mask[] maskHolder)

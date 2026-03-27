@@ -40,6 +40,66 @@ decide row survival, scans should be able to defer decoding unrelated columns
 and later honor narrower `constrain(mask)` requests for those columns where the
 source format and scan structure make that feasible.
 
+## Layer Model
+
+Nitro should converge on three named layers with one-way dependencies:
+
+- `Core`
+- `Library`
+- `Tests`
+
+Dependencies should point downward only:
+
+- `Core` depends on nothing above it
+- `Library` may depend on `Core`
+- `Tests` may depend on both `Library` and `Core`
+
+Code should not reach upward across these boundaries. In particular, benchmark
+and test harness concerns must not leak into `Library` or `Core`, and
+source-specific or function-specific code in `Library` must not force
+benchmark-specific assumptions into shared operator or evaluator code.
+
+### Core
+
+`Core` is the execution substrate:
+
+- the `Operator` contract and reusable operator runtime machinery
+- shared data structures such as grouping and join tables
+- the scalar evaluator and IR
+- allocator and mask infrastructure
+- the base `Vector` abstraction
+- framework-level physical encodings such as dictionary and RLE wrappers
+
+`Core` should define generic contracts and reusable execution mechanisms, not
+domain-specific functions or benchmark/query lowerings.
+
+### Library
+
+`Library` builds on `Core` with concrete reusable functionality:
+
+- concrete value vectors and nested/vector families
+- scalar and aggregation function implementations
+- aggregation states
+- reusable source operators such as Parquet scans
+- reusable join, grouping, and expression helpers that depend on concrete
+  value encodings
+
+`Library` may use traits and concrete vector families to specialize execution,
+but it should remain query-agnostic.
+
+### Tests
+
+`Tests` contains validation and benchmarking scaffolding:
+
+- query/operator-assembly definitions
+- benchmark harnesses
+- reference-result validation
+- fixtures and synthetic repros
+
+`Tests` may assemble lowered operator trees and exercise `Core` and `Library`,
+but it should not introduce alternate execution mechanisms or host-side
+shortcuts that bypass the engine contracts being measured.
+
 ## Architectural Principles
 
 ### Operators orchestrate batches
@@ -183,6 +243,14 @@ Trait-aware dispatch should compose with nested vectors too. For example, map
 key lookups over UTF-8 string keys may use the same UTF-8 and ASCII traits used
 by top-level binary/string primitives, without requiring a different logical
 type system for nested keys.
+
+Traits should be open metadata, not a closed enum of framework-known cases.
+The runtime may ship common built-in traits such as UTF-8 or ASCII hints, but
+the trait model should allow callers and future libraries to attach additional
+name/value metadata without changing the base `BinaryVector` contract. Traits
+describe situational properties of a specific use of a vector; they should not
+be treated as a closed type system or as a complete list of all possible
+semantic interpretations of a byte sequence.
 
 Trait-aware dispatch should also matter in core operators, not only in scalar
 functions. Core operators such as grouping should be able to consume

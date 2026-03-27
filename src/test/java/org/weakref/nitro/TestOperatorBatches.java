@@ -545,6 +545,28 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSemiJoinOperatorFiltersI64Membership()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(10L, "alpha"),
+                        row(20L, "beta"),
+                        row(30L, "gamma"))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(20L),
+                        row(30L),
+                        row(30L))),
+                0);
+
+        new OperatorAssertions.OperatorAssert(operator).matchesExactly(List.of(
+                row(20L, "beta"),
+                row(30L, "gamma")));
+    }
+
+    @Test
     void testTopNOperatorPreservesBinaryOutputColumn()
     {
         BinaryVector names = new BinaryVector(4, 19);
