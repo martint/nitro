@@ -23,6 +23,7 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -982,5 +983,13 @@ public class Allocator
         }
     }
 
-    public record Context(String name) {}
+    public record Context(String name, long scopeId)
+    {
+        private static final AtomicLong NEXT_SCOPE_ID = new AtomicLong();
+
+        public Context(String name)
+        {
+            this(name, NEXT_SCOPE_ID.incrementAndGet());
+        }
+    }
 }

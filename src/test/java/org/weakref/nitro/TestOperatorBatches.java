@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -64,6 +65,7 @@ import java.util.function.Function;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.data.Row.row;
 
 public class TestOperatorBatches
@@ -152,6 +154,43 @@ public class TestOperatorBatches
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L, 1L, 2L, 3L, 4L);
         assertThat(batch.borrowMask().count()).isEqualTo(3);
+    }
+
+    @Test
+    void testFilterOperatorDoesNotTreatNullIntegerValuesAsEqual()
+    {
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable constant = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(constant, new Literal(4L), AllMask.ALL),
+                        new Assignment(
+                                predicate,
+                                new Call("eq", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(constant, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        Operator operator = new FilterOperator(
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row((Object) null),
+                        row(4L),
+                        row(5L),
+                        row(4L),
+                        row((Object) null))),
+                evaluationPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                allocator);
+
+        Batch batch = operator.next();
+        Mask mask = batch.borrowMask();
+        assertThat(mask.count()).isEqualTo(2);
+        assertThat(mask.position(0)).isEqualTo(1);
+        assertThat(mask.position(1)).isEqualTo(3);
     }
 
     @Test
@@ -584,6 +623,34 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorOutputCanFeedAnotherHashJoin()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 2, List.of(
+                                row(1L, 11L),
+                                row(2L, 22L))),
+                        0,
+                        new ConstantTableOperator(allocator, 2, List.of(
+                                row(10L, 1L),
+                                row(20L, 2L))),
+                        1),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, "one"),
+                        row(2L, "two"))),
+                0)) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 11L, 10L, 1L, 1L, "one"),
+                            row(2L, 22L, 20L, 2L, 2L, "two"));
+        }
+    }
+
+    @Test
     void testSemiJoinOperatorFiltersUtf8Membership()
     {
         Allocator allocator = new Allocator();
@@ -649,6 +716,43 @@ public class TestOperatorBatches
             assertThat(Arrays.copyOf(((BooleanVector) batch.output(2).borrow(Stream.VALUES)).values(), 3))
                     .containsExactly(false, true, true);
             batch.close();
+        }
+    }
+
+    @Test
+    void testEnforceSingleRowOperatorPassesThroughSingleRow()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new EnforceSingleRowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(11L, "value"))))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(row(11L, "value"));
+        }
+    }
+
+    @Test
+    void testEnforceSingleRowOperatorProducesNullRowForEmptyInput()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new EnforceSingleRowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of()))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(row(null, null));
+        }
+    }
+
+    @Test
+    void testEnforceSingleRowOperatorRejectsMultipleRows()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new EnforceSingleRowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(11L), row(12L))))) {
+            assertThatThrownBy(() -> OperatorAssertions.OperatorAssert.toRows(operator))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Scalar subquery returned multiple rows");
         }
     }
 

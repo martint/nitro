@@ -15,6 +15,7 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -56,11 +57,12 @@ public final class LessThanI64
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
+        Allocator.Context allocationContext = context.allocationContext("LessThanI64");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
         BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
@@ -68,7 +70,7 @@ public final class LessThanI64
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     existingNulls,
                     BooleanVector.class,
                     I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
@@ -81,12 +83,12 @@ public final class LessThanI64
         }
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
+            BooleanVector values = context.allocator().allocate(allocationContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
             return result.with(Stream.VALUES, I64BinaryDispatch.rleRleBoolean(leftRle, rightRle, values, LessThanI64::apply));
         }
 
         BooleanVector values = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existing instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
@@ -95,32 +97,31 @@ public final class LessThanI64
         return result.with(Stream.VALUES, values);
     }
 
-    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
-                    (rightNulls != null && rightNulls.values()[position]);
+            nulls[position] = isTrue(leftNulls, position) || isTrue(rightNulls, position);
         }
     }
 
     @Override
     public MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, ALLOCATION_CONTEXT, LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply);
     }
 
     @Override
     public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, ALLOCATION_CONTEXT, LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply);
     }
 
     @Override
     public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, ALLOCATION_CONTEXT, LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply);
     }
 
     @Override
@@ -138,5 +139,18 @@ public final class LessThanI64
     private static boolean apply(long leftValue, long rightValue)
     {
         return leftValue < rightValue;
+    }
+
+    private static boolean isTrue(Vector vector, int position)
+    {
+        if (vector == null) {
+            return false;
+        }
+        return switch (vector) {
+            case BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> isTrue(values.values(), values.ids()[position]);
+            case RleVector values -> isTrue(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean vector but got " + vector.getClass().getSimpleName());
+        };
     }
 }

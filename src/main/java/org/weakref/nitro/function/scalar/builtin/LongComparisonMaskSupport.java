@@ -45,10 +45,10 @@ final class LongComparisonMaskSupport
 
         Vector leftValues = inputs.get(0).values();
         Vector rightValues = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
         int trueCount = 0;
         int nullCount = 0;
@@ -97,10 +97,10 @@ final class LongComparisonMaskSupport
 
         Vector leftValues = inputs.get(0).values();
         Vector rightValues = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
         int trueCount = 0;
         for (int position : mask) {
@@ -133,10 +133,10 @@ final class LongComparisonMaskSupport
 
         Vector leftValues = inputs.get(0).values();
         Vector rightValues = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
         int falseCount = 0;
         for (int position : mask) {
@@ -169,10 +169,10 @@ final class LongComparisonMaskSupport
 
         Vector leftValues = inputs.get(0).values();
         Vector rightValues = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
         mask.retainIf(position -> {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
@@ -191,10 +191,10 @@ final class LongComparisonMaskSupport
 
         Vector leftValues = inputs.get(0).values();
         Vector rightValues = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        BooleanVector leftErrors = (BooleanVector) inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        BooleanVector rightErrors = (BooleanVector) inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
         mask.retainIf(position -> {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
@@ -231,13 +231,26 @@ final class LongComparisonMaskSupport
         };
     }
 
-    private static boolean isNull(BooleanVector nulls, int position)
+    private static boolean isNull(Vector nulls, int position)
     {
-        return nulls != null && nulls.values()[position];
+        return isTrue(nulls, position);
     }
 
-    private static boolean isError(BooleanVector errors, int position)
+    private static boolean isError(Vector errors, int position)
     {
-        return errors != null && errors.values()[position];
+        return isTrue(errors, position);
+    }
+
+    private static boolean isTrue(Vector vector, int position)
+    {
+        if (vector == null) {
+            return false;
+        }
+        return switch (vector) {
+            case BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> isTrue(values.values(), values.ids()[position]);
+            case RleVector values -> isTrue(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean vector but got " + vector.getClass().getSimpleName());
+        };
     }
 }

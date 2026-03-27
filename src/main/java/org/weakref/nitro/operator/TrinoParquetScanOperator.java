@@ -415,6 +415,11 @@ public final class TrinoParquetScanOperator
 
         private ColumnBuffer readMaskedColumn(ColumnSpec column, Block block, Mask mask)
         {
+            if (block.getPositionCount() == 0) {
+                return new ColumnBuffer(
+                        emptyMaskedValues(column, mask.size()),
+                        column.nullable() ? selectedNulls(mask) : null);
+            }
             return new ColumnBuffer(
                     convertMaskedValues(column, block, mask),
                     column.nullable() ? copyNulls(block, mask) : null);
@@ -462,6 +467,20 @@ public final class TrinoParquetScanOperator
             case SHORT_DECIMAL -> copyMaskedI64(block, mask);
             case BOOLEAN -> copyMaskedBoolean(block, mask);
             case BINARY -> copyMaskedBinary(column, block, mask);
+        };
+    }
+
+    private Vector emptyMaskedValues(ColumnSpec column, int size)
+    {
+        return switch (column.kind()) {
+            case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
+            case I64, SHORT_DECIMAL -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new);
+            case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, size, BooleanVector::new);
+            case BINARY -> {
+                BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, size, 0);
+                values.addTraits(column.binaryTraits());
+                yield values;
+            }
         };
     }
 
@@ -700,11 +719,19 @@ public final class TrinoParquetScanOperator
         return nulls;
     }
 
+    private BooleanVector selectedNulls(Mask mask)
+    {
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask.size(), BooleanVector::new);
+        boolean[] output = nulls.values();
+        forEachSelected(mask, position -> output[position] = true);
+        return nulls;
+    }
+
     private static int readInt(Block block, int position)
     {
         return switch (block) {
             case IntArrayBlock intArrayBlock -> intArrayBlock.getInt(position);
-            case DictionaryBlock dictionaryBlock -> readInt(dictionaryBlock.getDictionary(), dictionaryBlock.getId(position));
+            case DictionaryBlock dictionaryBlock -> readInt(dictionaryBlock.getUnderlyingValueBlock(), dictionaryBlock.getUnderlyingValuePosition(position));
             case RunLengthEncodedBlock runLengthEncodedBlock -> readInt(runLengthEncodedBlock.getValue(), 0);
             default -> throw unsupported(block);
         };
@@ -715,7 +742,7 @@ public final class TrinoParquetScanOperator
         return switch (block) {
             case IntArrayBlock intArrayBlock -> intArrayBlock.getInt(position);
             case LongArrayBlock longArrayBlock -> longArrayBlock.getLong(position);
-            case DictionaryBlock dictionaryBlock -> readLong(dictionaryBlock.getDictionary(), dictionaryBlock.getId(position));
+            case DictionaryBlock dictionaryBlock -> readLong(dictionaryBlock.getUnderlyingValueBlock(), dictionaryBlock.getUnderlyingValuePosition(position));
             case RunLengthEncodedBlock runLengthEncodedBlock -> readLong(runLengthEncodedBlock.getValue(), 0);
             default -> throw unsupported(block);
         };
@@ -725,7 +752,7 @@ public final class TrinoParquetScanOperator
     {
         return switch (block) {
             case ByteArrayBlock byteArrayBlock -> byteArrayBlock.getByte(position) != 0;
-            case DictionaryBlock dictionaryBlock -> readBoolean(dictionaryBlock.getDictionary(), dictionaryBlock.getId(position));
+            case DictionaryBlock dictionaryBlock -> readBoolean(dictionaryBlock.getUnderlyingValueBlock(), dictionaryBlock.getUnderlyingValuePosition(position));
             case RunLengthEncodedBlock runLengthEncodedBlock -> readBoolean(runLengthEncodedBlock.getValue(), 0);
             default -> throw unsupported(block);
         };
@@ -735,7 +762,7 @@ public final class TrinoParquetScanOperator
     {
         return switch (block) {
             case VariableWidthBlock variableWidthBlock -> variableWidthBlock.getSlice(position);
-            case DictionaryBlock dictionaryBlock -> readSlice(dictionaryBlock.getDictionary(), dictionaryBlock.getId(position));
+            case DictionaryBlock dictionaryBlock -> readSlice(dictionaryBlock.getUnderlyingValueBlock(), dictionaryBlock.getUnderlyingValuePosition(position));
             case RunLengthEncodedBlock runLengthEncodedBlock -> readSlice(runLengthEncodedBlock.getValue(), 0);
             default -> throw unsupported(block);
         };

@@ -15,12 +15,34 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Allocator;
 
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+
 import static java.util.Objects.requireNonNull;
 
-public record PrimitiveExecutionContext(Allocator allocator)
+public final class PrimitiveExecutionContext
 {
-    public PrimitiveExecutionContext
+    private final Allocator allocator;
+    private final Map<String, Allocator.Context> allocationContexts = new HashMap<>();
+
+    public PrimitiveExecutionContext(Allocator allocator)
     {
-        requireNonNull(allocator, "allocator is null");
+        this.allocator = requireNonNull(allocator, "allocator is null");
+    }
+
+    public Allocator allocator()
+    {
+        return allocator;
+    }
+
+    public Allocator.Context allocationContext(String name)
+    {
+        return allocationContexts.computeIfAbsent(name, Allocator.Context::new);
+    }
+
+    public Collection<Allocator.Context> allocationContexts()
+    {
+        return allocationContexts.values();
     }
 }

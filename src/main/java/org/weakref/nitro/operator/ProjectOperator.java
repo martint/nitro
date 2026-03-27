@@ -31,7 +31,7 @@ import java.util.Set;
 public class ProjectOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ProjectOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
 
     private final EvaluationPlan evaluationPlan;
@@ -75,7 +75,7 @@ public class ProjectOperator
             outputs[outputIndex] = new Output(
                     exposedStreams(outputReference.stream()),
                     stream -> evaluateOutput(batchState, outputReference, stream),
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
         return new Batch(
                 batchState.mask(),
@@ -134,7 +134,7 @@ public class ProjectOperator
             currentBatchState = null;
         }
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private final class BatchState
@@ -150,7 +150,7 @@ public class ProjectOperator
         {
             this.sourceBatch = sourceBatch;
             this.mask = sourceBatch.borrowMask();
-            this.schemaMask = this.mask.size() == 0 ? this.mask : allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, 1);
+            this.schemaMask = this.mask.size() == 0 ? this.mask : allocator.allocateRangeMask(allocationContext, 0, 1);
             this.planEvaluator = new PlanEvaluator(
                     evaluationPlan,
                     primitiveRegistry,

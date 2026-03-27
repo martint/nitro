@@ -23,6 +23,7 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
@@ -34,10 +35,12 @@ import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.Sum;
@@ -114,6 +117,17 @@ final class TpcdsParquetSupport
         Operator productNames = projectInputs(allocator, primitiveRegistry, matched, 0);
         Operator distinct = new MarkDistinctOperator(allocator, 0, productNames);
         return new TopNOperator(allocator, 100, 0, false, distinct);
+    }
+
+    public static Operator query44(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator ascending = query44RankedItems(allocator, primitiveRegistry, tables, false);
+        Operator descending = query44RankedItems(allocator, primitiveRegistry, tables, true);
+        Operator joined = new HashJoinOperator(allocator, ascending, 1, descending, 1);
+        joined = new HashJoinOperator(allocator, joined, 0, scannedTable(allocator, tables, "item", "i_item_sk", "i_product_name"), 0);
+        joined = new HashJoinOperator(allocator, joined, 2, scannedTable(allocator, tables, "item", "i_item_sk", "i_product_name"), 0);
+        Operator projected = projectInputs(allocator, primitiveRegistry, joined, 1, 5, 7);
+        return new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, projected);
     }
 
     public static Operator query45(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -523,6 +537,116 @@ final class TpcdsParquetSupport
                 equal(0, 19),
                 equal(0, 23),
                 equal(0, 29));
+    }
+
+    private static Operator query44RankedItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean descending)
+    {
+        Operator itemAggregates = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store_sales",
+                equal(1, 4),
+                new String[] {"ss_item_sk", "ss_store_sk", "ss_net_profit"},
+                0,
+                2);
+        itemAggregates = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                itemAggregates);
+        itemAggregates = filter(allocator, primitiveRegistry, itemAggregates, greaterThan(2, 0));
+        itemAggregates = projectQuery44ItemAggregates(allocator, primitiveRegistry, itemAggregates);
+
+        Operator scalarAggregate = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store_sales",
+                and(equal(0, 4), isNull(1)),
+                new String[] {"ss_store_sk", "ss_addr_sk", "ss_net_profit"},
+                0,
+                2);
+        scalarAggregate = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                scalarAggregate);
+        scalarAggregate = filter(allocator, primitiveRegistry, scalarAggregate, greaterThan(2, 0));
+        scalarAggregate = new EnforceSingleRowOperator(allocator, scalarAggregate);
+        scalarAggregate = projectQuery44ScalarAggregate(allocator, primitiveRegistry, scalarAggregate);
+
+        Operator joined = new HashJoinOperator(allocator, itemAggregates, 0, scalarAggregate, 0);
+        joined = projectQuery44AverageKeys(allocator, primitiveRegistry, joined);
+        joined = filter(allocator, primitiveRegistry, joined, query44ThresholdPredicate(1, 2));
+        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1);
+        joined = new TopNRankingOperator(allocator, 10, new int[] {1}, new boolean[] {descending}, joined);
+        return projectInputs(allocator, primitiveRegistry, joined, 0, 2);
+    }
+
+    private static Operator projectQuery44ItemAggregates(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable joinKey = new Variable(0);
+        List<Assignment> assignments = List.of(
+                new Assignment(joinKey, new Literal(1L), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(joinKey, Stream.VALUES),
+                new Reference(new Input(0), Stream.VALUES),
+                new Reference(new Input(1), Stream.VALUES),
+                new Reference(new Input(2), Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static Operator projectQuery44ScalarAggregate(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable joinKey = new Variable(0);
+        List<Assignment> assignments = List.of(
+                new Assignment(joinKey, new Literal(1L), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(joinKey, Stream.VALUES),
+                new Reference(new Input(1), Stream.VALUES),
+                new Reference(new Input(2), Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static Operator projectQuery44AverageKeys(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable itemAverage = new Variable(0);
+        Variable scalarAverage = new Variable(1);
+        List<Assignment> assignments = List.of(
+                new Assignment(itemAverage, new Call("divide_round_i64", List.of(
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                new Assignment(scalarAverage, new Call("divide_round_i64", List.of(
+                        new Reference(new Input(5), Stream.VALUES),
+                        new Reference(new Input(6), Stream.VALUES))), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(new Input(1), Stream.VALUES),
+                new Reference(itemAverage, Stream.VALUES),
+                new Reference(scalarAverage, Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static FilterSpec query44ThresholdPredicate(int itemAverageIndex, int scalarAverageIndex)
+    {
+        Variable ten = new Variable(0);
+        Variable nine = new Variable(1);
+        Variable scaledItem = new Variable(2);
+        Variable scaledScalar = new Variable(3);
+        Variable greater = new Variable(4);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(ten, new Literal(10L), AllMask.ALL),
+                new Assignment(nine, new Literal(9L), AllMask.ALL),
+                new Assignment(scaledItem, new Call("multiply", List.of(
+                        new Reference(new Input(itemAverageIndex), Stream.VALUES),
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledScalar, new Call("multiply", List.of(
+                        new Reference(new Input(scalarAverageIndex), Stream.VALUES),
+                        new Reference(nine, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greater, new Call("lt", List.of(
+                        new Reference(scaledScalar, Stream.VALUES),
+                        new Reference(scaledItem, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(greater, Stream.VALUES)));
     }
 
     private static FilterSpec query45ZipOrItemPredicate(int zipIndex, int itemMatchIndex)
@@ -1217,6 +1341,15 @@ final class TpcdsParquetSupport
                         new Reference(new Input(inputIndex), Stream.VALUES),
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(equals, Stream.VALUES)));
+    }
+
+    private static FilterSpec isNull(int inputIndex)
+    {
+        Variable isNull = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(isNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(isNull, Stream.VALUES)));
     }
 
     private static FilterSpec lessThan(int inputIndex, long constant)

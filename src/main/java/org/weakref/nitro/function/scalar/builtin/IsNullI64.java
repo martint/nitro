@@ -53,6 +53,7 @@ public final class IsNullI64
         if (!requestedStreams.contains(Stream.VALUES)) {
             return Streams.empty();
         }
+        Allocator.Context allocationContext = context.allocationContext("IsNullI64");
 
         BooleanVector inputNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
         Vector inputValues = (Vector) inputs.get(0).getOrNull(Stream.VALUES);
@@ -64,7 +65,7 @@ public final class IsNullI64
             requiredLength = Math.max(requiredLength, inputValues.length());
         }
         BooleanVector values = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null && output.getOrNull(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
                 requiredLength,

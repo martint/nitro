@@ -22,6 +22,7 @@ import io.trino.metadata.TestingFunctionResolution;
 import io.trino.operator.AggregationOperator.AggregationOperatorFactory;
 import io.trino.operator.Driver;
 import io.trino.operator.DriverContext;
+import io.trino.operator.EnforceSingleRowOperator;
 import io.trino.operator.FilterAndProjectOperator;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
@@ -34,6 +35,7 @@ import io.trino.operator.PagesIndex;
 import io.trino.operator.SetBuilderOperator.SetBuilderOperatorFactory;
 import io.trino.operator.SetBuilderOperator.SetSupplier;
 import io.trino.operator.TopNOperator;
+import io.trino.operator.TopNRankingOperator;
 import io.trino.operator.ValuesOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
 import io.trino.operator.join.JoinBridgeManager;
@@ -57,6 +59,7 @@ import io.trino.testing.MaterializedResult;
 import io.trino.testing.PageConsumerOperator;
 import io.trino.testing.TestingSession;
 import io.trino.testing.TestingTaskContext;
+import io.trino.type.BlockTypeOperators;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import org.weakref.nitro.tpcds.TpcdsParquetTables;
@@ -79,12 +82,14 @@ import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_FIRST;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_LAST;
+import static io.trino.spi.connector.SortOrder.DESC_NULLS_LAST;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static io.trino.sql.planner.plan.TopNRankingNode.RankingType.RANK;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -97,6 +102,7 @@ public final class TrinoTpcdsParquetSupport
     private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 5;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", ImmutableList.of());
+    private static final TestingAggregationFunction BIGINT_COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_AVG = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(BIGINT));
@@ -236,6 +242,42 @@ public final class TrinoTpcdsParquetSupport
                 List.of(VARCHAR));
     }
 
+    public MaterializedResult query44(TpcdsParquetTables tables)
+    {
+        List<Page> bestItemNames = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_product_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<Page> worstItemNames = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_product_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR)),
+                List.of(BIGINT, VARCHAR));
+        List<Type> rankedTypes = List.of(BIGINT, BIGINT);
+        List<Type> afterRankJoinTypes = concatTypes(rankedTypes, rankedTypes);
+        List<Type> afterBestItemTypes = concatTypes(afterRankJoinTypes, List.of(BIGINT, VARCHAR));
+        List<Type> outputTypes = List.of(BIGINT, VARCHAR, VARCHAR);
+
+        return executePagesPipeline(
+                query44RankedItemsPages(tables, false),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(44_20, rankedTypes, List.of(1), query44RankedItemsPages(tables, true), rankedTypes, List.of(1))),
+                        hashJoinStep(new HashJoinSpec(44_21, afterRankJoinTypes, List.of(0), bestItemNames, List.of(BIGINT, VARCHAR), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(44_22, afterBestItemTypes, List.of(2), worstItemNames, List.of(BIGINT, VARCHAR), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                44_23,
+                                Optional.empty(),
+                                List.of(field(1, BIGINT), field(5, VARCHAR), field(7, VARCHAR)),
+                                outputTypes)),
+                        factoryStep(topNFactory(44_24, outputTypes, 100, List.of(0, 1, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
     public MaterializedResult query45(TpcdsParquetTables tables)
     {
         List<String> columns = List.of("ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price");
@@ -304,6 +346,84 @@ public final class TrinoTpcdsParquetSupport
         steps.add(factoryStep(hashAggregationFactory(45_7, List.of(VARCHAR, VARCHAR), List.of(2, 1), salesSum.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()))));
         steps.add(factoryStep(topNFactory(45_8, List.of(VARCHAR, VARCHAR, salesSum.getFinalType()), 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))));
         return executePipeline(tables.tableFiles("web_sales"), columns, steps, List.of(VARCHAR, VARCHAR, salesSum.getFinalType()));
+    }
+
+    private List<Page> query44RankedItemsPages(TpcdsParquetTables tables, boolean descending)
+    {
+        List<Type> rankedTypes = List.of(BIGINT, BIGINT);
+        List<Type> filteredItemTypes = List.of(BIGINT, BIGINT);
+        List<Type> itemAggregateTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> itemJoinTypes = List.of(BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Type> scalarFilteredTypes = List.of(BIGINT, BIGINT);
+        List<Type> scalarAggregateTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> scalarJoinTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> afterCrossTypes = concatTypes(itemJoinTypes, scalarJoinTypes);
+        List<Type> rankInputTypes = List.of(BIGINT, BIGINT);
+        List<SortOrder> sortOrder = List.of(descending ? DESC_NULLS_LAST : ASC_NULLS_LAST);
+
+        List<Page> scalarPages = executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_store_sk", "ss_addr_sk", "ss_net_profit"),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                44_10,
+                                Optional.of(and(
+                                        equal(0, 4L, BIGINT),
+                                        new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(field(1, BIGINT)), List.of()))),
+                                List.of(field(0, BIGINT), field(2, BIGINT)),
+                                scalarFilteredTypes)),
+                        factoryStep(hashAggregationFactory(
+                                44_11,
+                                List.of(BIGINT),
+                                List.of(0),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                BIGINT_COUNT.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                44_12,
+                                Optional.of(greaterThan(field(2, BIGINT), constant(0L, BIGINT), BIGINT)),
+                                identityProjections(scalarAggregateTypes),
+                                scalarAggregateTypes)),
+                        factoryStep(enforceSingleRowFactory(44_13, scalarAggregateTypes)),
+                        factoryStep(filterAndProjectFactory(
+                                44_14,
+                                Optional.empty(),
+                                List.of(constant(1L, BIGINT), field(1, BIGINT), field(2, BIGINT)),
+                                scalarJoinTypes))));
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_item_sk", "ss_store_sk", "ss_net_profit"),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                44_0,
+                                Optional.of(equal(1, 4L, BIGINT)),
+                                List.of(field(0, BIGINT), field(2, BIGINT)),
+                                filteredItemTypes)),
+                        factoryStep(hashAggregationFactory(
+                                44_1,
+                                List.of(BIGINT),
+                                List.of(0),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                BIGINT_COUNT.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                44_2,
+                                Optional.of(greaterThan(field(2, BIGINT), constant(0L, BIGINT), BIGINT)),
+                                List.of(constant(1L, BIGINT), field(0, BIGINT), field(1, BIGINT), field(2, BIGINT)),
+                                itemJoinTypes)),
+                        hashJoinStep(new HashJoinSpec(44_3, itemJoinTypes, List.of(0), scalarPages, scalarJoinTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                44_4,
+                                Optional.of(query44ThresholdPredicate()),
+                                List.of(
+                                        field(1, BIGINT),
+                                        query44AverageKey(field(2, BIGINT), field(3, BIGINT))),
+                                rankInputTypes)),
+                        factoryStep(topNRankingFactory(44_5, rankInputTypes, List.of(0, 1), List.of(), List.of(1), sortOrder, 10)),
+                        factoryStep(filterAndProjectFactory(
+                                44_6,
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(2, BIGINT)),
+                                rankedTypes))));
     }
 
     public MaterializedResult query62(TpcdsParquetTables tables)
@@ -1509,6 +1629,14 @@ public final class TrinoTpcdsParquetSupport
                 Optional.empty());
     }
 
+    private OperatorFactory enforceSingleRowFactory(int operatorId, List<Type> types)
+    {
+        return new EnforceSingleRowOperator.EnforceSingleRowOperatorFactory(
+                operatorId,
+                new PlanNodeId("enforce-single-row-" + operatorId),
+                types);
+    }
+
     private OperatorFactory topNFactory(int operatorId, List<Type> types, int n, List<Integer> sortChannels, List<SortOrder> sortOrders)
     {
         List<Type> sortTypes = sortChannels.stream()
@@ -1520,6 +1648,32 @@ public final class TrinoTpcdsParquetSupport
                 types,
                 n,
                 orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders));
+    }
+
+    private OperatorFactory topNRankingFactory(int operatorId, List<Type> sourceTypes, List<Integer> outputChannels, List<Integer> partitionChannels, List<Integer> sortChannels, List<SortOrder> sortOrders, int limit)
+    {
+        List<Type> sortTypes = sortChannels.stream()
+                .map(sourceTypes::get)
+                .toList();
+        List<Type> partitionTypes = partitionChannels.stream()
+                .map(sourceTypes::get)
+                .toList();
+        return new TopNRankingOperator.TopNRankingOperatorFactory(
+                operatorId,
+                new PlanNodeId("topn-ranking-" + operatorId),
+                RANK,
+                sourceTypes,
+                outputChannels,
+                partitionChannels,
+                partitionTypes,
+                sortChannels,
+                limit,
+                false,
+                100_000,
+                Optional.empty(),
+                hashStrategyCompiler,
+                orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders),
+                new BlockTypeOperators());
     }
 
     private OperatorFactory filterAndProjectFactory(int operatorId, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
@@ -1711,6 +1865,32 @@ public final class TrinoTpcdsParquetSupport
                 BIGINT);
         RowExpression scaledAverage = multiply(field(7, BIGINT), constant(6L, BIGINT), BIGINT);
         return greaterThan(scaledReturn, scaledAverage, BIGINT);
+    }
+
+    private static RowExpression query44AverageKey(RowExpression sum, RowExpression count)
+    {
+        RowExpression halfCount = divide(count, constant(2L, BIGINT), BIGINT);
+        RowExpression positiveAverage = divide(add(sum, halfCount, BIGINT), count, BIGINT);
+        RowExpression negatedSum = subtract(constant(0L, BIGINT), sum, BIGINT);
+        RowExpression negativeAverage = subtract(
+                constant(0L, BIGINT),
+                divide(add(negatedSum, halfCount, BIGINT), count, BIGINT),
+                BIGINT);
+        return ifExpression(
+                lessThan(sum, constant(0L, BIGINT), BIGINT),
+                negativeAverage,
+                positiveAverage,
+                BIGINT);
+    }
+
+    private static RowExpression query44ThresholdPredicate()
+    {
+        RowExpression itemAverage = query44AverageKey(field(2, BIGINT), field(3, BIGINT));
+        RowExpression scalarAverage = query44AverageKey(field(5, BIGINT), field(6, BIGINT));
+        return greaterThan(
+                multiply(itemAverage, constant(10L, BIGINT), BIGINT),
+                multiply(scalarAverage, constant(9L, BIGINT), BIGINT),
+                BIGINT);
     }
 
     private static RowExpression greaterThan(RowExpression left, RowExpression right, Type type)

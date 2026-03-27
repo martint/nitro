@@ -30,10 +30,10 @@ import java.util.Set;
 public class HashJoinOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("HashJoinOperator");
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
 
     private final Allocator allocator;
+    private final Allocator.Context allocationContext = new Allocator.Context("HashJoinOperator");
     private final Operator outer;
     private final Operator inner;
     private final int[] outerJoinColumns;
@@ -83,7 +83,7 @@ public class HashJoinOperator
         this.inner = inner;
         this.outerJoinColumns = outerJoinColumns.clone();
         this.innerJoinColumns = innerJoinColumns.clone();
-        this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
+        this.buffers = new JoinBufferSupport(allocator, allocationContext);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
@@ -115,7 +115,7 @@ public class HashJoinOperator
         }
         return new Batch(
                 batchMask,
-                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                takenMask -> allocator.transfer(allocationContext, takenMask),
                 outputs);
     }
 
@@ -126,7 +126,7 @@ public class HashJoinOperator
             captureOuterSchemaIfAvailable();
             done = true;
             currentOutputCount = 0;
-            return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
+            return allocator.allocateAllMask(allocationContext, 0);
         }
 
         int outputPosition = 0;
@@ -169,10 +169,10 @@ public class HashJoinOperator
 
         if (outputPosition == 0) {
             currentOutputCount = 0;
-            return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
+            return allocator.allocateAllMask(allocationContext, 0);
         }
         currentOutputCount = outputPosition;
-        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
+        return allocator.allocateRangeMask(allocationContext, 0, outputPosition);
     }
 
     private boolean loadNextOuterBatch()
@@ -276,7 +276,7 @@ public class HashJoinOperator
     {
         outer.close();
         inner.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private Output resultOutput(int outputIndex)
@@ -289,7 +289,7 @@ public class HashJoinOperator
                 });
             }
             Streams empty = buffers.emptyLike(schema);
-            return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+            return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
 
         Set<Stream> streams = outputIndex < outer.outputCount()
@@ -298,7 +298,7 @@ public class HashJoinOperator
         return new Output(
                 streams,
                 stream -> materializeOutput(outputIndex).get(stream),
-                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                (stream, vector) -> allocator.transfer(allocationContext, vector));
     }
 
     private Streams outputSchema(int outputIndex)
@@ -429,7 +429,7 @@ public class HashJoinOperator
             }
         }
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 Arrays.copyOf(retainedInnerMaskPositionsScratch, uniqueCount),
                 innerBatch.retainedBatch().borrowMask().size()));
     }

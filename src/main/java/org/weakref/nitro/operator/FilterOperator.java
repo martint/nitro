@@ -27,7 +27,7 @@ import java.util.function.Function;
 public class FilterOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("FilterOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("FilterOperator");
 
     private final Operator source;
     private final Allocator allocator;
@@ -70,7 +70,7 @@ public class FilterOperator
         Batch sourceBatch = source.next();
         BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
         currentBatchState = batchState;
-        Mask batchMask = allocator.copyMask(ALLOCATION_CONTEXT, sourceBatch.borrowMask());
+        Mask batchMask = allocator.copyMask(allocationContext, sourceBatch.borrowMask());
         batchMask = planEvaluator.evaluateInPlace(predicateMask, batchMask);
         source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
@@ -125,7 +125,7 @@ public class FilterOperator
         }
         source.close();
         planEvaluator.reset();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private record BatchState(Batch sourceBatch, Mask[] maskHolder)

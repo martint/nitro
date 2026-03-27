@@ -47,43 +47,68 @@ public final class EqualI64
     }
 
     @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq");
-        if (!requestedStreams.contains(Stream.VALUES)) {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
+        Allocator.Context allocationContext = context.allocationContext("EqualI64");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
+        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
-        BooleanVector result = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+        Streams result = Streams.empty();
+        if (requestedStreams.contains(Stream.NULLS)) {
+            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+                    allocationContext,
+                    existingNulls,
+                    BooleanVector.class,
+                    BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())),
+                    BooleanVector::new);
+            applyNulls(leftNulls, rightNulls, mask, outputNulls);
+            result = result.with(Stream.NULLS, outputNulls);
+        }
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return result;
+        }
+
+        BooleanVector values = context.allocator().allocateOrGrow(
+                allocationContext,
                 existing instanceof BooleanVector vector ? vector : null,
                 BooleanVector.class,
                 BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())),
                 BooleanVector::new);
-        applyIntegerEquality(left, right, mask, result);
-        return Streams.of(Stream.VALUES, result);
+        applyIntegerEquality(left, right, mask, values);
+        return result.with(Stream.VALUES, values);
     }
 
     @Override
     public MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual);
     }
 
     @Override
     public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual);
     }
 
     @Override
     public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, ALLOCATION_CONTEXT, EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual);
     }
 
     @Override
@@ -117,6 +142,15 @@ public final class EqualI64
         }
     }
 
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
+    {
+        boolean[] nulls = outputNulls.values();
+        java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
+        for (int position : mask) {
+            nulls[position] = isTrue(leftNulls, position) || isTrue(rightNulls, position);
+        }
+    }
+
     private static long integerValue(Vector vector, int position)
     {
         return switch (vector) {
@@ -131,5 +165,18 @@ public final class EqualI64
     private static boolean compareEqual(long leftValue, long rightValue)
     {
         return leftValue == rightValue;
+    }
+
+    private static boolean isTrue(Vector vector, int position)
+    {
+        if (vector == null) {
+            return false;
+        }
+        return switch (vector) {
+            case BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> isTrue(values.values(), values.ids()[position]);
+            case RleVector values -> isTrue(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean vector but got " + vector.getClass().getSimpleName());
+        };
     }
 }

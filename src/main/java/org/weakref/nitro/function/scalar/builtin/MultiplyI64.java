@@ -48,18 +48,19 @@ public final class MultiplyI64
         if (!requestedStreams.contains(Stream.VALUES)) {
             return Streams.empty();
         }
+        Allocator.Context allocationContext = context.allocationContext("MultiplyI64");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+            I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
             return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, MultiplyI64::apply));
         }
 
         I64Vector result = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existing instanceof I64Vector vector ? vector : null,
                 I64Vector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),

@@ -54,6 +54,7 @@ public final class AndBoolean
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
+        Allocator.Context allocationContext = context.allocationContext("AndBoolean");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
@@ -67,7 +68,7 @@ public final class AndBoolean
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     existingNulls,
                     BooleanVector.class,
                     length,
@@ -80,7 +81,7 @@ public final class AndBoolean
         }
 
         BooleanVector outputValues = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existingValues,
                 BooleanVector.class,
                 length,
@@ -130,10 +131,5 @@ public final class AndBoolean
     private static boolean isNull(BooleanVector nulls, int position)
     {
         return nulls != null && nulls.values()[position];
-    }
-
-    private static boolean apply(boolean leftValue, boolean rightValue)
-    {
-        return leftValue && rightValue;
     }
 }

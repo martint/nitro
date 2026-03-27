@@ -286,6 +286,67 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testBinaryVectorCopyPositionsIntoAppendsFromMultipleSources()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("BinaryCopyAppend");
+
+        BinaryVector first = new BinaryVector(4, 32);
+        first.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        first.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        first.setBytes(1, "bravo".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        first.setBytes(2, "charlie".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        first.setBytes(3, "delta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        BinaryVector second = new BinaryVector(4, 32);
+        second.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        second.setBytes(0, "echo".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        second.setBytes(1, "foxtrot".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        second.setBytes(2, "golf".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        second.setBytes(3, "hotel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        BinaryVector copy = null;
+        copy = (BinaryVector) first.copyPositionsInto(allocator, context, copy, new int[] {1, 3}, 2, 0, 4);
+        copy = (BinaryVector) second.copyPositionsInto(allocator, context, copy, new int[] {0, 2}, 2, 2, 4);
+
+        assertThat(new String(copy.copyBytes(0), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("bravo");
+        assertThat(new String(copy.copyBytes(1), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("delta");
+        assertThat(new String(copy.copyBytes(2), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("echo");
+        assertThat(new String(copy.copyBytes(3), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("golf");
+    }
+
+    @Test
+    void testBinaryVectorCopyPositionsIntoAppendsLargeChunks()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("BinaryCopyLargeAppend");
+
+        BinaryVector first = new BinaryVector(10_000, 200_000);
+        first.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        for (int position = 0; position < 10_000; position++) {
+            first.setBytes(position, ("left-" + position).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        BinaryVector second = new BinaryVector(10_000, 200_000);
+        second.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        for (int position = 0; position < 10_000; position++) {
+            second.setBytes(position, ("right-" + position).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        int[] firstPositions = java.util.stream.IntStream.range(4_096, 5_904).toArray();
+        int[] secondPositions = java.util.stream.IntStream.range(0, 2_288).toArray();
+
+        BinaryVector copy = null;
+        copy = (BinaryVector) first.copyPositionsInto(allocator, context, copy, firstPositions, firstPositions.length, 0, 4_096);
+        copy = (BinaryVector) second.copyPositionsInto(allocator, context, copy, secondPositions, secondPositions.length, 1_808, 4_096);
+
+        assertThat(new String(copy.copyBytes(0), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("left-4096");
+        assertThat(new String(copy.copyBytes(1_807), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("left-5903");
+        assertThat(new String(copy.copyBytes(1_808), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("right-0");
+        assertThat(new String(copy.copyBytes(4_095), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("right-2287");
+    }
+
+    @Test
     void testMinUtf8StateVectorRetainedBytesAreCachedIncrementally()
     {
         MinUtf8StateVector state = new MinUtf8StateVector(4);

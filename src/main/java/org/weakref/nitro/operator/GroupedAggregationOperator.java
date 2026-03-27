@@ -34,7 +34,7 @@ import static java.lang.Math.toIntExact;
 public class GroupedAggregationOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupedAggregationOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
 
     private final int groupColumn;
@@ -154,7 +154,7 @@ public class GroupedAggregationOperator
         this.maxGroup = toIntExact(maxObservedGroup);
         for (int i = 0; i < result.length; i++) {
             if (states[i] == null) {
-                states[i] = aggregations[i].allocate(allocator, ALLOCATION_CONTEXT, 0);
+                states[i] = aggregations[i].allocate(allocator, allocationContext, 0);
             }
             result[i] = null;
         }
@@ -167,7 +167,7 @@ public class GroupedAggregationOperator
 
         done = true;
 
-        return allocator.allocateAllMask(ALLOCATION_CONTEXT, this.maxGroup + 1);
+        return allocator.allocateAllMask(allocationContext, this.maxGroup + 1);
     }
 
     private Mask computeInlineGroupedResults()
@@ -182,7 +182,7 @@ public class GroupedAggregationOperator
                 }
 
                 long previousMaxGroup = maxObservedGroup;
-                reusableGroups = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
+                reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
                 assignInlineGroups(batch, mask, reusableGroups);
                 maxObservedGroup = Math.max(maxObservedGroup, maxGroup(reusableGroups, mask));
 
@@ -194,7 +194,7 @@ public class GroupedAggregationOperator
         }
 
         finishResults(maxObservedGroup);
-        return allocator.allocateAllMask(ALLOCATION_CONTEXT, this.maxGroup + 1);
+        return allocator.allocateAllMask(allocationContext, this.maxGroup + 1);
     }
 
     private void assignInlineGroups(Batch batch, Mask mask, I64Vector groups)
@@ -240,8 +240,8 @@ public class GroupedAggregationOperator
         for (int index = 0; index < aggregations.length; index++) {
             Accumulator accumulator = aggregations[index];
             states[index] = states[index] == null
-                    ? accumulator.allocate(allocator, ALLOCATION_CONTEXT, newCapacity)
-                    : accumulator.grow(allocator, ALLOCATION_CONTEXT, states[index], newCapacity);
+                    ? accumulator.allocate(allocator, allocationContext, newCapacity)
+                    : accumulator.grow(allocator, allocationContext, states[index], newCapacity);
             accumulator.initialize(states[index], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
         }
     }
@@ -253,14 +253,14 @@ public class GroupedAggregationOperator
         }
 
         for (DistinctAggregationGroup distinctAggregationGroup : distinctAggregationGroups) {
-            Mask distinctMask = distinctAggregationGroup.select(groups, mask, streamAccessor, allocator);
+            Mask distinctMask = distinctAggregationGroup.select(groups, mask, streamAccessor, allocator, allocationContext);
             try {
                 for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
                     aggregations[aggregationIndex].accumulateDistinctSelected(states[aggregationIndex], groups, distinctMask, streamAccessor);
                 }
             }
             finally {
-                allocator.release(ALLOCATION_CONTEXT, distinctMask);
+                allocator.release(allocationContext, distinctMask);
             }
         }
     }
@@ -270,7 +270,7 @@ public class GroupedAggregationOperator
         this.maxGroup = toIntExact(maxObservedGroup);
         for (int index = 0; index < result.length; index++) {
             if (states[index] == null) {
-                states[index] = aggregations[index].allocate(allocator, ALLOCATION_CONTEXT, 0);
+                states[index] = aggregations[index].allocate(allocator, allocationContext, 0);
             }
             result[index] = null;
         }
@@ -293,7 +293,7 @@ public class GroupedAggregationOperator
             int output = outputIndex;
             outputs[outputIndex] = resultOutput(output, batchState);
         }
-        return new Batch(batchMask, batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchMask, batchState::constrain, takenMask -> allocator.transfer(allocationContext, takenMask), outputs);
     }
 
     @Override
@@ -315,16 +315,16 @@ public class GroupedAggregationOperator
             return new Output(
                     groupedKeyStreams(),
                     stream -> groupedKeyOutput(groupedOutput, batchState).get(stream),
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
-                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
         }
 
         Streams streams = result[output - groupedResults.length];
         return new Output(
                 EnumSet.of(Stream.VALUES, Stream.NULLS),
                 stream -> aggregationOutput(output - groupedResults.length, batchState).get(stream),
-                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
-                (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector),
+                (stream, vector) -> allocator.transfer(allocationContext, vector),
+                (stream, vector) -> allocator.release(allocationContext, vector),
                 (existing, sourcePosition, outputPosition, size) -> aggregationCopyPosition(output - groupedResults.length, existing, sourcePosition, outputPosition, size));
     }
 
@@ -334,7 +334,7 @@ public class GroupedAggregationOperator
         if (streams != null && batchState.aggregationMaterializedMask[output] != null && batchState.mask.equals(batchState.aggregationMaterializedMask[output])) {
             return streams;
         }
-        streams = aggregations[output].result(maxGroup, states[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+        streams = aggregations[output].result(maxGroup, states[output], batchState.mask, streams, allocator, allocationContext);
         result[output] = streams;
         batchState.aggregationMaterializedMask[output] = batchState.mask;
         return streams;
@@ -342,7 +342,7 @@ public class GroupedAggregationOperator
 
     private Streams aggregationCopyPosition(int output, Streams existing, int sourcePosition, int outputPosition, int size)
     {
-        return aggregations[output].copyResultPosition(sourcePosition, maxGroup, states[output], existing, outputPosition, size, allocator, ALLOCATION_CONTEXT);
+        return aggregations[output].copyResultPosition(sourcePosition, maxGroup, states[output], existing, outputPosition, size, allocator, allocationContext);
     }
 
     private Streams groupedKeyOutput(int output, BatchState batchState)
@@ -352,10 +352,10 @@ public class GroupedAggregationOperator
             return streams;
         }
         if (groupByColumns == null) {
-            streams = groupedKeySource.groupedKeyOutput(groupedColumns[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+            streams = groupedKeySource.groupedKeyOutput(groupedColumns[output], batchState.mask, streams, allocator, allocationContext);
         }
         else {
-            streams = inlineGroupingState.groupedValues(groupedKeyIndexes[output], batchState.mask, streams, allocator, ALLOCATION_CONTEXT);
+            streams = inlineGroupingState.groupedValues(groupedKeyIndexes[output], batchState.mask, streams, allocator, allocationContext);
         }
         groupedResults[output] = streams;
         batchState.materializedMask[output] = batchState.mask;
@@ -388,7 +388,7 @@ public class GroupedAggregationOperator
     public void close()
     {
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private static int[] toArray(List<Integer> values)
@@ -475,10 +475,10 @@ public class GroupedAggregationOperator
             return aggregationIndexes;
         }
 
-        public Mask select(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, Allocator allocator)
+        public Mask select(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, Allocator allocator, Allocator.Context allocationContext)
         {
             if (mask.none()) {
-                return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], mask.size());
+                return allocator.allocateSparseMask(allocationContext, new int[0], mask.size());
             }
 
             Vector[] values = new Vector[inputColumns.length + 1];
@@ -502,7 +502,7 @@ public class GroupedAggregationOperator
                     distinctPositions[selectedCount++] = position;
                 }
             }
-            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, distinctPositions, selectedCount, mask.size());
+            return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());
         }
     }
 }
