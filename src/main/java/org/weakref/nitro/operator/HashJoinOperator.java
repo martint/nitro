@@ -23,6 +23,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -31,11 +32,13 @@ public class HashJoinOperator
         implements Operator
 {
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
+    private static final long NO_MATCH_ROW_REFERENCE = -1L;
 
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("HashJoinOperator");
     private final Operator outer;
     private final Operator inner;
+    private final boolean probeOuterJoin;
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
     private final JoinBufferSupport buffers;
@@ -66,10 +69,20 @@ public class HashJoinOperator
 
     public HashJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
-        this(allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn});
+        this(allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn}, false);
+    }
+
+    public HashJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn, boolean probeOuterJoin)
+    {
+        this(allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn}, probeOuterJoin);
     }
 
     public HashJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
+    {
+        this(allocator, outer, outerJoinColumns, inner, innerJoinColumns, false);
+    }
+
+    public HashJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns, boolean probeOuterJoin)
     {
         if (outerJoinColumns.length != innerJoinColumns.length) {
             throw new IllegalArgumentException("Join key counts must match");
@@ -81,6 +94,7 @@ public class HashJoinOperator
         this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
+        this.probeOuterJoin = probeOuterJoin;
         this.outerJoinColumns = outerJoinColumns.clone();
         this.innerJoinColumns = innerJoinColumns.clone();
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
@@ -122,7 +136,7 @@ public class HashJoinOperator
     private Mask produceBatch()
     {
         loadInnerIfNecessary();
-        if (joinIndex == null || joinIndex.isEmpty()) {
+        if ((joinIndex == null || joinIndex.isEmpty()) && !probeOuterJoin) {
             captureOuterSchemaIfAvailable();
             done = true;
             currentOutputCount = 0;
@@ -152,6 +166,18 @@ public class HashJoinOperator
                 currentOuterPositionReady = true;
                 currentMatches = matchesForOuterPosition();
                 currentMatchIndex = 0;
+            }
+
+            if (currentMatches.isEmpty()) {
+                if (probeOuterJoin) {
+                    outputOuterPositions[outputPosition] = currentOuterPosition;
+                    outputInnerRows[outputPosition] = NO_MATCH_ROW_REFERENCE;
+                    outputPosition++;
+                }
+                outerRemaining--;
+                currentOuterPositionReady = false;
+                currentMatches = LongLists.emptyList();
+                continue;
             }
 
             while (currentMatchIndex < currentMatches.size() && outputPosition < BATCH_SIZE) {
@@ -294,7 +320,7 @@ public class HashJoinOperator
 
         Set<Stream> streams = outputIndex < outer.outputCount()
                 ? currentOuterBatch.output(outputIndex).streams()
-                : bufferedInner.outputStreams(outputIndex - outer.outputCount());
+                : innerOutputStreams(outputIndex - outer.outputCount());
         return new Output(
                 streams,
                 stream -> materializeOutput(outputIndex).get(stream),
@@ -320,9 +346,10 @@ public class HashJoinOperator
         }
         Streams schema = outputBuffer.innerSchema()[outputIndex - outer.outputCount()];
         if (schema != null) {
-            return schema;
+            return probeOuterJoin ? ensureNullStream(schema) : schema;
         }
-        return bufferedInner.outputSchema(outputIndex - outer.outputCount());
+        Streams bufferedSchema = bufferedInner.outputSchema(outputIndex - outer.outputCount());
+        return probeOuterJoin && bufferedSchema != null ? ensureNullStream(bufferedSchema) : bufferedSchema;
     }
 
     private Streams materializeOutput(int outputIndex)
@@ -356,7 +383,7 @@ public class HashJoinOperator
 
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
-        if (currentOutputMask.all()) {
+        if (currentOutputMask.all() && !hasNoMatchRows()) {
             Streams result = null;
             int outputStart = 0;
             int next = 0;
@@ -376,11 +403,16 @@ public class HashJoinOperator
         }
 
         Streams result = null;
+        boolean exposeNulls = probeOuterJoin || innerOutputStreams(innerOutputIndex).contains(Stream.NULLS);
         for (int index = 0; index < currentOutputMask.count(); index++) {
             int outputPosition = currentOutputMask.position(index);
             long rowReference = outputInnerRows[outputPosition];
+            if (rowReference == NO_MATCH_ROW_REFERENCE) {
+                result = copyNullInnerPosition(result, innerOutputIndex, currentOutputCount, outputPosition);
+                continue;
+            }
             BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex(rowReference));
-            result = copyInnerSinglePosition(result, innerBatch, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference));
+            result = copyInnerSinglePosition(result, innerBatch, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference), exposeNulls);
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
     }
@@ -399,15 +431,31 @@ public class HashJoinOperator
         return buffers.copyPositions(output, existing, retainedInnerPositionsScratch, positionCount, outputStart, size);
     }
 
-    private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int size, int outputPosition, int logicalPosition)
+    private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int size, int outputPosition, int logicalPosition, boolean exposeNulls)
     {
         if (!innerBatch.retained()) {
-            return buffers.copySinglePosition(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition);
+            return withSyntheticNulls(existing, buffers.copySinglePosition(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition), size, outputPosition, exposeNulls);
         }
 
         int sourcePosition = innerBatch.sourcePosition(logicalPosition);
         constrainRetainedInnerBatch(innerBatch, new int[] {logicalPosition}, 1);
-        return buffers.copySinglePosition(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition);
+        return withSyntheticNulls(existing, buffers.copySinglePosition(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
+    }
+
+    private Streams copyNullInnerPosition(Streams existing, int innerOutputIndex, int size, int outputPosition)
+    {
+        Streams schema = outputSchema(innerOutputIndex + outer.outputCount());
+        if (schema == null) {
+            throw new IllegalStateException("Unable to determine inner output schema for left join");
+        }
+
+        Streams.Builder builder = Streams.builder();
+        builder.put(Stream.VALUES, existing == null ? nullValuesLike(schema.values(), size) : existing.values());
+        builder.put(Stream.NULLS, setBooleanPosition(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.NULLS), size, outputPosition, true));
+        if (schema.has(Stream.ERRORS)) {
+            builder.put(Stream.ERRORS, setBooleanPosition(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.ERRORS), size, outputPosition, false));
+        }
+        return builder.build();
     }
 
     private void constrainRetainedInnerBatch(BufferedJoinInput.InnerBatch innerBatch, int[] logicalPositions, int positionCount)
@@ -447,6 +495,85 @@ public class HashJoinOperator
     private static int rowPosition(long rowReference)
     {
         return (int) rowReference;
+    }
+
+    private boolean hasNoMatchRows()
+    {
+        for (int index = 0; index < currentOutputCount; index++) {
+            if (outputInnerRows[index] == NO_MATCH_ROW_REFERENCE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Set<Stream> innerOutputStreams(int innerOutputIndex)
+    {
+        Set<Stream> streams = bufferedInner.outputStreams(innerOutputIndex);
+        if (!probeOuterJoin || streams == null || streams.contains(Stream.NULLS)) {
+            return streams;
+        }
+        EnumSet<Stream> adjusted = EnumSet.copyOf(streams);
+        adjusted.add(Stream.NULLS);
+        return Set.copyOf(adjusted);
+    }
+
+    private Streams withSyntheticNulls(Streams existing, Streams streams, int size, int outputPosition, boolean exposeNulls)
+    {
+        if (!exposeNulls || streams.has(Stream.NULLS)) {
+            return streams;
+        }
+        return streams.with(Stream.NULLS, setBooleanPosition(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.NULLS), size, outputPosition, false));
+    }
+
+    private BooleanVector setBooleanPosition(BooleanVector existing, int size, int outputPosition, boolean value)
+    {
+        BooleanVector vector = allocator.allocateOrGrow(allocationContext, existing, BooleanVector.class, size, BooleanVector::new);
+        vector.values()[outputPosition] = value;
+        return vector;
+    }
+
+    private Streams ensureNullStream(Streams schema)
+    {
+        if (schema.has(Stream.NULLS)) {
+            return schema;
+        }
+        return schema.with(Stream.NULLS, new BooleanVector(0));
+    }
+
+    private Vector nullValuesLike(Vector sample, int size)
+    {
+        return switch (sample) {
+            case org.weakref.nitro.data.I64Vector _ -> allocator.allocate(allocationContext, org.weakref.nitro.data.I64Vector.class, size, org.weakref.nitro.data.I64Vector::new);
+            case org.weakref.nitro.data.I32Vector _ -> allocator.allocate(allocationContext, org.weakref.nitro.data.I32Vector.class, size, org.weakref.nitro.data.I32Vector::new);
+            case org.weakref.nitro.data.F64Vector _ -> allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, size, org.weakref.nitro.data.F64Vector::new);
+            case BooleanVector _ -> allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
+            case org.weakref.nitro.data.BinaryVector binary -> {
+                org.weakref.nitro.data.BinaryVector values = org.weakref.nitro.data.BinaryVector.allocate(allocator, allocationContext, size, 0);
+                values.addTraits(binary.traits());
+                yield values;
+            }
+            case org.weakref.nitro.data.DictionaryVector dictionary -> nullValuesLike(dictionary.values(), size);
+            case org.weakref.nitro.data.RleVector rle -> nullValuesLike(rle.values(), size);
+            case org.weakref.nitro.data.ArrayVector array -> {
+                org.weakref.nitro.data.ArrayVector values = allocator.allocateArray(allocationContext, size);
+                values.setElements(buffers.emptyLike(array.elements()));
+                yield values;
+            }
+            case org.weakref.nitro.data.MapVector map -> {
+                org.weakref.nitro.data.MapVector values = allocator.allocateMap(allocationContext, size);
+                values.setEntries(buffers.emptyLike(map.keys()), buffers.emptyLike(map.values()));
+                yield values;
+            }
+            case org.weakref.nitro.data.StructVector struct -> {
+                org.weakref.nitro.data.StructVector values = allocator.allocate(allocationContext, org.weakref.nitro.data.StructVector.class, size, org.weakref.nitro.data.StructVector::new);
+                for (Map.Entry<String, Streams> field : struct.fields().entrySet()) {
+                    values.setField(field.getKey(), buffers.emptyLike(field.getValue()));
+                }
+                yield values;
+            }
+            default -> throw new IllegalArgumentException("Unsupported null materialization type: " + sample.getClass().getSimpleName());
+        };
     }
 
     private static boolean isSingleLongJoinCandidate(Vector values)

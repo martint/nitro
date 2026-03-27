@@ -31,6 +31,7 @@ import io.trino.spi.connector.SourcePage;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
+import org.apache.parquet.schema.LogicalTypeAnnotation.DateLogicalTypeAnnotation;
 import org.apache.parquet.schema.LogicalTypeAnnotation.DecimalLogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
@@ -311,7 +312,9 @@ final class TrinoClickBenchPageReader
                 return createDecimalType(decimal.getPrecision(), decimal.getScale());
             }
             return switch (primitive.getPrimitiveTypeName()) {
-                case INT32 -> io.trino.spi.type.IntegerType.INTEGER;
+                case INT32 -> primitive.getLogicalTypeAnnotation() instanceof DateLogicalTypeAnnotation
+                        ? io.trino.spi.type.DateType.DATE
+                        : io.trino.spi.type.IntegerType.INTEGER;
                 case INT64 -> io.trino.spi.type.BigintType.BIGINT;
                 case BOOLEAN -> io.trino.spi.type.BooleanType.BOOLEAN;
                 case BINARY, FIXED_LEN_BYTE_ARRAY -> primitive.getLogicalTypeAnnotation() != null && primitive.getLogicalTypeAnnotation().equals(stringType())
@@ -352,7 +355,9 @@ final class TrinoClickBenchPageReader
             return createDecimalType(decimal.getPrecision(), decimal.getScale());
         }
         return switch (primitive.getPrimitiveTypeName()) {
-            case INT32 -> io.trino.spi.type.IntegerType.INTEGER;
+            case INT32 -> primitive.getLogicalTypeAnnotation() instanceof DateLogicalTypeAnnotation
+                    ? io.trino.spi.type.DateType.DATE
+                    : io.trino.spi.type.IntegerType.INTEGER;
             case INT64 -> io.trino.spi.type.BigintType.BIGINT;
             case BOOLEAN -> io.trino.spi.type.BooleanType.BOOLEAN;
             case BINARY, FIXED_LEN_BYTE_ARRAY -> primitive.getLogicalTypeAnnotation() != null && primitive.getLogicalTypeAnnotation().equals(stringType())

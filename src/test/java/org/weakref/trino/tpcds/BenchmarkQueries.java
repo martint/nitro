@@ -78,6 +78,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query80()
+    {
+        return support.query80(tables);
+    }
+
+    @Benchmark
     public Object query10()
     {
         return support.query10(tables);

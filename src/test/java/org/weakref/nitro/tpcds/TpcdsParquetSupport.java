@@ -25,6 +25,7 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
+import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
@@ -352,6 +353,60 @@ final class TpcdsParquetSupport
                 projected);
         Operator reordered = projectInputs(allocator, primitiveRegistry, aggregated, 0, 1, 2, 5, 3, 5, 4, 5);
         return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 4, 6}, new boolean[] {false, false, false, false, false}, reordered);
+    }
+
+    public static Operator query80(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator grouped = new GroupIdOperator(
+                allocator,
+                new UnionAllOperator(5, List.of(
+                        query80ChannelBranch(
+                                allocator,
+                                primitiveRegistry,
+                                tables,
+                                "store_sales",
+                                new String[] {"ss_sold_date_sk", "ss_item_sk", "ss_promo_sk", "ss_store_sk", "ss_ticket_number", "ss_ext_sales_price", "ss_net_profit"},
+                                "store_returns",
+                                new String[] {"sr_item_sk", "sr_ticket_number", "sr_return_amt", "sr_net_loss"},
+                                "store",
+                                new String[] {"s_store_sk", "s_store_id"},
+                                "store channel",
+                                "store"),
+                        query80ChannelBranch(
+                                allocator,
+                                primitiveRegistry,
+                                tables,
+                                "catalog_sales",
+                                new String[] {"cs_sold_date_sk", "cs_item_sk", "cs_promo_sk", "cs_catalog_page_sk", "cs_order_number", "cs_ext_sales_price", "cs_net_profit"},
+                                "catalog_returns",
+                                new String[] {"cr_item_sk", "cr_order_number", "cr_return_amount", "cr_net_loss"},
+                                "catalog_page",
+                                new String[] {"cp_catalog_page_sk", "cp_catalog_page_id"},
+                                "catalog channel",
+                                "catalog_page"),
+                        query80ChannelBranch(
+                                allocator,
+                                primitiveRegistry,
+                                tables,
+                                "web_sales",
+                                new String[] {"ws_sold_date_sk", "ws_item_sk", "ws_promo_sk", "ws_web_site_sk", "ws_order_number", "ws_ext_sales_price", "ws_net_profit"},
+                                "web_returns",
+                                new String[] {"wr_item_sk", "wr_order_number", "wr_return_amt", "wr_net_loss"},
+                                "web_site",
+                                new String[] {"web_site_sk", "web_site_id"},
+                                "web channel",
+                                "web_site"))),
+                new int[][] {
+                        {-1, -1, 2, 3, 4},
+                        {0, -1, 2, 3, 4},
+                        {0, 1, 2, 3, 4}});
+        grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 5),
+                List.of(new Sum(2), new Sum(3), new Sum(4)),
+                grouped);
+        grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 3, 4, 5);
+        return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, grouped);
     }
 
     public static Operator query73(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -986,6 +1041,122 @@ final class TpcdsParquetSupport
         return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
     }
 
+    private static Operator query80ChannelBranch(
+            Allocator allocator,
+            PrimitiveRegistry primitiveRegistry,
+            TpcdsParquetTables tables,
+            String salesTable,
+            String[] salesColumns,
+            String returnsTable,
+            String[] returnsColumns,
+            String dimensionTable,
+            String[] dimensionColumns,
+            String channelName,
+            String idPrefix)
+    {
+        Operator dateKeys = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                query80DatePredicate(),
+                new String[] {"d_date_sk", "d_date"},
+                0);
+        Operator itemKeys = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "item",
+                greaterThan(1, 5_000),
+                new String[] {"i_item_sk", "i_current_price"},
+                0);
+        Operator promotionKeys = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "promotion",
+                equalUtf8(1, "N"),
+                new String[] {"p_promo_sk", "p_channel_tv"},
+                0);
+        Operator dimension = scannedTable(allocator, tables, dimensionTable, dimensionColumns);
+
+        Operator joined = factScan(allocator, tables, salesTable, salesColumns);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                new int[] {1, 4},
+                factScan(allocator, tables, returnsTable, returnsColumns),
+                new int[] {0, 1},
+                true);
+        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 5, 6, 9, 10);
+        joined = new HashJoinOperator(allocator, joined, 0, dateKeys, 0);
+        joined = new HashJoinOperator(allocator, joined, 3, dimension, 0);
+        joined = new HashJoinOperator(allocator, joined, 1, itemKeys, 0);
+        joined = new HashJoinOperator(allocator, joined, 2, promotionKeys, 0);
+        joined = projectQuery80BranchValues(allocator, primitiveRegistry, joined, 10);
+        joined = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new Sum(2), new Sum(3)),
+                joined);
+        return projectQuery80BranchOutput(allocator, primitiveRegistry, joined, channelName, idPrefix);
+    }
+
+    private static Operator projectQuery80BranchValues(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int idIndex)
+    {
+        Variable zero = new Variable(0);
+        Variable returnAmountIsNull = new Variable(1);
+        Variable returnAmount = new Variable(2);
+        Variable returnLossIsNull = new Variable(3);
+        Variable returnLoss = new Variable(4);
+        Variable profit = new Variable(5);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(returnAmountIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(6), Stream.VALUES))), AllMask.ALL),
+                new Assignment(returnAmount, new Call("if_i64", List.of(
+                        new Reference(returnAmountIsNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(new Input(6), Stream.VALUES))), AllMask.ALL),
+                new Assignment(returnLossIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(7), Stream.VALUES))), AllMask.ALL),
+                new Assignment(returnLoss, new Call("if_i64", List.of(
+                        new Reference(returnLossIsNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(new Input(7), Stream.VALUES))), AllMask.ALL),
+                new Assignment(profit, new Call("subtract", List.of(
+                        new Reference(new Input(5), Stream.VALUES),
+                        new Reference(returnLoss, Stream.VALUES))), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(new Input(idIndex), Stream.VALUES),
+                new Reference(new Input(4), Stream.VALUES),
+                new Reference(returnAmount, Stream.VALUES),
+                new Reference(profit, Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static Operator projectQuery80BranchOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, String channelName, String idPrefix)
+    {
+        Variable channel = new Variable(0);
+        Variable prefix = new Variable(1);
+        Variable id = new Variable(2);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(channel, new Literal(channelName), AllMask.ALL),
+                new Assignment(prefix, new Literal(idPrefix), AllMask.ALL),
+                new Assignment(id, new Call("concat_utf8", List.of(
+                        new Reference(prefix, Stream.VALUES),
+                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(channel, Stream.VALUES),
+                new Reference(id, Stream.VALUES),
+                new Reference(new Input(1), Stream.VALUES),
+                new Reference(new Input(2), Stream.VALUES),
+                new Reference(new Input(3), Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
     private static long query90Count(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, Operator timeKeys, Operator householdKeys, Operator pageKeys)
     {
         try (Operator filtered = factScan(allocator, tables, "web_sales", "ws_sold_time_sk", "ws_ship_hdemo_sk", "ws_web_page_sk");
@@ -1127,6 +1298,13 @@ final class TpcdsParquetSupport
     private static FilterSpec query96TimePredicate()
     {
         return and(equal(1, 20), greaterThan(2, 29));
+    }
+
+    private static FilterSpec query80DatePredicate()
+    {
+        return and(
+                greaterThan(1, 11_191),
+                lessThan(1, 11_223));
     }
 
     private static FilterSpec query01ReturnThresholdPredicate(int returnSumIndex, int storeTotalSumIndex, int storeCountIndex)

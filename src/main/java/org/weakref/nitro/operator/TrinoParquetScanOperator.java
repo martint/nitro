@@ -36,6 +36,7 @@ import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.block.VariableWidthBlock;
 import io.trino.spi.connector.SourcePage;
 import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.schema.LogicalTypeAnnotation.DateLogicalTypeAnnotation;
 import org.apache.parquet.schema.LogicalTypeAnnotation.DecimalLogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
@@ -345,7 +346,7 @@ public final class TrinoParquetScanOperator
                 }
                 else {
                     kind = switch (primitive.getPrimitiveTypeName()) {
-                        case INT32 -> ColumnKind.I32;
+                        case INT32 -> primitive.getLogicalTypeAnnotation() instanceof DateLogicalTypeAnnotation ? ColumnKind.DATE : ColumnKind.I32;
                         case INT64 -> ColumnKind.I64;
                         case BOOLEAN -> ColumnKind.BOOLEAN;
                         case BINARY, FIXED_LEN_BYTE_ARRAY -> ColumnKind.BINARY;
@@ -452,6 +453,7 @@ public final class TrinoParquetScanOperator
 
         return switch (column.kind()) {
             case I32 -> copyI32(block);
+            case DATE -> copyI32(block);
             case I64 -> copyI64(block);
             case SHORT_DECIMAL -> copyI64(block);
             case BOOLEAN -> copyBoolean(block);
@@ -463,6 +465,7 @@ public final class TrinoParquetScanOperator
     {
         return switch (column.kind()) {
             case I32 -> copyMaskedI32(block, mask);
+            case DATE -> copyMaskedI32(block, mask);
             case I64 -> copyMaskedI64(block, mask);
             case SHORT_DECIMAL -> copyMaskedI64(block, mask);
             case BOOLEAN -> copyMaskedBoolean(block, mask);
@@ -474,6 +477,7 @@ public final class TrinoParquetScanOperator
     {
         return switch (column.kind()) {
             case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
+            case DATE -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
             case I64, SHORT_DECIMAL -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new);
             case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, size, BooleanVector::new);
             case BINARY -> {
@@ -909,6 +913,7 @@ public final class TrinoParquetScanOperator
     private enum ColumnKind
     {
         I32(io.trino.spi.type.IntegerType.INTEGER),
+        DATE(io.trino.spi.type.DateType.DATE),
         I64(io.trino.spi.type.BigintType.BIGINT),
         SHORT_DECIMAL(io.trino.spi.type.BigintType.BIGINT),
         BOOLEAN(io.trino.spi.type.BooleanType.BOOLEAN),

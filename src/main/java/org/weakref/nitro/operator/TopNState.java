@@ -116,7 +116,7 @@ final class TopNState
             if (currentNull == slotNull) {
                 return 0;
             }
-            return currentNull ? -1 : 1;
+            return currentNull ? 1 : -1;
         }
 
         Vector flattenedCurrent = OperatorVectorSupport.flatten(currentValues);

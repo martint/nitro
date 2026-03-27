@@ -29,6 +29,7 @@ import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
+import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
@@ -720,6 +721,51 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupIdOperatorExpandsGroupingSets()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new GroupIdOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row("store channel", "storeA", 10L),
+                        row("web channel", "webB", 20L))),
+                new int[][] {
+                        {-1, -1, 2},
+                        {0, -1, 2},
+                        {0, 1, 2}})) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(null, null, 10L, 0L),
+                            row(null, null, 20L, 0L),
+                            row("store channel", null, 10L, 1L),
+                            row("web channel", null, 20L, 1L),
+                            row("store channel", "storeA", 10L, 2L),
+                            row("web channel", "webB", 20L, 2L));
+        }
+    }
+
+    @Test
+    void testHashJoinOperatorSupportsProbeOuterJoin()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, "matched"),
+                        row(2L, "unmatched"))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 100L))),
+                0,
+                true)) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, "matched", 1L, 100L),
+                            row(2L, "unmatched", null, null));
+        }
+    }
+
+    @Test
     void testEnforceSingleRowOperatorPassesThroughSingleRow()
     {
         Allocator allocator = new Allocator();
@@ -867,6 +913,28 @@ public class TestOperatorBatches
                 row("alpha"),
                 row("beta"),
                 row((Object) null));
+    }
+
+    @Test
+    void testTopNOperatorExcludesNullsAtAscendingCutoff()
+    {
+        List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
+                new Allocator(),
+                2,
+                0,
+                false,
+                new ConstantTableOperator(
+                        new Allocator(),
+                        1,
+                        List.of(
+                                row("beta"),
+                                row((Object) null),
+                                row("alpha"),
+                                row((Object) null)))));
+
+        assertThat(rows).containsExactly(
+                row("alpha"),
+                row("beta"));
     }
 
     @Test

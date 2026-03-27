@@ -4,7 +4,7 @@ This note captures what the unsupported parquet-backed TPC-DS queries currently
 need, based on Trino logical `EXPLAIN` output dumped by
 `org.weakref.nitro.tpcds.ExplainUnsupportedQueries`.
 
-The dump currently lives under `target/tpcds-explain/` and covers the `86`
+The dump currently lives under `target/tpcds-explain/` and covers the `84`
 benchmark queries that are not yet implemented in the parquet-backed Nitro and
 Trino operator harnesses.
 
@@ -16,10 +16,12 @@ Supported parquet-backed queries today:
 - `Q10`
 - `Q35`
 - `Q41`
+- `Q44`
 - `Q45`
 - `Q62`
 - `Q69`
 - `Q73`
+- `Q80`
 - `Q84`
 - `Q88`
 - `Q90`
@@ -47,12 +49,12 @@ is the source of truth for the operator topology we need to reproduce.
 Most unsupported queries already lower into plan shapes that are largely within
 the current Nitro vocabulary:
 
-- `86/86` use `Aggregate`
-- `84/86` use joins
-- `80/86` use `ScanFilter`
-- `77/86` use `ScanFilterProject`
-- `74/86` use `Project`
-- `64/86` use `TopN`
+- `84/84` use `Aggregate`
+- `82/84` use joins
+- `78/84` use `ScanFilter`
+- `75/84` use `ScanFilterProject`
+- `72/84` use `Project`
+- `62/84` use `TopN`
 
 That means a large fraction of the remaining work is not "invent a whole new
 engine", but rather:
@@ -90,7 +92,7 @@ Status:
 
 Queries:
 
-- `Q44`, `Q67`, `Q70`
+- `Q67`, `Q70`
 
 Needed shape:
 
@@ -99,8 +101,6 @@ Needed shape:
 
 Representative plans:
 
-- `Q44` uses two separate `TopNRanking` branches plus scalar-subquery
-  enforcement
 - `Q70` uses `TopNRanking` under a grouped state summary
 
 Status:
@@ -112,7 +112,7 @@ Status:
 Queries:
 
 - `Q05`, `Q14`, `Q16`, `Q18`, `Q22`, `Q27`, `Q28`, `Q36`, `Q67`, `Q70`,
-  `Q77`, `Q80`, `Q86`, `Q94`, `Q95`
+  `Q77`, `Q86`, `Q94`, `Q95`
 
 Needed shape:
 
@@ -122,12 +122,12 @@ Needed shape:
 
 Representative plans:
 
-- `Q80` uses `GroupId` for channel/id subtotal output
 - `Q70` uses `GroupId` before ranking
 
 Status:
 
-- missing as a reusable operator
+- implemented in Nitro and in the Trino parquet harness
+- no longer a blocking operator family for the next expansion batch
 
 ### FullJoin
 
@@ -154,7 +154,7 @@ Status:
 
 Queries:
 
-- `Q06`, `Q44`, `Q54`, `Q58`
+- `Q06`, `Q54`, `Q58`
 
 Needed shape:
 
@@ -164,7 +164,7 @@ Needed shape:
 
 Representative plans:
 
-- `Q44` uses `EnforceSingleRow` under scalar comparison branches
+- scalar-subquery comparisons still lower through `EnforceSingleRow`
 
 Status:
 
@@ -232,16 +232,7 @@ Implement:
 
 This is likely the biggest single feature unlock for unsupported TPC-DS.
 
-### Batch 4: grouping sets
-
-Implement:
-
-- `GroupId`
-
-This should unlock several report-style queries that are otherwise ordinary
-join/aggregate/topN pipelines.
-
-### Batch 5: full outer join
+### Batch 4: full outer join
 
 Implement:
 
@@ -253,9 +244,5 @@ This is a smaller query count, but currently blocks `Q51` and `Q97`.
 
 Good first unsupported queries after this explain pass:
 
-- `Q44`
-  - good design target for `TopNRanking` plus `EnforceSingleRow`
-- `Q80`
-  - good design target for `GroupId`
 - `Q51`
   - good design target for `Window` plus `FullJoin`
