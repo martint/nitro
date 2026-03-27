@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro;
+package org.weakref.trino.tpcds;
 
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.AfterAll;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class TestTrinoTpcdsQueries
+public class TestQueries
 {
     private static final String TPCDS_SMOKE_SCHEMA_PROPERTY = "nitro.tpcds.smoke.schema";
     private static final String TPCDS_SMOKE_HEAVY_SCHEMA_PROPERTY = "nitro.tpcds.smoke.heavy.schema";
@@ -53,7 +53,7 @@ public class TestTrinoTpcdsQueries
     }
 
     @TestFactory
-    Stream<DynamicTest> testAllCanonicalQueriesExecute()
+    Stream<DynamicTest> testQueries()
     {
         return TpcdsQueryCatalog.benchmarkQueryIds().stream()
                 .map(queryId -> DynamicTest.dynamicTest("q" + queryId, () -> {
@@ -65,7 +65,7 @@ public class TestTrinoTpcdsQueries
     }
 
     @Test
-    void testHighRiskQueriesExecute()
+    void testHighRiskQueries()
     {
         assertThat(support.executeBenchmarkQuery("12", schemaForQuery("12"))).isNotNull();
         assertThat(support.executeBenchmarkQuery("64", schemaForQuery("64"))).isNotNull();

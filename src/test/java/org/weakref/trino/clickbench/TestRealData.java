@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro;
+package org.weakref.trino.clickbench;
 
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.Test;
@@ -23,7 +23,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-public class TestTrinoClickBenchHitsRealData
+public class TestRealData
 {
     private static final String RUN_ACTUAL_TESTS_PROPERTY = "nitro.clickbench.runActualDataTests";
 
@@ -48,7 +48,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery00()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            support.consumeQuery0SelectAll(actualHitsDirectory());
+            support.consumeQuery00(actualHitsDirectory());
         }
     }
 
@@ -56,7 +56,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery01()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query1CountAll(actualHitsDirectory());
+            MaterializedResult result = support.query01(actualHitsDirectory());
             assertThat(result.getRowCount()).isEqualTo(1);
             assertThat(result.getOnlyValue()).isEqualTo(99_997_497L);
         }
@@ -66,7 +66,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery02()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertSingleLongResult(support.query2CountNonZeroAdvEngineId(actualHitsDirectory()));
+            assertSingleLongResult(support.query02(actualHitsDirectory()));
         }
     }
 
@@ -74,7 +74,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery03()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query3SumAdvEngineAndAvgResolutionWidth(actualHitsDirectory());
+            MaterializedResult result = support.query03(actualHitsDirectory());
             assertThat(result.getMaterializedRows()).singleElement().satisfies(row -> {
                 assertThat(row.getFields()).hasSize(3);
                 assertThat(row.getFields().get(0)).isInstanceOf(Long.class);
@@ -88,7 +88,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery04()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertSingleDoubleResult(support.query4AvgUserId(actualHitsDirectory()));
+            assertSingleDoubleResult(support.query04(actualHitsDirectory()));
         }
     }
 
@@ -96,7 +96,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery05()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertSingleLongResult(support.query5CountDistinctUserId(actualHitsDirectory()));
+            assertSingleLongResult(support.query05(actualHitsDirectory()));
         }
     }
 
@@ -104,7 +104,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery06()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertSingleLongResult(support.query6CountDistinctSearchPhrase(actualHitsDirectory()));
+            assertSingleLongResult(support.query06(actualHitsDirectory()));
         }
     }
 
@@ -112,7 +112,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery07()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query7MinAndMaxEventDate(actualHitsDirectory());
+            MaterializedResult result = support.query07(actualHitsDirectory());
             assertThat(result.getMaterializedRows()).singleElement().satisfies(row -> {
                 assertThat(row.getFields()).containsExactly(15_888, 15_917);
             });
@@ -123,7 +123,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery08()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query8GroupByAdvEngineId(actualHitsDirectory());
+            MaterializedResult result = support.query08(actualHitsDirectory());
             assertThat(result.getMaterializedRows())
                     .extracting(row -> row.getFields())
                     .containsExactly(
@@ -144,7 +144,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery09()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query9TopRegionsByDistinctUsers(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query09(actualHitsDirectory()), 2);
         }
     }
 
@@ -152,7 +152,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery10()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query10RegionAggregates(actualHitsDirectory()), 5);
+            assertNonEmptyRows(support.query10(actualHitsDirectory()), 5);
         }
     }
 
@@ -160,7 +160,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery11()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query11TopMobilePhoneModelsByDistinctUsers(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query11(actualHitsDirectory()), 2);
         }
     }
 
@@ -168,7 +168,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery12()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query12TopMobilePhonesAndModelsByDistinctUsers(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query12(actualHitsDirectory()), 3);
         }
     }
 
@@ -176,7 +176,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery13()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query13TopSearchPhrases(actualHitsDirectory());
+            MaterializedResult result = support.query13(actualHitsDirectory());
             assertThat(result.getMaterializedRows()).isNotEmpty();
             assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(2);
             assertThat(result.getMaterializedRows().getFirst().getFields().get(0)).isInstanceOf(String.class);
@@ -188,7 +188,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery14()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query14TopSearchPhrasesByDistinctUsers(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query14(actualHitsDirectory()), 2);
         }
     }
 
@@ -196,7 +196,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery15()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query15TopSearchEngineAndPhrasePairs(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query15(actualHitsDirectory()), 3);
         }
     }
 
@@ -204,7 +204,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery16()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query16TopUserIds(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query16(actualHitsDirectory()), 2);
         }
     }
 
@@ -212,7 +212,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery17()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query17TopUserIdAndSearchPhrasePairs(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query17(actualHitsDirectory()), 3);
         }
     }
 
@@ -220,7 +220,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery18()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query18FirstUserIdAndSearchPhrasePairs(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query18(actualHitsDirectory()), 3);
         }
     }
 
@@ -228,7 +228,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery19()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query19TopUserIdMinuteAndSearchPhraseTriples(actualHitsDirectory()), 4);
+            assertNonEmptyRows(support.query19(actualHitsDirectory()), 4);
         }
     }
 
@@ -236,7 +236,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery20()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query20UserIdsForExactUserId(actualHitsDirectory()), 1);
+            assertNonEmptyRows(support.query20(actualHitsDirectory()), 1);
         }
     }
 
@@ -244,7 +244,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery21()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertSingleLongResult(support.query21CountUrlsContainingGoogle(actualHitsDirectory()));
+            assertSingleLongResult(support.query21(actualHitsDirectory()));
         }
     }
 
@@ -252,7 +252,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery22()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query22SearchPhrasesWithGoogleUrls(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query22(actualHitsDirectory()), 3);
         }
     }
 
@@ -260,7 +260,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery23()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query23GoogleTitlesNonGoogleUrls(actualHitsDirectory()), 5);
+            assertNonEmptyRows(support.query23(actualHitsDirectory()), 5);
         }
     }
 
@@ -268,7 +268,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery24()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query24SelectAllGoogleUrlsOrderedByEventTime(actualHitsDirectory());
+            MaterializedResult result = support.query24(actualHitsDirectory());
             assertThat(result.getMaterializedRows()).isNotEmpty();
             assertThat(result.getMaterializedRows().getFirst().getFields().size()).isGreaterThan(20);
         }
@@ -278,7 +278,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery25()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query25SearchPhrasesOrderedByEventTime(actualHitsDirectory()), 1);
+            assertNonEmptyRows(support.query25(actualHitsDirectory()), 1);
         }
     }
 
@@ -286,7 +286,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery26()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query26SearchPhrasesOrderedAscending(actualHitsDirectory()), 1);
+            assertNonEmptyRows(support.query26(actualHitsDirectory()), 1);
         }
     }
 
@@ -294,7 +294,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery27()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query27SearchPhrasesOrderedByEventTimeThenPhrase(actualHitsDirectory()), 1);
+            assertNonEmptyRows(support.query27(actualHitsDirectory()), 1);
         }
     }
 
@@ -302,7 +302,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery28()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query28CounterAverageUrlLength(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query28(actualHitsDirectory()), 3);
         }
     }
 
@@ -310,7 +310,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery29()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query29RefererHosts(actualHitsDirectory()), 4);
+            assertNonEmptyRows(support.query29(actualHitsDirectory()), 4);
         }
     }
 
@@ -318,7 +318,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery30()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query30SumResolutionWidthPlusOffsets(actualHitsDirectory());
+            MaterializedResult result = support.query30(actualHitsDirectory());
             assertThat(result.getRowCount()).isEqualTo(1);
             assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(90);
         }
@@ -328,7 +328,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery31()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query31SearchEngineAndClientIp(actualHitsDirectory()), 5);
+            assertNonEmptyRows(support.query31(actualHitsDirectory()), 5);
         }
     }
 
@@ -336,7 +336,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery32()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query32WatchIdAndClientIpWithSearchPhrase(actualHitsDirectory()), 5);
+            assertNonEmptyRows(support.query32(actualHitsDirectory()), 5);
         }
     }
 
@@ -344,7 +344,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery33()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query33WatchIdAndClientIp(actualHitsDirectory()), 5);
+            assertNonEmptyRows(support.query33(actualHitsDirectory()), 5);
         }
     }
 
@@ -352,7 +352,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery34()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query34TopUrls(actualHitsDirectory());
+            MaterializedResult result = support.query34(actualHitsDirectory());
             assertThat(result.getMaterializedRows()).isNotEmpty();
             assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(2);
             assertThat(result.getMaterializedRows().getFirst().getFields().get(0)).isInstanceOf(String.class);
@@ -364,7 +364,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery35()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query35ConstantAndTopUrls(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query35(actualHitsDirectory()), 3);
         }
     }
 
@@ -372,7 +372,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery36()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query36ClientIpArithmeticGroups(actualHitsDirectory()), 5);
+            assertNonEmptyRows(support.query36(actualHitsDirectory()), 5);
         }
     }
 
@@ -380,7 +380,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery37()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query37TopUrlsForCounter62(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query37(actualHitsDirectory()), 2);
         }
     }
 
@@ -388,7 +388,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery38()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query38TopTitlesForCounter62(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query38(actualHitsDirectory()), 2);
         }
     }
 
@@ -396,7 +396,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery39()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query39TopUrlsOffset(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query39(actualHitsDirectory()), 2);
         }
     }
 
@@ -404,7 +404,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery40()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query40TrafficSourceGroups(actualHitsDirectory()), 6);
+            assertNonEmptyRows(support.query40(actualHitsDirectory()), 6);
         }
     }
 
@@ -412,7 +412,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery41()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query41UrlHashByEventDate(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query41(actualHitsDirectory()), 3);
         }
     }
 
@@ -420,7 +420,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery42()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query42WindowClientSizes(actualHitsDirectory()), 3);
+            assertNonEmptyRows(support.query42(actualHitsDirectory()), 3);
         }
     }
 
@@ -428,7 +428,7 @@ public class TestTrinoClickBenchHitsRealData
     void testQuery43()
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            assertNonEmptyRows(support.query43PageViewsByMinute(actualHitsDirectory()), 2);
+            assertNonEmptyRows(support.query43(actualHitsDirectory()), 2);
         }
     }
 

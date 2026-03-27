@@ -11,15 +11,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro;
+package org.weakref.nitro.tpcds;
 
 import io.trino.spi.type.SqlDecimal;
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.OperatorAssertions;
+import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.tpcds.TpcdsParquetTables;
 import org.weakref.nitro.trino.TrinoTpcdsParquetSupport;
 import org.weakref.nitro.trino.TrinoTpcdsSupport;
 
@@ -32,10 +33,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-public class TestTpcdsParquetQueries
+public class TestQueries
 {
     @Test
-    void testQuery41MatchesTrinoOperatorAssembly()
+    void testQuery41()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
@@ -62,7 +63,7 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
-    void testQuery41EligibleManufacturersMatchTrinoOperatorAssembly()
+    void testQuery41EligibleManufacturers()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
@@ -77,7 +78,7 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
-    void testNitroQuery41MatchesTrinoSqlReference()
+    void testQuery41Sql()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
@@ -100,7 +101,7 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
-    void testQuery41MatchesTrinoSqlReference()
+    void testQuery41TrinoSql()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
@@ -119,181 +120,181 @@ public class TestTpcdsParquetQueries
     }
 
     @Test
-    void testQuery62MatchesTrinoOperatorAssembly()
+    void testQuery62()
     {
         assertOperatorMatches("62", tables -> TpcdsParquetSupport.query62(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query62(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery10MatchesTrinoOperatorAssembly()
+    void testQuery10()
     {
         assertOperatorMatches("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery35MatchesTrinoOperatorAssembly()
+    void testQuery35()
     {
         assertOperatorMatches("35", tables -> TpcdsParquetSupport.query35(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query35(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery10MatchesTrinoSqlReference()
+    void testQuery10Sql()
     {
         assertNitroMatchesSql("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery10MatchesTrinoSqlReference()
+    void testQuery10TrinoSql()
     {
         assertTrinoOperatorMatchesSql("10", support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery35MatchesTrinoSqlReference()
+    void testQuery35Sql()
     {
         assertNitroMatchesSql("35", tables -> TpcdsParquetSupport.query35(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery35MatchesTrinoSqlReference()
+    void testQuery35TrinoSql()
     {
         assertTrinoOperatorMatchesSql("35", support -> support.query35(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery62MatchesTrinoSqlReference()
+    void testQuery62Sql()
     {
         assertNitroMatchesSql("62", tables -> TpcdsParquetSupport.query62(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery62MatchesTrinoSqlReference()
+    void testQuery62TrinoSql()
     {
         assertTrinoOperatorMatchesSql("62", support -> support.query62(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery96MatchesTrinoOperatorAssembly()
+    void testQuery96()
     {
         assertOperatorMatches("96", tables -> TpcdsParquetSupport.query96(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query96(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery73MatchesTrinoOperatorAssembly()
+    void testQuery73()
     {
         assertOperatorMatches("73", tables -> TpcdsParquetSupport.query73(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query73(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery73MatchesTrinoSqlReference()
+    void testQuery73Sql()
     {
         assertNitroMatchesSql("73", tables -> TpcdsParquetSupport.query73(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery73MatchesTrinoSqlReference()
+    void testQuery73TrinoSql()
     {
         assertTrinoOperatorMatchesSql("73", support -> support.query73(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery69MatchesTrinoOperatorAssembly()
+    void testQuery69()
     {
         assertOperatorMatches("69", tables -> TpcdsParquetSupport.query69(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query69(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery69MatchesTrinoSqlReference()
+    void testQuery69Sql()
     {
         assertNitroMatchesSql("69", tables -> TpcdsParquetSupport.query69(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery69MatchesTrinoSqlReference()
+    void testQuery69TrinoSql()
     {
         assertTrinoOperatorMatchesSql("69", support -> support.query69(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery84MatchesTrinoOperatorAssembly()
+    void testQuery84()
     {
         assertOperatorMatches("84", tables -> TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query84(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery84MatchesTrinoSqlReference()
+    void testQuery84Sql()
     {
-        assertNitroMatchesSql("84", tables -> TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestTpcdsParquetQueries::normalizeQuery84Value);
+        assertNitroMatchesSql("84", tables -> TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeQuery84Value);
     }
 
     @Test
-    void testQuery84MatchesTrinoSqlReference()
+    void testQuery84TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("84", support -> support.query84(TpcdsParquetTables.requiredActual("sf10")), TestTpcdsParquetQueries::normalizeQuery84Value);
+        assertTrinoOperatorMatchesSql("84", support -> support.query84(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeQuery84Value);
     }
 
     @Test
-    void testQuery90MatchesTrinoOperatorAssembly()
+    void testQuery90()
     {
         assertOperatorMatches("90", tables -> TpcdsParquetSupport.query90(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query90(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery90MatchesTrinoSqlReference()
+    void testQuery90Sql()
     {
         assertApproximateNitroMatchesSql("90", tables -> TpcdsParquetSupport.query90(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery90MatchesTrinoSqlReference()
+    void testQuery90TrinoSql()
     {
         assertApproximateTrinoOperatorMatchesSql("90", support -> support.query90(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery96MatchesTrinoSqlReference()
+    void testQuery96Sql()
     {
         assertNitroMatchesSql("96", tables -> TpcdsParquetSupport.query96(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery96MatchesTrinoSqlReference()
+    void testQuery96TrinoSql()
     {
         assertTrinoOperatorMatchesSql("96", support -> support.query96(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery99MatchesTrinoOperatorAssembly()
+    void testQuery99()
     {
         assertOperatorMatches("99", tables -> TpcdsParquetSupport.query99(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query99(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testQuery88MatchesTrinoOperatorAssembly()
+    void testQuery88()
     {
         assertOperatorMatches("88", tables -> TpcdsParquetSupport.query88(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query88(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery88MatchesTrinoSqlReference()
+    void testQuery88Sql()
     {
         assertNitroMatchesSql("88", tables -> TpcdsParquetSupport.query88(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery88MatchesTrinoSqlReference()
+    void testQuery88TrinoSql()
     {
         assertTrinoOperatorMatchesSql("88", support -> support.query88(TpcdsParquetTables.requiredActual("sf10")));
     }
 
     @Test
-    void testNitroQuery99MatchesTrinoSqlReference()
+    void testQuery99Sql()
     {
         assertNitroMatchesSql("99", tables -> TpcdsParquetSupport.query99(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
-    void testQuery99MatchesTrinoSqlReference()
+    void testQuery99TrinoSql()
     {
         assertTrinoOperatorMatchesSql("99", support -> support.query99(TpcdsParquetTables.requiredActual("sf10")));
     }
@@ -317,7 +318,7 @@ public class TestTpcdsParquetQueries
 
     private static void assertNitroMatchesSql(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery)
     {
-        assertNitroMatchesSql(queryId, nitroQuery, TestTpcdsParquetQueries::normalizeValue);
+        assertNitroMatchesSql(queryId, nitroQuery, TestQueries::normalizeValue);
     }
 
     private static void assertNitroMatchesSql(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<Object, Object> valueNormalizer)
@@ -339,7 +340,7 @@ public class TestTpcdsParquetQueries
 
     private static void assertTrinoOperatorMatchesSql(String queryId, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery)
     {
-        assertTrinoOperatorMatchesSql(queryId, trinoQuery, TestTpcdsParquetQueries::normalizeValue);
+        assertTrinoOperatorMatchesSql(queryId, trinoQuery, TestQueries::normalizeValue);
     }
 
     private static void assertTrinoOperatorMatchesSql(String queryId, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
@@ -406,7 +407,7 @@ public class TestTpcdsParquetQueries
 
     private static List<org.weakref.nitro.data.Row> normalizeNitroRows(List<org.weakref.nitro.data.Row> rows)
     {
-        return normalizeNitroRows(rows, TestTpcdsParquetQueries::normalizeValue);
+        return normalizeNitroRows(rows, TestQueries::normalizeValue);
     }
 
     private static List<org.weakref.nitro.data.Row> normalizeNitroRows(List<org.weakref.nitro.data.Row> rows, java.util.function.Function<Object, Object> valueNormalizer)
@@ -420,7 +421,7 @@ public class TestTpcdsParquetQueries
 
     private static List<org.weakref.nitro.data.Row> normalizeTrinoRows(MaterializedResult result)
     {
-        return normalizeTrinoRows(result, TestTpcdsParquetQueries::normalizeValue);
+        return normalizeTrinoRows(result, TestQueries::normalizeValue);
     }
 
     private static List<org.weakref.nitro.data.Row> normalizeTrinoRows(MaterializedResult result, java.util.function.Function<Object, Object> valueNormalizer)

@@ -109,13 +109,13 @@ public final class TrinoClickBenchSupport
         return TrinoClickBenchPageReader.requiredActualHitsPath();
     }
 
-    public void consumeQuery0SelectAll(Path input)
+    public void consumeQuery00(Path input)
     {
         List<String> columns = TrinoClickBenchPageReader.allColumns(input);
         consume(input, columns, List.of(), TrinoClickBenchPageReader.columnTypes(input, columns));
     }
 
-    public MaterializedResult query1CountAll(Path input)
+    public MaterializedResult query01(Path input)
     {
         return materialize(
                 input,
@@ -127,7 +127,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT));
     }
 
-    public MaterializedResult query3SumAdvEngineAndAvgResolutionWidth(Path input)
+    public MaterializedResult query03(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT, BIGINT);
         return materialize(
@@ -150,7 +150,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT_SUM.getFinalType(), COUNT.getFinalType(), BIGINT_AVG.getFinalType()));
     }
 
-    public MaterializedResult query7MinAndMaxEventDate(Path input)
+    public MaterializedResult query07(Path input)
     {
         return materialize(
                 input,
@@ -164,7 +164,7 @@ public final class TrinoClickBenchSupport
                 List.of(INTEGER_MIN.getFinalType(), INTEGER_MAX.getFinalType()));
     }
 
-    public MaterializedResult query8GroupByAdvEngineId(Path input)
+    public MaterializedResult query08(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, BIGINT);
         return materialize(
@@ -194,7 +194,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query13TopSearchPhrases(Path input)
+    public MaterializedResult query13(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -224,7 +224,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query34TopUrls(Path input)
+    public MaterializedResult query34(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -248,7 +248,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query2CountNonZeroAdvEngineId(Path input)
+    public MaterializedResult query02(Path input)
     {
         return materialize(
                 input,
@@ -259,7 +259,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT));
     }
 
-    public MaterializedResult query4AvgUserId(Path input)
+    public MaterializedResult query04(Path input)
     {
         return materialize(
                 input,
@@ -268,7 +268,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT_AVG.getFinalType()));
     }
 
-    public MaterializedResult query5CountDistinctUserId(Path input)
+    public MaterializedResult query05(Path input)
     {
         return materialize(
                 input,
@@ -279,7 +279,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT));
     }
 
-    public MaterializedResult query6CountDistinctSearchPhrase(Path input)
+    public MaterializedResult query06(Path input)
     {
         return materialize(
                 input,
@@ -290,7 +290,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT));
     }
 
-    public MaterializedResult query9TopRegionsByDistinctUsers(Path input)
+    public MaterializedResult query09(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, BIGINT);
         return materialize(
@@ -307,7 +307,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query10RegionAggregates(Path input)
+    public MaterializedResult query10(Path input)
     {
         List<Type> projectedTypes = List.of(INTEGER, BIGINT, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(INTEGER, BIGINT_SUM.getFinalType(), BIGINT, BIGINT_AVG.getFinalType(), BIGINT);
@@ -334,7 +334,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query11TopMobilePhoneModelsByDistinctUsers(Path input)
+    public MaterializedResult query11(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -357,7 +357,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query12TopMobilePhonesAndModelsByDistinctUsers(Path input)
+    public MaterializedResult query12(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, VARCHAR, BIGINT);
         return materialize(
@@ -380,7 +380,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query14TopSearchPhrasesByDistinctUsers(Path input)
+    public MaterializedResult query14(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -403,7 +403,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query15TopSearchEngineAndPhrasePairs(Path input)
+    public MaterializedResult query15(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, VARCHAR, BIGINT);
         return materialize(
@@ -425,7 +425,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query16TopUserIds(Path input)
+    public MaterializedResult query16(Path input)
     {
         List<Type> outputTypes = List.of(BIGINT, BIGINT);
         return materialize(
@@ -437,7 +437,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query17TopUserIdAndSearchPhrasePairs(Path input)
+    public MaterializedResult query17(Path input)
     {
         List<Type> outputTypes = List.of(BIGINT, VARCHAR, BIGINT);
         return materialize(
@@ -449,7 +449,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query18FirstUserIdAndSearchPhrasePairs(Path input)
+    public MaterializedResult query18(Path input)
     {
         List<Type> outputTypes = List.of(BIGINT, VARCHAR, BIGINT);
         return materialize(
@@ -461,7 +461,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query19TopUserIdMinuteAndSearchPhraseTriples(Path input)
+    public MaterializedResult query19(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT, BIGINT, VARCHAR);
         List<Type> outputTypes = List.of(BIGINT, BIGINT, VARCHAR, BIGINT);
@@ -480,7 +480,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query20UserIdsForExactUserId(Path input)
+    public MaterializedResult query20(Path input)
     {
         return materialize(
                 input,
@@ -494,7 +494,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT));
     }
 
-    public MaterializedResult query21CountUrlsContainingGoogle(Path input)
+    public MaterializedResult query21(Path input)
     {
         return materialize(
                 input,
@@ -505,7 +505,7 @@ public final class TrinoClickBenchSupport
                 List.of(BIGINT));
     }
 
-    public MaterializedResult query22SearchPhrasesWithGoogleUrls(Path input)
+    public MaterializedResult query22(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, VARCHAR_MIN.getFinalType(), BIGINT);
         return materialize(
@@ -528,7 +528,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query23GoogleTitlesNonGoogleUrls(Path input)
+    public MaterializedResult query23(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, VARCHAR_MIN.getFinalType(), VARCHAR_MIN.getFinalType(), BIGINT, BIGINT);
         return materialize(
@@ -557,7 +557,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query24SelectAllGoogleUrlsOrderedByEventTime(Path input)
+    public MaterializedResult query24(Path input)
     {
         List<String> columns = TrinoClickBenchPageReader.allColumns(input);
         List<Type> types = TrinoClickBenchPageReader.columnTypes(input, columns);
@@ -572,7 +572,7 @@ public final class TrinoClickBenchSupport
                 types);
     }
 
-    public MaterializedResult query25SearchPhrasesOrderedByEventTime(Path input)
+    public MaterializedResult query25(Path input)
     {
         return materialize(
                 input,
@@ -584,7 +584,7 @@ public final class TrinoClickBenchSupport
                 List.of(VARCHAR));
     }
 
-    public MaterializedResult query26SearchPhrasesOrderedAscending(Path input)
+    public MaterializedResult query26(Path input)
     {
         return materialize(
                 input,
@@ -595,7 +595,7 @@ public final class TrinoClickBenchSupport
                 List.of(VARCHAR));
     }
 
-    public MaterializedResult query27SearchPhrasesOrderedByEventTimeThenPhrase(Path input)
+    public MaterializedResult query27(Path input)
     {
         return materialize(
                 input,
@@ -607,7 +607,7 @@ public final class TrinoClickBenchSupport
                 List.of(VARCHAR));
     }
 
-    public MaterializedResult query28CounterAverageUrlLength(Path input)
+    public MaterializedResult query28(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, DOUBLE, BIGINT);
         return materialize(
@@ -636,7 +636,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query29RefererHosts(Path input)
+    public MaterializedResult query29(Path input)
     {
         List<Type> projectedTypes = List.of(VARCHAR, BIGINT, VARCHAR);
         List<Type> outputTypes = List.of(VARCHAR, DOUBLE, BIGINT, VARCHAR);
@@ -667,7 +667,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query30SumResolutionWidthPlusOffsets(Path input)
+    public MaterializedResult query30(Path input)
     {
         List<RowExpression> projections = new ArrayList<>();
         List<Type> projectedTypes = new ArrayList<>();
@@ -686,7 +686,7 @@ public final class TrinoClickBenchSupport
                 projectedTypes);
     }
 
-    public MaterializedResult query31SearchEngineAndClientIp(Path input)
+    public MaterializedResult query31(Path input)
     {
         List<Type> projectedTypes = List.of(INTEGER, INTEGER, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(INTEGER, INTEGER, BIGINT, BIGINT_SUM.getFinalType(), BIGINT_AVG.getFinalType());
@@ -711,7 +711,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query32WatchIdAndClientIpWithSearchPhrase(Path input)
+    public MaterializedResult query32(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT_SUM.getFinalType(), BIGINT_AVG.getFinalType());
@@ -736,7 +736,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query33WatchIdAndClientIp(Path input)
+    public MaterializedResult query33(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT, BIGINT_SUM.getFinalType(), BIGINT_AVG.getFinalType());
@@ -761,7 +761,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query35ConstantAndTopUrls(Path input)
+    public MaterializedResult query35(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT, VARCHAR);
         List<Type> outputTypes = List.of(BIGINT, VARCHAR, BIGINT);
@@ -780,7 +780,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query36ClientIpArithmeticGroups(Path input)
+    public MaterializedResult query36(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT, BIGINT, BIGINT, BIGINT);
         List<Type> outputTypes = List.of(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
@@ -803,7 +803,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query37TopUrlsForCounter62(Path input)
+    public MaterializedResult query37(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -826,7 +826,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query38TopTitlesForCounter62(Path input)
+    public MaterializedResult query38(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -849,7 +849,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query39TopUrlsOffset(Path input)
+    public MaterializedResult query39(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
         return materialize(
@@ -874,7 +874,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query40TrafficSourceGroups(Path input)
+    public MaterializedResult query40(Path input)
     {
         List<Type> projectedTypes = List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR);
         List<Type> outputTypes = List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR, BIGINT);
@@ -903,7 +903,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query41UrlHashByEventDate(Path input)
+    public MaterializedResult query41(Path input)
     {
         List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT);
         return materialize(
@@ -928,7 +928,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query42WindowClientSizes(Path input)
+    public MaterializedResult query42(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, INTEGER, BIGINT);
         return materialize(
@@ -953,7 +953,7 @@ public final class TrinoClickBenchSupport
                 outputTypes);
     }
 
-    public MaterializedResult query43PageViewsByMinute(Path input)
+    public MaterializedResult query43(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT);
         List<Type> outputTypes = List.of(BIGINT, BIGINT);

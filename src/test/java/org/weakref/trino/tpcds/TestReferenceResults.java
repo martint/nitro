@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro;
+package org.weakref.trino.tpcds;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -27,7 +27,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class TestTrinoTpcdsReferenceResults
+public class TestReferenceResults
 {
     private static final String RUN_REFERENCE_RESULTS_PROPERTY = "nitro.tpcds.runReferenceResults";
 

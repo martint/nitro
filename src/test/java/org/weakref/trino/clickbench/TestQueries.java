@@ -11,11 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro;
+package org.weakref.trino.clickbench;
 
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.trino.TrinoClickBenchSupport;
 
 import java.io.IOException;
@@ -24,7 +25,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class TestTrinoClickBenchQueries
+public class TestQueries
 {
     @TempDir
     Path tempDirectory;
@@ -36,22 +37,22 @@ public class TestTrinoClickBenchQueries
     }
 
     @Test
-    void testTrinoQuery1CountAll()
+    void testQuery01()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query1CountAll(writeHitsFixture());
+            MaterializedResult result = support.query01(writeHitsFixture());
             assertThat(result.getRowCount()).isEqualTo(1);
             assertThat(result.getOnlyValue()).isEqualTo(8L);
         }
     }
 
     @Test
-    void testTrinoQuery3SumAdvEngineAndAvgResolutionWidth()
+    void testQuery03()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query3SumAdvEngineAndAvgResolutionWidth(writeHitsFixture());
+            MaterializedResult result = support.query03(writeHitsFixture());
             assertThat(result.getMaterializedRows()).singleElement().satisfies(row -> {
                 assertThat(row.getFields()).containsExactly(80L, 8L, 792.5);
             });
@@ -59,11 +60,11 @@ public class TestTrinoClickBenchQueries
     }
 
     @Test
-    void testTrinoQuery7MinAndMaxEventDate()
+    void testQuery07()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query7MinAndMaxEventDate(writeHitsFixture());
+            MaterializedResult result = support.query07(writeHitsFixture());
             assertThat(result.getMaterializedRows()).singleElement().satisfies(row -> {
                 assertThat(row.getFields()).containsExactly(20130701, 20130801);
             });
@@ -71,11 +72,11 @@ public class TestTrinoClickBenchQueries
     }
 
     @Test
-    void testTrinoQuery8GroupByAdvEngineId()
+    void testQuery08()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query8GroupByAdvEngineId(writeHitsFixture());
+            MaterializedResult result = support.query08(writeHitsFixture());
             assertThat(result.getMaterializedRows()).hasSize(2);
             assertThat(result.getMaterializedRows().getFirst().getFields()).isEqualTo(List.of(20, 3L));
             assertThat(result.getMaterializedRows().get(1).getFields()).isEqualTo(List.of(10, 2L));
@@ -83,77 +84,77 @@ public class TestTrinoClickBenchQueries
     }
 
     @Test
-    void testTrinoQuery13TopSearchPhrases()
+    void testQuery13()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query13TopSearchPhrases(writeHitsFixture());
+            MaterializedResult result = support.query13(writeHitsFixture());
             assertThat(result.getRowCount()).isEqualTo(4);
             assertThat(result.getMaterializedRows().getFirst().getFields()).isEqualTo(List.of("news", 2L));
         }
     }
 
     @Test
-    void testTrinoQuery34TopUrls()
+    void testQuery34()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query34TopUrls(writeHitsFixture());
+            MaterializedResult result = support.query34(writeHitsFixture());
             assertThat(result.getRowCount()).isEqualTo(7);
             assertThat(result.getMaterializedRows().getFirst().getFields()).isEqualTo(List.of("https://google.com/search", 2L));
         }
     }
 
     @Test
-    void testTrinoQuery21CountUrlsContainingGoogle()
+    void testQuery21()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query21CountUrlsContainingGoogle(writeHitsFixture());
+            MaterializedResult result = support.query21(writeHitsFixture());
             assertThat(result.getRowCount()).isEqualTo(1);
             assertThat(result.getOnlyValue()).isEqualTo(4L);
         }
     }
 
     @Test
-    void testTrinoQuery22SearchPhrasesWithGoogleUrls()
+    void testQuery22()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query22SearchPhrasesWithGoogleUrls(writeHitsFixture());
+            MaterializedResult result = support.query22(writeHitsFixture());
             assertThat(result.getMaterializedRows()).isNotEmpty();
             assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(3);
         }
     }
 
     @Test
-    void testTrinoQuery23GoogleTitlesNonGoogleUrls()
+    void testQuery23()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query23GoogleTitlesNonGoogleUrls(writeHitsFixture());
+            MaterializedResult result = support.query23(writeHitsFixture());
             assertThat(result.getMaterializedRows()).isNotEmpty();
             assertThat(result.getMaterializedRows().getFirst().getFields()).hasSize(5);
         }
     }
 
     @Test
-    void testTrinoQuery24SelectAllGoogleUrlsOrderedByEventTime()
+    void testQuery24()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query24SelectAllGoogleUrlsOrderedByEventTime(writeHitsFixture());
+            MaterializedResult result = support.query24(writeHitsFixture());
             assertThat(result.getMaterializedRows()).isNotEmpty();
             assertThat(result.getMaterializedRows().getFirst().getFields().size()).isGreaterThan(20);
         }
     }
 
     @Test
-    void testTrinoQuery29RefererHosts()
+    void testQuery29()
             throws IOException
     {
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
-            MaterializedResult result = support.query29RefererHosts(writeHitsFixture());
+            MaterializedResult result = support.query29(writeHitsFixture());
             assertThat(result.getRowCount()).isZero();
         }
     }
