@@ -113,6 +113,9 @@ public class AggregationOperator
             while (source.hasNext()) {
                 try (Batch batch = source.next()) {
                     Mask mask = batch.borrowMask();
+                    if (mask.none()) {
+                        continue;
+                    }
                     if (!tryAccumulateFusedMinMax(state, batch, mask, batchState)) {
                         for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
                             Accumulator accumulator = aggregations.get(aggregation);

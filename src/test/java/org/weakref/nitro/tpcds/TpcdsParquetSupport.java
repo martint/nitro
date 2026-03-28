@@ -430,6 +430,18 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, grouped);
     }
 
+    public static Operator query97(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator store = query97Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_item_sk", "ss_sold_date_sk");
+        Operator catalog = query97Channel(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_item_sk", "cs_sold_date_sk");
+        Operator joined = new FullJoinOperator(allocator, store, new int[] {0, 1}, catalog, new int[] {0, 1});
+        Operator indicators = projectQuery97JoinIndicators(allocator, primitiveRegistry, joined);
+        return new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new Sum(1), new Sum(2)),
+                indicators);
+    }
+
     public static Operator query73(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator allowedDates = filteredProjectedTable(allocator, primitiveRegistry, tables, "date_dim", dayOfMonthAndYearsPredicate(1, 2, 1, 2, 1999, 2000, 2001), new String[] {"d_date_sk", "d_dom", "d_year"});
@@ -1565,6 +1577,76 @@ final class TpcdsParquetSupport
                         new Reference(joinedDateAsDate, Stream.VALUES),
                         new Reference(new Input(2), Stream.VALUES),
                         new Reference(new Input(5), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator query97Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String customerColumn, String itemColumn, String soldDateColumn)
+    {
+        Operator facts = factScan(allocator, tables, salesTable, customerColumn, itemColumn, soldDateColumn);
+        Operator allowedDates = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                and(greaterThan(1, 1199), lessThan(1, 1212)),
+                new String[] {"d_date_sk", "d_month_seq"},
+                0);
+        facts = new HashJoinOperator(allocator, facts, 2, allowedDates, 0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 0, 1);
+        return new MarkDistinctOperator(allocator, new int[] {0, 1}, facts);
+    }
+
+    private static Operator projectQuery97JoinIndicators(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable storeCustomerIsNull = new Variable(2);
+        Variable catalogCustomerIsNull = new Variable(3);
+        Variable storeOnlyWhenStorePresent = new Variable(4);
+        Variable catalogOnlyWhenStoreMissing = new Variable(5);
+        Variable storeAndCatalogWhenStorePresent = new Variable(6);
+        Variable storeOnly = new Variable(7);
+        Variable catalogOnly = new Variable(8);
+        Variable storeAndCatalog = new Variable(9);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(one, new Literal(1L), AllMask.ALL),
+                new Assignment(storeCustomerIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                new Assignment(catalogCustomerIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                new Assignment(storeOnlyWhenStorePresent, new Call("if_i64", List.of(
+                        new Reference(catalogCustomerIsNull, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(catalogOnlyWhenStoreMissing, new Call("if_i64", List.of(
+                        new Reference(catalogCustomerIsNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(one, Stream.VALUES))), AllMask.ALL),
+                new Assignment(storeAndCatalogWhenStorePresent, new Call("if_i64", List.of(
+                        new Reference(catalogCustomerIsNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(one, Stream.VALUES))), AllMask.ALL),
+                new Assignment(storeOnly, new Call("if_i64", List.of(
+                        new Reference(storeCustomerIsNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(storeOnlyWhenStorePresent, Stream.VALUES))), AllMask.ALL),
+                new Assignment(catalogOnly, new Call("if_i64", List.of(
+                        new Reference(storeCustomerIsNull, Stream.VALUES),
+                        new Reference(catalogOnlyWhenStoreMissing, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(storeAndCatalog, new Call("if_i64", List.of(
+                        new Reference(storeCustomerIsNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(storeAndCatalogWhenStorePresent, Stream.VALUES))), AllMask.ALL));
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(assignments, List.of(
+                        new Reference(storeOnly, Stream.VALUES),
+                        new Reference(catalogOnly, Stream.VALUES),
+                        new Reference(storeAndCatalog, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

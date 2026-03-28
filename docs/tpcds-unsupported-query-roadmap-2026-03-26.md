@@ -133,7 +133,7 @@ Status:
 
 Queries:
 
-- `Q51`, `Q97`
+- none of the current near-term targets
 
 Needed shape:
 
@@ -148,7 +148,8 @@ Representative plans:
 
 Status:
 
-- missing from the current reusable join vocabulary
+- implemented in Nitro and in the Trino parquet harness
+- no longer a blocking operator family for the next expansion batch
 
 ### EnforceSingleRow
 
@@ -238,7 +239,7 @@ Implement:
 
 - `FullJoin`
 
-This is a smaller query count, but currently blocks `Q51` and `Q97`.
+This is a smaller query count, but it no longer blocks the current expansion path.
 
 ## Practical next targets
 

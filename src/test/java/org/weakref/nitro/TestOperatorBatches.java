@@ -225,6 +225,40 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testAggregationOperatorSkipsEmptyProjectedBatches()
+    {
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable threshold = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan filterPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(threshold, new Literal(0L), AllMask.ALL),
+                        new Assignment(
+                                predicate,
+                                new Call("lt", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(threshold, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+        Operator filtered = new FilterOperator(
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L))),
+                filterPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                allocator);
+        Operator projected = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(), List.of(new Reference(new Input(0), Stream.VALUES))),
+                primitiveRegistry,
+                filtered);
+        Operator operator = new AggregationOperator(allocator, List.of(new Sum(0)), projected);
+
+        Batch batch = operator.next();
+        assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L);
+    }
+
+    @Test
     void testAvgAccumulatorHandlesDictionaryEncodedNullStream()
     {
         Allocator allocator = new Allocator();
