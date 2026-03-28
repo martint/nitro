@@ -376,6 +376,31 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 4, 6}, new boolean[] {false, false, false, false, false}, reordered);
     }
 
+    public static Operator query67(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator grouped = new GroupIdOperator(
+                allocator,
+                query67SalesByRollupKey(allocator, primitiveRegistry, tables),
+                new int[][] {
+                        {-1, -1, -1, -1, -1, -1, -1, -1, 8},
+                        {0, -1, -1, -1, -1, -1, -1, -1, 8},
+                        {0, 1, -1, -1, -1, -1, -1, -1, 8},
+                        {0, 1, 2, -1, -1, -1, -1, -1, 8},
+                        {0, 1, 2, 3, -1, -1, -1, -1, 8},
+                        {0, 1, 2, 3, 4, -1, -1, -1, 8},
+                        {0, 1, 2, 3, 4, 5, -1, -1, 8},
+                        {0, 1, 2, 3, 4, 5, 6, -1, 8},
+                        {0, 1, 2, 3, 4, 5, 6, 7, 8}});
+        grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
+                List.of(new Sum(8)),
+                grouped);
+        grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9);
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped);
+        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped);
+    }
+
     public static Operator query70(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator activeStates = query70ActiveStates(allocator, primitiveRegistry, tables);
@@ -1637,6 +1662,38 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, facts, 0);
     }
 
+    private static Operator query67SalesByRollupKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price");
+        facts = projectQuery67FactSales(allocator, primitiveRegistry, facts);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(greaterThan(4, 1199), lessThan(4, 1212)),
+                        new String[] {"d_date_sk", "d_year", "d_qoy", "d_moy", "d_month_seq"},
+                        0, 1, 2, 3),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                2,
+                scannedTable(allocator, tables, "store", "s_store_sk", "s_store_id"),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_class", "i_category", "i_product_name"),
+                0);
+        return projectInputs(allocator, primitiveRegistry, facts, 13, 12, 11, 14, 5, 6, 7, 9, 3);
+    }
+
     private static Operator query70SalesByLocation(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_store_sk", "ss_net_profit");
@@ -1712,6 +1769,41 @@ final class TpcdsParquetSupport
                         new Reference(new Input(3), Stream.VALUES),
                         new Reference(hierarchy, Stream.VALUES),
                         new Reference(stateForRank, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery67FactSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zero = new Variable(0);
+        Variable priceIsNull = new Variable(1);
+        Variable quantityIsNull = new Variable(2);
+        Variable anyNull = new Variable(3);
+        Variable multiplied = new Variable(4);
+        Variable sales = new Variable(5);
+        List<Assignment> assignments = List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(priceIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(4), Stream.VALUES))), AllMask.ALL),
+                new Assignment(quantityIsNull, new Call("is_null_i32", List.of(
+                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                new Assignment(anyNull, new Call("or", List.of(
+                        new Reference(priceIsNull, Stream.VALUES),
+                        new Reference(quantityIsNull, Stream.VALUES))), AllMask.ALL),
+                new Assignment(multiplied, new Call("multiply", List.of(
+                        new Reference(new Input(4), Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                new Assignment(sales, new Call("if_i64", List.of(
+                        new Reference(anyNull, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(multiplied, Stream.VALUES))), AllMask.ALL));
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(assignments, List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(sales, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

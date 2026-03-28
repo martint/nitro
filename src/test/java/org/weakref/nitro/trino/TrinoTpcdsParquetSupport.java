@@ -95,6 +95,7 @@ import static io.trino.spi.connector.SortOrder.DESC_NULLS_LAST;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.DateType.DATE;
+import static io.trino.spi.type.DecimalType.createDecimalType;
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
@@ -578,6 +579,88 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 List.of(field(6, VARCHAR), field(5, VARCHAR), field(2, factTypes.get(2))),
                                 List.of(VARCHAR, VARCHAR, factTypes.get(2))))));
+    }
+
+    private List<Page> query67SalesByRollupKeyPages(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price"));
+        Type salesPriceType = factTypes.get(4);
+        Type quantityDecimalType = createDecimalType(10, 0);
+        Type salesType = createDecimalType(17, 2);
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price"),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                67_9,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, BIGINT),
+                                        field(1, BIGINT),
+                                        field(2, BIGINT),
+                                        coalesce(
+                                                new CallExpression(
+                                                        FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(salesPriceType, quantityDecimalType)),
+                                                        List.of(
+                                                                field(4, salesPriceType),
+                                                                new CallExpression(FUNCTION_RESOLUTION.getCoercion(INTEGER, quantityDecimalType), List.of(field(3, INTEGER))))),
+                                                constant(0L, salesType),
+                                                salesType)),
+                                List.of(BIGINT, BIGINT, BIGINT, salesType))),
+                        hashJoinStep(new HashJoinSpec(
+                                67_10,
+                                List.of(BIGINT, BIGINT, BIGINT, salesType),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year", "d_qoy", "d_moy", "d_month_seq"),
+                                        Optional.of(and(greaterThan(4, 1199, INTEGER), lessThan(4, 1212, INTEGER))),
+                                        List.of(field(0, BIGINT), field(1, INTEGER), field(2, INTEGER), field(3, INTEGER)),
+                                        List.of(BIGINT, INTEGER, INTEGER, INTEGER)),
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                67_11,
+                                concatTypes(List.of(BIGINT, BIGINT, BIGINT, salesType), List.of(BIGINT, INTEGER, INTEGER, INTEGER)),
+                                List.of(2),
+                                relationPages(
+                                        tables,
+                                        "store",
+                                        List.of("s_store_sk", "s_store_id"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, VARCHAR)),
+                                        List.of(BIGINT, VARCHAR)),
+                                List.of(BIGINT, VARCHAR),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                67_12,
+                                concatTypes(List.of(BIGINT, BIGINT, BIGINT, salesType), List.of(BIGINT, INTEGER, INTEGER, INTEGER, BIGINT, VARCHAR)),
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk", "i_brand", "i_class", "i_category", "i_product_name"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, VARCHAR), field(2, VARCHAR), field(3, VARCHAR), field(4, VARCHAR)),
+                                        List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR)),
+                                List.of(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                67_13,
+                                Optional.empty(),
+                                List.of(
+                                        field(13, VARCHAR),
+                                        field(12, VARCHAR),
+                                        field(11, VARCHAR),
+                                        field(14, VARCHAR),
+                                        field(5, INTEGER),
+                                        field(6, INTEGER),
+                                        field(7, INTEGER),
+                                        field(9, VARCHAR),
+                                        field(3, salesType)),
+                                List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, INTEGER, VARCHAR, salesType)))));
     }
 
     private List<Page> query44RankedItemsPages(TpcdsParquetTables tables, boolean descending)
@@ -1115,6 +1198,56 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 List.of(field(2, netProfitSum.getFinalType()), field(0, VARCHAR), field(1, VARCHAR), field(3, INTEGER), field(5, BIGINT)),
                                 outputTypes))),
+                outputTypes);
+    }
+
+    public MaterializedResult query67(TpcdsParquetTables tables)
+    {
+        Type salesType = createDecimalType(17, 2);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        List<Type> rollupTypes = List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, INTEGER, VARCHAR, salesType);
+        List<Type> groupIdTypes = concatTypes(rollupTypes, List.of(BIGINT));
+        List<Type> groupedTypes = List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, INTEGER, VARCHAR, BIGINT, salesSum.getFinalType());
+        List<Type> rankedSourceTypes = List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, INTEGER, VARCHAR, salesSum.getFinalType());
+        List<Type> outputTypes = concatTypes(rankedSourceTypes, List.of(BIGINT));
+
+        return executePagesPipeline(
+                query67SalesByRollupKeyPages(tables),
+                List.of(
+                        factoryStep(groupIdFactory(
+                                67_20,
+                                groupIdTypes,
+                                List.of(
+                                        Map.of(8, 8),
+                                        Map.of(0, 0, 8, 8),
+                                        Map.of(0, 0, 1, 1, 8, 8),
+                                        Map.of(0, 0, 1, 1, 2, 2, 8, 8),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3, 8, 8),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 8, 8),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 8, 8),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8)))),
+                        factoryStep(hashAggregationFactory(
+                                67_21,
+                                List.of(VARCHAR, VARCHAR, VARCHAR, VARCHAR, INTEGER, INTEGER, INTEGER, VARCHAR, BIGINT),
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                67_22,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, VARCHAR),
+                                        field(1, VARCHAR),
+                                        field(2, VARCHAR),
+                                        field(3, VARCHAR),
+                                        field(4, INTEGER),
+                                        field(5, INTEGER),
+                                        field(6, INTEGER),
+                                        field(7, VARCHAR),
+                                        field(9, salesSum.getFinalType())),
+                                rankedSourceTypes)),
+                        factoryStep(topNRankingFactory(67_23, rankedSourceTypes, List.of(0, 1, 2, 3, 4, 5, 6, 7, 8), List.of(0), List.of(8), List.of(DESC_NULLS_LAST), 100)),
+                        factoryStep(topNFactory(67_24, outputTypes, 100, List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
                 outputTypes);
     }
 
