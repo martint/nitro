@@ -69,8 +69,8 @@ engine", but rather:
 
 Queries:
 
-- `Q12`, `Q20`, `Q36`, `Q47`, `Q49`, `Q51`, `Q53`, `Q57`, `Q63`, `Q70`,
-  `Q86`, `Q89`, `Q98`
+- `Q12`, `Q20`, `Q36`, `Q47`, `Q49`, `Q53`, `Q57`, `Q63`, `Q86`, `Q89`,
+  `Q98`
 
 Needed shape:
 
@@ -86,13 +86,15 @@ Representative plans:
 
 Status:
 
-- missing as a reusable operator family
+- implemented in Nitro and in the Trino parquet harness
+- validated by `Q51` and `Q70`
+- still needs broader coverage across the remaining window-heavy queries
 
 ### TopNRanking
 
 Queries:
 
-- `Q67`, `Q70`
+- `Q67`
 
 Needed shape:
 
@@ -105,14 +107,15 @@ Representative plans:
 
 Status:
 
-- missing as a dedicated lowering/operator
+- implemented in Nitro and in the Trino parquet harness
+- validated by `Q44` and `Q70`
 
 ### GroupId
 
 Queries:
 
-- `Q05`, `Q14`, `Q16`, `Q18`, `Q22`, `Q27`, `Q28`, `Q36`, `Q67`, `Q70`,
-  `Q77`, `Q86`, `Q94`, `Q95`
+- `Q05`, `Q14`, `Q16`, `Q18`, `Q22`, `Q27`, `Q28`, `Q36`, `Q67`, `Q77`,
+  `Q86`, `Q94`, `Q95`
 
 Needed shape:
 

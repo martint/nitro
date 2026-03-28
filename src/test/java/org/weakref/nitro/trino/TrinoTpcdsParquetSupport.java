@@ -487,6 +487,99 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(BIGINT, DATE, BIGINT)))));
     }
 
+    private List<Page> query70ActiveStatesPages(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_store_sk", "ss_net_profit"));
+        TestingAggregationFunction netProfitSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(factTypes.get(2)));
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_store_sk", "ss_net_profit"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                70_0,
+                                factTypes,
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_month_seq"),
+                                        Optional.of(and(greaterThan(1, 1199, INTEGER), lessThan(1, 1212, INTEGER))),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                70_1,
+                                concatTypes(factTypes, List.of(BIGINT)),
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "store",
+                                        List.of("s_store_sk", "s_state"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, VARCHAR)),
+                                        List.of(BIGINT, VARCHAR)),
+                                List.of(BIGINT, VARCHAR),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                70_2,
+                                Optional.empty(),
+                                List.of(field(5, VARCHAR), field(2, factTypes.get(2))),
+                                List.of(VARCHAR, factTypes.get(2)))),
+                        factoryStep(hashAggregationFactory(
+                                70_3,
+                                List.of(VARCHAR),
+                                List.of(0),
+                                netProfitSum.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                70_4,
+                                Optional.empty(),
+                                List.of(field(0, VARCHAR)),
+                                List.of(VARCHAR)))));
+    }
+
+    private List<Page> query70SalesByLocationPages(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_store_sk", "ss_net_profit"));
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_store_sk", "ss_net_profit"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                70_10,
+                                factTypes,
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_month_seq"),
+                                        Optional.of(and(greaterThan(1, 1199, INTEGER), lessThan(1, 1212, INTEGER))),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                70_11,
+                                concatTypes(factTypes, List.of(BIGINT)),
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "store",
+                                        List.of("s_store_sk", "s_county", "s_state"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, VARCHAR), field(2, VARCHAR)),
+                                        List.of(BIGINT, VARCHAR, VARCHAR)),
+                                List.of(BIGINT, VARCHAR, VARCHAR),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                70_12,
+                                Optional.empty(),
+                                List.of(field(6, VARCHAR), field(5, VARCHAR), field(2, factTypes.get(2))),
+                                List.of(VARCHAR, VARCHAR, factTypes.get(2))))));
+    }
+
     private List<Page> query44RankedItemsPages(TpcdsParquetTables tables, boolean descending)
     {
         List<Type> rankedTypes = List.of(BIGINT, BIGINT);
@@ -976,6 +1069,53 @@ public final class TrinoTpcdsParquetSupport
         steps.add(factoryStep(reorderedProjection));
         steps.add(factoryStep(topN));
         return executePipeline(tables.tableFiles("customer"), List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"), steps, outputTypes);
+    }
+
+    public MaterializedResult query70(TpcdsParquetTables tables)
+    {
+        Type netProfitType = tableColumnTypes(tables, "store_sales", List.of("ss_net_profit")).getFirst();
+        TestingAggregationFunction netProfitSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(netProfitType));
+        List<Type> locationTypes = List.of(VARCHAR, VARCHAR, netProfitType);
+        List<Type> groupIdTypes = concatTypes(locationTypes, List.of(BIGINT));
+        List<Type> groupedTypes = List.of(VARCHAR, VARCHAR, BIGINT, netProfitSum.getFinalType());
+        List<Type> rollupTypes = List.of(VARCHAR, VARCHAR, netProfitSum.getFinalType(), INTEGER, VARCHAR);
+        List<Type> rankedTypes = concatTypes(rollupTypes, List.of(BIGINT));
+        List<Type> outputTypes = List.of(netProfitSum.getFinalType(), VARCHAR, VARCHAR, INTEGER, BIGINT);
+
+        return executePagesPipeline(
+                query70SalesByLocationPages(tables),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(70_20, locationTypes, List.of(0), query70ActiveStatesPages(tables), List.of(VARCHAR), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                70_21,
+                                Optional.empty(),
+                                List.of(field(0, VARCHAR), field(1, VARCHAR), field(2, netProfitType)),
+                                locationTypes)),
+                        factoryStep(groupIdFactory(
+                                70_22,
+                                groupIdTypes,
+                                List.of(
+                                        Map.of(2, 2),
+                                        Map.of(0, 0, 2, 2),
+                                        Map.of(0, 0, 1, 1, 2, 2)))),
+                        factoryStep(hashAggregationFactory(
+                                70_23,
+                                List.of(VARCHAR, VARCHAR, BIGINT),
+                                List.of(0, 1, 3),
+                                netProfitSum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                70_24,
+                                Optional.empty(),
+                                query70RollupProjection(netProfitSum.getFinalType()),
+                                rollupTypes)),
+                        factoryStep(topNRankingFactory(70_25, rollupTypes, List.of(0, 1, 2, 3, 4), List.of(3, 4), List.of(2), List.of(DESC_NULLS_LAST), 100)),
+                        factoryStep(topNFactory(70_26, rankedTypes, 100, List.of(3, 4, 5), List.of(DESC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                70_27,
+                                Optional.empty(),
+                                List.of(field(2, netProfitSum.getFinalType()), field(0, VARCHAR), field(1, VARCHAR), field(3, INTEGER), field(5, BIGINT)),
+                                outputTypes))),
+                outputTypes);
     }
 
     public MaterializedResult query80(TpcdsParquetTables tables)
@@ -2525,6 +2665,34 @@ public final class TrinoTpcdsParquetSupport
     private static RowExpression ifExpression(RowExpression condition, RowExpression whenTrue, RowExpression whenFalse, Type outputType)
     {
         return new SpecialForm(SpecialForm.Form.IF, outputType, List.of(condition, whenTrue, whenFalse), List.of());
+    }
+
+    private static List<RowExpression> query70RollupProjection(Type sumType)
+    {
+        RowExpression groupId = field(2, BIGINT);
+        RowExpression groupIdIsZero = equal(groupId, constant(0L, BIGINT), BIGINT);
+        RowExpression groupIdIsOne = equal(groupId, constant(1L, BIGINT), BIGINT);
+        RowExpression groupIdIsTwo = equal(groupId, constant(2L, BIGINT), BIGINT);
+        RowExpression hierarchy = ifExpression(
+                groupIdIsZero,
+                constant(2L, INTEGER),
+                ifExpression(
+                        groupIdIsOne,
+                        constant(1L, INTEGER),
+                        constant(0L, INTEGER),
+                        INTEGER),
+                INTEGER);
+        RowExpression stateForRank = ifExpression(
+                groupIdIsTwo,
+                field(0, VARCHAR),
+                constant(Slices.utf8Slice("\uFFFF"), VARCHAR),
+                VARCHAR);
+        return List.of(
+                field(0, VARCHAR),
+                field(1, VARCHAR),
+                field(3, sumType),
+                hierarchy,
+                stateForRank);
     }
 
     private static WindowFunctionDefinition aggregateWindowFunction(String functionName, List<Type> argumentTypes, Type outputType, int... inputChannels)

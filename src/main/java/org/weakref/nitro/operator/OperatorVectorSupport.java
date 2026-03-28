@@ -103,11 +103,7 @@ final class OperatorVectorSupport
 
     public static int binaryHash(byte[] bytes)
     {
-        int result = 1;
-        for (byte value : bytes) {
-            result = 31 * result + value;
-        }
-        return result;
+        return binaryHash(bytes, 0, bytes.length);
     }
 
     public static int binaryCompare(Vector left, int leftPosition, Vector right, int rightPosition)

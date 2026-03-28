@@ -245,7 +245,7 @@ final class OperatorKeySemantics
         public BinaryKey(byte[] bytes)
         {
             this.bytes = bytes;
-            this.hash = Arrays.hashCode(bytes);
+            this.hash = OperatorVectorSupport.binaryHash(bytes);
         }
 
         public byte[] bytes()

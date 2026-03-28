@@ -521,6 +521,39 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorCanGroupTwoUtf8KeysAndLongKey()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new CountAll()),
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row("AL", "Walker County", 2L),
+                        row("AL", "Walker County", 2L),
+                        row("TN", "Williamson County", 2L),
+                        row("TN", "Williamson County", 2L),
+                        row("TN", "Williamson County", 2L))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector stateKeys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector countyKeys = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector hierarchyKeys = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+        I64Vector counts = (I64Vector) batch.output(3).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(2);
+        assertThat(utf8(stateKeys, 0)).isEqualTo("AL");
+        assertThat(utf8(countyKeys, 0)).isEqualTo("Walker County");
+        assertThat(hierarchyKeys.values()[0]).isEqualTo(2L);
+        assertThat(counts.values()[0]).isEqualTo(2L);
+        assertThat(utf8(stateKeys, 1)).isEqualTo("TN");
+        assertThat(utf8(countyKeys, 1)).isEqualTo("Williamson County");
+        assertThat(hierarchyKeys.values()[1]).isEqualTo(2L);
+        assertThat(counts.values()[1]).isEqualTo(3L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorPreservesNullableCompositeKeys()
     {
         Allocator allocator = new Allocator();
