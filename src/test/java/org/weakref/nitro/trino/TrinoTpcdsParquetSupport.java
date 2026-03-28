@@ -18,6 +18,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
+import io.trino.metadata.ResolvedFunction;
 import io.trino.metadata.TestingFunctionResolution;
 import io.trino.operator.AggregationOperator.AggregationOperatorFactory;
 import io.trino.operator.Driver;
@@ -38,17 +39,26 @@ import io.trino.operator.SetBuilderOperator.SetSupplier;
 import io.trino.operator.TopNOperator;
 import io.trino.operator.TopNRankingOperator;
 import io.trino.operator.ValuesOperator;
+import io.trino.operator.WindowFunctionDefinition;
+import io.trino.operator.WindowOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
+import io.trino.operator.join.HashBuilderOperator.HashBuilderOperatorFactory;
 import io.trino.operator.join.JoinBridgeManager;
+import io.trino.operator.join.LookupOuterOperator;
 import io.trino.operator.join.LookupSource;
-import io.trino.operator.join.unspilled.HashBuilderOperator.HashBuilderOperatorFactory;
-import io.trino.operator.join.unspilled.PartitionedLookupSourceFactory;
+import io.trino.operator.join.PartitionedLookupSourceFactory;
+import io.trino.operator.window.AggregationWindowFunctionSupplier;
+import io.trino.operator.window.FrameInfo;
+import io.trino.operator.window.RegularPartitionerSupplier;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.connector.SortOrder;
 import io.trino.spi.function.OperatorType;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeOperators;
+import io.trino.spiller.PartitioningSpillerFactory;
+import io.trino.spiller.SingleStreamSpillerFactory;
+import io.trino.spiller.SpillerFactory;
 import io.trino.sql.gen.JoinCompiler;
 import io.trino.sql.gen.OrderingCompiler;
 import io.trino.sql.planner.plan.AggregationNode.Step;
@@ -82,6 +92,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.trino.operator.WindowFunctionDefinition.window;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_FIRST;
 import static io.trino.spi.connector.SortOrder.ASC_NULLS_LAST;
 import static io.trino.spi.connector.SortOrder.DESC_NULLS_LAST;
@@ -92,7 +103,10 @@ import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static io.trino.sql.planner.plan.FrameBoundType.CURRENT_ROW;
+import static io.trino.sql.planner.plan.FrameBoundType.UNBOUNDED_PRECEDING;
 import static io.trino.sql.planner.plan.TopNRankingNode.RankingType.RANK;
+import static io.trino.sql.planner.plan.WindowFrameType.ROWS;
 import static io.trino.sql.relational.Expressions.constant;
 import static io.trino.sql.relational.Expressions.field;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -110,6 +124,16 @@ public final class TrinoTpcdsParquetSupport
     private static final TestingAggregationFunction BIGINT_AVG = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MAX = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT));
+    private static final FrameInfo RUNNING_ROWS_FRAME = new FrameInfo(
+            ROWS,
+            UNBOUNDED_PRECEDING,
+            Optional.empty(),
+            Optional.empty(),
+            CURRENT_ROW,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.of(FrameInfo.Ordering.ASCENDING));
 
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("TrinoTpcdsParquetSupport"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoTpcdsParquetSupport-scheduled"));
@@ -349,6 +373,122 @@ public final class TrinoTpcdsParquetSupport
         steps.add(factoryStep(hashAggregationFactory(45_7, List.of(VARCHAR, VARCHAR), List.of(2, 1), salesSum.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()))));
         steps.add(factoryStep(topNFactory(45_8, List.of(VARCHAR, VARCHAR, salesSum.getFinalType()), 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))));
         return executePipeline(tables.tableFiles("web_sales"), columns, steps, List.of(VARCHAR, VARCHAR, salesSum.getFinalType()));
+    }
+
+    public MaterializedResult query51(TpcdsParquetTables tables)
+    {
+        List<Type> branchTypes = List.of(BIGINT, DATE, BIGINT);
+        List<Type> joinedTypes = concatTypes(branchTypes, branchTypes);
+        List<Type> projectedTypes = List.of(BIGINT, DATE, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(BIGINT, DATE, BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Page> storePages = query51ChannelPages(tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price");
+        List<Page> webPages = query51ChannelPages(tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price");
+        List<Page> joinedPages = new ArrayList<>(executePipelinePages(
+                webPages,
+                List.of(hashJoinStep(new HashJoinSpec(
+                        51_20,
+                        branchTypes,
+                        List.of(0, 1),
+                        storePages,
+                        branchTypes,
+                        List.of(0, 1),
+                        JoinOperatorType.probeOuterJoin(false))))));
+        joinedPages.addAll(executePipelinePages(
+                storePages,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                51_21,
+                                branchTypes,
+                                List.of(0, 1),
+                                webPages,
+                                branchTypes,
+                                List.of(0, 1),
+                                JoinOperatorType.probeOuterJoin(false))),
+                        factoryStep(filterAndProjectFactory(
+                                51_22,
+                                Optional.of(new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(field(3, BIGINT)), List.of())),
+                                List.of(
+                                        field(3, BIGINT),
+                                        field(4, DATE),
+                                        field(5, BIGINT),
+                                        field(0, BIGINT),
+                                        field(1, DATE),
+                                        field(2, BIGINT)),
+                                joinedTypes)))));
+
+        return executePagesPipeline(
+                joinedPages,
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                51_23,
+                                Optional.empty(),
+                                List.of(
+                                        ifExpression(new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(field(0, BIGINT)), List.of()), field(3, BIGINT), field(0, BIGINT), BIGINT),
+                                        ifExpression(new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(field(1, DATE)), List.of()), field(4, DATE), field(1, DATE), DATE),
+                                        field(2, BIGINT),
+                                        field(5, BIGINT)),
+                                projectedTypes)),
+                        factoryStep(windowFactory(
+                                51_24,
+                                projectedTypes,
+                                List.of(0, 1, 2, 3),
+                                List.of(0),
+                                List.of(1),
+                                List.of(ASC_NULLS_LAST),
+                                List.of(
+                                        aggregateWindowFunction("max", List.of(BIGINT), BIGINT, 2),
+                                        aggregateWindowFunction("max", List.of(BIGINT), BIGINT, 3)))),
+                        factoryStep(filterAndProjectFactory(
+                                51_25,
+                                Optional.of(greaterThan(field(4, BIGINT), field(5, BIGINT), BIGINT)),
+                                identityProjections(outputTypes),
+                                outputTypes)),
+                        factoryStep(topNFactory(51_26, outputTypes, 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
+    private List<Page> query51ChannelPages(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesPriceColumn)
+    {
+        List<String> factColumns = List.of(soldDateColumn, itemColumn, salesPriceColumn);
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, factColumns);
+        List<Type> groupedTypes = List.of(BIGINT, DATE, BIGINT);
+
+        List<Page> allowedDates = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_date", "d_month_seq"),
+                Optional.of(and(greaterThan(2, 1199, INTEGER), lessThan(2, 1212, INTEGER))),
+                List.of(field(0, BIGINT), field(1, DATE)),
+                List.of(BIGINT, DATE));
+
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                factColumns,
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                51_0,
+                                Optional.of(equal(new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(field(1, BIGINT)), List.of()), constant(false, BOOLEAN), BOOLEAN)),
+                                identityProjections(factTypes),
+                                factTypes)),
+                        hashJoinStep(new HashJoinSpec(51_1, factTypes, List.of(0), allowedDates, List.of(BIGINT, DATE), List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                51_2,
+                                List.of(BIGINT, DATE),
+                                List.of(1, 4),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()))),
+                        factoryStep(windowFactory(
+                                51_3,
+                                groupedTypes,
+                                List.of(0, 1, 2),
+                                List.of(0),
+                                List.of(1),
+                                List.of(ASC_NULLS_LAST),
+                                List.of(aggregateWindowFunction("sum", List.of(BIGINT), BIGINT, 2)))),
+                        factoryStep(filterAndProjectFactory(
+                                51_4,
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(1, DATE), field(3, BIGINT)),
+                                List.of(BIGINT, DATE, BIGINT)))));
     }
 
     private List<Page> query44RankedItemsPages(TpcdsParquetTables tables, boolean descending)
@@ -1215,6 +1355,54 @@ public final class TrinoTpcdsParquetSupport
         return outputPages;
     }
 
+    private List<Page> executeHashJoinPages(List<Page> probePages, HashJoinSpec spec)
+    {
+        List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
+        HashJoinRuntime hashJoinRuntime = createHashJoinRuntime(taskContext, spec);
+
+        DriverContext probeDriverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
+        ValuesOperator.ValuesOperatorFactory sourceFactory = new ValuesOperator.ValuesOperatorFactory(0, new PlanNodeId("values-source"), probePages);
+        OperatorFactory joinFactory = hashJoinRuntime.joinFactory();
+        List<Operator> joinOperators = new ArrayList<>();
+        joinOperators.add(sourceFactory.createOperator(probeDriverContext));
+        joinOperators.add(joinFactory.createOperator(probeDriverContext));
+        sourceFactory.noMoreOperators();
+        joinFactory.noMoreOperators();
+        joinOperators.add(new PageConsumerOperator(
+                probeDriverContext.addOperatorContext(1000, new PlanNodeId("join-sink"), PageConsumerOperator.class.getSimpleName()),
+                outputPages::add,
+                java.util.function.Function.identity()));
+
+        try (Driver driver = Driver.createDriver(probeDriverContext, joinOperators)) {
+            processDriver(driver, joinOperators);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to execute Trino hash-join probe pipeline", exception);
+        }
+
+        if (hashJoinRuntime.outerFactory() != null) {
+            DriverContext outerDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
+            LookupOuterOperator.LookupOuterOperatorFactory outerFactory = hashJoinRuntime.outerFactory();
+            List<Operator> outerOperators = new ArrayList<>();
+            outerOperators.add(outerFactory.createOperator(outerDriverContext));
+            outerFactory.noMoreOperators();
+            outerOperators.add(new PageConsumerOperator(
+                    outerDriverContext.addOperatorContext(1001, new PlanNodeId("outer-sink"), PageConsumerOperator.class.getSimpleName()),
+                    outputPages::add,
+                    java.util.function.Function.identity()));
+
+            try (Driver driver = Driver.createDriver(outerDriverContext, outerOperators)) {
+                processDriver(driver, outerOperators);
+            }
+            catch (Exception exception) {
+                throw new RuntimeException("Unable to execute Trino hash-join outer pipeline", exception);
+            }
+        }
+
+        return outputPages;
+    }
+
     private List<Page> executePipelinePages(List<Page> inputPages, List<PipelineStep> steps)
     {
         List<Page> outputPages = new ArrayList<>();
@@ -1268,7 +1456,86 @@ public final class TrinoTpcdsParquetSupport
 
     private OperatorFactory createHashJoinFactory(io.trino.operator.TaskContext taskContext, HashJoinSpec hashJoinSpec)
     {
-        PartitionedLookupSourceFactory lookupSourceFactory = new PartitionedLookupSourceFactory(
+        return createHashJoinRuntime(taskContext, hashJoinSpec).joinFactory();
+    }
+
+    private HashJoinRuntime createHashJoinRuntime(io.trino.operator.TaskContext taskContext, HashJoinSpec hashJoinSpec)
+    {
+        boolean buildOuter = switch (hashJoinSpec.joinOperatorType().getType()) {
+            case LOOKUP_OUTER, FULL_OUTER -> true;
+            default -> false;
+        };
+        if (buildOuter) {
+            PartitionedLookupSourceFactory lookupSourceFactory = new PartitionedLookupSourceFactory(
+                    hashJoinSpec.buildTypes(),
+                    hashJoinSpec.buildTypes(),
+                    hashJoinSpec.buildHashChannels().stream()
+                            .map(hashJoinSpec.buildTypes()::get)
+                            .toList(),
+                    1,
+                    true,
+                    new TypeOperators());
+            JoinBridgeManager<PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
+                    true,
+                    lookupSourceFactory,
+                    lookupSourceFactory.getOutputTypes());
+            OperatorFactory joinFactory = io.trino.operator.OperatorFactories.spillingJoin(
+                    hashJoinSpec.joinOperatorType(),
+                    hashJoinSpec.operatorId(),
+                    new PlanNodeId("join-" + hashJoinSpec.operatorId()),
+                    joinBridgeManager,
+                    hashJoinSpec.probeTypes(),
+                    hashJoinSpec.probeJoinChannels(),
+                    Optional.empty(),
+                    OptionalInt.empty(),
+                    PartitioningSpillerFactory.unsupportedPartitioningSpillerFactory(),
+                    new TypeOperators());
+            LookupOuterOperator.LookupOuterOperatorFactory outerFactory = new LookupOuterOperator.LookupOuterOperatorFactory(
+                    7000 + hashJoinSpec.operatorId(),
+                    new PlanNodeId("outer-" + hashJoinSpec.operatorId()),
+                    hashJoinSpec.probeTypes(),
+                    lookupSourceFactory.getOutputTypes(),
+                    joinBridgeManager);
+            HashBuilderOperatorFactory buildOperatorFactory = new HashBuilderOperatorFactory(
+                    9000 + hashJoinSpec.operatorId(),
+                    new PlanNodeId("build-" + hashJoinSpec.operatorId()),
+                    joinBridgeManager,
+                    rangeList(hashJoinSpec.buildTypes().size()),
+                    hashJoinSpec.buildHashChannels(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    ImmutableList.of(),
+                    100,
+                    new PagesIndex.TestingFactory(false),
+                    false,
+                    SingleStreamSpillerFactory.unsupportedSingleStreamSpillerFactory(),
+                    HashArraySizeSupplier.incrementalLoadFactorHashArraySizeSupplier(taskContext.getSession()));
+            ValuesOperator.ValuesOperatorFactory valuesOperatorFactory = new ValuesOperator.ValuesOperatorFactory(
+                    8000 + hashJoinSpec.operatorId(),
+                    new PlanNodeId("values-" + hashJoinSpec.operatorId()),
+                    hashJoinSpec.buildPages());
+
+            DriverContext buildDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
+            try (Driver buildDriver = Driver.createDriver(
+                    buildDriverContext,
+                    valuesOperatorFactory.createOperator(buildDriverContext),
+                    buildOperatorFactory.createOperator(buildDriverContext))) {
+                valuesOperatorFactory.noMoreOperators();
+                buildOperatorFactory.noMoreOperators();
+                ListenableFuture<Void> buildFinished = joinBridgeManager.getJoinBridge().whenBuildFinishes();
+                while (!buildFinished.isDone()) {
+                    buildDriver.processForNumberOfIterations(1);
+                }
+                buildFinished.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS);
+            }
+            catch (Exception exception) {
+                throw new RuntimeException("Unable to build Trino full-outer hash-join lookup source", exception);
+            }
+
+            return new HashJoinRuntime(joinFactory, outerFactory);
+        }
+
+        io.trino.operator.join.unspilled.PartitionedLookupSourceFactory lookupSourceFactory = new io.trino.operator.join.unspilled.PartitionedLookupSourceFactory(
                 hashJoinSpec.buildTypes(),
                 hashJoinSpec.buildTypes(),
                 hashJoinSpec.buildHashChannels().stream()
@@ -1277,7 +1544,7 @@ public final class TrinoTpcdsParquetSupport
                 1,
                 false,
                 new TypeOperators());
-        JoinBridgeManager<PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
+        JoinBridgeManager<io.trino.operator.join.unspilled.PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
                 false,
                 lookupSourceFactory,
                 lookupSourceFactory.getOutputTypes());
@@ -1290,7 +1557,7 @@ public final class TrinoTpcdsParquetSupport
                 hashJoinSpec.probeTypes(),
                 hashJoinSpec.probeJoinChannels(),
                 Optional.empty());
-        HashBuilderOperatorFactory buildOperatorFactory = new HashBuilderOperatorFactory(
+        io.trino.operator.join.unspilled.HashBuilderOperator.HashBuilderOperatorFactory buildOperatorFactory = new io.trino.operator.join.unspilled.HashBuilderOperator.HashBuilderOperatorFactory(
                 9000 + hashJoinSpec.operatorId(),
                 new PlanNodeId("build-" + hashJoinSpec.operatorId()),
                 joinBridgeManager,
@@ -1318,13 +1585,13 @@ public final class TrinoTpcdsParquetSupport
             while (!lookupSource.isDone()) {
                 buildDriver.processForNumberOfIterations(1);
             }
-            lookupSource.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS).close();
+            lookupSource.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS);
         }
         catch (Exception exception) {
             throw new RuntimeException("Unable to build Trino hash-join lookup source", exception);
         }
 
-        return joinFactory;
+        return new HashJoinRuntime(joinFactory, null);
     }
 
     private OperatorFactory createSemiJoinFactory(io.trino.operator.TaskContext taskContext, SemiJoinSpec semiJoinSpec)
@@ -1891,6 +2158,31 @@ public final class TrinoTpcdsParquetSupport
                 new BlockTypeOperators());
     }
 
+    private OperatorFactory windowFactory(int operatorId, List<Type> sourceTypes, List<Integer> outputChannels, List<Integer> partitionChannels, List<Integer> sortChannels, List<SortOrder> sortOrders, List<WindowFunctionDefinition> windowFunctions)
+    {
+        SpillerFactory spillerFactory = (types, spillContext, aggregatedMemoryContext) -> {
+            throw new UnsupportedOperationException("Window spilling is disabled in TrinoTpcdsParquetSupport");
+        };
+        return new WindowOperator.WindowOperatorFactory(
+                operatorId,
+                new PlanNodeId("window-" + operatorId),
+                sourceTypes,
+                outputChannels,
+                windowFunctions,
+                partitionChannels,
+                List.of(),
+                sortChannels,
+                sortOrders,
+                0,
+                10_000,
+                new PagesIndex.TestingFactory(false),
+                false,
+                spillerFactory,
+                orderingCompiler,
+                List.of(),
+                new RegularPartitionerSupplier());
+    }
+
     private OperatorFactory filterAndProjectFactory(int operatorId, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
     {
         return FilterAndProjectOperator.createOperatorFactory(
@@ -2158,6 +2450,24 @@ public final class TrinoTpcdsParquetSupport
         return new SpecialForm(SpecialForm.Form.IF, outputType, List.of(condition, whenTrue, whenFalse), List.of());
     }
 
+    private static WindowFunctionDefinition aggregateWindowFunction(String functionName, List<Type> argumentTypes, Type outputType, int... inputChannels)
+    {
+        ResolvedFunction resolvedFunction = FUNCTION_RESOLUTION.resolveFunction(functionName, fromTypes(argumentTypes));
+        AggregationWindowFunctionSupplier supplier = new AggregationWindowFunctionSupplier(
+                resolvedFunction.signature(),
+                FUNCTION_RESOLUTION.getPlannerContext().getFunctionManager().getAggregationImplementation(resolvedFunction),
+                resolvedFunction.functionNullability());
+        return window(
+                supplier,
+                outputType,
+                RUNNING_ROWS_FRAME,
+                false,
+                List.of(),
+                java.util.Arrays.stream(inputChannels)
+                        .boxed()
+                        .toList());
+    }
+
     private static RowExpression yearMonthRangePredicate(int yearIndex, int monthIndex, int year, int minimumMonthInclusive, int maximumMonthInclusive)
     {
         return and(
@@ -2290,6 +2600,10 @@ public final class TrinoTpcdsParquetSupport
             this(operatorId, probeTypes, probeJoinChannels, buildPages, buildTypes, buildHashChannels, JoinOperatorType.innerJoin(false, false));
         }
     }
+
+    private record HashJoinRuntime(
+            OperatorFactory joinFactory,
+            LookupOuterOperator.LookupOuterOperatorFactory outerFactory) {}
 
     private record SemiJoinSpec(
             int operatorId,

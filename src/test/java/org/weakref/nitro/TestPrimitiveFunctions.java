@@ -22,6 +22,7 @@ import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
 import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
+import org.weakref.nitro.function.scalar.builtin.CastI64ToI32;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
@@ -33,9 +34,11 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
+import org.weakref.nitro.function.scalar.builtin.IfI32;
 import org.weakref.nitro.function.scalar.builtin.IfI64;
 import org.weakref.nitro.function.scalar.builtin.IfUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
+import org.weakref.nitro.function.scalar.builtin.IsNullI32;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.function.scalar.builtin.LengthUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
@@ -70,6 +73,7 @@ public final class TestPrimitiveFunctions
                 ArrayMinI64.class,
                 ArraySumI64.class,
                 Cardinality.class,
+                CastI64ToI32.class,
                 ConcatUtf8.class,
                 ContainsUtf8.class,
                 ExtractHostUtf8.class,
@@ -78,8 +82,10 @@ public final class TestPrimitiveFunctions
                 EqualI64.class,
                 EqualUtf8.class,
                 HashUtf8.class,
+                IfI32.class,
                 IfI64.class,
                 IfUtf8.class,
+                IsNullI32.class,
                 IsNullI64.class,
                 InUtf8.class,
                 LessThanI64.class,

@@ -95,9 +95,19 @@ final class BufferedJoinInput
             if (firstRetainedBatch == null) {
                 firstRetainedBatch = batch;
             }
+            captureSchema(batch, schema);
             captureStreams(batch, outputStreams);
             Mask mask = batch.borrowMask();
             if (mask.none()) {
+                continue;
+            }
+            if (!mask.all()) {
+                Streams[] columns = new Streams[columnCount];
+                for (int columnIndex = 0; columnIndex < columns.length; columnIndex++) {
+                    columns[columnIndex] = buffers.copyAndCompact(batch.output(columnIndex), mask, 0, null, 0, mask.count(), mask.count());
+                }
+                rowCount += mask.count();
+                batches.add(new InnerBatch(columns, mask.count()));
                 continue;
             }
             int[] positions = positions(mask);

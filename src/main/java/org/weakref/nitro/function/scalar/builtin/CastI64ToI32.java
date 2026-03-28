@@ -1,0 +1,97 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.function.scalar.builtin;
+
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.ScalarFunction;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+
+import java.util.List;
+import java.util.Set;
+
+import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.Math.toIntExact;
+
+@ScalarFunction(name = "cast_i64_to_i32")
+public final class CastI64ToI32
+        implements PrimitiveFunction
+{
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("CastI64ToI32");
+
+    @Override
+    public Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of(ALLOCATION_CONTEXT);
+    }
+
+    @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
+    public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    {
+        checkArgument(inputs.size() == 1, "Unexpected argument count for cast_i64_to_i32");
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
+            return Streams.empty();
+        }
+
+        Streams input = inputs.get(0);
+        Streams result = Streams.empty();
+        if (requestedStreams.contains(Stream.NULLS) && input.has(Stream.NULLS)) {
+            result = result.with(Stream.NULLS, input.get(Stream.NULLS));
+        }
+
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return result;
+        }
+
+        I32Vector outputValues = context.allocator().allocateOrGrow(
+                ALLOCATION_CONTEXT,
+                output != null && output.has(Stream.VALUES) && output.values() instanceof I32Vector vector ? vector : null,
+                I32Vector.class,
+                mask.maxPosition() + 1,
+                I32Vector::new);
+        applyValues(input.values(), mask, outputValues);
+        return result.with(Stream.VALUES, outputValues);
+    }
+
+    private static void applyValues(Vector values, Mask mask, I32Vector output)
+    {
+        for (int position : mask) {
+            output.values()[position] = toIntExact(longValue(values, position));
+        }
+    }
+
+    private static long longValue(Vector values, int position)
+    {
+        return switch (values) {
+            case I64Vector vector -> vector.values()[position];
+            case DictionaryVector vector -> longValue(vector.values(), vector.ids()[position]);
+            case RleVector vector -> longValue(vector.values(), vector.runIndex(position));
+            default -> throw new IllegalArgumentException("Unsupported cast_i64_to_i32 input vector type: " + values.getClass().getSimpleName());
+        };
+    }
+}

@@ -28,6 +28,7 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
+import org.weakref.nitro.operator.FullJoinOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -43,6 +44,7 @@ import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.Sum;
@@ -270,6 +272,54 @@ public class TestOperatorBatches
         int rowCount = batch.borrowMask().count();
         assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(3L, 3L);
         assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(2L, 1L);
+    }
+
+    @Test
+    void testFullJoinOperatorNullExtendsUnmatchedRows()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new FullJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 10), row(2L, 20))),
+                new int[] {0, 1},
+                new ConstantTableOperator(allocator, 2, List.of(row(2L, 20), row(3L, 30))),
+                new int[] {0, 1})) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 10, null, null),
+                            row(2L, 20, 2L, 20),
+                            row(null, null, 3L, 30));
+        }
+    }
+
+    @Test
+    void testWindowOperatorProducesRunningPartitionedAggregates()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(1L, 2, 5L),
+                        row(1L, 1, 3L),
+                        row(2L, 1, 7L),
+                        row(1L, 3, (Object) null),
+                        row(2L, 2, 4L))),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(
+                        new WindowOperator.RunningSumI64WindowFunction(2),
+                        new WindowOperator.RunningMaxI64WindowFunction(2)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 1, 3L, 3L, 3L),
+                            row(1L, 2, 5L, 8L, 5L),
+                            row(1L, 3, null, 8L, 5L),
+                            row(2L, 1, 7L, 7L, 7L),
+                            row(2L, 2, 4L, 11L, 7L));
+        }
     }
 
     @Test

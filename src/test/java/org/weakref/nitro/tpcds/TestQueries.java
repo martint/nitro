@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.tpcds;
 
+import io.trino.spi.type.SqlDate;
 import io.trino.spi.type.SqlDecimal;
 import io.trino.testing.MaterializedResult;
 import org.junit.jupiter.api.Test;
@@ -1443,6 +1444,12 @@ public class TestQueries
     }
 
     @Test
+    void testQuery51()
+    {
+        assertOperatorMatches("51", tables -> TpcdsParquetSupport.query51(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query51(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDateAndDecimalValue);
+    }
+
+    @Test
     void testQuery10()
     {
         assertOperatorMatches("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
@@ -1497,9 +1504,21 @@ public class TestQueries
     }
 
     @Test
+    void testQuery51Sql()
+    {
+        assertNitroMatchesSql("51", tables -> TpcdsParquetSupport.query51(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeDateAndDecimalValue);
+    }
+
+    @Test
     void testQuery45TrinoSql()
     {
         assertTrinoOperatorMatchesSql("45", support -> support.query45(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery51TrinoSql()
+    {
+        assertTrinoOperatorMatchesSql("51", support -> support.query51(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDateAndDecimalValue);
     }
 
     @Test
@@ -1813,6 +1832,12 @@ public class TestQueries
 
     private static Object normalizeDecimalCentsValue(Object value)
     {
+        if (value instanceof java.time.LocalDate date) {
+            return (int) date.toEpochDay();
+        }
+        if (value instanceof SqlDate date) {
+            return date.getDays();
+        }
         if (value instanceof SqlDecimal decimal) {
             return decimal.toBigDecimal().unscaledValue().longValueExact();
         }
@@ -1820,5 +1845,10 @@ public class TestQueries
             return decimal.unscaledValue().longValueExact();
         }
         return normalizeValue(value);
+    }
+
+    private static Object normalizeDateAndDecimalValue(Object value)
+    {
+        return normalizeDecimalCentsValue(value);
     }
 }

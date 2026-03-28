@@ -25,6 +25,7 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
+import org.weakref.nitro.operator.FullJoinOperator;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
@@ -39,6 +40,7 @@ import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
+import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
@@ -188,6 +190,25 @@ final class TpcdsParquetSupport
                 List.of(new Sum(2)),
                 projected);
         return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, aggregated);
+    }
+
+    public static Operator query51(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator web = query51Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price");
+        Operator store = query51Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price");
+        Operator joined = new FullJoinOperator(allocator, web, new int[] {0, 1}, store, new int[] {0, 1});
+        joined = projectQuery51JoinOutput(allocator, primitiveRegistry, joined);
+        joined = new WindowOperator(
+                allocator,
+                joined,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(
+                        new WindowOperator.RunningMaxI64WindowFunction(2),
+                        new WindowOperator.RunningMaxI64WindowFunction(3)));
+        joined = filter(allocator, primitiveRegistry, joined, query51CumulativePredicate(4, 5));
+        return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
     }
 
     public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -1485,6 +1506,79 @@ final class TpcdsParquetSupport
                 projected);
     }
 
+    private static Operator query51Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesPriceColumn)
+    {
+        Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesPriceColumn);
+        facts = filter(allocator, primitiveRegistry, facts, isNotNullI64(1));
+        Operator allowedDates = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                and(greaterThan(2, 1199), lessThan(2, 1212)),
+                new String[] {"d_date_sk", "d_date", "d_month_seq"},
+                0,
+                1);
+        facts = new HashJoinOperator(allocator, facts, 0, allowedDates, 0);
+        Operator grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(1, 4),
+                List.of(new Sum(2)),
+                facts);
+        Operator running = new WindowOperator(
+                allocator,
+                grouped,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new WindowOperator.RunningSumI64WindowFunction(2)));
+        return projectInputs(allocator, primitiveRegistry, running, 0, 1, 3);
+    }
+
+    private static Operator projectQuery51JoinOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable webItemIsNull = new Variable(0);
+        Variable joinedItem = new Variable(1);
+        Variable webDateIsNull = new Variable(2);
+        Variable joinedDate = new Variable(3);
+        Variable joinedDateAsDate = new Variable(4);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(webItemIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                new Assignment(joinedItem, new Call("if_i64", List.of(
+                        new Reference(webItemIsNull, Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                new Assignment(webDateIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                new Assignment(joinedDate, new Call("if_i64", List.of(
+                        new Reference(webDateIsNull, Stream.VALUES),
+                        new Reference(new Input(4), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                new Assignment(joinedDateAsDate, new Call("cast_i64_to_i32", List.of(
+                        new Reference(joinedDate, Stream.VALUES))), AllMask.ALL));
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(assignments, List.of(
+                        new Reference(joinedItem, Stream.VALUES),
+                        new Reference(joinedDateAsDate, Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(new Input(5), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static FilterSpec query51CumulativePredicate(int webCumulativeIndex, int storeCumulativeIndex)
+    {
+        Variable greaterThan = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(new Input(storeCumulativeIndex), Stream.VALUES),
+                        new Reference(new Input(webCumulativeIndex), Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES)));
+    }
+
     private static FilterSpec equalUtf8(int inputIndex, String constant)
     {
         Variable literal = new Variable(0);
@@ -1528,6 +1622,18 @@ final class TpcdsParquetSupport
                 new Assignment(isNull, new Call("is_null_i64", List.of(
                         new Reference(new Input(inputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(isNull, Stream.VALUES)));
+    }
+
+    private static FilterSpec isNotNullI64(int inputIndex)
+    {
+        Variable isNull = new Variable(0);
+        Variable notNull = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(isNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(notNull, new Call("not", List.of(
+                        new Reference(isNull, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(notNull, Stream.VALUES)));
     }
 
     private static FilterSpec lessThan(int inputIndex, long constant)
