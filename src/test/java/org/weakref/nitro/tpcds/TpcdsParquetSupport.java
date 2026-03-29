@@ -226,6 +226,27 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {2, 1, 0}, new boolean[] {false, false, false}, quarterlySales);
     }
 
+    public static Operator query57(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        List<Row> monthlyRankedRows;
+        try (Operator monthlyRanked = query57MonthlyRankedSales(allocator, primitiveRegistry, tables)) {
+            monthlyRankedRows = OperatorAssertions.OperatorAssert.toRows(monthlyRanked);
+        }
+        int monthlyRankedOutputCount = monthlyRankedRows.isEmpty() ? 8 : monthlyRankedRows.getFirst().values().length;
+
+        Operator current = projectQuery57CurrentRows(allocator, primitiveRegistry, new ConstantTableOperator(allocator, monthlyRankedOutputCount, monthlyRankedRows));
+        Operator previous = projectQuery57AdjacentRows(allocator, primitiveRegistry, new ConstantTableOperator(allocator, monthlyRankedOutputCount, monthlyRankedRows), true);
+        Operator next = projectQuery57AdjacentRows(allocator, primitiveRegistry, new ConstantTableOperator(allocator, monthlyRankedOutputCount, monthlyRankedRows), false);
+
+        Operator joined = new HashJoinOperator(allocator, current, new int[] {0, 1, 2, 7}, previous, new int[] {0, 1, 2, 4});
+        joined = new HashJoinOperator(allocator, joined, new int[] {0, 1, 2, 7}, next, new int[] {0, 1, 2, 4});
+        joined = projectQuery57Output(allocator, primitiveRegistry, joined);
+        joined = filter(allocator, primitiveRegistry, joined, query53QuarterlyDeviationPredicate(6, 5));
+        joined = projectQuery57SortKey(allocator, primitiveRegistry, joined);
+        joined = new TopNOperator(allocator, 100, new int[] {9, 2}, new boolean[] {false, false}, joined);
+        return projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5, 6, 7, 8);
+    }
+
     public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator allowedShipDates = materializedTable(
@@ -1712,6 +1733,115 @@ final class TpcdsParquetSupport
                 List.of(0, 1),
                 List.of(new Sum(2)),
                 facts);
+    }
+
+    private static Operator query57MonthlyRankedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                2,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category"),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query57DatePredicate(),
+                        new String[] {"d_date_sk", "d_year", "d_moy"},
+                        0, 1, 2),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 8, 9, 3);
+        facts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 4),
+                List.of(new Sum(5)),
+                facts);
+        facts = new TopNRankingOperator(
+                allocator,
+                32,
+                new int[] {0, 1, 2},
+                new int[] {3, 4},
+                new boolean[] {false, false},
+                facts);
+        facts = new WindowOperator(
+                allocator,
+                facts,
+                new int[] {0, 1, 2, 3},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(5)));
+        return projectInputs(allocator, primitiveRegistry, facts, 0, 1, 2, 3, 4, 7, 5, 6);
+    }
+
+    private static Operator projectQuery57CurrentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        source = filter(allocator, primitiveRegistry, source, equal(3, 1999));
+        return projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 6, 7);
+    }
+
+    private static Operator projectQuery57AdjacentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, boolean previous)
+    {
+        Variable one = new Variable(0);
+        Variable adjustedRank = new Variable(1);
+        List<Assignment> assignments = List.of(
+                new Assignment(one, new Literal(1L), AllMask.ALL),
+                new Assignment(adjustedRank, new Call(previous ? "add" : "subtract", List.of(
+                        new Reference(new Input(7), Stream.VALUES),
+                        new Reference(one, Stream.VALUES))), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(new Input(0), Stream.VALUES),
+                new Reference(new Input(1), Stream.VALUES),
+                new Reference(new Input(2), Stream.VALUES),
+                new Reference(new Input(6), Stream.VALUES),
+                new Reference(adjustedRank, Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static Operator projectQuery57Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        return projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 6, 11, 16);
+    }
+
+    private static Operator projectQuery57SortKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable difference = new Variable(0);
+        List<Assignment> assignments = List.of(
+                new Assignment(difference, new Call("subtract", List.of(
+                        new Reference(new Input(6), Stream.VALUES),
+                        new Reference(new Input(5), Stream.VALUES))), AllMask.ALL));
+        List<Reference> outputs = List.of(
+                new Reference(new Input(0), Stream.VALUES),
+                new Reference(new Input(1), Stream.VALUES),
+                new Reference(new Input(2), Stream.VALUES),
+                new Reference(new Input(3), Stream.VALUES),
+                new Reference(new Input(4), Stream.VALUES),
+                new Reference(new Input(5), Stream.VALUES),
+                new Reference(new Input(6), Stream.VALUES),
+                new Reference(new Input(7), Stream.VALUES),
+                new Reference(new Input(8), Stream.VALUES),
+                new Reference(difference, Stream.VALUES));
+        return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
+    }
+
+    private static FilterSpec query57DatePredicate()
+    {
+        return or(
+                equal(1, 1999),
+                and(equal(1, 1998), equal(2, 12)),
+                and(equal(1, 2000), equal(2, 1)));
     }
 
     private static Operator projectQuery51JoinOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
