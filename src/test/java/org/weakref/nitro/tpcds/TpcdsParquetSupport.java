@@ -211,6 +211,21 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
     }
 
+    public static Operator query53(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator quarterlySales = query53QuarterlySalesByManufact(allocator, primitiveRegistry, tables);
+        quarterlySales = new WindowOperator(
+                allocator,
+                quarterlySales,
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(2)));
+        quarterlySales = filter(allocator, primitiveRegistry, quarterlySales, query53QuarterlyDeviationPredicate(2, 3));
+        quarterlySales = projectInputs(allocator, primitiveRegistry, quarterlySales, 0, 2, 3);
+        return new TopNOperator(allocator, 100, new int[] {2, 1, 0}, new boolean[] {false, false, false}, quarterlySales);
+    }
+
     public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator allowedShipDates = materializedTable(
@@ -675,6 +690,63 @@ final class TpcdsParquetSupport
                 equal(0, 19),
                 equal(0, 23),
                 equal(0, 29));
+    }
+
+    private static FilterSpec query53ItemPredicate()
+    {
+        FilterSpec firstBranch = and(
+                utf8AnyOf(2, Set.of("Books", "Children", "Electronics")),
+                utf8AnyOf(3, Set.of("personal", "portable", "reference", "self-help")),
+                utf8AnyOf(4, Set.of("scholaramalgamalg #14", "scholaramalgamalg #7", "exportiunivamalg #9", "scholaramalgamalg #9")));
+        FilterSpec secondBranch = and(
+                utf8AnyOf(2, Set.of("Women", "Music", "Men")),
+                utf8AnyOf(3, Set.of("accessories", "classical", "fragrances", "pants")),
+                utf8AnyOf(4, Set.of("amalgimporto #1", "edu packscholar #1", "exportiimporto #1", "importoamalg #1")));
+        return or(firstBranch, secondBranch);
+    }
+
+    private static FilterSpec query53QuarterlyDeviationPredicate(int sumIndex, int averageIndex)
+    {
+        Variable zero = new Variable(0);
+        Variable ten = new Variable(1);
+        Variable averagePositive = new Variable(2);
+        Variable sumLessThanAverage = new Variable(3);
+        Variable averageMinusSum = new Variable(4);
+        Variable sumMinusAverage = new Variable(5);
+        Variable absoluteDifference = new Variable(6);
+        Variable scaledDifference = new Variable(7);
+        Variable deviationLarge = new Variable(8);
+        Variable result = new Variable(9);
+
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(ten, new Literal(10L), AllMask.ALL),
+                new Assignment(averagePositive, new Call("lt", List.of(
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(sumLessThanAverage, new Call("lt", List.of(
+                        new Reference(new Input(sumIndex), Stream.VALUES),
+                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(averageMinusSum, new Call("subtract", List.of(
+                        new Reference(new Input(averageIndex), Stream.VALUES),
+                        new Reference(new Input(sumIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(sumMinusAverage, new Call("subtract", List.of(
+                        new Reference(new Input(sumIndex), Stream.VALUES),
+                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(absoluteDifference, new Call("if_i64", List.of(
+                        new Reference(sumLessThanAverage, Stream.VALUES),
+                        new Reference(averageMinusSum, Stream.VALUES),
+                        new Reference(sumMinusAverage, Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledDifference, new Call("multiply", List.of(
+                        new Reference(absoluteDifference, Stream.VALUES),
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                new Assignment(deviationLarge, new Call("lt", List.of(
+                        new Reference(new Input(averageIndex), Stream.VALUES),
+                        new Reference(scaledDifference, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("and", List.of(
+                        new Reference(averagePositive, Stream.VALUES),
+                        new Reference(deviationLarge, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
     }
 
     private static Operator query44RankedItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean descending)
@@ -1595,6 +1667,51 @@ final class TpcdsParquetSupport
                 new boolean[] {false},
                 List.of(new WindowOperator.RunningSumI64WindowFunction(2)));
         return projectInputs(allocator, primitiveRegistry, running, 0, 1, 3);
+    }
+
+    private static Operator query53QuarterlySalesByManufact(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query53ItemPredicate(),
+                        new String[] {"i_item_sk", "i_manufact_id", "i_category", "i_class", "i_brand"},
+                        0,
+                        1),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(greaterThan(2, 1199), lessThan(2, 1212)),
+                        new String[] {"d_date_sk", "d_qoy", "d_month_seq"},
+                        0,
+                        1),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                2,
+                scannedTable(allocator, tables, "store", "s_store_sk"),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 5, 7, 3);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new Sum(2)),
+                facts);
     }
 
     private static Operator projectQuery51JoinOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)

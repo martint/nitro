@@ -4,7 +4,7 @@ This note captures what the unsupported parquet-backed TPC-DS queries currently
 need, based on Trino logical `EXPLAIN` output dumped by
 `org.weakref.nitro.tpcds.ExplainUnsupportedQueries`.
 
-The dump currently lives under `target/tpcds-explain/` and covers the `84`
+The dump currently lives under `target/tpcds-explain/` and covers the `79`
 benchmark queries that are not yet implemented in the parquet-backed Nitro and
 Trino operator harnesses.
 
@@ -18,14 +18,19 @@ Supported parquet-backed queries today:
 - `Q41`
 - `Q44`
 - `Q45`
+- `Q51`
+- `Q53`
 - `Q62`
+- `Q67`
 - `Q69`
+- `Q70`
 - `Q73`
 - `Q80`
 - `Q84`
 - `Q88`
 - `Q90`
 - `Q96`
+- `Q97`
 - `Q99`
 
 Everything else is currently unsupported in the parquet-backed operator
@@ -49,12 +54,12 @@ is the source of truth for the operator topology we need to reproduce.
 Most unsupported queries already lower into plan shapes that are largely within
 the current Nitro vocabulary:
 
-- `84/84` use `Aggregate`
-- `82/84` use joins
-- `78/84` use `ScanFilter`
-- `75/84` use `ScanFilterProject`
-- `72/84` use `Project`
-- `62/84` use `TopN`
+- `79/79` use `Aggregate`
+- `77/79` use joins
+- `73/79` use `ScanFilter`
+- `70/79` use `ScanFilterProject`
+- `67/79` use `Project`
+- `57/79` use `TopN`
 
 That means a large fraction of the remaining work is not "invent a whole new
 engine", but rather:
@@ -69,7 +74,7 @@ engine", but rather:
 
 Queries:
 
-- `Q12`, `Q20`, `Q36`, `Q47`, `Q49`, `Q53`, `Q57`, `Q63`, `Q86`, `Q89`,
+- `Q12`, `Q20`, `Q36`, `Q47`, `Q49`, `Q57`, `Q63`, `Q86`, `Q89`,
   `Q98`
 
 Needed shape:
@@ -82,19 +87,20 @@ Representative plans:
 
 - `Q51` uses two partitioned running-sum windows plus a final window after a
   `FullJoin`
+- `Q53` uses a partition-wide quarterly average window
 - `Q70` uses `Window` together with `GroupId` and `TopNRanking`
 
 Status:
 
 - implemented in Nitro and in the Trino parquet harness
-- validated by `Q51` and `Q70`
+- validated by `Q51`, `Q53`, and `Q70`
 - still needs broader coverage across the remaining window-heavy queries
 
 ### TopNRanking
 
 Queries:
 
-- `Q67`
+- none in the current unsupported set
 
 Needed shape:
 
@@ -108,7 +114,7 @@ Representative plans:
 Status:
 
 - implemented in Nitro and in the Trino parquet harness
-- validated by `Q44` and `Q70`
+- validated by `Q44`, `Q67`, and `Q70`
 
 ### GroupId
 

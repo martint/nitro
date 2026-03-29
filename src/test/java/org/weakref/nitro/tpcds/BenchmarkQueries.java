@@ -81,6 +81,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query53()
+    {
+        consume(TpcdsParquetSupport.query53(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query80()
     {
         consume(TpcdsParquetSupport.query80(allocator, primitiveRegistry, tables));

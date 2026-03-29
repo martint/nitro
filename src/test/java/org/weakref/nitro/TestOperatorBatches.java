@@ -357,6 +357,35 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorProducesPartitionAverageWithoutOrdering()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2L, 7L),
+                        row(1L, 2L),
+                        row(1L, 3L),
+                        row(3L, (Object) null),
+                        row(2L, 9L),
+                        row(1L, (Object) null))),
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(1)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 2L, 3L),
+                            row(1L, 3L, 3L),
+                            row(1L, null, 3L),
+                            row(2L, 7L, 8L),
+                            row(2L, 9L, 8L),
+                            row(3L, null, null));
+        }
+    }
+
+    @Test
     void testGroupedAggregationOperatorCanFuseGroupingAndAggregation()
     {
         Allocator allocator = new Allocator();

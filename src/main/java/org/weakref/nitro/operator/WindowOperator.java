@@ -41,9 +41,6 @@ public final class WindowOperator
 
     public WindowOperator(Allocator allocator, Operator source, int[] partitionColumns, int[] orderingColumns, boolean[] descendingByColumn, List<RunningWindowFunction> windowFunctions)
     {
-        if (orderingColumns.length == 0) {
-            throw new IllegalArgumentException("WindowOperator requires at least one ordering column");
-        }
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
         }
@@ -151,13 +148,19 @@ public final class WindowOperator
         Streams output = function.emptyOutput(allocator, allocationContext, rows.size());
         RowReference previous = null;
         function.reset();
+        int partitionStart = 0;
         for (int outputPosition = 0; outputPosition < rows.size(); outputPosition++) {
             RowReference row = rows.get(outputPosition);
             if (previous != null && !samePartition(previous, row)) {
+                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition);
                 function.reset();
+                partitionStart = outputPosition;
             }
             output = function.append(allocator, allocationContext, output, row.page().columns(), row.position(), outputPosition, rows.size());
             previous = row;
+        }
+        if (!rows.isEmpty()) {
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, rows.size());
         }
         return output;
     }
@@ -279,6 +282,11 @@ public final class WindowOperator
         void reset();
 
         Streams append(Allocator allocator, Allocator.Context allocationContext, Streams output, Streams[] sourceColumns, int inputPosition, int outputPosition, int outputSize);
+
+        default Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
+        {
+            return output;
+        }
     }
 
     public static final class RunningSumI64WindowFunction
@@ -377,6 +385,71 @@ public final class WindowOperator
                 outputValues.values()[outputPosition] = runningMax;
             }
             return output;
+        }
+    }
+
+    public static final class PartitionAverageI64WindowFunction
+            implements RunningWindowFunction
+    {
+        private final int inputColumn;
+        private long runningSum;
+        private long runningCount;
+
+        public PartitionAverageI64WindowFunction(int inputColumn)
+        {
+            this.inputColumn = inputColumn;
+        }
+
+        @Override
+        public Streams emptyOutput(Allocator allocator, Allocator.Context allocationContext, int size)
+        {
+            return Streams.ofValuesAndNulls(
+                    allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
+                    allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
+        }
+
+        @Override
+        public void reset()
+        {
+            runningSum = 0;
+            runningCount = 0;
+        }
+
+        @Override
+        public Streams append(Allocator allocator, Allocator.Context allocationContext, Streams output, Streams[] sourceColumns, int inputPosition, int outputPosition, int outputSize)
+        {
+            Streams input = sourceColumns[inputColumn];
+            Vector values = input.values();
+            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            if (!OperatorVectorSupport.isNull(nulls, inputPosition)) {
+                runningSum += OperatorVectorSupport.longValue(values, inputPosition);
+                runningCount++;
+            }
+            return output;
+        }
+
+        @Override
+        public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
+        {
+            I64Vector outputValues = (I64Vector) output.values();
+            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            boolean hasValue = runningCount > 0;
+            long average = hasValue ? roundDivide(runningSum, runningCount) : 0;
+            for (int outputPosition = partitionStart; outputPosition < partitionEnd; outputPosition++) {
+                outputNulls.values()[outputPosition] = !hasValue;
+                if (hasValue) {
+                    outputValues.values()[outputPosition] = average;
+                }
+            }
+            return output;
+        }
+
+        private static long roundDivide(long numerator, long denominator)
+        {
+            long positiveNumerator = numerator >= 0 ? numerator : -numerator;
+            long positiveDenominator = denominator >= 0 ? denominator : -denominator;
+            long rounded = (positiveNumerator + (positiveDenominator / 2)) / positiveDenominator;
+            return (numerator < 0) ^ (denominator < 0) ? -rounded : rounded;
         }
     }
 

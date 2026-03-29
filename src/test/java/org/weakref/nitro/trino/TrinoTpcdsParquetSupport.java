@@ -101,6 +101,7 @@ import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.planner.plan.FrameBoundType.CURRENT_ROW;
+import static io.trino.sql.planner.plan.FrameBoundType.UNBOUNDED_FOLLOWING;
 import static io.trino.sql.planner.plan.FrameBoundType.UNBOUNDED_PRECEDING;
 import static io.trino.sql.planner.plan.TopNRankingNode.RankingType.RANK;
 import static io.trino.sql.planner.plan.WindowFrameType.ROWS;
@@ -131,6 +132,16 @@ public final class TrinoTpcdsParquetSupport
             Optional.empty(),
             Optional.empty(),
             Optional.of(FrameInfo.Ordering.ASCENDING));
+    private static final FrameInfo PARTITION_ROWS_FRAME = new FrameInfo(
+            ROWS,
+            UNBOUNDED_PRECEDING,
+            Optional.empty(),
+            Optional.empty(),
+            UNBOUNDED_FOLLOWING,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty());
 
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("TrinoTpcdsParquetSupport"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoTpcdsParquetSupport-scheduled"));
@@ -441,6 +452,69 @@ public final class TrinoTpcdsParquetSupport
                                 identityProjections(outputTypes),
                                 outputTypes)),
                         factoryStep(topNFactory(51_26, outputTypes, 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
+    public MaterializedResult query53(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        Type salesType = factTypes.get(3);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        TestingAggregationFunction quarterlyAverage = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(salesSum.getFinalType()));
+        List<Type> itemTypes = List.of(BIGINT, INTEGER);
+        List<Type> dateTypes = List.of(BIGINT, INTEGER);
+        List<Type> quarterlyTypes = List.of(INTEGER, INTEGER, salesSum.getFinalType());
+        List<Type> windowTypes = List.of(INTEGER, INTEGER, salesSum.getFinalType(), quarterlyAverage.getFinalType());
+        List<Type> outputTypes = List.of(INTEGER, salesSum.getFinalType(), quarterlyAverage.getFinalType());
+
+        List<Page> itemKeys = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_manufact_id", "i_category", "i_class", "i_brand"),
+                Optional.of(query53ItemPredicate()),
+                List.of(field(0, BIGINT), field(1, INTEGER)),
+                itemTypes);
+        List<Page> allowedDates = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_qoy", "d_month_seq"),
+                Optional.of(and(greaterThan(2, 1199, INTEGER), lessThan(2, 1212, INTEGER))),
+                List.of(field(0, BIGINT), field(1, INTEGER)),
+                dateTypes);
+        List<Page> storeKeys = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+
+        return executePipeline(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(53_0, factTypes, List.of(1), itemKeys, itemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(53_1, concatTypes(factTypes, itemTypes), List.of(0), allowedDates, dateTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(53_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(2), storeKeys, List.of(BIGINT), List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                53_3,
+                                List.of(INTEGER, INTEGER),
+                                List.of(5, 7),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()))),
+                        factoryStep(windowFactory(
+                                53_4,
+                                quarterlyTypes,
+                                List.of(0, 1, 2),
+                                List.of(0),
+                                List.of(),
+                                List.of(),
+                                List.of(aggregateWindowFunction("avg", List.of(salesSum.getFinalType()), quarterlyAverage.getFinalType(), PARTITION_ROWS_FRAME, 2)))),
+                        factoryStep(filterAndProjectFactory(
+                                53_5,
+                                Optional.of(query53DeviationPredicate(salesSum.getFinalType(), quarterlyAverage.getFinalType())),
+                                List.of(field(0, INTEGER), field(2, salesSum.getFinalType()), field(3, quarterlyAverage.getFinalType())),
+                                outputTypes)),
+                        factoryStep(topNFactory(53_6, outputTypes, 100, List.of(2, 1, 0), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
                 outputTypes);
     }
 
@@ -2770,6 +2844,34 @@ public final class TrinoTpcdsParquetSupport
                 BIGINT);
     }
 
+    private static RowExpression query53ItemPredicate()
+    {
+        RowExpression firstBranch = and(
+                varcharAnyOf(2, Set.of("Books", "Children", "Electronics")),
+                varcharAnyOf(3, Set.of("personal", "portable", "reference", "self-help")),
+                varcharAnyOf(4, Set.of("scholaramalgamalg #14", "scholaramalgamalg #7", "exportiunivamalg #9", "scholaramalgamalg #9")));
+        RowExpression secondBranch = and(
+                varcharAnyOf(2, Set.of("Women", "Music", "Men")),
+                varcharAnyOf(3, Set.of("accessories", "classical", "fragrances", "pants")),
+                varcharAnyOf(4, Set.of("amalgimporto #1", "edu packscholar #1", "exportiimporto #1", "importoamalg #1")));
+        return or(firstBranch, secondBranch);
+    }
+
+    private static RowExpression query53DeviationPredicate(Type sumType, Type averageType)
+    {
+        RowExpression sum = cast(field(2, sumType), sumType, DOUBLE);
+        RowExpression average = cast(field(3, averageType), averageType, DOUBLE);
+        RowExpression sumLessThanAverage = lessThan(sum, average, DOUBLE);
+        RowExpression absoluteDifference = ifExpression(
+                sumLessThanAverage,
+                subtract(average, sum, DOUBLE),
+                subtract(sum, average, DOUBLE),
+                DOUBLE);
+        return and(
+                greaterThan(average, constant(0.0, DOUBLE), DOUBLE),
+                greaterThan(multiply(absoluteDifference, constant(10.0, DOUBLE), DOUBLE), average, DOUBLE));
+    }
+
     private static RowExpression greaterThan(RowExpression left, RowExpression right, Type type)
     {
         return lessThan(right, left, type);
@@ -2793,6 +2895,11 @@ public final class TrinoTpcdsParquetSupport
     private static RowExpression divide(RowExpression left, RowExpression right, Type type)
     {
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.DIVIDE, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression cast(RowExpression expression, Type fromType, Type toType)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.getCoercion(fromType, toType), List.of(expression));
     }
 
     private static RowExpression ifExpression(RowExpression condition, RowExpression whenTrue, RowExpression whenFalse, Type outputType)
@@ -2830,6 +2937,11 @@ public final class TrinoTpcdsParquetSupport
 
     private static WindowFunctionDefinition aggregateWindowFunction(String functionName, List<Type> argumentTypes, Type outputType, int... inputChannels)
     {
+        return aggregateWindowFunction(functionName, argumentTypes, outputType, RUNNING_ROWS_FRAME, inputChannels);
+    }
+
+    private static WindowFunctionDefinition aggregateWindowFunction(String functionName, List<Type> argumentTypes, Type outputType, FrameInfo frameInfo, int... inputChannels)
+    {
         ResolvedFunction resolvedFunction = FUNCTION_RESOLUTION.resolveFunction(functionName, fromTypes(argumentTypes));
         AggregationWindowFunctionSupplier supplier = new AggregationWindowFunctionSupplier(
                 resolvedFunction.signature(),
@@ -2838,7 +2950,7 @@ public final class TrinoTpcdsParquetSupport
         return window(
                 supplier,
                 outputType,
-                RUNNING_ROWS_FRAME,
+                frameInfo,
                 false,
                 List.of(),
                 java.util.Arrays.stream(inputChannels)
