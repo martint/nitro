@@ -101,6 +101,51 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, 0, false, customerIds);
     }
 
+    public static Operator query06(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator scalarMonthSequence = query06ScalarMonthSequence(allocator, primitiveRegistry, tables);
+        Operator categoryAggregates = query06CategoryAggregates(allocator, tables);
+
+        Operator joined = factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_item_sk");
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                0,
+                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk"),
+                0);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                4,
+                scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_state"),
+                0);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                1,
+                scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_month_seq"),
+                0);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                2,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_current_price", "i_category"),
+                0);
+        joined = new HashJoinOperator(allocator, joined, 8, scalarMonthSequence, 0);
+        joined = projectInputs(allocator, primitiveRegistry, joined, 6, 10, 11);
+        joined = new HashJoinOperator(allocator, joined, 2, categoryAggregates, 0, true);
+        joined = filter(allocator, primitiveRegistry, joined, query06ThresholdPredicate(1, 4, 5));
+        joined = projectInputs(allocator, primitiveRegistry, joined, 0);
+
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                joined);
+        aggregated = filter(allocator, primitiveRegistry, aggregated, greaterThan(1, 9));
+        return new TopNOperator(allocator, 100, new int[] {1, 0}, new boolean[] {false, false}, aggregated);
+    }
+
     public static Operator query41(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator eligibleManufacturers = filter(
@@ -815,6 +860,29 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, joined, 0, 2);
     }
 
+    private static Operator query06ScalarMonthSequence(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator monthSequence = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                and(equal(1, 2001), equal(2, 1)),
+                new String[] {"d_month_seq", "d_year", "d_moy"},
+                0);
+        monthSequence = new MarkDistinctOperator(allocator, 0, monthSequence);
+        return new EnforceSingleRowOperator(allocator, monthSequence);
+    }
+
+    private static Operator query06CategoryAggregates(Allocator allocator, TpcdsParquetTables tables)
+    {
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                scannedTable(allocator, tables, "item", "i_category", "i_current_price"));
+    }
+
     private static Operator projectQuery44ItemAggregates(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         Variable joinKey = new Variable(0);
@@ -1507,6 +1575,36 @@ final class TpcdsParquetSupport
                         new Reference(scaledAverage, Stream.VALUES),
                         new Reference(scaledReturn, Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES)));
+    }
+
+    private static FilterSpec query06ThresholdPredicate(int priceIndex, int categorySumIndex, int categoryCountIndex)
+    {
+        Variable five = new Variable(0);
+        Variable six = new Variable(1);
+        Variable countTimesPrice = new Variable(2);
+        Variable scaledPrice = new Variable(3);
+        Variable scaledAverage = new Variable(4);
+        Variable greaterThan = new Variable(5);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(five, new Literal(5L), AllMask.ALL),
+                new Assignment(six, new Literal(6L), AllMask.ALL),
+                new Assignment(countTimesPrice, new Call("multiply", List.of(
+                        new Reference(new Input(categoryCountIndex), Stream.VALUES),
+                        new Reference(new Input(priceIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledPrice, new Call("multiply", List.of(
+                        new Reference(countTimesPrice, Stream.VALUES),
+                        new Reference(five, Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledAverage, new Call("multiply", List.of(
+                        new Reference(new Input(categorySumIndex), Stream.VALUES),
+                        new Reference(six, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(scaledAverage, Stream.VALUES),
+                        new Reference(scaledPrice, Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                isNotNullI64(priceIndex),
+                isNotNullI64(categorySumIndex),
+                isNotNullI64(categoryCountIndex),
+                new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
     }
 
     private static FilterSpec query73HouseholdPredicate()

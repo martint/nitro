@@ -157,6 +157,117 @@ public final class TrinoTpcdsParquetSupport
                 List.of(VARCHAR));
     }
 
+    public MaterializedResult query06(TpcdsParquetTables tables)
+    {
+        List<String> salesColumns = List.of("ss_customer_sk", "ss_sold_date_sk", "ss_item_sk");
+        List<Type> salesTypes = tableColumnTypes(tables, "store_sales", salesColumns);
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_current_addr_sk"));
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_state"));
+        Type stateType = addressTypes.get(1);
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_month_seq"));
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_current_price", "i_category"));
+        Type priceType = itemTypes.get(1);
+        Type categoryType = itemTypes.get(2);
+        TestingAggregationFunction priceAverage = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(priceType));
+        Type averageType = priceAverage.getFinalType();
+
+        List<Type> afterCustomerTypes = concatTypes(salesTypes, customerTypes);
+        List<Type> afterAddressTypes = concatTypes(afterCustomerTypes, addressTypes);
+        List<Type> afterDateTypes = concatTypes(afterAddressTypes, dateTypes);
+        List<Type> afterItemTypes = concatTypes(afterDateTypes, itemTypes);
+        List<Type> afterMonthTypes = concatTypes(afterItemTypes, List.of(dateTypes.get(1)));
+        List<Type> projectedTypes = List.of(stateType, priceType, categoryType);
+        List<Type> categoryAverageTypes = List.of(categoryType, averageType);
+        List<Type> afterAverageTypes = concatTypes(projectedTypes, categoryAverageTypes);
+        List<Type> outputTypes = List.of(stateType, BIGINT);
+
+        List<Page> customerPages = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_current_addr_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, BIGINT)),
+                customerTypes);
+        List<Page> addressPages = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_state"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, stateType)),
+                addressTypes);
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_month_seq"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, dateTypes.get(1))),
+                dateTypes);
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_current_price", "i_category"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, priceType), field(2, categoryType)),
+                itemTypes);
+        List<Page> scalarMonthPages = executePipelinePages(
+                relationPages(
+                        tables,
+                        "date_dim",
+                        List.of("d_month_seq", "d_year", "d_moy"),
+                        Optional.of(and(equal(1, 2001, INTEGER), equal(2, 1, INTEGER))),
+                        List.of(field(0, INTEGER)),
+                        List.of(INTEGER)),
+                List.of(
+                        factoryStep(hashAggregationFactory(610, List.of(INTEGER), List.of(0))),
+                        factoryStep(enforceSingleRowFactory(611, List.of(INTEGER)))));
+        List<Page> categoryAveragePages = executePipelinePages(
+                relationPages(
+                        tables,
+                        "item",
+                        List.of("i_category", "i_current_price"),
+                        Optional.empty(),
+                        List.of(field(0, categoryType), field(1, priceType)),
+                        List.of(categoryType, priceType)),
+                List.of(factoryStep(hashAggregationFactory(
+                        620,
+                        List.of(categoryType),
+                        List.of(0),
+                        priceAverage.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty())))));
+
+        return executePipeline(
+                tables.tableFiles("store_sales"),
+                salesColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(600, salesTypes, List.of(0), customerPages, customerTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(601, afterCustomerTypes, List.of(4), addressPages, addressTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(602, afterAddressTypes, List.of(1), datePages, dateTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(603, afterDateTypes, List.of(2), itemPages, itemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(604, afterItemTypes, List.of(8), scalarMonthPages, List.of(INTEGER), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                605,
+                                Optional.empty(),
+                                List.of(field(6, stateType), field(10, priceType), field(11, categoryType)),
+                                projectedTypes)),
+                        hashJoinStep(new HashJoinSpec(606, projectedTypes, List.of(2), categoryAveragePages, categoryAverageTypes, List.of(0), JoinOperatorType.probeOuterJoin(false))),
+                        factoryStep(filterAndProjectFactory(
+                                607,
+                                Optional.of(query06ThresholdPredicate(priceType, averageType)),
+                                List.of(field(0, stateType)),
+                                List.of(stateType))),
+                        factoryStep(hashAggregationFactory(
+                                608,
+                                List.of(stateType),
+                                List.of(0),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                609,
+                                Optional.of(greaterThan(field(1, BIGINT), constant(9L, BIGINT), BIGINT)),
+                                identityProjections(outputTypes),
+                                outputTypes)),
+                        factoryStep(topNFactory(612, outputTypes, 100, List.of(1, 0), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
     private List<Page> query01CustomerIdsPages(TpcdsParquetTables tables)
     {
         return executePipelinePages(
@@ -2990,6 +3101,18 @@ public final class TrinoTpcdsParquetSupport
                 BIGINT);
         RowExpression scaledAverage = multiply(field(7, BIGINT), constant(6L, BIGINT), BIGINT);
         return greaterThan(scaledReturn, scaledAverage, BIGINT);
+    }
+
+    private static RowExpression query06ThresholdPredicate(Type priceType, Type averageType)
+    {
+        Type multiplierType = createDecimalType(2, 1);
+        RowExpression scaledAverage = new CallExpression(
+                FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(averageType, multiplierType)),
+                List.of(field(4, averageType), constant(12L, multiplierType)));
+        return greaterThan(
+                cast(field(1, priceType), priceType, scaledAverage.type()),
+                scaledAverage,
+                scaledAverage.type());
     }
 
     private static RowExpression query44AverageKey(RowExpression sum, RowExpression count)

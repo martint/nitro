@@ -5,14 +5,15 @@ need, based on Trino logical `EXPLAIN` output dumped by
 `org.weakref.nitro.tpcds.ExplainUnsupportedQueries`.
 
 The dump currently lives under `target/tpcds-explain/` and covers the `79`
-benchmark queries that are not yet implemented in the parquet-backed Nitro and
-Trino operator harnesses.
+benchmark queries that were not yet implemented in the parquet-backed Nitro and
+Trino operator harnesses when this snapshot was generated.
 
 ## Current coverage
 
 Supported parquet-backed queries today:
 
 - `Q01`
+- `Q06`
 - `Q10`
 - `Q35`
 - `Q41`
@@ -178,7 +179,9 @@ Representative plans:
 
 Status:
 
-- missing as an explicit operator/lowering step
+- implemented in Nitro and in the Trino parquet harness
+- validated by `Q06` and `Q44`
+- no longer a blocking operator family for scalar-subquery expansion
 
 ## Already-covered advanced shapes
 

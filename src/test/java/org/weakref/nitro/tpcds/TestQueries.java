@@ -60,6 +60,12 @@ public class TestQueries
     }
 
     @Test
+    void testQuery06()
+    {
+        assertOperatorMatches("06", tables -> TpcdsParquetSupport.query06(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query06(TpcdsParquetTables.requiredActual("sf10")));
+    }
+
+    @Test
     void testQuery41()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
