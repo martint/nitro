@@ -453,5 +453,60 @@ public final class WindowOperator
         }
     }
 
+    public static final class PartitionSumI64WindowFunction
+            implements RunningWindowFunction
+    {
+        private final int inputColumn;
+        private long runningSum;
+        private boolean hasValue;
+
+        public PartitionSumI64WindowFunction(int inputColumn)
+        {
+            this.inputColumn = inputColumn;
+        }
+
+        @Override
+        public Streams emptyOutput(Allocator allocator, Allocator.Context allocationContext, int size)
+        {
+            return Streams.ofValuesAndNulls(
+                    allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
+                    allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
+        }
+
+        @Override
+        public void reset()
+        {
+            runningSum = 0;
+            hasValue = false;
+        }
+
+        @Override
+        public Streams append(Allocator allocator, Allocator.Context allocationContext, Streams output, Streams[] sourceColumns, int inputPosition, int outputPosition, int outputSize)
+        {
+            Streams input = sourceColumns[inputColumn];
+            Vector values = input.values();
+            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            if (!OperatorVectorSupport.isNull(nulls, inputPosition)) {
+                runningSum += OperatorVectorSupport.longValue(values, inputPosition);
+                hasValue = true;
+            }
+            return output;
+        }
+
+        @Override
+        public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
+        {
+            I64Vector outputValues = (I64Vector) output.values();
+            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            for (int outputPosition = partitionStart; outputPosition < partitionEnd; outputPosition++) {
+                outputNulls.values()[outputPosition] = !hasValue;
+                if (hasValue) {
+                    outputValues.values()[outputPosition] = runningSum;
+                }
+            }
+            return output;
+        }
+    }
+
     private record RowReference(int pageIndex, TableOperator.Page page, int position) {}
 }

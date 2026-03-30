@@ -66,6 +66,18 @@ public class TestQueries
     }
 
     @Test
+    void testQuery12()
+    {
+        assertOperatorMatches("12", tables -> TpcdsParquetSupport.query12(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query12(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery20()
+    {
+        assertOperatorMatches("20", tables -> TpcdsParquetSupport.query20(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query20(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
     void testQuery09()
     {
         assertOperatorMatches("09", tables -> TpcdsParquetSupport.query09(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query09(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);

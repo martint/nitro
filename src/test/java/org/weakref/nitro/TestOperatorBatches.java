@@ -420,6 +420,35 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorProducesPartitionSumWithoutOrdering()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2L, 7L),
+                        row(1L, 2L),
+                        row(1L, 3L),
+                        row(3L, (Object) null),
+                        row(2L, 9L),
+                        row(1L, (Object) null))),
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionSumI64WindowFunction(1)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 2L, 5L),
+                            row(1L, 3L, 5L),
+                            row(1L, null, 5L),
+                            row(2L, 7L, 16L),
+                            row(2L, 9L, 16L),
+                            row(3L, null, null));
+        }
+    }
+
+    @Test
     void testGroupedAggregationOperatorCanFuseGroupingAndAggregation()
     {
         Allocator allocator = new Allocator();

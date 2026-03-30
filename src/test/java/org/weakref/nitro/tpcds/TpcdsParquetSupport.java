@@ -147,6 +147,61 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {1, 0}, new boolean[] {false, false}, aggregated);
     }
 
+    public static Operator query12(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        return queryRevenueRatioByClass(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price");
+    }
+
+    public static Operator query20(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        return queryRevenueRatioByClass(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price");
+    }
+
+    private static Operator queryRevenueRatioByClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
+    {
+        Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query12CategoryPredicate(),
+                        new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query12DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2);
+        facts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 4),
+                List.of(new Sum(5)),
+                facts);
+        facts = new WindowOperator(
+                allocator,
+                facts,
+                new int[] {3},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionSumI64WindowFunction(5)));
+        facts = projectQuery12RevenueRatio(allocator, primitiveRegistry, facts);
+        return new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
+    }
+
     public static Operator query09(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator reason = filteredProjectedTable(
@@ -1051,6 +1106,11 @@ final class TpcdsParquetSupport
                 utf8AnyOf(3, Set.of("accessories", "classical", "fragrances", "pants")),
                 utf8AnyOf(4, Set.of("amalgimporto #1", "edu packscholar #1", "exportiimporto #1", "importoamalg #1")));
         return or(firstBranch, secondBranch);
+    }
+
+    private static FilterSpec query12CategoryPredicate()
+    {
+        return utf8AnyOf(3, Set.of("Sports", "Books", "Home"));
     }
 
     private static FilterSpec query53QuarterlyDeviationPredicate(int sumIndex, int averageIndex)
@@ -2435,6 +2495,13 @@ final class TpcdsParquetSupport
                 lessThan(1, 11_074));
     }
 
+    private static FilterSpec query12DatePredicate()
+    {
+        return and(
+                greaterThan(1, 10_643),
+                lessThan(1, 10_675));
+    }
+
     private static FilterSpec query23YearRangePredicate()
     {
         return and(
@@ -3432,6 +3499,31 @@ final class TpcdsParquetSupport
                         new Reference(new Input(2), Stream.VALUES),
                         new Reference(new Input(3), Stream.VALUES),
                         new Reference(new Input(4), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery12RevenueRatio(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable scale = new Variable(0);
+        Variable ratio = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(scale, new Literal(100_000_000L), AllMask.ALL),
+                                new Assignment(ratio, new Call("divide_scale_round_i64", List.of(
+                                        new Reference(new Input(5), Stream.VALUES),
+                                        new Reference(new Input(6), Stream.VALUES),
+                                        new Reference(scale, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES),
+                                new Reference(ratio, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

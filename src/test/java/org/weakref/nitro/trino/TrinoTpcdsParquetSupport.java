@@ -272,6 +272,92 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query12(TpcdsParquetTables tables)
+    {
+        return queryRevenueRatioByClass(tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price");
+    }
+
+    public MaterializedResult query20(TpcdsParquetTables tables)
+    {
+        return queryRevenueRatioByClass(tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price");
+    }
+
+    private MaterializedResult queryRevenueRatioByClass(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
+    {
+        List<String> factColumns = List.of(soldDateColumn, itemColumn, salesColumn);
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, factColumns);
+        Type salesType = factTypes.get(2);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        Type groupedRevenueType = salesSum.getFinalType();
+        Type ratioType = createDecimalType(38, 6);
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"));
+        List<Type> projectedItemTypes = List.of(BIGINT, itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), itemTypes.get(5));
+        List<Type> groupedTypes = List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), itemTypes.get(5), groupedRevenueType);
+        List<Type> outputTypes = List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), itemTypes.get(5), groupedRevenueType, ratioType);
+
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"),
+                Optional.of(query12CategoryPredicate()),
+                List.of(field(0, BIGINT), field(1, itemTypes.get(1)), field(2, itemTypes.get(2)), field(3, itemTypes.get(3)), field(4, itemTypes.get(4)), field(5, itemTypes.get(5))),
+                projectedItemTypes);
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_date"),
+                Optional.of(query12DatePredicate()),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+
+        return executePipeline(
+                tables.tableFiles(salesTable),
+                factColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(12_0, factTypes, List.of(1), itemPages, projectedItemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(12_1, concatTypes(factTypes, projectedItemTypes), List.of(0), datePages, List.of(BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                12_2,
+                                Optional.empty(),
+                                List.of(
+                                        field(4, itemTypes.get(1)),
+                                        field(5, itemTypes.get(2)),
+                                        field(6, itemTypes.get(3)),
+                                        field(7, itemTypes.get(4)),
+                                        field(8, itemTypes.get(5)),
+                                        field(2, salesType)),
+                                List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), itemTypes.get(5), salesType))),
+                        factoryStep(hashAggregationFactory(
+                                12_3,
+                                List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), itemTypes.get(5)),
+                                List.of(0, 1, 2, 3, 4),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()))),
+                        factoryStep(windowFactory(
+                                12_4,
+                                groupedTypes,
+                                List.of(0, 1, 2, 3, 4, 5),
+                                List.of(3),
+                                List.of(),
+                                List.of(),
+                                List.of(aggregateWindowFunction("sum", List.of(groupedRevenueType), groupedRevenueType, PARTITION_ROWS_FRAME, 5)))),
+                        factoryStep(filterAndProjectFactory(
+                                12_5,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, itemTypes.get(1)),
+                                        field(1, itemTypes.get(2)),
+                                        field(2, itemTypes.get(3)),
+                                        field(3, itemTypes.get(4)),
+                                        field(4, itemTypes.get(5)),
+                                        field(5, groupedRevenueType),
+                                        divide(
+                                                multiply(field(5, groupedRevenueType), constant(100L, createDecimalType(10, 0))),
+                                                field(6, groupedRevenueType))),
+                                outputTypes)),
+                        factoryStep(topNFactory(12_6, outputTypes, 100, List.of(2, 3, 0, 1, 6), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
     public MaterializedResult query09(TpcdsParquetTables tables)
     {
         List<Type> reasonTypes = tableColumnTypes(tables, "reason", List.of("r_reason_sk"));
@@ -4916,6 +5002,13 @@ public final class TrinoTpcdsParquetSupport
                 lessThan(field(1, DATE), constant(11_074L, DATE), DATE));
     }
 
+    private static RowExpression query12DatePredicate()
+    {
+        return and(
+                greaterThan(field(1, DATE), constant(10_643L, DATE), DATE),
+                lessThan(field(1, DATE), constant(10_675L, DATE), DATE));
+    }
+
     private static RowExpression query23YearRangePredicate()
     {
         return and(
@@ -5128,6 +5221,11 @@ public final class TrinoTpcdsParquetSupport
                 varcharAnyOf(3, Set.of("accessories", "classical", "fragrances", "pants")),
                 varcharAnyOf(4, Set.of("amalgimporto #1", "edu packscholar #1", "exportiimporto #1", "importoamalg #1")));
         return or(firstBranch, secondBranch);
+    }
+
+    private static RowExpression query12CategoryPredicate()
+    {
+        return varcharAnyOf(3, Set.of("Sports", "Books", "Home"));
     }
 
     private static RowExpression query53DeviationPredicate(Type sumType, Type averageType)
