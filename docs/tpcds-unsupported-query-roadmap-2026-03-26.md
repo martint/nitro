@@ -36,6 +36,7 @@ Supported parquet-backed queries today:
 - `Q84`
 - `Q88`
 - `Q90`
+- `Q92`
 - `Q96`
 - `Q97`
 - `Q99`

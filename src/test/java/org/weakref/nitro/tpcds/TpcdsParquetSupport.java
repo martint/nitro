@@ -755,6 +755,40 @@ final class TpcdsParquetSupport
         return new ConstantTableOperator(allocator, 1, List.of(new Row(ratio)));
     }
 
+    public static Operator query92(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator allowedDates = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                query92DatePredicate(),
+                new String[] {"d_date_sk", "d_date"},
+                0);
+        Operator manufacturedItems = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "item",
+                equal(1, 350),
+                new String[] {"i_item_sk", "i_manufact_id"},
+                0);
+
+        Operator discounted = factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_discount_amt");
+        discounted = new HashJoinOperator(allocator, discounted, 1, manufacturedItems, 0);
+        discounted = new HashJoinOperator(allocator, discounted, 0, allowedDates, 0);
+        discounted = projectInputs(allocator, primitiveRegistry, discounted, 1, 2);
+
+        Operator itemAverages = query92ItemAverageDiscounts(allocator, primitiveRegistry, tables);
+        Operator joined = new HashJoinOperator(allocator, discounted, 0, itemAverages, 0, true);
+        joined = filter(allocator, primitiveRegistry, joined, query92DiscountThresholdPredicate(1, 3));
+        joined = projectInputs(allocator, primitiveRegistry, joined, 1);
+        return new AggregationOperator(
+                allocator,
+                List.of(new Sum(0)),
+                joined);
+    }
+
     public static Operator query88(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         long[] counts = new long[8];
@@ -1538,6 +1572,31 @@ final class TpcdsParquetSupport
         return projectQuery81StateAverage(allocator, primitiveRegistry, customerTotalReturn);
     }
 
+    private static Operator query92ItemAverageDiscounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator discounts = factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_discount_amt");
+        discounts = new HashJoinOperator(
+                allocator,
+                discounts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query92DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        discounts = projectInputs(allocator, primitiveRegistry, discounts, 1, 2);
+        discounts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                discounts);
+        return projectQuery81StateAverage(allocator, primitiveRegistry, discounts);
+    }
+
     private static Operator projectQuery80BranchValues(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int idIndex)
     {
         Variable zero = new Variable(0);
@@ -1743,6 +1802,13 @@ final class TpcdsParquetSupport
                 lessThan(1, 11_223));
     }
 
+    private static FilterSpec query92DatePredicate()
+    {
+        return and(
+                greaterThan(1, 10_982),
+                lessThan(1, 11_074));
+    }
+
     private static FilterSpec query81ReturnThresholdPredicate(int returnSumIndex, int stateAverageIndex)
     {
         Variable twelve = new Variable(0);
@@ -1765,6 +1831,31 @@ final class TpcdsParquetSupport
         return and(
                 isNotNullI64(returnSumIndex),
                 isNotNullI64(stateAverageIndex),
+                new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
+    }
+
+    private static FilterSpec query92DiscountThresholdPredicate(int discountIndex, int averageIndex)
+    {
+        Variable thirteen = new Variable(0);
+        Variable ten = new Variable(1);
+        Variable scaledDiscount = new Variable(2);
+        Variable scaledAverage = new Variable(3);
+        Variable greaterThan = new Variable(4);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(thirteen, new Literal(13L), AllMask.ALL),
+                new Assignment(ten, new Literal(10L), AllMask.ALL),
+                new Assignment(scaledDiscount, new Call("multiply", List.of(
+                        new Reference(new Input(discountIndex), Stream.VALUES),
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledAverage, new Call("multiply", List.of(
+                        new Reference(new Input(averageIndex), Stream.VALUES),
+                        new Reference(thirteen, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(scaledAverage, Stream.VALUES),
+                        new Reference(scaledDiscount, Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                isNotNullI64(discountIndex),
+                isNotNullI64(averageIndex),
                 new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
     }
 

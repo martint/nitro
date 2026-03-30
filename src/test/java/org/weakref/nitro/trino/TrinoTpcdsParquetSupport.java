@@ -2473,6 +2473,31 @@ public final class TrinoTpcdsParquetSupport
         return result.build();
     }
 
+    public MaterializedResult query92(TpcdsParquetTables tables)
+    {
+        Type discountType = tableColumnTypes(tables, "web_sales", List.of("ws_ext_discount_amt")).getFirst();
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(discountType)).getFinalType();
+        TestingAggregationFunction discountSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(discountType));
+        List<Type> filteredTypes = List.of(BIGINT, discountType);
+        List<Type> averagePagesTypes = List.of(BIGINT, averageType);
+        List<Type> joinedTypes = List.of(BIGINT, discountType, BIGINT, averageType);
+        List<Type> outputTypes = List.of(discountSum.getFinalType());
+
+        return executePagesPipeline(
+                query92FilteredDiscountPages(tables, 92_100),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(92_120, filteredTypes, List.of(0), query92ItemAveragePages(tables), averagePagesTypes, List.of(0), JoinOperatorType.probeOuterJoin(false))),
+                        factoryStep(filterAndProjectFactory(
+                                92_121,
+                                Optional.of(query92DiscountThresholdPredicate(discountType, averageType)),
+                                List.of(field(1, discountType)),
+                                List.of(discountType))),
+                        factoryStep(aggregationFactory(
+                                92_122,
+                                discountSum.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty())))),
+                outputTypes);
+    }
+
     public MaterializedResult query88(TpcdsParquetTables tables)
     {
         long[] counts = new long[8];
@@ -3535,6 +3560,77 @@ public final class TrinoTpcdsParquetSupport
                 List.of(BIGINT)));
     }
 
+    private List<Page> query92FilteredDiscountPages(TpcdsParquetTables tables, int operatorIdBase)
+    {
+        List<String> columns = List.of("ws_sold_date_sk", "ws_item_sk", "ws_ext_discount_amt");
+        List<Type> factTypes = tableColumnTypes(tables, "web_sales", columns);
+        Type discountType = factTypes.get(2);
+
+        return executePipelinePages(
+                tables.tableFiles("web_sales"),
+                columns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                factTypes,
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk", "i_manufact_id"),
+                                        Optional.of(equal(1, 350, INTEGER)),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 1,
+                                concatTypes(factTypes, List.of(BIGINT)),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_date"),
+                                        Optional.of(query92DatePredicate()),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 2,
+                                Optional.empty(),
+                                List.of(field(1, BIGINT), field(2, discountType)),
+                                List.of(BIGINT, discountType)))));
+    }
+
+    private List<Page> query92ItemAveragePages(TpcdsParquetTables tables)
+    {
+        Type discountType = tableColumnTypes(tables, "web_sales", List.of("ws_ext_discount_amt")).getFirst();
+        TestingAggregationFunction discountAverage = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(discountType));
+        return executePipelinePages(
+                tables.tableFiles("web_sales"),
+                List.of("ws_sold_date_sk", "ws_item_sk", "ws_ext_discount_amt"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                92_110,
+                                List.of(BIGINT, BIGINT, discountType),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_date"),
+                                        Optional.of(query92DatePredicate()),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                92_111,
+                                List.of(BIGINT),
+                                List.of(1),
+                                discountAverage.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
     private static long singleLongResult(MaterializedResult result)
     {
         if (result.getMaterializedRows().size() != 1) {
@@ -3895,6 +3991,13 @@ public final class TrinoTpcdsParquetSupport
                 lessThan(field(1, DATE), constant(11_223L, DATE), DATE));
     }
 
+    private static RowExpression query92DatePredicate()
+    {
+        return and(
+                greaterThan(field(1, DATE), constant(10_982L, DATE), DATE),
+                lessThan(field(1, DATE), constant(11_074L, DATE), DATE));
+    }
+
     private static RowExpression query81ThresholdPredicate(Type returnType, Type averageType)
     {
         Type multiplierType = createDecimalType(2, 1);
@@ -3903,6 +4006,18 @@ public final class TrinoTpcdsParquetSupport
                 List.of(field(4, averageType), constant(12L, multiplierType)));
         return greaterThan(
                 cast(field(2, returnType), returnType, scaledAverage.type()),
+                scaledAverage,
+                scaledAverage.type());
+    }
+
+    private static RowExpression query92DiscountThresholdPredicate(Type discountType, Type averageType)
+    {
+        Type multiplierType = createDecimalType(2, 1);
+        RowExpression scaledAverage = new CallExpression(
+                FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(averageType, multiplierType)),
+                List.of(field(3, averageType), constant(13L, multiplierType)));
+        return greaterThan(
+                cast(field(1, discountType), discountType, scaledAverage.type()),
                 scaledAverage,
                 scaledAverage.type());
     }
