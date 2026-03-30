@@ -2207,6 +2207,30 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query32(TpcdsParquetTables tables)
+    {
+        Type discountType = tableColumnTypes(tables, "catalog_sales", List.of("cs_ext_discount_amt")).getFirst();
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(discountType)).getFinalType();
+        TestingAggregationFunction discountSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(discountType));
+        List<Type> filteredTypes = List.of(BIGINT, discountType);
+        List<Type> averagePagesTypes = List.of(BIGINT, averageType);
+        List<Type> outputTypes = List.of(discountSum.getFinalType());
+
+        return executePagesPipeline(
+                query32FilteredDiscountPages(tables, 32_100),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(32_120, filteredTypes, List.of(0), query32ItemAveragePages(tables), averagePagesTypes, List.of(0), JoinOperatorType.probeOuterJoin(false))),
+                        factoryStep(filterAndProjectFactory(
+                                32_121,
+                                Optional.of(query92DiscountThresholdPredicate(discountType, averageType)),
+                                List.of(field(1, discountType)),
+                                List.of(discountType))),
+                        factoryStep(aggregationFactory(
+                                32_122,
+                                discountSum.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty())))),
+                outputTypes);
+    }
+
     public MaterializedResult query23(TpcdsParquetTables tables)
     {
         List<Page> channelPages = new ArrayList<>(query23ChannelPages(
@@ -3394,6 +3418,77 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(stateType),
                                 List.of(1),
                                 average.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
+    private List<Page> query32FilteredDiscountPages(TpcdsParquetTables tables, int operatorIdBase)
+    {
+        List<String> columns = List.of("cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt");
+        List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", columns);
+        Type discountType = factTypes.get(2);
+
+        return executePipelinePages(
+                tables.tableFiles("catalog_sales"),
+                columns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                factTypes,
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk", "i_manufact_id"),
+                                        Optional.of(equal(1, 977, INTEGER)),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 1,
+                                concatTypes(factTypes, List.of(BIGINT)),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_date"),
+                                        Optional.of(query92DatePredicate()),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 2,
+                                Optional.empty(),
+                                List.of(field(1, BIGINT), field(2, discountType)),
+                                List.of(BIGINT, discountType)))));
+    }
+
+    private List<Page> query32ItemAveragePages(TpcdsParquetTables tables)
+    {
+        Type discountType = tableColumnTypes(tables, "catalog_sales", List.of("cs_ext_discount_amt")).getFirst();
+        TestingAggregationFunction discountAverage = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(discountType));
+        return executePipelinePages(
+                tables.tableFiles("catalog_sales"),
+                List.of("cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                32_110,
+                                List.of(BIGINT, BIGINT, discountType),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_date"),
+                                        Optional.of(query92DatePredicate()),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                32_111,
+                                List.of(BIGINT),
+                                List.of(1),
+                                discountAverage.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
     }
 
     private List<Page> query23FrequentItemPages(TpcdsParquetTables tables)

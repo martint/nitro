@@ -132,6 +132,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query32()
+    {
+        return support.query32(tables);
+    }
+
+    @Benchmark
     public Object query81()
     {
         return support.query81(tables);

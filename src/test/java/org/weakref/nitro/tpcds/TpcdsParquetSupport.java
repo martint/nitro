@@ -658,6 +658,47 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, new boolean[] {false, false, false, false, false, false, false, false, false, false, false, false, false}, joined);
     }
 
+    public static Operator query32(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator discounted = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt");
+        discounted = new HashJoinOperator(
+                allocator,
+                discounted,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        equal(1, 977),
+                        new String[] {"i_item_sk", "i_manufact_id"},
+                        0),
+                0);
+        discounted = new HashJoinOperator(
+                allocator,
+                discounted,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query92DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        discounted = projectInputs(allocator, primitiveRegistry, discounted, 1, 2);
+
+        Operator itemAverages = query32ItemAverageDiscounts(allocator, primitiveRegistry, tables);
+        Operator joined = new HashJoinOperator(allocator, discounted, 0, itemAverages, 0, true);
+        joined = filter(allocator, primitiveRegistry, joined, query92DiscountThresholdPredicate(1, 3));
+        joined = projectInputs(allocator, primitiveRegistry, joined, 1);
+        return new AggregationOperator(
+                allocator,
+                List.of(new Sum(0)),
+                joined);
+    }
+
     public static Operator query23(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator catalog = query23Channel(
@@ -1616,6 +1657,31 @@ final class TpcdsParquetSupport
                 List.of(new Sum(2), new CountColumn(2)),
                 customerTotalReturn);
         return projectQuery81StateAverage(allocator, primitiveRegistry, customerTotalReturn);
+    }
+
+    private static Operator query32ItemAverageDiscounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator discounts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt");
+        discounts = new HashJoinOperator(
+                allocator,
+                discounts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query92DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        discounts = projectInputs(allocator, primitiveRegistry, discounts, 1, 2);
+        discounts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                discounts);
+        return projectQuery81StateAverage(allocator, primitiveRegistry, discounts);
     }
 
     private static Operator query09Bucket(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int minimumQuantityInclusive, int maximumQuantityInclusive, long threshold)
