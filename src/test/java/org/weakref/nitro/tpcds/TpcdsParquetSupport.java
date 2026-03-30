@@ -611,6 +611,35 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, grouped);
     }
 
+    public static Operator query81(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator customerTotalReturn = query81CustomerTotalReturn(allocator, primitiveRegistry, tables);
+        Operator stateAverages = query81StateAverageReturns(allocator, primitiveRegistry, tables);
+
+        Operator joined = new HashJoinOperator(allocator, customerTotalReturn, 1, stateAverages, 0, true);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                0,
+                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk", "c_customer_id", "c_salutation", "c_first_name", "c_last_name"),
+                0);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                6,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "customer_address",
+                        equalUtf8(1, "GA"),
+                        new String[] {"ca_address_sk", "ca_state", "ca_street_number", "ca_street_name", "ca_street_type", "ca_suite_number", "ca_city", "ca_county", "ca_zip", "ca_country", "ca_gmt_offset", "ca_location_type"}),
+                0);
+        joined = filter(allocator, primitiveRegistry, joined, query81ReturnThresholdPredicate(2, 4));
+        joined = projectInputs(allocator, primitiveRegistry, joined, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 12, 19, 20, 21, 22, 2);
+        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, new boolean[] {false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}, joined);
+    }
+
     public static Operator query97(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator store = query97Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_item_sk", "ss_sold_date_sk");
@@ -1396,6 +1425,48 @@ final class TpcdsParquetSupport
         return projectQuery80BranchOutput(allocator, primitiveRegistry, joined, channelName, idPrefix);
     }
 
+    private static Operator query81CustomerTotalReturn(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator returns = factScan(allocator, tables, "catalog_returns", "cr_returning_customer_sk", "cr_returned_date_sk", "cr_returning_addr_sk", "cr_return_amt_inc_tax");
+        returns = new HashJoinOperator(
+                allocator,
+                returns,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        equal(1, 2000),
+                        new String[] {"d_date_sk", "d_year"},
+                        0),
+                0);
+        returns = new HashJoinOperator(
+                allocator,
+                returns,
+                2,
+                scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_state"),
+                0);
+        returns = projectInputs(allocator, primitiveRegistry, returns, 0, 6, 3);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new Sum(2)),
+                returns);
+    }
+
+    private static Operator query81StateAverageReturns(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator customerTotalReturn = query81CustomerTotalReturn(allocator, primitiveRegistry, tables);
+        customerTotalReturn = filter(allocator, primitiveRegistry, customerTotalReturn, isNotNullI64(2));
+        customerTotalReturn = new GroupedAggregationOperator(
+                allocator,
+                List.of(1),
+                List.of(new Sum(2), new CountColumn(2)),
+                customerTotalReturn);
+        return projectQuery81StateAverage(allocator, primitiveRegistry, customerTotalReturn);
+    }
+
     private static Operator projectQuery80BranchValues(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int idIndex)
     {
         Variable zero = new Variable(0);
@@ -1599,6 +1670,31 @@ final class TpcdsParquetSupport
         return and(
                 greaterThan(1, 11_191),
                 lessThan(1, 11_223));
+    }
+
+    private static FilterSpec query81ReturnThresholdPredicate(int returnSumIndex, int stateAverageIndex)
+    {
+        Variable twelve = new Variable(0);
+        Variable ten = new Variable(1);
+        Variable scaledReturn = new Variable(2);
+        Variable scaledAverage = new Variable(3);
+        Variable greaterThan = new Variable(4);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(twelve, new Literal(12L), AllMask.ALL),
+                new Assignment(ten, new Literal(10L), AllMask.ALL),
+                new Assignment(scaledReturn, new Call("multiply", List.of(
+                        new Reference(new Input(returnSumIndex), Stream.VALUES),
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledAverage, new Call("multiply", List.of(
+                        new Reference(new Input(stateAverageIndex), Stream.VALUES),
+                        new Reference(twelve, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(scaledAverage, Stream.VALUES),
+                        new Reference(scaledReturn, Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                isNotNullI64(returnSumIndex),
+                isNotNullI64(stateAverageIndex),
+                new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
     }
 
     private static FilterSpec query01ReturnThresholdPredicate(int returnSumIndex, int storeTotalSumIndex, int storeCountIndex)
@@ -2306,6 +2402,22 @@ final class TpcdsParquetSupport
                         new Reference(new Input(0), Stream.VALUES),
                         new Reference(new Input(1), Stream.VALUES),
                         new Reference(percent, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery81StateAverage(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable average = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(average, new Call("divide_round_i64", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(average, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

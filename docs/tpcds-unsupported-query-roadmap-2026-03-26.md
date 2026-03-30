@@ -31,6 +31,7 @@ Supported parquet-backed queries today:
 - `Q70`
 - `Q73`
 - `Q80`
+- `Q81`
 - `Q84`
 - `Q88`
 - `Q90`
@@ -213,7 +214,7 @@ Status:
 
 - many of these are scalar-subquery cross joins over one-row aggregate inputs
 - the harder missing piece is usually `EnforceSingleRow`, not the cross join
-- validated by `Q44`, `Q54`, `Q58`, and `Q61`
+- validated by `Q44`, `Q54`, `Q58`, `Q61`, and `Q81`
   itself
 
 ## Recommended implementation order
