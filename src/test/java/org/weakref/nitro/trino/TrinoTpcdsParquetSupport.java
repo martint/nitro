@@ -2259,6 +2259,88 @@ public final class TrinoTpcdsParquetSupport
                 List.of(sum.getFinalType()));
     }
 
+    public MaterializedResult query14(TpcdsParquetTables tables)
+    {
+        List<Page> crossItemPages = query14CrossItemPages(tables);
+        List<Type> crossItemTypes = List.of(BIGINT);
+        List<Page> averageSalesPages = query14AverageSalesPages(tables);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(createDecimalType(18, 2))).getFinalType();
+
+        List<Page> unionPages = new ArrayList<>(query14ChannelBranchPages(
+                tables,
+                "store_sales",
+                "ss_sold_date_sk",
+                "ss_item_sk",
+                "ss_quantity",
+                "ss_list_price",
+                "store",
+                14_100,
+                crossItemPages,
+                crossItemTypes,
+                averageSalesPages,
+                averageType));
+        unionPages.addAll(query14ChannelBranchPages(
+                tables,
+                "catalog_sales",
+                "cs_sold_date_sk",
+                "cs_item_sk",
+                "cs_quantity",
+                "cs_list_price",
+                "catalog",
+                14_200,
+                crossItemPages,
+                crossItemTypes,
+                averageSalesPages,
+                averageType));
+        unionPages.addAll(query14ChannelBranchPages(
+                tables,
+                "web_sales",
+                "ws_sold_date_sk",
+                "ws_item_sk",
+                "ws_quantity",
+                "ws_list_price",
+                "web",
+                14_300,
+                crossItemPages,
+                crossItemTypes,
+                averageSalesPages,
+                averageType));
+
+        Type channelType = VARCHAR;
+        Type salesType = createDecimalType(38, 2);
+        List<Type> branchTypes = List.of(channelType, INTEGER, INTEGER, INTEGER, salesType, BIGINT);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        TestingAggregationFunction countSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
+        List<Type> groupIdTypes = concatTypes(branchTypes, List.of(BIGINT));
+        List<Type> outputTypes = List.of(channelType, INTEGER, INTEGER, INTEGER, salesSum.getFinalType(), countSum.getFinalType());
+
+        return executePagesPipeline(
+                unionPages,
+                List.of(
+                        factoryStep(groupIdFactory(
+                                14_400,
+                                groupIdTypes,
+                                List.of(
+                                        Map.of(4, 4, 5, 5),
+                                        Map.of(0, 0, 4, 4, 5, 5),
+                                        Map.of(0, 0, 1, 1, 4, 4, 5, 5),
+                                        Map.of(0, 0, 1, 1, 2, 2, 4, 4, 5, 5),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5)))),
+                        factoryStep(hashAggregationFactory(
+                                14_401,
+                                List.of(channelType, INTEGER, INTEGER, INTEGER, BIGINT),
+                                List.of(0, 1, 2, 3, 6),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                                countSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                14_402,
+                                Optional.empty(),
+                                List.of(field(0, channelType), field(1, INTEGER), field(2, INTEGER), field(3, INTEGER), field(5, salesSum.getFinalType()), field(6, countSum.getFinalType())),
+                                outputTypes)),
+                        factoryStep(topNFactory(14_403, outputTypes, 100, List.of(0, 1, 2, 3), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
     public MaterializedResult query81(TpcdsParquetTables tables)
     {
         Type stateType = query81StateType(tables);
@@ -3544,6 +3626,207 @@ public final class TrinoTpcdsParquetSupport
                         factoryStep(hashAggregationFactory(23_15, List.of(BIGINT), List.of(0)))));
     }
 
+    private List<Page> query14CrossItemPages(TpcdsParquetTables tables)
+    {
+        List<Type> tripleTypes = List.of(INTEGER, INTEGER, INTEGER);
+        List<Page> sharedTriples = executeHashJoinPages(
+                query14ChannelTriplesPages(tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", 14_10),
+                new HashJoinSpec(14_13, tripleTypes, List.of(0, 1, 2), query14ChannelTriplesPages(tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", 14_11), tripleTypes, List.of(0, 1, 2)));
+        sharedTriples = executePipelinePages(
+                sharedTriples,
+                List.of(
+                        factoryStep(filterAndProjectFactory(14_14, Optional.empty(), List.of(field(0, INTEGER), field(1, INTEGER), field(2, INTEGER)), tripleTypes)),
+                        factoryStep(hashAggregationFactory(14_15, tripleTypes, List.of(0, 1, 2)))));
+        sharedTriples = executeHashJoinPages(
+                sharedTriples,
+                new HashJoinSpec(14_16, tripleTypes, List.of(0, 1, 2), query14ChannelTriplesPages(tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", 14_12), tripleTypes, List.of(0, 1, 2)));
+        sharedTriples = executePipelinePages(
+                sharedTriples,
+                List.of(
+                        factoryStep(filterAndProjectFactory(14_17, Optional.empty(), List.of(field(0, INTEGER), field(1, INTEGER), field(2, INTEGER)), tripleTypes)),
+                        factoryStep(hashAggregationFactory(14_18, tripleTypes, List.of(0, 1, 2)))));
+
+        return executePipelinePages(
+                tables.tableFiles("item"),
+                List.of("i_item_sk", "i_brand_id", "i_class_id", "i_category_id"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                14_19,
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER),
+                                List.of(1, 2, 3),
+                                sharedTriples,
+                                tripleTypes,
+                                List.of(0, 1, 2))),
+                        factoryStep(filterAndProjectFactory(14_20, Optional.empty(), List.of(field(0, BIGINT)), List.of(BIGINT))),
+                        factoryStep(hashAggregationFactory(14_21, List.of(BIGINT), List.of(0)))));
+    }
+
+    private List<Page> query14ChannelTriplesPages(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, int operatorIdBase)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, List.of(soldDateColumn, itemColumn));
+        List<Type> itemTypes = List.of(BIGINT, INTEGER, INTEGER, INTEGER);
+        List<Type> tripleTypes = List.of(INTEGER, INTEGER, INTEGER);
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                List.of(soldDateColumn, itemColumn),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                factTypes,
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk", "i_brand_id", "i_class_id", "i_category_id"),
+                                        Optional.empty(),
+                                        identityProjections(itemTypes),
+                                        itemTypes),
+                                itemTypes,
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 1,
+                                concatTypes(factTypes, itemTypes),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year"),
+                                        Optional.of(query14YearRangePredicate()),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 2,
+                                Optional.empty(),
+                                List.of(field(3, INTEGER), field(4, INTEGER), field(5, INTEGER)),
+                                tripleTypes)),
+                        factoryStep(hashAggregationFactory(operatorIdBase + 3, tripleTypes, List.of(0, 1, 2)))));
+    }
+
+    private List<Page> query14AverageSalesPages(TpcdsParquetTables tables)
+    {
+        List<Page> salesPages = new ArrayList<>(query14ChannelSalesValuePages(tables, "store_sales", "ss_sold_date_sk", "ss_quantity", "ss_list_price", 14_30));
+        salesPages.addAll(query14ChannelSalesValuePages(tables, "catalog_sales", "cs_sold_date_sk", "cs_quantity", "cs_list_price", 14_40));
+        salesPages.addAll(query14ChannelSalesValuePages(tables, "web_sales", "ws_sold_date_sk", "ws_quantity", "ws_list_price", 14_50));
+
+        Type salesType = tableColumnTypes(tables, "store_sales", List.of("ss_list_price")).getFirst();
+        salesType = multiply(cast(constant(1L, INTEGER), INTEGER, createDecimalType(10, 0)), field(0, salesType)).type();
+        TestingAggregationFunction average = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(salesType));
+        return executePipelinePages(
+                salesPages,
+                List.of(factoryStep(aggregationFactory(14_60, average.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty())))));
+    }
+
+    private List<Page> query14ChannelSalesValuePages(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String quantityColumn, String listPriceColumn, int operatorIdBase)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, List.of(soldDateColumn, quantityColumn, listPriceColumn));
+        Type quantityType = factTypes.get(1);
+        Type priceType = factTypes.get(2);
+        Type quantityDecimalType = createDecimalType(10, 0);
+        RowExpression sales = multiply(
+                cast(field(1, quantityType), quantityType, quantityDecimalType),
+                field(2, priceType));
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                List.of(soldDateColumn, quantityColumn, listPriceColumn),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                factTypes,
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year"),
+                                        Optional.of(query14YearRangePredicate()),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 1,
+                                Optional.empty(),
+                                List.of(sales),
+                                List.of(sales.type())))));
+    }
+
+    private List<Page> query14ChannelBranchPages(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String quantityColumn, String listPriceColumn, String channelName, int operatorIdBase, List<Page> crossItemPages, List<Type> crossItemTypes, List<Page> averageSalesPages, Type averageType)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, List.of(soldDateColumn, itemColumn, quantityColumn, listPriceColumn));
+        Type quantityType = factTypes.get(2);
+        Type priceType = factTypes.get(3);
+        Type quantityDecimalType = createDecimalType(10, 0);
+        RowExpression sales = multiply(
+                cast(field(2, quantityType), quantityType, quantityDecimalType),
+                field(3, priceType));
+        Type salesType = sales.type();
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        List<Type> groupedTypes = List.of(INTEGER, INTEGER, INTEGER, salesSum.getFinalType(), BIGINT);
+
+        List<Page> groupedPages = executePipelinePages(
+                tables.tableFiles(salesTable),
+                List.of(soldDateColumn, itemColumn, quantityColumn, listPriceColumn),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(operatorIdBase, factTypes, List.of(1), crossItemPages, crossItemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 1,
+                                concatTypes(factTypes, crossItemTypes),
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk", "i_brand_id", "i_class_id", "i_category_id"),
+                                        Optional.empty(),
+                                        identityProjections(List.of(BIGINT, INTEGER, INTEGER, INTEGER)),
+                                        List.of(BIGINT, INTEGER, INTEGER, INTEGER)),
+                                List.of(BIGINT, INTEGER, INTEGER, INTEGER),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 2,
+                                concatTypes(concatTypes(factTypes, crossItemTypes), List.of(BIGINT, INTEGER, INTEGER, INTEGER)),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year", "d_moy"),
+                                        Optional.of(and(equal(1, 2001, INTEGER), equal(2, 11, INTEGER))),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 3,
+                                Optional.empty(),
+                                List.of(
+                                        field(6, INTEGER),
+                                        field(7, INTEGER),
+                                        field(8, INTEGER),
+                                        sales),
+                                List.of(INTEGER, INTEGER, INTEGER, salesType))),
+                        factoryStep(hashAggregationFactory(
+                                operatorIdBase + 4,
+                                List.of(INTEGER, INTEGER, INTEGER),
+                                List.of(0, 1, 2),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))));
+
+        List<Page> joinedPages = executeNestedLoopPages(groupedPages, groupedTypes, averageSalesPages, List.of(averageType));
+        return executePipelinePages(
+                joinedPages,
+                List.of(factoryStep(filterAndProjectFactory(
+                        operatorIdBase + 5,
+                        Optional.of(query14ThresholdPredicate(salesSum.getFinalType(), averageType)),
+                        List.of(
+                                constant(Slices.utf8Slice(channelName), VARCHAR),
+                                field(0, INTEGER),
+                                field(1, INTEGER),
+                                field(2, INTEGER),
+                                field(3, salesSum.getFinalType()),
+                                field(4, BIGINT)),
+                        List.of(VARCHAR, INTEGER, INTEGER, INTEGER, salesSum.getFinalType(), BIGINT)))));
+    }
+
     private List<Page> query09BucketPages(TpcdsParquetTables tables, int minimumQuantityInclusive, int maximumQuantityInclusive, long threshold, int operatorIdBase)
     {
         Type bucketType = createDecimalType(7, 2);
@@ -4396,6 +4679,13 @@ public final class TrinoTpcdsParquetSupport
                 lessThan(field(1, INTEGER), constant(2004L, INTEGER), INTEGER));
     }
 
+    private static RowExpression query14YearRangePredicate()
+    {
+        return and(
+                greaterThan(field(1, INTEGER), constant(1998L, INTEGER), INTEGER),
+                lessThan(field(1, INTEGER), constant(2002L, INTEGER), INTEGER));
+    }
+
     private static RowExpression query09QuantityPredicate(int quantityIndex, int minimumQuantityInclusive, int maximumQuantityInclusive)
     {
         return and(
@@ -4435,6 +4725,14 @@ public final class TrinoTpcdsParquetSupport
                 doubledSales,
                 cast(field(2, salesType), salesType, doubledSales.type()),
                 doubledSales.type());
+    }
+
+    private static RowExpression query14ThresholdPredicate(Type salesType, Type averageType)
+    {
+        return greaterThan(
+                cast(field(3, salesType), salesType, averageType),
+                field(5, averageType),
+                averageType);
     }
 
     private static RowExpression query01ReturnThresholdPredicate()

@@ -165,6 +165,38 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, reason, 1, 2, 3, 4, 5);
     }
 
+    public static Operator query14(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        List<Row> crossItemRows;
+        try (Operator crossItems = query14CrossItems(allocator, primitiveRegistry, tables)) {
+            crossItemRows = OperatorAssertions.OperatorAssert.toRows(crossItems);
+        }
+        List<Row> averageSalesRows;
+        try (Operator averageSales = query14AverageSales(allocator, primitiveRegistry, tables)) {
+            averageSalesRows = OperatorAssertions.OperatorAssert.toRows(averageSales);
+        }
+
+        Operator grouped = new GroupIdOperator(
+                allocator,
+                new UnionAllOperator(6, List.of(
+                        query14ChannelBranch(allocator, primitiveRegistry, tables, new ConstantTableOperator(allocator, 1, crossItemRows), new ConstantTableOperator(allocator, 1, averageSalesRows), "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity", "ss_list_price", "store"),
+                        query14ChannelBranch(allocator, primitiveRegistry, tables, new ConstantTableOperator(allocator, 1, crossItemRows), new ConstantTableOperator(allocator, 1, averageSalesRows), "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_quantity", "cs_list_price", "catalog"),
+                        query14ChannelBranch(allocator, primitiveRegistry, tables, new ConstantTableOperator(allocator, 1, crossItemRows), new ConstantTableOperator(allocator, 1, averageSalesRows), "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_quantity", "ws_list_price", "web"))),
+                new int[][] {
+                        {-1, -1, -1, -1, 4, 5},
+                        {0, -1, -1, -1, 4, 5},
+                        {0, 1, -1, -1, 4, 5},
+                        {0, 1, 2, -1, 4, 5},
+                        {0, 1, 2, 3, 4, 5}});
+        grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 6),
+                List.of(new Sum(4), new Sum(5)),
+                grouped);
+        grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 5, 6);
+        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3}, new boolean[] {false, false, false, false}, grouped);
+    }
+
     public static Operator query41(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator eligibleManufacturers = filter(
@@ -1659,6 +1691,140 @@ final class TpcdsParquetSupport
         return projectQuery81StateAverage(allocator, primitiveRegistry, customerTotalReturn);
     }
 
+    private static Operator query14CrossItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator sharedTriples = new HashJoinOperator(
+                allocator,
+                query14ChannelTriples(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk"),
+                new int[] {0, 1, 2},
+                query14ChannelTriples(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk"),
+                new int[] {0, 1, 2});
+        sharedTriples = projectInputs(allocator, primitiveRegistry, sharedTriples, 0, 1, 2);
+        sharedTriples = new HashJoinOperator(
+                allocator,
+                sharedTriples,
+                new int[] {0, 1, 2},
+                query14ChannelTriples(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk"),
+                new int[] {0, 1, 2});
+        sharedTriples = projectInputs(allocator, primitiveRegistry, sharedTriples, 0, 1, 2);
+        sharedTriples = new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, sharedTriples);
+
+        Operator crossItems = scannedTable(allocator, tables, "item", "i_item_sk", "i_brand_id", "i_class_id", "i_category_id");
+        crossItems = new HashJoinOperator(
+                allocator,
+                crossItems,
+                new int[] {1, 2, 3},
+                sharedTriples,
+                new int[] {0, 1, 2});
+        crossItems = projectInputs(allocator, primitiveRegistry, crossItems, 0);
+        return new MarkDistinctOperator(allocator, 0, crossItems);
+    }
+
+    private static Operator query14ChannelTriples(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn)
+    {
+        Operator triples = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn);
+        triples = new HashJoinOperator(
+                allocator,
+                triples,
+                1,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_brand_id", "i_class_id", "i_category_id"),
+                0);
+        triples = new HashJoinOperator(
+                allocator,
+                triples,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query14YearRangePredicate(),
+                        new String[] {"d_date_sk", "d_year"},
+                        0),
+                0);
+        triples = projectInputs(allocator, primitiveRegistry, triples, 3, 4, 5);
+        return new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, triples);
+    }
+
+    private static Operator query14AverageSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator sales = new UnionAllOperator(
+                1,
+                List.of(
+                        query14ChannelSalesValues(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_quantity", "ss_list_price"),
+                        query14ChannelSalesValues(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_quantity", "cs_list_price"),
+                        query14ChannelSalesValues(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_quantity", "ws_list_price")));
+        sales = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new CountColumn(0)),
+                sales);
+        return projectQuery09Average(allocator, primitiveRegistry, sales, 0, 1);
+    }
+
+    private static Operator query14ChannelSalesValues(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String quantityColumn, String listPriceColumn)
+    {
+        Operator sales = factScan(allocator, tables, salesTable, soldDateColumn, quantityColumn, listPriceColumn);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query14YearRangePredicate(),
+                        new String[] {"d_date_sk", "d_year"},
+                        0),
+                0);
+        return projectQuery14SalesOnly(allocator, primitiveRegistry, sales, 1, 2);
+    }
+
+    private static Operator query14ChannelBranch(
+            Allocator allocator,
+            PrimitiveRegistry primitiveRegistry,
+            TpcdsParquetTables tables,
+            Operator crossItems,
+            Operator averageSales,
+            String salesTable,
+            String soldDateColumn,
+            String itemColumn,
+            String quantityColumn,
+            String listPriceColumn,
+            String channelName)
+    {
+        Operator branch = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, quantityColumn, listPriceColumn);
+        branch = new SemiJoinOperator(allocator, branch, 1, crossItems, 0);
+        branch = new HashJoinOperator(
+                allocator,
+                branch,
+                1,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_brand_id", "i_class_id", "i_category_id"),
+                0);
+        branch = new HashJoinOperator(
+                allocator,
+                branch,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(equal(1, 2001), equal(2, 11)),
+                        new String[] {"d_date_sk", "d_year", "d_moy"},
+                        0),
+                0);
+        branch = projectQuery14SalesByCategory(allocator, primitiveRegistry, branch, 5, 6, 7, 2, 3);
+        branch = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new Sum(3), new CountAll()),
+                branch);
+        branch = new NestedLoopJoinOperator(allocator, branch, averageSales);
+        branch = filter(allocator, primitiveRegistry, branch, query14ThresholdPredicate(3, 5));
+        return projectQuery14ChannelOutput(allocator, primitiveRegistry, branch, channelName);
+    }
+
     private static Operator query32ItemAverageDiscounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator discounts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt");
@@ -2086,6 +2252,13 @@ final class TpcdsParquetSupport
                 lessThan(1, 2004));
     }
 
+    private static FilterSpec query14YearRangePredicate()
+    {
+        return and(
+                greaterThan(1, 1998),
+                lessThan(1, 2002));
+    }
+
     private static FilterSpec query09QuantityPredicate(int minimumQuantityInclusive, int maximumQuantityInclusive)
     {
         return and(
@@ -2159,6 +2332,19 @@ final class TpcdsParquetSupport
         return and(
                 isNotNullI64(salesIndex),
                 isNotNullI64(maxIndex),
+                new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
+    }
+
+    private static FilterSpec query14ThresholdPredicate(int salesIndex, int averageIndex)
+    {
+        Variable greaterThan = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(new Input(averageIndex), Stream.VALUES),
+                        new Reference(new Input(salesIndex), Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                isNotNullI64(salesIndex),
+                isNotNullI64(averageIndex),
                 new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
     }
 
@@ -2982,6 +3168,56 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(assignments, List.of(new Reference(sales, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery14SalesOnly(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int quantityIndex, int priceIndex)
+    {
+        Variable sales = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(sales, new Call("multiply", List.of(
+                                new Reference(new Input(priceIndex), Stream.VALUES),
+                                new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(sales, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery14SalesByCategory(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int brandIndex, int classIndex, int categoryIndex, int quantityIndex, int priceIndex)
+    {
+        Variable sales = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(sales, new Call("multiply", List.of(
+                                new Reference(new Input(priceIndex), Stream.VALUES),
+                                new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(brandIndex), Stream.VALUES),
+                        new Reference(new Input(classIndex), Stream.VALUES),
+                        new Reference(new Input(categoryIndex), Stream.VALUES),
+                        new Reference(sales, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery14ChannelOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, String channelName)
+    {
+        Variable channel = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(channel, new Literal(channelName), AllMask.ALL)),
+                List.of(
+                        new Reference(channel, Stream.VALUES),
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(new Input(4), Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

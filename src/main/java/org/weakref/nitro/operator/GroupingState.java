@@ -73,6 +73,11 @@ final class GroupingState
         longGroups.defaultReturnValue(-1);
     }
 
+    public boolean isInitialized()
+    {
+        return initialized;
+    }
+
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
     {
         assignGroups(new Vector[] {values}, new BooleanVector[] {(BooleanVector) nulls}, mask, result);
@@ -93,6 +98,11 @@ final class GroupingState
 
         OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKeys[0]);
         return key != null && groups.getLong(key) != -1;
+    }
+
+    public void initializeSchema(Vector[] values, BooleanVector[] nulls)
+    {
+        initializeIfNecessary(values, nulls);
     }
 
     @SuppressWarnings("unchecked")

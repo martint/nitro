@@ -178,6 +178,7 @@ public class GroupedAggregationOperator
             try (Batch batch = source.next()) {
                 Mask mask = batch.borrowMask();
                 if (mask.none()) {
+                    initializeInlineGroupingSchema(batch);
                     continue;
                 }
 
@@ -195,6 +196,29 @@ public class GroupedAggregationOperator
 
         finishResults(maxObservedGroup);
         return allocator.allocateAllMask(allocationContext, this.maxGroup + 1);
+    }
+
+    private void initializeInlineGroupingSchema(Batch batch)
+    {
+        if (groupByColumns == null || groupByColumns.length == 0) {
+            return;
+        }
+        Vector[] values = new Vector[groupByColumns.length];
+        BooleanVector[] nulls = new BooleanVector[groupByColumns.length];
+        for (int index = 0; index < groupByColumns.length; index++) {
+            Output output = batch.output(groupByColumns[index]);
+            try {
+                values[index] = output.borrowOrNull(Stream.VALUES);
+                nulls[index] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+            }
+            catch (IllegalArgumentException ignored) {
+                return;
+            }
+            if (values[index] == null) {
+                return;
+            }
+        }
+        inlineGroupingState.initializeSchema(values, nulls);
     }
 
     private void assignInlineGroups(Batch batch, Mask mask, I64Vector groups)
@@ -312,8 +336,9 @@ public class GroupedAggregationOperator
     {
         if (output < groupedResults.length) {
             int groupedOutput = output;
+            Set<Stream> outputStreams = groupedKeyStreams(batchState);
             return new Output(
-                    groupedKeyStreams(),
+                    outputStreams,
                     stream -> groupedKeyOutput(groupedOutput, batchState).get(stream),
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
                     (stream, vector) -> allocator.release(allocationContext, vector));
@@ -362,8 +387,11 @@ public class GroupedAggregationOperator
         return streams;
     }
 
-    private Set<Stream> groupedKeyStreams()
+    private Set<Stream> groupedKeyStreams(BatchState batchState)
     {
+        if (batchState.mask.none() && groupByColumns != null && !inlineGroupingState.isInitialized()) {
+            return Set.of();
+        }
         return EnumSet.of(Stream.VALUES, Stream.NULLS);
     }
 
