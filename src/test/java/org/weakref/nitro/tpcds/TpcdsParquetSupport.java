@@ -233,6 +233,15 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
 
+    public static Operator query49(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator store = query49Channel(allocator, primitiveRegistry, tables, "store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_net_paid", "ss_net_profit", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt");
+        Operator catalog = query49Channel(allocator, primitiveRegistry, tables, "catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number", "cs_quantity", "cs_net_paid", "cs_net_profit", "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount");
+        Operator web = query49Channel(allocator, primitiveRegistry, tables, "web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_net_paid", "ws_net_profit", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt");
+        Operator combined = new UnionAllOperator(5, List.of(store, catalog, web));
+        return new TopNOperator(allocator, 100, new int[] {0, 3, 4, 1}, new boolean[] {false, false, false, false}, combined);
+    }
+
     private static Operator queryRevenueRatioByClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
@@ -1242,6 +1251,22 @@ final class TpcdsParquetSupport
                         new Reference(averagePositive, Stream.VALUES),
                         new Reference(deviationLarge, Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    private static FilterSpec query49SalesPredicate(int quantityIndex, int netPaidIndex, int netProfitIndex)
+    {
+        return and(
+                greaterThan(quantityIndex, 0),
+                and(
+                        greaterThan(netPaidIndex, 0),
+                        greaterThan(netProfitIndex, 100)));
+    }
+
+    private static FilterSpec query49TopRankPredicate(int returnRankIndex, int currencyRankIndex)
+    {
+        return or(
+                lessThan(returnRankIndex, 11),
+                lessThan(currencyRankIndex, 11));
     }
 
     private static Operator query44RankedItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean descending)
@@ -4020,6 +4045,46 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, facts, 8, 7, 3, 4);
     }
 
+    private static Operator query49Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String channel, String salesTable, String soldDateColumn, String itemColumn, String orderColumn, String quantityColumn, String netPaidColumn, String netProfitColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String returnQuantityColumn, String returnAmountColumn)
+    {
+        Operator sales = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                salesTable,
+                query49SalesPredicate(3, 4, 5),
+                new String[] {soldDateColumn, itemColumn, orderColumn, quantityColumn, netPaidColumn, netProfitColumn});
+        Operator returns = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                returnsTable,
+                greaterThan(3, 1_000_000L),
+                new String[] {returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn});
+        sales = new HashJoinOperator(allocator, sales, new int[] {2, 1}, returns, new int[] {1, 0});
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(equal(1, 2001), equal(2, 12)),
+                        new String[] {"d_date_sk", "d_year", "d_moy"},
+                        0),
+                0);
+        sales = projectQuery49Measures(allocator, primitiveRegistry, sales);
+        sales = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new Sum(2), new Sum(3), new Sum(4)),
+                sales);
+        sales = projectQuery49Ratios(allocator, primitiveRegistry, sales);
+        return query49Ranks(allocator, primitiveRegistry, sales, channel);
+    }
+
     private static Operator projectQuery70Rollup(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         Variable zero = new Variable(0);
@@ -4072,6 +4137,98 @@ final class TpcdsParquetSupport
                         new Reference(stateForRank, Stream.VALUES))),
                 primitiveRegistry,
                 source);
+    }
+
+    private static Operator projectQuery49Measures(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zero = new Variable(0);
+        Variable returnQuantityIsNull = new Variable(1);
+        Variable returnQuantity = new Variable(2);
+        Variable returnAmountIsNull = new Variable(3);
+        Variable returnAmount = new Variable(4);
+
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(returnQuantityIsNull, new Call("is_null_i64", List.of(
+                                new Reference(new Input(8), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(returnQuantity, new Call("if_i64", List.of(
+                                new Reference(returnQuantityIsNull, Stream.VALUES),
+                                new Reference(zero, Stream.VALUES),
+                                new Reference(new Input(8), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(returnAmountIsNull, new Call("is_null_i64", List.of(
+                                new Reference(new Input(9), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(returnAmount, new Call("if_i64", List.of(
+                                new Reference(returnAmountIsNull, Stream.VALUES),
+                                new Reference(zero, Stream.VALUES),
+                                new Reference(new Input(9), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(returnQuantity, Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(returnAmount, Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery49Ratios(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable scale = new Variable(0);
+        Variable returnRatio = new Variable(1);
+        Variable currencyRatio = new Variable(2);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(scale, new Literal(1_000_000_000_000L), AllMask.ALL),
+                        new Assignment(returnRatio, new Call("divide_scale_round_i64", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(scale, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(currencyRatio, new Call("divide_scale_round_i64", List.of(
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(scale, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(returnRatio, Stream.VALUES),
+                                new Reference(currencyRatio, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator query49Ranks(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, String channel)
+    {
+        Operator ranked = new WindowOperator(
+                allocator,
+                source,
+                new int[0],
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new WindowOperator.RankWindowFunction(new int[] {1}, new boolean[] {false})));
+        ranked = new WindowOperator(
+                allocator,
+                ranked,
+                new int[0],
+                new int[] {2},
+                new boolean[] {false},
+                List.of(new WindowOperator.RankWindowFunction(new int[] {2}, new boolean[] {false})));
+        ranked = filter(allocator, primitiveRegistry, ranked, query49TopRankPredicate(3, 4));
+
+        Variable channelName = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(channelName, new Literal(channel), AllMask.ALL)),
+                        List.of(
+                                new Reference(channelName, Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES))),
+                primitiveRegistry,
+                ranked);
     }
 
     private static Operator projectQuery36Rollup(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)

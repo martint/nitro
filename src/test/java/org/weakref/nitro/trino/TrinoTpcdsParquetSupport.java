@@ -50,6 +50,8 @@ import io.trino.operator.join.NestedLoopJoinOperator;
 import io.trino.operator.join.NestedLoopJoinPagesSupplier;
 import io.trino.operator.window.AggregationWindowFunctionSupplier;
 import io.trino.operator.window.FrameInfo;
+import io.trino.operator.window.RankFunction;
+import io.trino.operator.window.ReflectionWindowFunctionSupplier;
 import io.trino.operator.window.RegularPartitionerSupplier;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
@@ -573,6 +575,21 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 List.of(field(2, grossMarginType), field(0, VARCHAR), field(1, VARCHAR), field(3, INTEGER), field(5, BIGINT)),
                                 outputTypes))),
+                outputTypes);
+    }
+
+    public MaterializedResult query49(TpcdsParquetTables tables)
+    {
+        Type ratioType = createDecimalType(19, 12);
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT, ratioType, BIGINT, BIGINT);
+
+        List<Page> unionPages = new ArrayList<>(query49ChannelPages(tables, "store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_net_paid", "ss_net_profit", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt", 49_000, ratioType));
+        unionPages.addAll(query49ChannelPages(tables, "catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number", "cs_quantity", "cs_net_paid", "cs_net_profit", "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount", 49_100, ratioType));
+        unionPages.addAll(query49ChannelPages(tables, "web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_net_paid", "ws_net_profit", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt", 49_200, ratioType));
+
+        return executePagesPipeline(
+                unionPages,
+                List.of(factoryStep(topNFactory(49_900, outputTypes, 100, List.of(0, 3, 4, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
                 outputTypes);
     }
 
@@ -1555,6 +1572,122 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(itemTypes.get(1)),
                                 List.of(4),
                                 salesSum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
+    private List<Page> query49ChannelPages(TpcdsParquetTables tables, String channel, String salesTable, String soldDateColumn, String itemColumn, String orderColumn, String quantityColumn, String netPaidColumn, String netProfitColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String returnQuantityColumn, String returnAmountColumn, int operatorIdBase, Type ratioType)
+    {
+        List<String> salesColumns = List.of(soldDateColumn, itemColumn, orderColumn, quantityColumn, netPaidColumn, netProfitColumn);
+        List<Type> salesTypes = tableColumnTypes(tables, salesTable, salesColumns);
+        Type quantityType = salesTypes.get(3);
+        Type netPaidType = salesTypes.get(4);
+        Type returnAmountType = tableColumnTypes(tables, returnsTable, List.of(returnAmountColumn)).getFirst();
+        Type returnQuantityType = tableColumnTypes(tables, returnsTable, List.of(returnQuantityColumn)).getFirst();
+
+        TestingAggregationFunction returnQuantitySum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
+        TestingAggregationFunction quantitySum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
+        TestingAggregationFunction returnAmountSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(returnAmountType));
+        TestingAggregationFunction netPaidSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(netPaidType));
+
+        List<Type> projectedTypes = List.of(BIGINT, BIGINT, BIGINT, returnAmountType, netPaidType);
+        List<Type> groupedTypes = List.of(BIGINT, returnQuantitySum.getFinalType(), quantitySum.getFinalType(), returnAmountSum.getFinalType(), netPaidSum.getFinalType());
+        List<Type> ratioTypes = List.of(BIGINT, ratioType, ratioType);
+        List<Type> firstRankTypes = List.of(BIGINT, ratioType, ratioType, BIGINT);
+        List<Type> rankedTypes = List.of(BIGINT, ratioType, ratioType, BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(VARCHAR, BIGINT, ratioType, BIGINT, BIGINT);
+
+        List<Page> returnPages = relationPages(
+                tables,
+                returnsTable,
+                List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn),
+                Optional.of(greaterThan(3, 1_000_000L, returnAmountType)),
+                List.of(field(0, BIGINT), field(1, BIGINT), field(2, returnQuantityType), field(3, returnAmountType)),
+                List.of(BIGINT, BIGINT, returnQuantityType, returnAmountType));
+        List<Page> decemberDatePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                Optional.of(and(equal(1, 2001, INTEGER), equal(2, 12, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                salesColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(operatorIdBase, salesTypes, List.of(2, 1), returnPages, List.of(BIGINT, BIGINT, returnQuantityType, returnAmountType), List.of(1, 0))),
+                        hashJoinStep(new HashJoinSpec(operatorIdBase + 1, concatTypes(salesTypes, List.of(BIGINT, BIGINT, returnQuantityType, returnAmountType)), List.of(0), decemberDatePages, List.of(BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 2,
+                                Optional.of(and(
+                                        greaterThan(field(3, quantityType), constant(0L, quantityType), quantityType),
+                                        and(
+                                                greaterThan(field(4, netPaidType), constant(0L, netPaidType), netPaidType),
+                                                greaterThan(field(5, netPaidType), constant(100L, netPaidType), netPaidType)))),
+                                List.of(
+                                        field(1, BIGINT),
+                                        coalesce(cast(field(8, returnQuantityType), returnQuantityType, BIGINT), constant(0L, BIGINT), BIGINT),
+                                        cast(field(3, quantityType), quantityType, BIGINT),
+                                        coalesce(field(9, returnAmountType), constant(0L, returnAmountType), returnAmountType),
+                                        field(4, netPaidType)),
+                                projectedTypes)),
+                        factoryStep(hashAggregationFactory(
+                                operatorIdBase + 3,
+                                List.of(BIGINT),
+                                List.of(0),
+                                returnQuantitySum.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                quantitySum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                returnAmountSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                                netPaidSum.createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 4,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, BIGINT),
+                                        cast(
+                                                divide(
+                                                        cast(field(1, BIGINT), BIGINT, createDecimalType(15, 4)),
+                                                        cast(field(2, BIGINT), BIGINT, createDecimalType(15, 4))),
+                                                divide(
+                                                        cast(field(1, BIGINT), BIGINT, createDecimalType(15, 4)),
+                                                        cast(field(2, BIGINT), BIGINT, createDecimalType(15, 4))).type(),
+                                                ratioType),
+                                        cast(
+                                                divide(
+                                                        cast(field(3, returnAmountSum.getFinalType()), returnAmountSum.getFinalType(), createDecimalType(15, 4)),
+                                                        cast(field(4, netPaidSum.getFinalType()), netPaidSum.getFinalType(), createDecimalType(15, 4))),
+                                                divide(
+                                                        cast(field(3, returnAmountSum.getFinalType()), returnAmountSum.getFinalType(), createDecimalType(15, 4)),
+                                                        cast(field(4, netPaidSum.getFinalType()), netPaidSum.getFinalType(), createDecimalType(15, 4))).type(),
+                                                ratioType)),
+                                ratioTypes)),
+                        factoryStep(windowFactory(
+                                operatorIdBase + 5,
+                                ratioTypes,
+                                List.of(0, 1, 2),
+                                List.of(),
+                                List.of(1),
+                                List.of(ASC_NULLS_LAST),
+                                List.of(rankWindowFunction()))),
+                        factoryStep(windowFactory(
+                                operatorIdBase + 6,
+                                firstRankTypes,
+                                List.of(0, 1, 2, 3),
+                                List.of(),
+                                List.of(2),
+                                List.of(ASC_NULLS_LAST),
+                                List.of(rankWindowFunction()))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 7,
+                                Optional.of(or(
+                                        lessThan(field(3, BIGINT), constant(11L, BIGINT), BIGINT),
+                                        lessThan(field(4, BIGINT), constant(11L, BIGINT), BIGINT))),
+                                List.of(
+                                        constant(Slices.utf8Slice(channel), VARCHAR),
+                                        field(0, BIGINT),
+                                        field(1, ratioType),
+                                        field(3, BIGINT),
+                                        field(4, BIGINT)),
+                                outputTypes))));
     }
 
     private List<Page> query61SalesPages(TpcdsParquetTables tables, boolean promotionalOnly, int operatorIdBase)
@@ -5725,6 +5858,17 @@ public final class TrinoTpcdsParquetSupport
                 java.util.Arrays.stream(inputChannels)
                         .boxed()
                         .toList());
+    }
+
+    private static WindowFunctionDefinition rankWindowFunction()
+    {
+        return window(
+                new ReflectionWindowFunctionSupplier(0, RankFunction.class),
+                BIGINT,
+                RUNNING_ROWS_FRAME,
+                false,
+                List.of(),
+                List.of());
     }
 
     private static RowExpression yearMonthRangePredicate(int yearIndex, int monthIndex, int year, int minimumMonthInclusive, int maximumMonthInclusive)

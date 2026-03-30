@@ -92,7 +92,7 @@ engine", but rather:
 
 Queries:
 
-- `Q47`, `Q49`,
+- `Q47`,
   `Q98`
 
 Needed shape:

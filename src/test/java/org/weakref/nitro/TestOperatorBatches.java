@@ -449,6 +449,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorProducesRankWithTies()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(3L, "third"),
+                        row(1L, "first-a"),
+                        row(1L, "first-b"),
+                        row(2L, "second"))),
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new WindowOperator.RankWindowFunction(new int[] {0}, new boolean[] {false})))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, "first-a", 1L),
+                            row(1L, "first-b", 1L),
+                            row(2L, "second", 3L),
+                            row(3L, "third", 4L));
+        }
+    }
+
+    @Test
     void testGroupedAggregationOperatorCanFuseGroupingAndAggregation()
     {
         Allocator allocator = new Allocator();
