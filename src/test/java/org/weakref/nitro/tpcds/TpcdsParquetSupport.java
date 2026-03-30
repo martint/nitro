@@ -193,6 +193,26 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {0, 2, 1}, new boolean[] {false, false, false}, monthlySales);
     }
 
+    public static Operator query86(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator grouped = new GroupIdOperator(
+                allocator,
+                query86SalesByCategoryClass(allocator, primitiveRegistry, tables),
+                new int[][] {
+                        {-1, -1, 2},
+                        {0, -1, 2},
+                        {0, 1, 2}});
+        grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 3),
+                List.of(new Sum(2)),
+                grouped);
+        grouped = projectQuery86Rollup(allocator, primitiveRegistry, grouped);
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped);
+        grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5}, new boolean[] {true, false, false}, grouped);
+        return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
+    }
+
     private static Operator queryRevenueRatioByClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
@@ -3917,6 +3937,31 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, facts, 6, 5, 2);
     }
 
+    private static Operator query86SalesByCategoryClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_net_paid");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(greaterThan(1, 1199), lessThan(1, 1212)),
+                        new String[] {"d_date_sk", "d_month_seq"},
+                        0),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_class", "i_category"),
+                0);
+        return projectInputs(allocator, primitiveRegistry, facts, 6, 5, 2);
+    }
+
     private static Operator projectQuery70Rollup(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         Variable zero = new Variable(0);
@@ -3967,6 +4012,60 @@ final class TpcdsParquetSupport
                         new Reference(new Input(3), Stream.VALUES),
                         new Reference(hierarchy, Stream.VALUES),
                         new Reference(stateForRank, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery86Rollup(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable two = new Variable(2);
+        Variable groupIdIsZero = new Variable(3);
+        Variable groupIdIsOne = new Variable(4);
+        Variable groupIdIsTwo = new Variable(5);
+        Variable classSubtotalHierarchy = new Variable(6);
+        Variable hierarchyLong = new Variable(7);
+        Variable hierarchy = new Variable(8);
+        Variable sentinel = new Variable(9);
+        Variable categoryForRank = new Variable(10);
+
+        List<Assignment> assignments = List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(one, new Literal(1L), AllMask.ALL),
+                new Assignment(two, new Literal(2L), AllMask.ALL),
+                new Assignment(groupIdIsZero, new Call("eq", List.of(
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(groupIdIsOne, new Call("eq", List.of(
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(one, Stream.VALUES))), AllMask.ALL),
+                new Assignment(groupIdIsTwo, new Call("eq", List.of(
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(two, Stream.VALUES))), AllMask.ALL),
+                new Assignment(classSubtotalHierarchy, new Call("if_i64", List.of(
+                        new Reference(groupIdIsOne, Stream.VALUES),
+                        new Reference(one, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                new Assignment(hierarchyLong, new Call("if_i64", List.of(
+                        new Reference(groupIdIsZero, Stream.VALUES),
+                        new Reference(two, Stream.VALUES),
+                        new Reference(classSubtotalHierarchy, Stream.VALUES))), AllMask.ALL),
+                new Assignment(hierarchy, new Call("cast_i64_to_i32", List.of(
+                        new Reference(hierarchyLong, Stream.VALUES))), AllMask.ALL),
+                new Assignment(sentinel, new Literal(NULLS_LAST_SENTINEL_STRING), AllMask.ALL),
+                new Assignment(categoryForRank, new Call("if_utf8", List.of(
+                        new Reference(groupIdIsTwo, Stream.VALUES),
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(sentinel, Stream.VALUES))), AllMask.ALL));
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(assignments, List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(hierarchy, Stream.VALUES),
+                        new Reference(categoryForRank, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
