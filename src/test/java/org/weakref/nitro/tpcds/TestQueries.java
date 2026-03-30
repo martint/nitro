@@ -90,6 +90,12 @@ public class TestQueries
     }
 
     @Test
+    void testQuery63()
+    {
+        assertOperatorMatches("63", tables -> TpcdsParquetSupport.query63(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query63(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
     void testQuery09()
     {
         assertOperatorMatches("09", tables -> TpcdsParquetSupport.query09(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query09(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);

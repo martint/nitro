@@ -178,6 +178,21 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, monthlySales, 0, 1, 2, 3, 4, 5, 6, 7);
     }
 
+    public static Operator query63(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator monthlySales = query63MonthlySalesByManager(allocator, primitiveRegistry, tables);
+        monthlySales = new WindowOperator(
+                allocator,
+                monthlySales,
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(2)));
+        monthlySales = filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(2, 3));
+        monthlySales = projectInputs(allocator, primitiveRegistry, monthlySales, 0, 2, 3);
+        return new TopNOperator(allocator, 100, new int[] {0, 2, 1}, new boolean[] {false, false, false}, monthlySales);
+    }
+
     private static Operator queryRevenueRatioByClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
@@ -2983,6 +2998,51 @@ final class TpcdsParquetSupport
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5),
                 List.of(new Sum(6)),
+                facts);
+    }
+
+    private static Operator query63MonthlySalesByManager(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query53ItemPredicate(),
+                        new String[] {"i_item_sk", "i_manager_id", "i_category", "i_class", "i_brand"},
+                        0,
+                        1),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(greaterThan(2, 1199), lessThan(2, 1212)),
+                        new String[] {"d_date_sk", "d_moy", "d_month_seq"},
+                        0,
+                        1),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                2,
+                scannedTable(allocator, tables, "store", "s_store_sk"),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 5, 7, 3);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new Sum(2)),
                 facts);
     }
 

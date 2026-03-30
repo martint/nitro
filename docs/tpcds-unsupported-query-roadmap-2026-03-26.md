@@ -32,6 +32,7 @@ Supported parquet-backed queries today:
 - `Q58`
 - `Q61`
 - `Q62`
+- `Q63`
 - `Q67`
 - `Q69`
 - `Q70`
@@ -89,7 +90,7 @@ engine", but rather:
 
 Queries:
 
-- `Q36`, `Q47`, `Q49`, `Q63`, `Q86`,
+- `Q36`, `Q47`, `Q49`, `Q86`,
   `Q98`
 
 Needed shape:

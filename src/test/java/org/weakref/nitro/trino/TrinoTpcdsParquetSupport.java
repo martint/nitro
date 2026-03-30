@@ -367,6 +367,71 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query63(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        Type salesType = factTypes.get(3);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        TestingAggregationFunction monthlyAverage = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(salesSum.getFinalType()));
+        List<Type> itemTypes = List.of(BIGINT, INTEGER);
+        List<Type> dateTypes = List.of(BIGINT, INTEGER);
+        List<Type> groupedTypes = List.of(INTEGER, INTEGER, salesSum.getFinalType());
+        List<Type> outputTypes = List.of(INTEGER, salesSum.getFinalType(), monthlyAverage.getFinalType());
+
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_manager_id", "i_category", "i_class", "i_brand"),
+                Optional.of(query53ItemPredicate()),
+                List.of(field(0, BIGINT), field(1, INTEGER)),
+                itemTypes);
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_moy", "d_month_seq"),
+                Optional.of(and(greaterThan(2, 1199, INTEGER), lessThan(2, 1212, INTEGER))),
+                List.of(field(0, BIGINT), field(1, INTEGER)),
+                dateTypes);
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+
+        return executePipeline(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(63_0, factTypes, List.of(1), itemPages, itemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(63_1, concatTypes(factTypes, itemTypes), List.of(0), datePages, dateTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(63_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(2), storePages, List.of(BIGINT), List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                63_3,
+                                List.of(INTEGER, INTEGER),
+                                List.of(5, 7),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()))),
+                        factoryStep(windowFactory(
+                                63_4,
+                                groupedTypes,
+                                List.of(0, 1, 2),
+                                List.of(0),
+                                List.of(),
+                                List.of(),
+                                List.of(aggregateWindowFunction("avg", List.of(salesSum.getFinalType()), monthlyAverage.getFinalType(), PARTITION_ROWS_FRAME, 2)))),
+                        factoryStep(filterAndProjectFactory(
+                                63_5,
+                                Optional.of(queryRelativeDeviationPredicate(2, 3, salesSum.getFinalType(), monthlyAverage.getFinalType())),
+                                List.of(
+                                        field(0, INTEGER),
+                                        field(2, salesSum.getFinalType()),
+                                        field(3, monthlyAverage.getFinalType())),
+                                outputTypes)),
+                        factoryStep(topNFactory(63_6, outputTypes, 100, List.of(0, 2, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
     private MaterializedResult queryRevenueRatioByClass(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         List<String> factColumns = List.of(soldDateColumn, itemColumn, salesColumn);
