@@ -1468,6 +1468,12 @@ public class TestQueries
     }
 
     @Test
+    void testQuery58()
+    {
+        assertOperatorMatches("58", tables -> TpcdsParquetSupport.query58(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query58(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
     void testQuery57()
     {
         assertOperatorMatches("57", tables -> TpcdsParquetSupport.query57(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query57(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
@@ -1555,6 +1561,18 @@ public class TestQueries
     void testQuery53TrinoSql()
     {
         assertTrinoOperatorMatchesSql("53", support -> support.query53(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery58Sql()
+    {
+        assertNitroMatchesSql("58", tables -> TpcdsParquetSupport.query58(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery58TrinoSql()
+    {
+        assertTrinoOperatorMatchesSql("58", support -> support.query58(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
     }
 
     @Test

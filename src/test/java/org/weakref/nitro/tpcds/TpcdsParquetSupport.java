@@ -298,6 +298,20 @@ final class TpcdsParquetSupport
         return projectQuery54Output(allocator, primitiveRegistry, grouped);
     }
 
+    public static Operator query58(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator store = query58Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
+        Operator catalog = query58Channel(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price");
+        Operator web = query58Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price");
+
+        Operator joined = new HashJoinOperator(allocator, store, 0, catalog, 0);
+        joined = new HashJoinOperator(allocator, joined, 0, web, 0);
+        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 3, 5);
+        joined = filter(allocator, primitiveRegistry, joined, query58SimilarityPredicate(1, 2, 3));
+        joined = new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
+        return projectQuery58Output(allocator, primitiveRegistry, joined);
+    }
+
     public static Operator query57(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         List<Row> monthlyRankedRows;
@@ -2030,6 +2044,182 @@ final class TpcdsParquetSupport
                 source);
     }
 
+    private static Operator query58Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String priceColumn)
+    {
+        Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, priceColumn);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id"),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_date"),
+                0);
+        facts = new HashJoinOperator(allocator, facts, 6, query58AllowedDates(allocator, primitiveRegistry, tables), 0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 2);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1)),
+                facts);
+    }
+
+    private static Operator query58AllowedDates(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator allowedDates = scannedTable(allocator, tables, "date_dim", "d_date", "d_week_seq");
+        allowedDates = new NestedLoopJoinOperator(allocator, allowedDates, query58ScalarWeekSequence(allocator, primitiveRegistry, tables));
+        allowedDates = filter(allocator, primitiveRegistry, allowedDates, equalColumns(1, 2));
+        allowedDates = projectInputs(allocator, primitiveRegistry, allowedDates, 0);
+        return new MarkDistinctOperator(allocator, 0, allowedDates);
+    }
+
+    private static Operator query58ScalarWeekSequence(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator weekSequence = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                equal(1, 10_959L),
+                new String[] {"d_week_seq", "d_date"},
+                0);
+        weekSequence = new MarkDistinctOperator(allocator, 0, weekSequence);
+        return new EnforceSingleRowOperator(allocator, weekSequence);
+    }
+
+    private static FilterSpec query58SimilarityPredicate(int storeRevenueIndex, int catalogRevenueIndex, int webRevenueIndex)
+    {
+        return and(
+                query58WithinTenPercentPredicate(storeRevenueIndex, catalogRevenueIndex),
+                query58WithinTenPercentPredicate(storeRevenueIndex, webRevenueIndex),
+                query58WithinTenPercentPredicate(catalogRevenueIndex, storeRevenueIndex),
+                query58WithinTenPercentPredicate(catalogRevenueIndex, webRevenueIndex),
+                query58WithinTenPercentPredicate(webRevenueIndex, storeRevenueIndex),
+                query58WithinTenPercentPredicate(webRevenueIndex, catalogRevenueIndex));
+    }
+
+    private static FilterSpec query58WithinTenPercentPredicate(int leftIndex, int rightIndex)
+    {
+        Variable nine = new Variable(0);
+        Variable ten = new Variable(1);
+        Variable eleven = new Variable(2);
+        Variable leftTimesTen = new Variable(3);
+        Variable rightTimesNine = new Variable(4);
+        Variable rightTimesEleven = new Variable(5);
+        Variable lowerLessThan = new Variable(6);
+        Variable lowerEqual = new Variable(7);
+        Variable lowerSatisfied = new Variable(8);
+        Variable upperLessThan = new Variable(9);
+        Variable upperEqual = new Variable(10);
+        Variable upperSatisfied = new Variable(11);
+        Variable result = new Variable(12);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(nine, new Literal(9L), AllMask.ALL),
+                new Assignment(ten, new Literal(10L), AllMask.ALL),
+                new Assignment(eleven, new Literal(11L), AllMask.ALL),
+                new Assignment(leftTimesTen, new Call("multiply", List.of(
+                        new Reference(new Input(leftIndex), Stream.VALUES),
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                new Assignment(rightTimesNine, new Call("multiply", List.of(
+                        new Reference(new Input(rightIndex), Stream.VALUES),
+                        new Reference(nine, Stream.VALUES))), AllMask.ALL),
+                new Assignment(rightTimesEleven, new Call("multiply", List.of(
+                        new Reference(new Input(rightIndex), Stream.VALUES),
+                        new Reference(eleven, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lowerLessThan, new Call("lt", List.of(
+                        new Reference(rightTimesNine, Stream.VALUES),
+                        new Reference(leftTimesTen, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lowerEqual, new Call("eq", List.of(
+                        new Reference(leftTimesTen, Stream.VALUES),
+                        new Reference(rightTimesNine, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lowerSatisfied, new Call("or", List.of(
+                        new Reference(lowerLessThan, Stream.VALUES),
+                        new Reference(lowerEqual, Stream.VALUES))), AllMask.ALL),
+                new Assignment(upperLessThan, new Call("lt", List.of(
+                        new Reference(leftTimesTen, Stream.VALUES),
+                        new Reference(rightTimesEleven, Stream.VALUES))), AllMask.ALL),
+                new Assignment(upperEqual, new Call("eq", List.of(
+                        new Reference(leftTimesTen, Stream.VALUES),
+                        new Reference(rightTimesEleven, Stream.VALUES))), AllMask.ALL),
+                new Assignment(upperSatisfied, new Call("or", List.of(
+                        new Reference(upperLessThan, Stream.VALUES),
+                        new Reference(upperEqual, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("and", List.of(
+                        new Reference(lowerSatisfied, Stream.VALUES),
+                        new Reference(upperSatisfied, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    private static Operator projectQuery58Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable three = new Variable(0);
+        Variable tenThousand = new Variable(1);
+        Variable firstPairTotal = new Variable(2);
+        Variable totalRevenue = new Variable(3);
+        Variable denominator = new Variable(4);
+        Variable scaledStoreRevenue = new Variable(5);
+        Variable scaledCatalogRevenue = new Variable(6);
+        Variable scaledWebRevenue = new Variable(7);
+        Variable scaledTotalRevenue = new Variable(8);
+        Variable storeDeviation = new Variable(9);
+        Variable catalogDeviation = new Variable(10);
+        Variable webDeviation = new Variable(11);
+        Variable average = new Variable(12);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(three, new Literal(3L), AllMask.ALL),
+                        new Assignment(tenThousand, new Literal(10_000L), AllMask.ALL),
+                        new Assignment(firstPairTotal, new Call("add", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(totalRevenue, new Call("add", List.of(
+                                new Reference(firstPairTotal, Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(denominator, new Call("multiply", List.of(
+                                new Reference(totalRevenue, Stream.VALUES),
+                                new Reference(three, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(scaledStoreRevenue, new Call("multiply", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(scaledCatalogRevenue, new Call("multiply", List.of(
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(scaledWebRevenue, new Call("multiply", List.of(
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(scaledTotalRevenue, new Call("multiply", List.of(
+                                new Reference(totalRevenue, Stream.VALUES),
+                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(storeDeviation, new Call("divide_round_i64", List.of(
+                                new Reference(scaledStoreRevenue, Stream.VALUES),
+                                new Reference(denominator, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(catalogDeviation, new Call("divide_round_i64", List.of(
+                                new Reference(scaledCatalogRevenue, Stream.VALUES),
+                                new Reference(denominator, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(webDeviation, new Call("divide_round_i64", List.of(
+                                new Reference(scaledWebRevenue, Stream.VALUES),
+                                new Reference(denominator, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(average, new Call("divide_round_i64", List.of(
+                                new Reference(scaledTotalRevenue, Stream.VALUES),
+                                new Reference(three, Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(storeDeviation, Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(catalogDeviation, Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(webDeviation, Stream.VALUES),
+                        new Reference(average, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
     private static Operator query57MonthlyRankedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator facts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price");
@@ -2463,6 +2653,16 @@ final class TpcdsParquetSupport
                 new Assignment(equals, new Call("eq", List.of(
                         new Reference(new Input(inputIndex), Stream.VALUES),
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(equals, Stream.VALUES)));
+    }
+
+    private static FilterSpec equalColumns(int leftInputIndex, int rightInputIndex)
+    {
+        Variable equals = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(equals, new Call("eq", List.of(
+                        new Reference(new Input(leftInputIndex), Stream.VALUES),
+                        new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(equals, Stream.VALUES)));
     }
 

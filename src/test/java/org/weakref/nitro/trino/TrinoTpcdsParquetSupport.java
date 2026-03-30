@@ -735,6 +735,43 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query58(TpcdsParquetTables tables)
+    {
+        List<Page> storePages = query58ChannelPages(tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price", 58_00);
+        List<Page> catalogPages = query58ChannelPages(tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price", 58_10);
+        List<Page> webPages = query58ChannelPages(tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price", 58_20);
+
+        Type itemIdType = tableColumnTypes(tables, "item", List.of("i_item_id")).getFirst();
+        Type revenueType = FUNCTION_RESOLUTION.getAggregateFunction(
+                "sum",
+                fromTypes(tableColumnTypes(tables, "store_sales", List.of("ss_ext_sales_price")).getFirst()))
+                .getFinalType();
+        List<Type> channelTypes = List.of(itemIdType, revenueType);
+        List<Type> joinedTypes = List.of(itemIdType, revenueType, revenueType, revenueType);
+        List<RowExpression> outputProjections = query58OutputProjections(itemIdType, revenueType);
+        List<Type> outputTypes = outputProjections.stream()
+                .map(RowExpression::type)
+                .toList();
+
+        return executePagesPipeline(
+                storePages,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(58_30, channelTypes, List.of(0), catalogPages, channelTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(58_31, concatTypes(channelTypes, channelTypes), List.of(0), webPages, channelTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                58_32,
+                                Optional.of(query58SimilarityPredicate(1, 3, 5, revenueType)),
+                                List.of(field(0, itemIdType), field(1, revenueType), field(3, revenueType), field(5, revenueType)),
+                                joinedTypes)),
+                        factoryStep(topNFactory(58_33, joinedTypes, 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                58_34,
+                                Optional.empty(),
+                                outputProjections,
+                                outputTypes))),
+                outputTypes);
+    }
+
     public MaterializedResult query57(TpcdsParquetTables tables)
     {
         List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", List.of("cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
@@ -1026,6 +1063,102 @@ public final class TrinoTpcdsParquetSupport
                 List.of(
                         factoryStep(hashAggregationFactory(556 + offset, List.of(INTEGER), List.of(0))),
                         factoryStep(enforceSingleRowFactory(558 + offset, List.of(INTEGER)))));
+    }
+
+    private List<Page> query58ChannelPages(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesPriceColumn, int operatorIdBase)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, List.of(soldDateColumn, itemColumn, salesPriceColumn));
+        Type salesPriceType = factTypes.get(2);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesPriceType));
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_id"));
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_date"));
+        List<Type> itemKeyTypes = List.of(BIGINT, itemTypes.get(1));
+        List<Type> soldDateTypes = List.of(BIGINT, dateTypes.get(1));
+        List<Type> allowedDateTypes = List.of(dateTypes.get(1));
+
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                List.of(soldDateColumn, itemColumn, salesPriceColumn),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                factTypes,
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk", "i_item_id"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, itemTypes.get(1))),
+                                        itemKeyTypes),
+                                itemKeyTypes,
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 1,
+                                concatTypes(factTypes, itemKeyTypes),
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_date"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, dateTypes.get(1))),
+                                        soldDateTypes),
+                                soldDateTypes,
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 2,
+                                concatTypes(concatTypes(factTypes, itemKeyTypes), soldDateTypes),
+                                List.of(6),
+                                query58AllowedDatesPages(tables),
+                                allowedDateTypes,
+                                List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                operatorIdBase + 3,
+                                List.of(itemTypes.get(1)),
+                                List.of(4),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
+    private List<Page> query58AllowedDatesPages(TpcdsParquetTables tables)
+    {
+        List<Type> dateTypes = List.of(DATE, INTEGER);
+        List<Page> withWeekSequence = executeNestedLoopPages(
+                relationPages(
+                        tables,
+                        "date_dim",
+                        List.of("d_date", "d_week_seq"),
+                        Optional.empty(),
+                        List.of(field(0, DATE), field(1, INTEGER)),
+                        dateTypes),
+                dateTypes,
+                query58ScalarWeekSequencePages(tables),
+                List.of(INTEGER));
+
+        return executePipelinePages(
+                withWeekSequence,
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                58_40,
+                                Optional.of(equal(field(1, INTEGER), field(2, INTEGER), INTEGER)),
+                                List.of(field(0, DATE)),
+                                List.of(DATE))),
+                        factoryStep(hashAggregationFactory(58_41, List.of(DATE), List.of(0)))));
+    }
+
+    private List<Page> query58ScalarWeekSequencePages(TpcdsParquetTables tables)
+    {
+        return executePipelinePages(
+                relationPages(
+                        tables,
+                        "date_dim",
+                        List.of("d_week_seq", "d_date"),
+                        Optional.of(equal(1, 10_959L, DATE)),
+                        List.of(field(0, INTEGER)),
+                        List.of(INTEGER)),
+                List.of(
+                        factoryStep(hashAggregationFactory(58_42, List.of(INTEGER), List.of(0))),
+                        factoryStep(enforceSingleRowFactory(58_43, List.of(INTEGER)))));
     }
 
     private List<Page> query70ActiveStatesPages(TpcdsParquetTables tables)
@@ -3253,6 +3386,16 @@ public final class TrinoTpcdsParquetSupport
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(type, type)), List.of(left, right));
     }
 
+    private static RowExpression equal(RowExpression left, RowExpression right)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(left.type(), right.type())), List.of(left, right));
+    }
+
+    private static RowExpression lessThan(RowExpression left, RowExpression right)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.LESS_THAN, List.of(left.type(), right.type())), List.of(left, right));
+    }
+
     private OperatorFactory semiJoinFilterProjectFactory(int operatorId, List<Type> probeTypes, boolean includeMatches)
     {
         RowExpression filter = includeMatches
@@ -3384,6 +3527,51 @@ public final class TrinoTpcdsParquetSupport
                 revenueType);
     }
 
+    private static RowExpression query58SimilarityPredicate(int storeRevenueIndex, int catalogRevenueIndex, int webRevenueIndex, Type revenueType)
+    {
+        return and(
+                query58WithinTenPercent(field(storeRevenueIndex, revenueType), field(catalogRevenueIndex, revenueType)),
+                query58WithinTenPercent(field(storeRevenueIndex, revenueType), field(webRevenueIndex, revenueType)),
+                query58WithinTenPercent(field(catalogRevenueIndex, revenueType), field(storeRevenueIndex, revenueType)),
+                query58WithinTenPercent(field(catalogRevenueIndex, revenueType), field(webRevenueIndex, revenueType)),
+                query58WithinTenPercent(field(webRevenueIndex, revenueType), field(storeRevenueIndex, revenueType)),
+                query58WithinTenPercent(field(webRevenueIndex, revenueType), field(catalogRevenueIndex, revenueType)));
+    }
+
+    private static RowExpression query58WithinTenPercent(RowExpression left, RowExpression right)
+    {
+        Type factorType = createDecimalType(2, 0);
+        RowExpression leftScaled = multiply(left, constant(10L, factorType));
+        RowExpression lowerBound = multiply(right, constant(9L, factorType));
+        RowExpression upperBound = multiply(right, constant(11L, factorType));
+        return and(
+                or(equal(leftScaled, lowerBound), greaterThan(leftScaled, lowerBound)),
+                or(equal(leftScaled, upperBound), lessThan(leftScaled, upperBound)));
+    }
+
+    private static List<RowExpression> query58OutputProjections(Type itemIdType, Type revenueType)
+    {
+        Type percentType = createDecimalType(7, 2);
+        Type divisorType = createDecimalType(10, 0);
+        Type averageType = createDecimalType(38, 6);
+
+        RowExpression totalRevenue = add(add(field(1, revenueType), field(2, revenueType)), field(3, revenueType));
+        RowExpression averageBase = divide(totalRevenue, constant(3L, divisorType));
+        RowExpression storeDeviationBase = multiply(divide(divide(field(1, revenueType), totalRevenue), constant(3L, divisorType)), constant(100L, divisorType));
+        RowExpression catalogDeviationBase = multiply(divide(divide(field(2, revenueType), totalRevenue), constant(3L, divisorType)), constant(100L, divisorType));
+        RowExpression webDeviationBase = multiply(divide(divide(field(3, revenueType), totalRevenue), constant(3L, divisorType)), constant(100L, divisorType));
+
+        return List.of(
+                field(0, itemIdType),
+                field(1, revenueType),
+                cast(storeDeviationBase, storeDeviationBase.type(), percentType),
+                field(2, revenueType),
+                cast(catalogDeviationBase, catalogDeviationBase.type(), percentType),
+                field(3, revenueType),
+                cast(webDeviationBase, webDeviationBase.type(), percentType),
+                cast(averageBase, averageBase.type(), averageType));
+    }
+
     private static RowExpression query44AverageKey(RowExpression sum, RowExpression count)
     {
         RowExpression halfCount = divide(count, constant(2L, BIGINT), BIGINT);
@@ -3456,14 +3644,29 @@ public final class TrinoTpcdsParquetSupport
         return lessThan(right, left, type);
     }
 
+    private static RowExpression greaterThan(RowExpression left, RowExpression right)
+    {
+        return lessThan(right, left);
+    }
+
     private static RowExpression multiply(RowExpression left, RowExpression right, Type type)
     {
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(type, type)), List.of(left, right));
     }
 
+    private static RowExpression multiply(RowExpression left, RowExpression right)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(left.type(), right.type())), List.of(left, right));
+    }
+
     private static RowExpression add(RowExpression left, RowExpression right, Type type)
     {
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.ADD, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression add(RowExpression left, RowExpression right)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.ADD, List.of(left.type(), right.type())), List.of(left, right));
     }
 
     private static RowExpression subtract(RowExpression left, RowExpression right, Type type)
@@ -3474,6 +3677,11 @@ public final class TrinoTpcdsParquetSupport
     private static RowExpression divide(RowExpression left, RowExpression right, Type type)
     {
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.DIVIDE, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression divide(RowExpression left, RowExpression right)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.DIVIDE, List.of(left.type(), right.type())), List.of(left, right));
     }
 
     private static RowExpression cast(RowExpression expression, Type fromType, Type toType)
