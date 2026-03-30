@@ -498,6 +498,84 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query36(TpcdsParquetTables tables)
+    {
+        List<String> factColumns = List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_ext_sales_price", "ss_net_profit");
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
+        Type salesType = factTypes.get(3);
+        Type netProfitType = factTypes.get(4);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        TestingAggregationFunction netProfitSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(netProfitType));
+        Type grossMarginType = createDecimalType(38, 6);
+        List<Type> sourceTypes = List.of(VARCHAR, VARCHAR, salesType, netProfitType);
+        List<Type> groupIdTypes = concatTypes(sourceTypes, List.of(BIGINT));
+        List<Type> groupedTypes = List.of(VARCHAR, VARCHAR, BIGINT, netProfitSum.getFinalType(), salesSum.getFinalType());
+        List<Type> rollupTypes = List.of(VARCHAR, VARCHAR, grossMarginType, INTEGER, VARCHAR);
+        List<Type> rankedTypes = concatTypes(rollupTypes, List.of(BIGINT));
+        List<Type> outputTypes = List.of(grossMarginType, VARCHAR, VARCHAR, INTEGER, BIGINT);
+
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_year"),
+                Optional.of(equal(1, 2001, INTEGER)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_class", "i_category"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, VARCHAR), field(2, VARCHAR)),
+                List.of(BIGINT, VARCHAR, VARCHAR));
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_state"),
+                Optional.of(equal(1, VARCHAR, "TN")),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+
+        return executePipeline(
+                tables.tableFiles("store_sales"),
+                factColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(36_0, factTypes, List.of(0), datePages, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(36_1, concatTypes(factTypes, List.of(BIGINT)), List.of(1), itemPages, List.of(BIGINT, VARCHAR, VARCHAR), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(36_2, concatTypes(concatTypes(factTypes, List.of(BIGINT)), List.of(BIGINT, VARCHAR, VARCHAR)), List.of(2), storePages, List.of(BIGINT), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                36_3,
+                                Optional.empty(),
+                                List.of(field(8, VARCHAR), field(7, VARCHAR), field(3, salesType), field(4, netProfitType)),
+                                sourceTypes)),
+                        factoryStep(groupIdFactory(
+                                36_4,
+                                groupIdTypes,
+                                List.of(
+                                        Map.of(2, 2, 3, 3),
+                                        Map.of(0, 0, 2, 2, 3, 3),
+                                        Map.of(0, 0, 1, 1, 2, 2, 3, 3)))),
+                        factoryStep(hashAggregationFactory(
+                                36_5,
+                                List.of(VARCHAR, VARCHAR, BIGINT),
+                                List.of(0, 1, 4),
+                                netProfitSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                36_6,
+                                Optional.empty(),
+                                query36RollupProjection(netProfitSum.getFinalType(), salesSum.getFinalType(), grossMarginType),
+                                rollupTypes)),
+                        factoryStep(topNRankingFactory(36_7, rollupTypes, List.of(0, 1, 2, 3, 4), List.of(3, 4), List.of(2), List.of(ASC_NULLS_LAST), 100)),
+                        factoryStep(topNFactory(36_8, rankedTypes, 100, List.of(3, 4, 5, 0, 1), List.of(DESC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                36_9,
+                                Optional.empty(),
+                                List.of(field(2, grossMarginType), field(0, VARCHAR), field(1, VARCHAR), field(3, INTEGER), field(5, BIGINT)),
+                                outputTypes))),
+                outputTypes);
+    }
+
     private MaterializedResult queryRevenueRatioByClass(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         List<String> factColumns = List.of(soldDateColumn, itemColumn, salesColumn);
@@ -5564,6 +5642,38 @@ public final class TrinoTpcdsParquetSupport
                 field(3, sumType),
                 hierarchy,
                 stateForRank);
+    }
+
+    private static List<RowExpression> query36RollupProjection(Type numeratorType, Type denominatorType, Type grossMarginType)
+    {
+        RowExpression groupId = field(2, BIGINT);
+        RowExpression groupIdIsZero = equal(groupId, constant(0L, BIGINT), BIGINT);
+        RowExpression groupIdIsOne = equal(groupId, constant(1L, BIGINT), BIGINT);
+        RowExpression groupIdIsTwo = equal(groupId, constant(2L, BIGINT), BIGINT);
+        RowExpression hierarchy = ifExpression(
+                groupIdIsZero,
+                constant(2L, INTEGER),
+                ifExpression(
+                        groupIdIsOne,
+                        constant(1L, INTEGER),
+                        constant(0L, INTEGER),
+                        INTEGER),
+                INTEGER);
+        RowExpression categoryForRank = ifExpression(
+                groupIdIsTwo,
+                field(0, VARCHAR),
+                constant(Slices.utf8Slice("\uFFFF"), VARCHAR),
+                VARCHAR);
+        RowExpression rawGrossMargin = divide(
+                cast(field(3, numeratorType), numeratorType, createDecimalType(15, 4)),
+                cast(field(4, denominatorType), denominatorType, createDecimalType(15, 4)));
+        RowExpression grossMargin = cast(rawGrossMargin, rawGrossMargin.type(), grossMarginType);
+        return List.of(
+                field(0, VARCHAR),
+                field(1, VARCHAR),
+                grossMargin,
+                hierarchy,
+                categoryForRank);
     }
 
     private static List<RowExpression> query86RollupProjection(Type sumType)
