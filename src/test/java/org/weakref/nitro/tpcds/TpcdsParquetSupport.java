@@ -147,6 +147,24 @@ final class TpcdsParquetSupport
         return new TopNOperator(allocator, 100, new int[] {1, 0}, new boolean[] {false, false}, aggregated);
     }
 
+    public static Operator query09(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator reason = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "reason",
+                equal(0, 1L),
+                new String[] {"r_reason_sk"},
+                0);
+        reason = new NestedLoopJoinOperator(allocator, reason, query09Bucket(allocator, primitiveRegistry, tables, 1, 20, 74_129L));
+        reason = new NestedLoopJoinOperator(allocator, reason, query09Bucket(allocator, primitiveRegistry, tables, 21, 40, 122_840L));
+        reason = new NestedLoopJoinOperator(allocator, reason, query09Bucket(allocator, primitiveRegistry, tables, 41, 60, 56_580L));
+        reason = new NestedLoopJoinOperator(allocator, reason, query09Bucket(allocator, primitiveRegistry, tables, 61, 80, 10_097L));
+        reason = new NestedLoopJoinOperator(allocator, reason, query09Bucket(allocator, primitiveRegistry, tables, 81, 100, 165_306L));
+        return projectInputs(allocator, primitiveRegistry, reason, 1, 2, 3, 4, 5);
+    }
+
     public static Operator query41(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator eligibleManufacturers = filter(
@@ -1600,6 +1618,55 @@ final class TpcdsParquetSupport
         return projectQuery81StateAverage(allocator, primitiveRegistry, customerTotalReturn);
     }
 
+    private static Operator query09Bucket(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int minimumQuantityInclusive, int maximumQuantityInclusive, long threshold)
+    {
+        FilterSpec quantityPredicate = query09QuantityPredicate(minimumQuantityInclusive, maximumQuantityInclusive);
+
+        Operator count = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store_sales",
+                quantityPredicate,
+                new String[] {"ss_quantity"});
+        count = new AggregationOperator(
+                allocator,
+                List.of(new CountAll()),
+                count);
+
+        Operator discountAverage = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store_sales",
+                quantityPredicate,
+                new String[] {"ss_quantity", "ss_ext_discount_amt"},
+                1);
+        discountAverage = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new CountColumn(0)),
+                discountAverage);
+        discountAverage = projectQuery09Average(allocator, primitiveRegistry, discountAverage, 0, 1);
+
+        Operator netPaidAverage = filteredProjectedScan(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "store_sales",
+                quantityPredicate,
+                new String[] {"ss_quantity", "ss_net_paid"},
+                1);
+        netPaidAverage = new AggregationOperator(
+                allocator,
+                List.of(new Sum(0), new CountColumn(0)),
+                netPaidAverage);
+        netPaidAverage = projectQuery09Average(allocator, primitiveRegistry, netPaidAverage, 0, 1);
+
+        Operator bucket = new NestedLoopJoinOperator(allocator, count, discountAverage);
+        bucket = new NestedLoopJoinOperator(allocator, bucket, netPaidAverage);
+        return projectQuery09BucketValue(allocator, primitiveRegistry, bucket, threshold);
+    }
+
     private static Operator query23FrequentItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator frequentItems = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk");
@@ -1951,6 +2018,13 @@ final class TpcdsParquetSupport
         return and(
                 greaterThan(1, 1999),
                 lessThan(1, 2004));
+    }
+
+    private static FilterSpec query09QuantityPredicate(int minimumQuantityInclusive, int maximumQuantityInclusive)
+    {
+        return and(
+                greaterThan(0, minimumQuantityInclusive - 1L),
+                lessThan(0, maximumQuantityInclusive + 1L));
     }
 
     private static FilterSpec query81ReturnThresholdPredicate(int returnSumIndex, int stateAverageIndex)
@@ -2743,6 +2817,41 @@ final class TpcdsParquetSupport
                 List.of(
                         new Reference(new Input(0), Stream.VALUES),
                         new Reference(average, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery09Average(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int sumIndex, int countIndex)
+    {
+        Variable average = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(average, new Call("divide_round_i64", List.of(
+                                new Reference(new Input(sumIndex), Stream.VALUES),
+                                new Reference(new Input(countIndex), Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(average, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery09BucketValue(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, long threshold)
+    {
+        Variable thresholdLiteral = new Variable(0);
+        Variable countGreaterThanThreshold = new Variable(1);
+        Variable bucketValue = new Variable(2);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(thresholdLiteral, new Literal(threshold), AllMask.ALL),
+                        new Assignment(countGreaterThanThreshold, new Call("lt", List.of(
+                                new Reference(thresholdLiteral, Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(bucketValue, new Call("if_i64", List.of(
+                                new Reference(countGreaterThanThreshold, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(bucketValue, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

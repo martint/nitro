@@ -14,6 +14,7 @@ Supported parquet-backed queries today:
 
 - `Q01`
 - `Q06`
+- `Q09`
 - `Q10`
 - `Q23`
 - `Q30`

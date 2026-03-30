@@ -272,6 +272,37 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query09(TpcdsParquetTables tables)
+    {
+        List<Type> reasonTypes = tableColumnTypes(tables, "reason", List.of("r_reason_sk"));
+        List<Page> reasonPages = relationPages(
+                tables,
+                "reason",
+                List.of("r_reason_sk"),
+                Optional.of(equal(0, 1L, BIGINT)),
+                List.of(field(0, BIGINT)),
+                reasonTypes);
+        Type bucketType = createDecimalType(7, 2);
+        List<Page> joined = executeNestedLoopPages(reasonPages, List.of(BIGINT), query09BucketPages(tables, 1, 20, 74_129L, 9_00), List.of(bucketType));
+        joined = executeNestedLoopPages(joined, List.of(BIGINT, bucketType), query09BucketPages(tables, 21, 40, 122_840L, 9_10), List.of(bucketType));
+        joined = executeNestedLoopPages(joined, List.of(BIGINT, bucketType, bucketType), query09BucketPages(tables, 41, 60, 56_580L, 9_20), List.of(bucketType));
+        joined = executeNestedLoopPages(joined, List.of(BIGINT, bucketType, bucketType, bucketType), query09BucketPages(tables, 61, 80, 10_097L, 9_30), List.of(bucketType));
+        joined = executeNestedLoopPages(joined, List.of(BIGINT, bucketType, bucketType, bucketType, bucketType), query09BucketPages(tables, 81, 100, 165_306L, 9_40), List.of(bucketType));
+        return executePagesPipeline(
+                joined,
+                List.of(factoryStep(filterAndProjectFactory(
+                        9_50,
+                        Optional.empty(),
+                        List.of(
+                                field(1, bucketType),
+                                field(2, bucketType),
+                                field(3, bucketType),
+                                field(4, bucketType),
+                                field(5, bucketType)),
+                        List.of(bucketType, bucketType, bucketType, bucketType, bucketType)))),
+                List.of(bucketType, bucketType, bucketType, bucketType, bucketType));
+    }
+
     private List<Page> query01CustomerIdsPages(TpcdsParquetTables tables)
     {
         return executePipelinePages(
@@ -3418,6 +3449,62 @@ public final class TrinoTpcdsParquetSupport
                         factoryStep(hashAggregationFactory(23_15, List.of(BIGINT), List.of(0)))));
     }
 
+    private List<Page> query09BucketPages(TpcdsParquetTables tables, int minimumQuantityInclusive, int maximumQuantityInclusive, long threshold, int operatorIdBase)
+    {
+        Type bucketType = createDecimalType(7, 2);
+        List<Page> countPages = executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_quantity"),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase,
+                                Optional.of(query09QuantityPredicate(0, minimumQuantityInclusive, maximumQuantityInclusive)),
+                                List.of(),
+                                List.of())),
+                        factoryStep(aggregationFactory(
+                                operatorIdBase + 1,
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))));
+        List<Page> discountAveragePages = executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_quantity", "ss_ext_discount_amt"),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 2,
+                                Optional.of(query09QuantityPredicate(0, minimumQuantityInclusive, maximumQuantityInclusive)),
+                                List.of(field(1, bucketType)),
+                                List.of(bucketType))),
+                        factoryStep(aggregationFactory(
+                                operatorIdBase + 3,
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(bucketType)).createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty())))));
+        List<Page> netPaidAveragePages = executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_quantity", "ss_net_paid"),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 4,
+                                Optional.of(query09QuantityPredicate(0, minimumQuantityInclusive, maximumQuantityInclusive)),
+                                List.of(field(1, bucketType)),
+                                List.of(bucketType))),
+                        factoryStep(aggregationFactory(
+                                operatorIdBase + 5,
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(bucketType)).createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty())))));
+        return executePipelinePages(
+                executeNestedLoopPages(
+                        executeNestedLoopPages(countPages, List.of(BIGINT), discountAveragePages, List.of(bucketType)),
+                        List.of(BIGINT, bucketType),
+                        netPaidAveragePages,
+                        List.of(bucketType)),
+                List.of(factoryStep(filterAndProjectFactory(
+                        operatorIdBase + 6,
+                        Optional.empty(),
+                        List.of(ifExpression(
+                                greaterThan(field(0, BIGINT), constant(threshold, BIGINT), BIGINT),
+                                field(1, bucketType),
+                                field(2, bucketType),
+                                bucketType)),
+                        List.of(bucketType)))));
+    }
+
     private List<Page> query23CustomerSalesPages(TpcdsParquetTables tables, boolean filterYears, int operatorIdBase)
     {
         List<String> factColumns = filterYears
@@ -4212,6 +4299,13 @@ public final class TrinoTpcdsParquetSupport
         return and(
                 greaterThan(field(1, INTEGER), constant(1999L, INTEGER), INTEGER),
                 lessThan(field(1, INTEGER), constant(2004L, INTEGER), INTEGER));
+    }
+
+    private static RowExpression query09QuantityPredicate(int quantityIndex, int minimumQuantityInclusive, int maximumQuantityInclusive)
+    {
+        return and(
+                greaterThan(field(quantityIndex, INTEGER), constant((long) (minimumQuantityInclusive - 1), INTEGER), INTEGER),
+                lessThan(field(quantityIndex, INTEGER), constant((long) (maximumQuantityInclusive + 1), INTEGER), INTEGER));
     }
 
     private static RowExpression query81ThresholdPredicate(Type returnType, Type averageType)
