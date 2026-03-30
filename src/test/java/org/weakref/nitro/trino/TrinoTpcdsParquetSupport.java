@@ -2176,6 +2176,34 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query23(TpcdsParquetTables tables)
+    {
+        List<Page> channelPages = new ArrayList<>(query23ChannelPages(
+                tables,
+                "catalog_sales",
+                "cs_sold_date_sk",
+                "cs_bill_customer_sk",
+                "cs_item_sk",
+                "cs_quantity",
+                "cs_list_price",
+                23_100));
+        channelPages.addAll(query23ChannelPages(
+                tables,
+                "web_sales",
+                "ws_sold_date_sk",
+                "ws_bill_customer_sk",
+                "ws_item_sk",
+                "ws_quantity",
+                "ws_list_price",
+                23_200));
+        Type salesType = createDecimalType(17, 2);
+        TestingAggregationFunction sum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        return executePagesPipeline(
+                channelPages,
+                List.of(factoryStep(aggregationFactory(23_300, sum.createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty())))),
+                List.of(sum.getFinalType()));
+    }
+
     public MaterializedResult query81(TpcdsParquetTables tables)
     {
         Type stateType = query81StateType(tables);
@@ -3337,6 +3365,187 @@ public final class TrinoTpcdsParquetSupport
                                 average.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
     }
 
+    private List<Page> query23FrequentItemPages(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_item_sk"));
+        List<Type> groupedTypes = List.of(BIGINT, DATE, BIGINT);
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_item_sk"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                23_10,
+                                factTypes,
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year", "d_date"),
+                                        Optional.of(query23YearRangePredicate()),
+                                        List.of(field(0, BIGINT), field(2, DATE)),
+                                        List.of(BIGINT, DATE)),
+                                List.of(BIGINT, DATE),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                23_11,
+                                concatTypes(factTypes, List.of(BIGINT, DATE)),
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "item",
+                                        List.of("i_item_sk"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                23_12,
+                                Optional.empty(),
+                                List.of(field(1, BIGINT), field(3, DATE)),
+                                List.of(BIGINT, DATE))),
+                        factoryStep(hashAggregationFactory(
+                                23_13,
+                                List.of(BIGINT, DATE),
+                                List.of(0, 1),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                23_14,
+                                Optional.of(greaterThan(field(2, BIGINT), constant(4L, BIGINT), BIGINT)),
+                                List.of(field(0, BIGINT)),
+                                List.of(BIGINT))),
+                        factoryStep(hashAggregationFactory(23_15, List.of(BIGINT), List.of(0)))));
+    }
+
+    private List<Page> query23CustomerSalesPages(TpcdsParquetTables tables, boolean filterYears, int operatorIdBase)
+    {
+        List<String> factColumns = filterYears
+                ? List.of("ss_customer_sk", "ss_sold_date_sk", "ss_quantity", "ss_sales_price")
+                : List.of("ss_customer_sk", "ss_quantity", "ss_sales_price");
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
+        Type priceType = factTypes.get(filterYears ? 3 : 2);
+        Type quantityDecimalType = createDecimalType(10, 0);
+        Type salesType = createDecimalType(17, 2);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        List<PipelineStep> steps = new ArrayList<>();
+
+        if (filterYears) {
+            steps.add(hashJoinStep(new HashJoinSpec(
+                    operatorIdBase,
+                    factTypes,
+                    List.of(1),
+                    relationPages(
+                            tables,
+                            "date_dim",
+                            List.of("d_date_sk", "d_year"),
+                            Optional.of(query23YearRangePredicate()),
+                            List.of(field(0, BIGINT)),
+                            List.of(BIGINT)),
+                    List.of(BIGINT),
+                    List.of(0))));
+        }
+
+        List<Type> afterDateTypes = filterYears ? concatTypes(factTypes, List.of(BIGINT)) : factTypes;
+        steps.add(hashJoinStep(new HashJoinSpec(
+                operatorIdBase + 1,
+                afterDateTypes,
+                List.of(0),
+                relationPages(
+                        tables,
+                        "customer",
+                        List.of("c_customer_sk"),
+                        Optional.empty(),
+                        List.of(field(0, BIGINT)),
+                        List.of(BIGINT)),
+                List.of(BIGINT),
+                List.of(0))));
+        List<Type> afterCustomerTypes = concatTypes(afterDateTypes, List.of(BIGINT));
+        steps.add(factoryStep(filterAndProjectFactory(
+                operatorIdBase + 2,
+                Optional.empty(),
+                List.of(
+                        field(0, BIGINT),
+                        coalesce(
+                                new CallExpression(
+                                        FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(priceType, quantityDecimalType)),
+                                        List.of(
+                                                field(filterYears ? 3 : 2, priceType),
+                                                new CallExpression(FUNCTION_RESOLUTION.getCoercion(INTEGER, quantityDecimalType), List.of(field(filterYears ? 2 : 1, INTEGER))))),
+                                constant(0L, salesType),
+                                salesType)),
+                List.of(BIGINT, salesType))));
+        steps.add(factoryStep(hashAggregationFactory(
+                operatorIdBase + 3,
+                List.of(BIGINT),
+                List.of(0),
+                salesSum.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()))));
+        return executePipelinePages(tables.tableFiles("store_sales"), factColumns, steps);
+    }
+
+    private List<Page> query23BestCustomerPages(TpcdsParquetTables tables)
+    {
+        Type lineSalesType = createDecimalType(17, 2);
+        Type customerSalesType = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(lineSalesType)).getFinalType();
+        List<Page> allSalesPages = query23CustomerSalesPages(tables, false, 23_20);
+        TestingAggregationFunction salesMax = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(customerSalesType));
+        List<Page> maxSalesPages = executePipelinePages(
+                query23CustomerSalesPages(tables, true, 23_30),
+                List.of(factoryStep(aggregationFactory(23_34, salesMax.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty())))));
+        return executePipelinePages(
+                executeNestedLoopPages(allSalesPages, List.of(BIGINT, customerSalesType), maxSalesPages, List.of(customerSalesType)),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                23_35,
+                                Optional.of(query23BestCustomerPredicate(customerSalesType)),
+                                List.of(field(0, BIGINT)),
+                                List.of(BIGINT))),
+                        factoryStep(hashAggregationFactory(23_36, List.of(BIGINT), List.of(0)))));
+    }
+
+    private List<Page> query23ChannelPages(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String customerColumn, String itemColumn, String quantityColumn, String listPriceColumn, int operatorIdBase)
+    {
+        List<String> factColumns = List.of(soldDateColumn, customerColumn, itemColumn, quantityColumn, listPriceColumn);
+        List<Type> factTypes = tableColumnTypes(tables, salesTable, factColumns);
+        Type priceType = factTypes.get(4);
+        Type quantityDecimalType = createDecimalType(10, 0);
+        Type salesType = createDecimalType(17, 2);
+
+        return executePipelinePages(
+                tables.tableFiles(salesTable),
+                factColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                factTypes,
+                                List.of(0),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year", "d_moy"),
+                                        Optional.of(and(equal(1, 2000, INTEGER), equal(2, 2, INTEGER))),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        semiJoinPagesStep(new SemiJoinPagesSpec(operatorIdBase + 1, concatTypes(factTypes, List.of(BIGINT)), 2, query23FrequentItemPages(tables), List.of(BIGINT), 0)),
+                        factoryStep(semiJoinFilterProjectFactory(operatorIdBase + 2, concatTypes(factTypes, List.of(BIGINT)), true)),
+                        semiJoinPagesStep(new SemiJoinPagesSpec(operatorIdBase + 3, concatTypes(factTypes, List.of(BIGINT)), 1, query23BestCustomerPages(tables), List.of(BIGINT), 0)),
+                        factoryStep(semiJoinFilterProjectFactory(operatorIdBase + 4, concatTypes(factTypes, List.of(BIGINT)), true)),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 5,
+                                Optional.empty(),
+                                List.of(coalesce(
+                                        new CallExpression(
+                                                FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(priceType, quantityDecimalType)),
+                                                List.of(
+                                                        field(4, priceType),
+                                                        new CallExpression(FUNCTION_RESOLUTION.getCoercion(INTEGER, quantityDecimalType), List.of(field(3, INTEGER))))),
+                                        constant(0L, salesType),
+                                        salesType)),
+                                List.of(salesType)))));
+    }
+
     private Type query81StateType(TpcdsParquetTables tables)
     {
         return tableColumnTypes(tables, "customer_address", List.of("ca_state")).getFirst();
@@ -3998,6 +4207,13 @@ public final class TrinoTpcdsParquetSupport
                 lessThan(field(1, DATE), constant(11_074L, DATE), DATE));
     }
 
+    private static RowExpression query23YearRangePredicate()
+    {
+        return and(
+                greaterThan(field(1, INTEGER), constant(1999L, INTEGER), INTEGER),
+                lessThan(field(1, INTEGER), constant(2004L, INTEGER), INTEGER));
+    }
+
     private static RowExpression query81ThresholdPredicate(Type returnType, Type averageType)
     {
         Type multiplierType = createDecimalType(2, 1);
@@ -4020,6 +4236,16 @@ public final class TrinoTpcdsParquetSupport
                 cast(field(1, discountType), discountType, scaledAverage.type()),
                 scaledAverage,
                 scaledAverage.type());
+    }
+
+    private static RowExpression query23BestCustomerPredicate(Type salesType)
+    {
+        Type multiplierType = createDecimalType(2, 0);
+        RowExpression doubledSales = multiply(field(1, salesType), constant(2L, multiplierType));
+        return greaterThan(
+                doubledSales,
+                cast(field(2, salesType), salesType, doubledSales.type()),
+                doubledSales.type());
     }
 
     private static RowExpression query01ReturnThresholdPredicate()
