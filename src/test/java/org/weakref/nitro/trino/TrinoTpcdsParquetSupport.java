@@ -593,6 +593,114 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query47(TpcdsParquetTables tables)
+    {
+        List<Type> monthlyRankedTypes = query47MonthlyRankedTypes(tables);
+        Type categoryType = monthlyRankedTypes.get(0);
+        Type brandType = monthlyRankedTypes.get(1);
+        Type storeNameType = monthlyRankedTypes.get(2);
+        Type companyNameType = monthlyRankedTypes.get(3);
+        Type yearType = monthlyRankedTypes.get(4);
+        Type monthType = monthlyRankedTypes.get(5);
+        Type sumType = monthlyRankedTypes.get(6);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(sumType)).getFinalType();
+
+        List<Type> currentTypes = List.of(categoryType, brandType, storeNameType, companyNameType, yearType, monthType, averageType, sumType, BIGINT);
+        List<Type> adjacentTypes = List.of(categoryType, brandType, storeNameType, companyNameType, sumType, BIGINT);
+        List<Type> afterPreviousTypes = concatTypes(currentTypes, adjacentTypes);
+        List<Type> afterNextTypes = concatTypes(afterPreviousTypes, adjacentTypes);
+        List<Type> sortedTypes = concatTypes(List.of(categoryType, brandType, storeNameType, companyNameType, yearType, monthType, averageType, sumType, sumType, sumType), List.of(sumType));
+        List<Type> outputTypes = List.of(categoryType, brandType, storeNameType, companyNameType, yearType, monthType, averageType, sumType, sumType, sumType);
+
+        List<Page> monthlyRankedPages = query47MonthlyRankedSalesPages(tables);
+        List<Page> currentPages = executePipelinePages(
+                monthlyRankedPages,
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                47_10,
+                                Optional.of(equal(4, 1999, INTEGER)),
+                                identityProjections(monthlyRankedTypes),
+                                monthlyRankedTypes)),
+                        factoryStep(windowFactory(
+                                47_11,
+                                monthlyRankedTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7),
+                                List.of(0, 1, 2, 3),
+                                List.of(),
+                                List.of(),
+                                List.of(aggregateWindowFunction("avg", List.of(sumType), averageType, PARTITION_ROWS_FRAME, 6)))),
+                        factoryStep(filterAndProjectFactory(
+                                47_12,
+                                Optional.empty(),
+                                List.of(field(0, categoryType), field(1, brandType), field(2, storeNameType), field(3, companyNameType), field(4, yearType), field(5, monthType), field(8, averageType), field(6, sumType), field(7, BIGINT)),
+                                currentTypes))));
+        List<Page> previousPages = executePipelinePages(
+                monthlyRankedPages,
+                List.of(factoryStep(filterAndProjectFactory(
+                        47_13,
+                        Optional.empty(),
+                        List.of(
+                                field(0, categoryType),
+                                field(1, brandType),
+                                field(2, storeNameType),
+                                field(3, companyNameType),
+                                field(6, sumType),
+                                add(field(7, BIGINT), constant(1L, BIGINT), BIGINT)),
+                        adjacentTypes))));
+        List<Page> nextPages = executePipelinePages(
+                monthlyRankedPages,
+                List.of(factoryStep(filterAndProjectFactory(
+                        47_14,
+                        Optional.empty(),
+                        List.of(
+                                field(0, categoryType),
+                                field(1, brandType),
+                                field(2, storeNameType),
+                                field(3, companyNameType),
+                                field(6, sumType),
+                                subtract(field(7, BIGINT), constant(1L, BIGINT), BIGINT)),
+                        adjacentTypes))));
+
+        return executePagesPipeline(
+                currentPages,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(47_20, currentTypes, List.of(0, 1, 2, 3, 8), previousPages, adjacentTypes, List.of(0, 1, 2, 3, 5))),
+                        hashJoinStep(new HashJoinSpec(47_21, afterPreviousTypes, List.of(0, 1, 2, 3, 8), nextPages, adjacentTypes, List.of(0, 1, 2, 3, 5))),
+                        factoryStep(filterAndProjectFactory(
+                                47_22,
+                                Optional.of(queryRelativeDeviationPredicate(7, 6, sumType, averageType)),
+                                List.of(
+                                        field(0, categoryType),
+                                        field(1, brandType),
+                                        field(2, storeNameType),
+                                        field(3, companyNameType),
+                                        field(4, yearType),
+                                        field(5, monthType),
+                                        field(6, averageType),
+                                        field(7, sumType),
+                                        field(13, sumType),
+                                        field(19, sumType),
+                                        subtract(field(7, sumType), field(6, averageType), sumType)),
+                                sortedTypes)),
+                        factoryStep(topNFactory(47_23, sortedTypes, 100, List.of(10, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                47_24,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, categoryType),
+                                        field(1, brandType),
+                                        field(2, storeNameType),
+                                        field(3, companyNameType),
+                                        field(4, yearType),
+                                        field(5, monthType),
+                                        field(6, averageType),
+                                        field(7, sumType),
+                                        field(8, sumType),
+                                        field(9, sumType)),
+                                outputTypes))),
+                outputTypes);
+    }
+
     private MaterializedResult queryRevenueRatioByClass(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         List<String> factColumns = List.of(soldDateColumn, itemColumn, salesColumn);
@@ -1688,6 +1796,89 @@ public final class TrinoTpcdsParquetSupport
                                         field(3, BIGINT),
                                         field(4, BIGINT)),
                                 outputTypes))));
+    }
+
+    private List<Type> query47MonthlyRankedTypes(TpcdsParquetTables tables)
+    {
+        Type salesType = tableColumnTypes(tables, "store_sales", List.of("ss_sales_price")).getFirst();
+        Type itemBrandType = tableColumnTypes(tables, "item", List.of("i_brand")).getFirst();
+        Type itemCategoryType = tableColumnTypes(tables, "item", List.of("i_category")).getFirst();
+        Type storeNameType = tableColumnTypes(tables, "store", List.of("s_store_name")).getFirst();
+        Type companyNameType = tableColumnTypes(tables, "store", List.of("s_company_name")).getFirst();
+        Type sumType = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType)).getFinalType();
+        return List.of(itemCategoryType, itemBrandType, storeNameType, companyNameType, INTEGER, INTEGER, sumType, BIGINT);
+    }
+
+    private List<Page> query47MonthlyRankedSalesPages(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        Type salesType = factTypes.get(3);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        Type itemBrandType = tableColumnTypes(tables, "item", List.of("i_brand")).getFirst();
+        Type itemCategoryType = tableColumnTypes(tables, "item", List.of("i_category")).getFirst();
+        Type storeNameType = tableColumnTypes(tables, "store", List.of("s_store_name")).getFirst();
+        Type companyNameType = tableColumnTypes(tables, "store", List.of("s_company_name")).getFirst();
+
+        List<Type> itemTypes = List.of(BIGINT, itemBrandType, itemCategoryType);
+        List<Type> dateTypes = List.of(BIGINT, INTEGER, INTEGER);
+        List<Type> storeTypes = List.of(BIGINT, storeNameType, companyNameType);
+        List<Type> projectedTypes = List.of(itemCategoryType, itemBrandType, storeNameType, companyNameType, INTEGER, INTEGER, salesType);
+        List<Type> groupedTypes = List.of(itemCategoryType, itemBrandType, storeNameType, companyNameType, INTEGER, INTEGER, salesSum.getFinalType());
+
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_brand", "i_category"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, itemBrandType), field(2, itemCategoryType)),
+                itemTypes);
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                Optional.of(query57DatePredicate()),
+                List.of(field(0, BIGINT), field(1, INTEGER), field(2, INTEGER)),
+                dateTypes);
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_store_name", "s_company_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, storeNameType), field(2, companyNameType)),
+                storeTypes);
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(47_0, factTypes, List.of(1), itemPages, itemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(47_1, concatTypes(factTypes, itemTypes), List.of(0), datePages, dateTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(47_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(2), storePages, storeTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                47_3,
+                                Optional.empty(),
+                                List.of(
+                                        field(6, itemCategoryType),
+                                        field(5, itemBrandType),
+                                        field(11, storeNameType),
+                                        field(12, companyNameType),
+                                        field(8, INTEGER),
+                                        field(9, INTEGER),
+                                        field(3, salesType)),
+                                projectedTypes)),
+                        factoryStep(hashAggregationFactory(
+                                47_4,
+                                List.of(itemCategoryType, itemBrandType, storeNameType, companyNameType, INTEGER, INTEGER),
+                                List.of(0, 1, 2, 3, 4, 5),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty()))),
+                        factoryStep(windowFactory(
+                                47_5,
+                                groupedTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6),
+                                List.of(0, 1, 2, 3),
+                                List.of(4, 5),
+                                List.of(ASC_NULLS_LAST, ASC_NULLS_LAST),
+                                List.of(rankWindowFunction())))));
     }
 
     private List<Page> query61SalesPages(TpcdsParquetTables tables, boolean promotionalOnly, int operatorIdBase)
