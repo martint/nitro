@@ -2107,6 +2107,75 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query30(TpcdsParquetTables tables)
+    {
+        Type stateType = query81StateType(tables);
+        List<Page> customerTotalReturnPages = query30CustomerTotalReturnPages(tables, 30_100);
+        List<Type> customerTotalReturnTypes = List.of(BIGINT, stateType, query30ReturnSumType(tables));
+        List<Page> stateAveragePages = query30StateAveragePages(tables);
+        List<Type> stateAverageTypes = List.of(stateType, query30StateAverageType(tables));
+
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_current_addr_sk", "c_customer_id", "c_salutation", "c_first_name", "c_last_name", "c_preferred_cust_flag", "c_birth_day", "c_birth_month", "c_birth_year", "c_birth_country", "c_login", "c_email_address", "c_last_review_date_sk"));
+        List<Page> customerPages = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_current_addr_sk", "c_customer_id", "c_salutation", "c_first_name", "c_last_name", "c_preferred_cust_flag", "c_birth_day", "c_birth_month", "c_birth_year", "c_birth_country", "c_login", "c_email_address", "c_last_review_date_sk"),
+                Optional.empty(),
+                identityProjections(customerTypes),
+                customerTypes);
+        List<Page> gaAddressPages = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_state"),
+                Optional.of(equal(1, stateType, "GA")),
+                identityProjections(List.of(BIGINT, stateType)),
+                List.of(BIGINT, stateType));
+
+        List<Type> afterAverageTypes = concatTypes(customerTotalReturnTypes, stateAverageTypes);
+        List<Type> afterCustomerTypes = concatTypes(afterAverageTypes, customerTypes);
+        List<Type> outputTypes = List.of(
+                customerTypes.get(2),
+                customerTypes.get(3),
+                customerTypes.get(4),
+                customerTypes.get(5),
+                customerTypes.get(6),
+                customerTypes.get(7),
+                customerTypes.get(8),
+                customerTypes.get(9),
+                customerTypes.get(10),
+                customerTypes.get(11),
+                customerTypes.get(12),
+                customerTypes.get(13),
+                customerTotalReturnTypes.get(2));
+
+        return executePagesPipeline(
+                customerTotalReturnPages,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(30_120, customerTotalReturnTypes, List.of(1), stateAveragePages, stateAverageTypes, List.of(0), JoinOperatorType.probeOuterJoin(false))),
+                        hashJoinStep(new HashJoinSpec(30_121, afterAverageTypes, List.of(0), customerPages, customerTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(30_122, afterCustomerTypes, List.of(6), gaAddressPages, List.of(BIGINT, stateType), List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                30_123,
+                                Optional.of(query81ThresholdPredicate(customerTotalReturnTypes.get(2), stateAverageTypes.get(1))),
+                                List.of(
+                                        field(7, customerTypes.get(2)),
+                                        field(8, customerTypes.get(3)),
+                                        field(9, customerTypes.get(4)),
+                                        field(10, customerTypes.get(5)),
+                                        field(11, customerTypes.get(6)),
+                                        field(12, customerTypes.get(7)),
+                                        field(13, customerTypes.get(8)),
+                                        field(14, customerTypes.get(9)),
+                                        field(15, customerTypes.get(10)),
+                                        field(16, customerTypes.get(11)),
+                                        field(17, customerTypes.get(12)),
+                                        field(18, customerTypes.get(13)),
+                                        field(2, customerTotalReturnTypes.get(2))),
+                                outputTypes)),
+                        factoryStep(topNFactory(30_124, outputTypes, 100, List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                outputTypes);
+    }
+
     public MaterializedResult query81(TpcdsParquetTables tables)
     {
         Type stateType = query81StateType(tables);
@@ -3178,6 +3247,71 @@ public final class TrinoTpcdsParquetSupport
                                 average.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
     }
 
+    private List<Page> query30CustomerTotalReturnPages(TpcdsParquetTables tables, int operatorIdBase)
+    {
+        List<String> returnColumns = List.of("wr_returning_customer_sk", "wr_returned_date_sk", "wr_returning_addr_sk", "wr_return_amt");
+        List<Type> returnTypes = tableColumnTypes(tables, "web_returns", returnColumns);
+        Type returnAmountType = returnTypes.get(3);
+        Type stateType = query81StateType(tables);
+        TestingAggregationFunction returnSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(returnAmountType));
+
+        return executePipelinePages(
+                tables.tableFiles("web_returns"),
+                returnColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase,
+                                returnTypes,
+                                List.of(1),
+                                relationPages(
+                                        tables,
+                                        "date_dim",
+                                        List.of("d_date_sk", "d_year"),
+                                        Optional.of(equal(1, 2002, INTEGER)),
+                                        List.of(field(0, BIGINT)),
+                                        List.of(BIGINT)),
+                                List.of(BIGINT),
+                                List.of(0))),
+                        hashJoinStep(new HashJoinSpec(
+                                operatorIdBase + 1,
+                                concatTypes(returnTypes, List.of(BIGINT)),
+                                List.of(2),
+                                relationPages(
+                                        tables,
+                                        "customer_address",
+                                        List.of("ca_address_sk", "ca_state"),
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(1, stateType)),
+                                        List.of(BIGINT, stateType)),
+                                List.of(BIGINT, stateType),
+                                List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                operatorIdBase + 2,
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(6, stateType), field(3, returnAmountType)),
+                                List.of(BIGINT, stateType, returnAmountType))),
+                        factoryStep(hashAggregationFactory(
+                                operatorIdBase + 3,
+                                List.of(BIGINT, stateType),
+                                List.of(0, 1),
+                                returnSum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
+    private List<Page> query30StateAveragePages(TpcdsParquetTables tables)
+    {
+        Type stateType = query81StateType(tables);
+        Type returnSumType = query30ReturnSumType(tables);
+        TestingAggregationFunction average = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(returnSumType));
+        return executePipelinePages(
+                query30CustomerTotalReturnPages(tables, 30_110),
+                List.of(
+                        factoryStep(hashAggregationFactory(
+                                30_114,
+                                List.of(stateType),
+                                List.of(1),
+                                average.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
     private Type query81StateType(TpcdsParquetTables tables)
     {
         return tableColumnTypes(tables, "customer_address", List.of("ca_state")).getFirst();
@@ -3192,6 +3326,17 @@ public final class TrinoTpcdsParquetSupport
     private Type query81StateAverageType(TpcdsParquetTables tables)
     {
         return FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(query81ReturnSumType(tables))).getFinalType();
+    }
+
+    private Type query30ReturnSumType(TpcdsParquetTables tables)
+    {
+        Type returnAmountType = tableColumnTypes(tables, "web_returns", List.of("wr_return_amt")).getFirst();
+        return FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(returnAmountType)).getFinalType();
+    }
+
+    private Type query30StateAverageType(TpcdsParquetTables tables)
+    {
+        return FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(query30ReturnSumType(tables))).getFinalType();
     }
 
     private List<Page> query97ChannelPages(TpcdsParquetTables tables, String salesTable, String customerColumn, String itemColumn, String soldDateColumn, int operatorIdBase)
