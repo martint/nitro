@@ -17,6 +17,7 @@ Supported parquet-backed queries today:
 - `Q09`
 - `Q10`
 - `Q23`
+- `Q24`
 - `Q30`
 - `Q35`
 - `Q41`
@@ -211,7 +212,7 @@ Status:
 
 Queries include:
 
-- `Q06`, `Q09`, `Q23`, `Q24`, `Q28`, `Q30`, `Q44`,
+- `Q06`, `Q09`, `Q23`, `Q28`, `Q30`, `Q44`,
   `Q54`, `Q61`, `Q77`, `Q81`, `Q92`
 
 Status:

@@ -309,6 +309,40 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorHandlesDictionaryEncodedGroupNulls()
+    {
+        Allocator allocator = new Allocator();
+        DictionaryVector groupNulls = new DictionaryVector(new int[] {0, 1, 0}, new BooleanVector(new boolean[] {false, true}));
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                0,
+                List.of(new Sum(1), new CountAll()),
+                new TableOperator(
+                        2,
+                        List.of(new TableOperator.Page(
+                                3,
+                                new Streams[] {
+                                        Streams.builder()
+                                                .put(Stream.VALUES, new I64Vector(new long[] {1L, 1L, 2L}))
+                                                .put(Stream.NULLS, groupNulls)
+                                                .build(),
+                                        Streams.ofValues(new I64Vector(new long[] {10L, 20L, 30L}))},
+                                Mask.all(3)))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        assertThat(rowCount).isEqualTo(3);
+        boolean[] groupedNulls = Arrays.copyOf(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values(), rowCount);
+        int nullCount = 0;
+        for (boolean value : groupedNulls) {
+            if (value) {
+                nullCount++;
+            }
+        }
+        assertThat(nullCount).isEqualTo(1);
+    }
+
+    @Test
     void testFullJoinOperatorNullExtendsUnmatchedRows()
     {
         Allocator allocator = new Allocator();

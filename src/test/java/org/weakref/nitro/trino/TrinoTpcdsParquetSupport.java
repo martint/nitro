@@ -2259,6 +2259,59 @@ public final class TrinoTpcdsParquetSupport
                 List.of(sum.getFinalType()));
     }
 
+    public MaterializedResult query24(TpcdsParquetTables tables)
+    {
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"));
+        Type lastNameType = customerTypes.get(1);
+        Type firstNameType = customerTypes.get(2);
+        List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"));
+        Type storeNameType = storeTypes.get(2);
+        Type ssalesInputType = createDecimalType(19, 2);
+        Type preAggregatedRevenueType = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(ssalesInputType)).getFinalType();
+        Type revenueType = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(preAggregatedRevenueType)).getFinalType();
+        TestingAggregationFunction groupedSalesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(revenueType));
+        Type groupedRevenueType = groupedSalesSum.getFinalType();
+        TestingAggregationFunction revenueCount = FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(revenueType));
+        List<Type> groupedTypes = List.of(lastNameType, firstNameType, storeNameType, groupedRevenueType);
+        List<Type> scalarTypes = List.of(groupedRevenueType, BIGINT);
+
+        List<Page> groupedSalesPages = executePipelinePages(
+                query24SalesPages(tables, Optional.of("pale")),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                24_100,
+                                Optional.empty(),
+                                List.of(field(0, lastNameType), field(1, firstNameType), field(2, storeNameType), field(10, revenueType)),
+                                groupedTypes)),
+                        factoryStep(hashAggregationFactory(
+                                24_101,
+                                List.of(lastNameType, firstNameType, storeNameType),
+                                List.of(0, 1, 2),
+                                groupedSalesSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))));
+        List<Page> averageSalesPages = executePipelinePages(
+                query24AverageSalesPages(tables),
+                List.of(factoryStep(aggregationFactory(
+                        24_110,
+                        groupedSalesSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
+                        revenueCount.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))));
+
+        MaterializedResult fullResult = executePagesPipeline(
+                executeNestedLoopPages(groupedSalesPages, groupedTypes, averageSalesPages, scalarTypes),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                24_120,
+                                Optional.of(query24ThresholdPredicate(groupedRevenueType)),
+                                List.of(field(0, lastNameType), field(1, firstNameType), field(2, storeNameType), field(3, groupedRevenueType)),
+                                groupedTypes)),
+                        factoryStep(topNFactory(24_121, groupedTypes, 100, List.of(0, 1, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                groupedTypes);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(taskContext().getSession(), groupedTypes);
+        for (io.trino.testing.MaterializedRow row : fullResult.getMaterializedRows()) {
+            result.row(row.getField(0), row.getField(1), row.getField(2), row.getField(3));
+        }
+        return result.build();
+    }
+
     public MaterializedResult query14(TpcdsParquetTables tables)
     {
         List<Page> crossItemPages = query14CrossItemPages(tables);
@@ -4011,6 +4064,190 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(salesType)))));
     }
 
+    private List<Page> query24SalesPages(TpcdsParquetTables tables, Optional<String> colorFilter)
+    {
+        Type widenedItemPriceType = createDecimalType(19, 2);
+        List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"));
+        List<Type> filteredStoreTypes = List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT);
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id"));
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"));
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_zip", "ca_state", "ca_country"));
+        RowExpression upperCountry = upper(field(2, addressTypes.get(2)));
+        List<Type> projectedAddressTypes = List.of(BIGINT, upperCountry.type(), addressTypes.get(1));
+        Type preAggregatedRevenueType = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(createDecimalType(19, 2))).getFinalType();
+        TestingAggregationFunction groupedRevenueSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(preAggregatedRevenueType));
+
+        List<Type> customerStoreItemTypes = List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), BIGINT, BIGINT, preAggregatedRevenueType);
+        List<Type> afterStoreTypes = concatTypes(customerStoreItemTypes, filteredStoreTypes);
+        List<Type> afterItemTypes = concatTypes(afterStoreTypes, itemTypes);
+
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"),
+                Optional.of(equal(1, 8, INTEGER)),
+                List.of(field(0, storeTypes.get(0)), field(2, storeTypes.get(2)), field(3, storeTypes.get(3)), cast(field(4, storeTypes.get(4)), storeTypes.get(4), BIGINT)),
+                filteredStoreTypes);
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id"),
+                colorFilter.map(color -> equal(field(3, itemTypes.get(3)), constant(Slices.utf8Slice(color), itemTypes.get(3)), itemTypes.get(3))),
+                identityProjections(itemTypes),
+                itemTypes);
+        List<Page> addressPages = query24AddressLookupPages(tables);
+
+        List<Page> customerStoreItemPages = query24CustomerStoreItemPages(tables);
+        List<PipelineStep> steps = new ArrayList<>(List.of(
+                hashJoinStep(new HashJoinSpec(24_01, customerStoreItemTypes, List.of(3), storePages, filteredStoreTypes, List.of(0))),
+                hashJoinStep(new HashJoinSpec(24_02, afterStoreTypes, List.of(4), itemPages, itemTypes, List.of(0)))));
+        steps.add(hashJoinStep(new HashJoinSpec(24_04, afterItemTypes, List.of(9), addressPages, projectedAddressTypes, List.of(0))));
+        steps.add(factoryStep(filterAndProjectFactory(
+                24_045,
+                Optional.of(equal(field(2, customerTypes.get(3)), field(17, projectedAddressTypes.get(1)), projectedAddressTypes.get(1))),
+                List.of(
+                        field(0, customerTypes.get(1)),
+                        field(1, customerTypes.get(2)),
+                        field(7, filteredStoreTypes.get(1)),
+                        field(18, projectedAddressTypes.get(2)),
+                        field(8, filteredStoreTypes.get(2)),
+                        field(13, itemTypes.get(3)),
+                        cast(field(11, itemTypes.get(1)), itemTypes.get(1), widenedItemPriceType),
+                        field(15, itemTypes.get(5)),
+                        field(14, itemTypes.get(4)),
+                        field(12, itemTypes.get(2)),
+                        field(5, preAggregatedRevenueType)),
+                List.of(customerTypes.get(1), customerTypes.get(2), filteredStoreTypes.get(1), projectedAddressTypes.get(2), filteredStoreTypes.get(2), itemTypes.get(3), widenedItemPriceType, itemTypes.get(5), itemTypes.get(4), itemTypes.get(2), preAggregatedRevenueType))));
+        steps.add(factoryStep(hashAggregationFactory(
+                24_05,
+                List.of(customerTypes.get(1), customerTypes.get(2), filteredStoreTypes.get(1), projectedAddressTypes.get(2), filteredStoreTypes.get(2), itemTypes.get(3), widenedItemPriceType, itemTypes.get(5), itemTypes.get(4), itemTypes.get(2)),
+                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+                groupedRevenueSum.createAggregatorFactory(Step.SINGLE, List.of(10), OptionalInt.empty()))));
+        return executePipelinePages(customerStoreItemPages, steps);
+    }
+
+    private List<Page> query24AverageSalesPages(TpcdsParquetTables tables)
+    {
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"));
+        Type preAggregatedRevenueType = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(createDecimalType(19, 2))).getFinalType();
+        TestingAggregationFunction groupedRevenueSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(preAggregatedRevenueType));
+        List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"));
+        List<Type> slimStoreTypes = List.of(storeTypes.get(0), BIGINT);
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_zip", "ca_state", "ca_country"));
+        RowExpression upperCountry = upper(field(2, addressTypes.get(2)));
+        List<Type> projectedAddressTypes = List.of(BIGINT, upperCountry.type(), addressTypes.get(1));
+
+        List<Type> customerStoreItemTypes = List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), BIGINT, BIGINT, preAggregatedRevenueType);
+        List<Type> afterStoreTypes = concatTypes(customerStoreItemTypes, slimStoreTypes);
+
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"),
+                Optional.of(equal(1, 8, INTEGER)),
+                List.of(field(0, storeTypes.get(0)), cast(field(4, storeTypes.get(4)), storeTypes.get(4), BIGINT)),
+                slimStoreTypes);
+        List<Page> addressPages = query24AddressLookupPages(tables);
+
+        return executePipelinePages(
+                query24CustomerStoreItemPages(tables),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(24_207, customerStoreItemTypes, List.of(3), storePages, slimStoreTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(24_209, afterStoreTypes, List.of(7), addressPages, projectedAddressTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                24_210,
+                                Optional.of(equal(field(2, customerTypes.get(3)), field(9, projectedAddressTypes.get(1)), projectedAddressTypes.get(1))),
+                                List.of(
+                                        field(0, customerTypes.get(1)),
+                                        field(1, customerTypes.get(2)),
+                                        field(10, projectedAddressTypes.get(2)),
+                                        field(3, BIGINT),
+                                        field(4, BIGINT),
+                                        field(5, preAggregatedRevenueType)),
+                                List.of(customerTypes.get(1), customerTypes.get(2), projectedAddressTypes.get(2), BIGINT, BIGINT, preAggregatedRevenueType))),
+                        factoryStep(hashAggregationFactory(
+                                24_211,
+                                List.of(customerTypes.get(1), customerTypes.get(2), projectedAddressTypes.get(2), BIGINT, BIGINT),
+                                List.of(0, 1, 2, 3, 4),
+                                groupedRevenueSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))));
+    }
+
+    private List<Page> query24CustomerStoreItemPages(TpcdsParquetTables tables)
+    {
+        List<Type> salesTypes = tableColumnTypes(tables, "store_sales", List.of("ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid"));
+        Type salesPriceType = salesTypes.get(4);
+        Type widenedSalesType = createDecimalType(19, 2);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(widenedSalesType));
+        List<Type> returnsTypes = tableColumnTypes(tables, "store_returns", List.of("sr_ticket_number", "sr_item_sk"));
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"));
+        List<Type> afterReturnsTypes = concatTypes(salesTypes, returnsTypes);
+
+        List<Page> returnsPages = relationPages(
+                tables,
+                "store_returns",
+                List.of("sr_ticket_number", "sr_item_sk"),
+                Optional.empty(),
+                identityProjections(returnsTypes),
+                returnsTypes);
+        List<Page> customerPages = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"),
+                Optional.empty(),
+                identityProjections(customerTypes),
+                customerTypes);
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(24_000, salesTypes, List.of(0, 1), returnsPages, returnsTypes, List.of(0, 1))),
+                        hashJoinStep(new HashJoinSpec(24_003, afterReturnsTypes, List.of(2), customerPages, customerTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                24_001,
+                                Optional.empty(),
+                                List.of(
+                                        field(8, customerTypes.get(1)),
+                                        field(9, customerTypes.get(2)),
+                                        field(10, customerTypes.get(3)),
+                                        field(3, BIGINT),
+                                        field(1, BIGINT),
+                                        cast(field(4, salesPriceType), salesPriceType, widenedSalesType)),
+                                List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), BIGINT, BIGINT, widenedSalesType))),
+                        factoryStep(hashAggregationFactory(
+                                24_002,
+                                List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), BIGINT, BIGINT),
+                                List.of(0, 1, 2, 3, 4),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))));
+    }
+
+    private List<Page> query24AddressLookupPages(TpcdsParquetTables tables)
+    {
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_zip", "ca_state", "ca_country"));
+        RowExpression upperCountry = upper(field(2, addressTypes.get(2)));
+        List<Type> projectedAddressTypes = List.of(BIGINT, upperCountry.type(), addressTypes.get(1));
+        List<Page> rawAddressPages = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_zip", "ca_state", "ca_country"),
+                Optional.empty(),
+                List.of(cast(field(0, addressTypes.get(0)), addressTypes.get(0), BIGINT), upperCountry, field(1, addressTypes.get(1))),
+                projectedAddressTypes);
+        return executePipelinePages(
+                rawAddressPages,
+                List.of(
+                        factoryStep(hashAggregationFactory(
+                                24_012,
+                                projectedAddressTypes,
+                                List.of(0, 1, 2),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                        factoryStep(filterAndProjectFactory(
+                                24_013,
+                                Optional.empty(),
+                                List.of(field(0, projectedAddressTypes.get(0)), field(1, projectedAddressTypes.get(1)), field(2, projectedAddressTypes.get(2))),
+                                projectedAddressTypes))));
+    }
+
     private Type query81StateType(TpcdsParquetTables tables)
     {
         return tableColumnTypes(tables, "customer_address", List.of("ca_state")).getFirst();
@@ -4636,6 +4873,13 @@ public final class TrinoTpcdsParquetSupport
                 List.of(value, constant(start, BIGINT), constant(length, BIGINT)));
     }
 
+    private static RowExpression upper(RowExpression value)
+    {
+        return new CallExpression(
+                FUNCTION_RESOLUTION.resolveFunction("upper", fromTypes(value.type())),
+                List.of(value));
+    }
+
     private static RowExpression query45ItemPredicate()
     {
         return or(
@@ -4733,6 +4977,17 @@ public final class TrinoTpcdsParquetSupport
                 cast(field(3, salesType), salesType, averageType),
                 field(5, averageType),
                 averageType);
+    }
+
+    private static RowExpression query24ThresholdPredicate(Type salesType)
+    {
+        Type countType = createDecimalType(19, 0);
+        Type factorType = createDecimalType(2, 0);
+        RowExpression count = cast(field(5, BIGINT), BIGINT, countType);
+        RowExpression scaledSales = multiply(
+                multiply(field(3, salesType), count),
+                constant(20L, factorType));
+        return greaterThan(scaledSales, field(4, salesType));
     }
 
     private static RowExpression query01ReturnThresholdPredicate()

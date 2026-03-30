@@ -80,12 +80,12 @@ final class GroupingState
 
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
     {
-        assignGroups(new Vector[] {values}, new BooleanVector[] {(BooleanVector) nulls}, mask, result);
+        assignGroups(new Vector[] {values}, new Vector[] {nulls}, mask, result);
     }
 
-    public boolean contains(Vector values, BooleanVector nulls, int position)
+    public boolean contains(Vector values, Vector nulls, int position)
     {
-        initializeIfNecessary(new Vector[] {values}, new BooleanVector[] {nulls});
+        initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});
         if (OperatorVectorSupport.isNull(nulls, position)) {
             return false;
         }
@@ -100,13 +100,13 @@ final class GroupingState
         return key != null && groups.getLong(key) != -1;
     }
 
-    public void initializeSchema(Vector[] values, BooleanVector[] nulls)
+    public void initializeSchema(Vector[] values, Vector[] nulls)
     {
         initializeIfNecessary(values, nulls);
     }
 
     @SuppressWarnings("unchecked")
-    public void assignGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    public void assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         initializeIfNecessary(values, nulls);
         if (useLongGrouping) {
@@ -143,7 +143,7 @@ final class GroupingState
         }
     }
 
-    private void initializeIfNecessary(Vector[] values, BooleanVector[] nulls)
+    private void initializeIfNecessary(Vector[] values, Vector[] nulls)
     {
         if (initialized) {
             return;
@@ -202,10 +202,10 @@ final class GroupingState
         }
     }
 
-    private void assignFlatGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         if (nulls.length == 1) {
-            BooleanVector nullVector = nulls[0];
+            Vector nullVector = nulls[0];
             for (int position : mask) {
                 if (OperatorVectorSupport.isNull(nullVector, position)) {
                     result.values()[position] = nullGroup();
@@ -237,7 +237,7 @@ final class GroupingState
         }
     }
 
-    private void assignLongGroups(Vector values, BooleanVector nullVector, Mask mask, I64Vector result)
+    private void assignLongGroups(Vector values, Vector nullVector, Mask mask, I64Vector result)
     {
         for (int position : mask) {
             if (OperatorVectorSupport.isNull(nullVector, position)) {
@@ -257,7 +257,7 @@ final class GroupingState
         }
     }
 
-    private void assignLongPairGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    private void assignLongPairGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
             if (hasNull(nulls, position)) {
@@ -278,7 +278,7 @@ final class GroupingState
         }
     }
 
-    private void assignLongQuadGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    private void assignLongQuadGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
             if (hasNull(nulls, position)) {
@@ -303,7 +303,7 @@ final class GroupingState
         }
     }
 
-    private void assignLongTripleGroups(Vector[] values, BooleanVector[] nulls, Mask mask, I64Vector result)
+    private void assignLongTripleGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
             if (hasNull(nulls, position)) {
@@ -326,7 +326,7 @@ final class GroupingState
         }
     }
 
-    private void assignDictionaryGroups(DictionaryVector dictionary, BooleanVector nullVector, Mask mask, I64Vector result)
+    private void assignDictionaryGroups(DictionaryVector dictionary, Vector nullVector, Mask mask, I64Vector result)
     {
         int[] ids = dictionary.ids();
         Vector dictionaryValues = dictionary.values();
@@ -552,9 +552,9 @@ final class GroupingState
         return nullGroup;
     }
 
-    private static boolean hasNull(BooleanVector[] nulls, int position)
+    private static boolean hasNull(Vector[] nulls, int position)
     {
-        for (BooleanVector nullVector : nulls) {
+        for (Vector nullVector : nulls) {
             if (OperatorVectorSupport.isNull(nullVector, position)) {
                 return true;
             }
@@ -562,9 +562,9 @@ final class GroupingState
         return false;
     }
 
-    private static boolean hasNullableKeys(BooleanVector[] nulls)
+    private static boolean hasNullableKeys(Vector[] nulls)
     {
-        for (BooleanVector nullVector : nulls) {
+        for (Vector nullVector : nulls) {
             if (nullVector != null) {
                 return true;
             }

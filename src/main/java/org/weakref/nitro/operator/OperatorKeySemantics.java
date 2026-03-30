@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 
@@ -34,7 +33,7 @@ final class OperatorKeySemantics
         return requireHandler(values).reusableProbeKey();
     }
 
-    public static Key probeKey(Vector values, BooleanVector nulls, int position, Key reusable)
+    public static Key probeKey(Vector values, Vector nulls, int position, Key reusable)
     {
         if (OperatorVectorSupport.isNull(nulls, position)) {
             return null;

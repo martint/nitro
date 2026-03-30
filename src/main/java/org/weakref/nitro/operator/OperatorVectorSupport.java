@@ -41,6 +41,11 @@ final class OperatorVectorSupport
         return nulls != null && nulls.values()[position];
     }
 
+    public static boolean isNull(Vector nulls, int position)
+    {
+        return nulls != null && booleanValue(nulls, position);
+    }
+
     public static Vector flatten(Vector vector)
     {
         return switch (vector) {

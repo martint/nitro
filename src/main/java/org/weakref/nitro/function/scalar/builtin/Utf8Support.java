@@ -26,6 +26,11 @@ final class Utf8Support
         return substring(vector.data(), vector.startOffset(position), vector.length(position), start, length);
     }
 
+    public static byte[] upper(BinaryVector vector, int position)
+    {
+        return upper(vector.data(), vector.startOffset(position), vector.length(position));
+    }
+
     public static byte[] substring(byte[] data, int offset, int length, long start, long count)
     {
         if (count <= 0 || length <= 0) {
@@ -49,6 +54,25 @@ final class Utf8Support
         return java.util.Arrays.copyOfRange(data, startOffset, endOffset);
     }
 
+    public static byte[] upper(byte[] data, int offset, int length)
+    {
+        if (length <= 0) {
+            return new byte[0];
+        }
+
+        int end = offset + length;
+        byte[] output = new byte[length * 4];
+        int outputOffset = 0;
+        int inputOffset = offset;
+        while (inputOffset < end) {
+            int codePoint = codePoint(data, inputOffset, end);
+            inputOffset = nextCodePointOffset(data, inputOffset, end);
+            int upperCodePoint = Character.toUpperCase(codePoint);
+            outputOffset = appendCodePoint(output, outputOffset, upperCodePoint);
+        }
+        return java.util.Arrays.copyOf(output, outputOffset);
+    }
+
     public static int javaStringHash(BinaryVector vector, int position)
     {
         byte[] data = vector.data();
@@ -56,31 +80,8 @@ final class Utf8Support
         int end = vector.endOffset(position);
         int hash = 0;
         while (offset < end) {
-            int firstByte = Byte.toUnsignedInt(data[offset++]);
-            if (firstByte < 0x80) {
-                hash = 31 * hash + firstByte;
-                continue;
-            }
-
-            int codePoint;
-            if ((firstByte & 0xE0) == 0xC0) {
-                codePoint = ((firstByte & 0x1F) << 6) | continuation(data, offset++, end);
-            }
-            else if ((firstByte & 0xF0) == 0xE0) {
-                codePoint = ((firstByte & 0x0F) << 12) |
-                        (continuation(data, offset++, end) << 6) |
-                        continuation(data, offset++, end);
-            }
-            else if ((firstByte & 0xF8) == 0xF0) {
-                codePoint = ((firstByte & 0x07) << 18) |
-                        (continuation(data, offset++, end) << 12) |
-                        (continuation(data, offset++, end) << 6) |
-                        continuation(data, offset++, end);
-            }
-            else {
-                throw new IllegalArgumentException("Invalid UTF-8 leading byte: " + firstByte);
-            }
-
+            int codePoint = codePoint(data, offset, end);
+            offset = nextCodePointOffset(data, offset, end);
             if (codePoint < 0x10000) {
                 hash = 31 * hash + codePoint;
                 continue;
@@ -93,6 +94,53 @@ final class Utf8Support
             hash = 31 * hash + lowSurrogate;
         }
         return hash;
+    }
+
+    private static int codePoint(byte[] data, int offset, int end)
+    {
+        int firstByte = Byte.toUnsignedInt(data[offset++]);
+        if (firstByte < 0x80) {
+            return firstByte;
+        }
+        if ((firstByte & 0xE0) == 0xC0) {
+            return ((firstByte & 0x1F) << 6) | continuation(data, offset++, end);
+        }
+        if ((firstByte & 0xF0) == 0xE0) {
+            return ((firstByte & 0x0F) << 12) |
+                    (continuation(data, offset++, end) << 6) |
+                    continuation(data, offset++, end);
+        }
+        if ((firstByte & 0xF8) == 0xF0) {
+            return ((firstByte & 0x07) << 18) |
+                    (continuation(data, offset++, end) << 12) |
+                    (continuation(data, offset++, end) << 6) |
+                    continuation(data, offset++, end);
+        }
+        throw new IllegalArgumentException("Invalid UTF-8 leading byte: " + firstByte);
+    }
+
+    private static int appendCodePoint(byte[] output, int offset, int codePoint)
+    {
+        if (codePoint < 0x80) {
+            output[offset] = (byte) codePoint;
+            return offset + 1;
+        }
+        if (codePoint < 0x800) {
+            output[offset] = (byte) (0xC0 | (codePoint >>> 6));
+            output[offset + 1] = (byte) (0x80 | (codePoint & 0x3F));
+            return offset + 2;
+        }
+        if (codePoint < 0x10000) {
+            output[offset] = (byte) (0xE0 | (codePoint >>> 12));
+            output[offset + 1] = (byte) (0x80 | ((codePoint >>> 6) & 0x3F));
+            output[offset + 2] = (byte) (0x80 | (codePoint & 0x3F));
+            return offset + 3;
+        }
+        output[offset] = (byte) (0xF0 | (codePoint >>> 18));
+        output[offset + 1] = (byte) (0x80 | ((codePoint >>> 12) & 0x3F));
+        output[offset + 2] = (byte) (0x80 | ((codePoint >>> 6) & 0x3F));
+        output[offset + 3] = (byte) (0x80 | (codePoint & 0x3F));
+        return offset + 4;
     }
 
     private static int continuation(byte[] data, int offset, int end)

@@ -284,6 +284,9 @@ public class HashJoinOperator
         if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
             return new LongJoinIndex(Math.max(16, joinValues[0].length()));
         }
+        if (joinValues.length == 2 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1])) {
+            return new LongPairJoinIndex(Math.max(16, joinValues[0].length()));
+        }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues);
         if (layout != null) {
             return new FlatJoinIndex(layout);
@@ -781,6 +784,124 @@ public class HashJoinOperator
                 }
             }
             return false;
+        }
+    }
+
+    private static final class LongPairJoinIndex
+            implements JoinIndex
+    {
+        private static final float LOAD_FACTOR = 0.75f;
+
+        private long[] firstKeys;
+        private long[] secondKeys;
+        private LongArrayList[] rowsBySlot;
+        private int mask;
+        private int maxFill;
+        private int size;
+
+        private LongPairJoinIndex(int expectedSize)
+        {
+            int capacity = 16;
+            while (capacity < expectedSize / LOAD_FACTOR) {
+                capacity <<= 1;
+            }
+            firstKeys = new long[capacity];
+            secondKeys = new long[capacity];
+            rowsBySlot = new LongArrayList[capacity];
+            mask = capacity - 1;
+            maxFill = (int) (capacity * LOAD_FACTOR);
+        }
+
+        @Override
+        public boolean isEmpty()
+        {
+            return size == 0;
+        }
+
+        @Override
+        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        {
+            if (FlatJoinIndex.hasNull(nulls, position)) {
+                return;
+            }
+
+            long first = OperatorVectorSupport.longValue(values[0], position);
+            long second = OperatorVectorSupport.longValue(values[1], position);
+            int slot = findSlot(first, second);
+            LongArrayList rows = rowsBySlot[slot];
+            if (rows == null) {
+                firstKeys[slot] = first;
+                secondKeys[slot] = second;
+                rows = new LongArrayList();
+                rowsBySlot[slot] = rows;
+                size++;
+                if (size >= maxFill) {
+                    rehash();
+                    slot = findSlot(first, second);
+                    rows = rowsBySlot[slot];
+                }
+            }
+            rows.add(rowReference);
+        }
+
+        @Override
+        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            if (FlatJoinIndex.hasNull(nulls, position)) {
+                return LongLists.emptyList();
+            }
+
+            long first = OperatorVectorSupport.longValue(values[0], position);
+            long second = OperatorVectorSupport.longValue(values[1], position);
+            int slot = findSlot(first, second);
+            LongArrayList rows = rowsBySlot[slot];
+            if (rows == null || firstKeys[slot] != first || secondKeys[slot] != second) {
+                return LongLists.emptyList();
+            }
+            return rows;
+        }
+
+        private int findSlot(long first, long second)
+        {
+            int slot = mix(first, second) & mask;
+            while (rowsBySlot[slot] != null && (firstKeys[slot] != first || secondKeys[slot] != second)) {
+                slot = (slot + 1) & mask;
+            }
+            return slot;
+        }
+
+        private void rehash()
+        {
+            long[] previousFirstKeys = firstKeys;
+            long[] previousSecondKeys = secondKeys;
+            LongArrayList[] previousRowsBySlot = rowsBySlot;
+            int capacity = previousRowsBySlot.length * 2;
+
+            firstKeys = new long[capacity];
+            secondKeys = new long[capacity];
+            rowsBySlot = new LongArrayList[capacity];
+            mask = capacity - 1;
+            maxFill = (int) (capacity * LOAD_FACTOR);
+            size = 0;
+
+            for (int index = 0; index < previousRowsBySlot.length; index++) {
+                LongArrayList rows = previousRowsBySlot[index];
+                if (rows == null) {
+                    continue;
+                }
+                int slot = findSlot(previousFirstKeys[index], previousSecondKeys[index]);
+                firstKeys[slot] = previousFirstKeys[index];
+                secondKeys[slot] = previousSecondKeys[index];
+                rowsBySlot[slot] = rows;
+                size++;
+            }
+        }
+
+        private static int mix(long first, long second)
+        {
+            long hash = 31 * Long.hashCode(first) + Long.hashCode(second);
+            hash ^= (hash >>> 16);
+            return (int) hash;
         }
     }
 

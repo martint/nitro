@@ -23,6 +23,7 @@ import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
 import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI32;
+import org.weakref.nitro.function.scalar.builtin.CastUtf8ToI64;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
@@ -55,6 +56,7 @@ import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
+import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.util.List;
@@ -75,6 +77,7 @@ public final class TestPrimitiveFunctions
                 ArraySumI64.class,
                 Cardinality.class,
                 CastI64ToI32.class,
+                CastUtf8ToI64.class,
                 ConcatUtf8.class,
                 ContainsUtf8.class,
                 ExtractHostUtf8.class,
@@ -108,7 +111,8 @@ public final class TestPrimitiveFunctions
                 OrBoolean.class,
                 RegexpReplaceUtf8.class,
                 StartsWithUtf8.class,
-                SubstringUtf8.class)) {
+                SubstringUtf8.class,
+                UpperUtf8.class)) {
             primitiveRegistry.register(scalarRegistry.register(functionClass));
         }
         return primitiveRegistry;

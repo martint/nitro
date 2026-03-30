@@ -400,6 +400,80 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testUpperUtf8ProjectsUppercaseBytes()
+    {
+        Variable upper = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        upper,
+                        new Call("upper_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(upper, Stream.VALUES),
+                        new Reference(upper, Stream.NULLS)));
+
+        BinaryVector input = new BinaryVector(3, 32);
+        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        input.setBytes(0, "mixed".getBytes(UTF_8));
+        input.setBytes(1, "mañana".getBytes(UTF_8));
+        input.setNull(2);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, true});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), input,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Streams valuesResult = evaluator.evaluate(new Reference(upper, Stream.VALUES), Mask.all(3));
+        Streams nullsResult = evaluator.evaluate(new Reference(upper, Stream.NULLS), Mask.all(3));
+
+        BinaryVector values = (BinaryVector) valuesResult.get(Stream.VALUES);
+        BooleanVector resultNulls = (BooleanVector) nullsResult.get(Stream.NULLS);
+        assertThat(utf8(values, 0)).isEqualTo("MIXED");
+        assertThat(utf8(values, 1)).isEqualTo("MAÑANA");
+        assertThat(resultNulls.values()).containsExactly(false, false, true);
+    }
+
+    @Test
+    void testCastUtf8ToI64ParsesSignedDigits()
+    {
+        Variable cast = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        cast,
+                        new Call("cast_utf8_to_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(cast, Stream.VALUES),
+                        new Reference(cast, Stream.NULLS)));
+
+        BinaryVector input = new BinaryVector(3, 16);
+        input.setBytes(0, "12345".getBytes(UTF_8));
+        input.setBytes(1, "-7".getBytes(UTF_8));
+        input.setNull(2);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, true});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), input,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Streams valuesResult = evaluator.evaluate(new Reference(cast, Stream.VALUES), Mask.all(3));
+        Streams nullsResult = evaluator.evaluate(new Reference(cast, Stream.NULLS), Mask.all(3));
+
+        I64Vector values = (I64Vector) valuesResult.get(Stream.VALUES);
+        BooleanVector resultNulls = (BooleanVector) nullsResult.get(Stream.NULLS);
+        assertThat(values.values()).containsExactly(12345L, -7L, 0L);
+        assertThat(resultNulls.values()).containsExactly(false, false, true);
+    }
+
+    @Test
     void testStructFieldCombinesParentAndChildNulls()
     {
         Variable name = new Variable(0);

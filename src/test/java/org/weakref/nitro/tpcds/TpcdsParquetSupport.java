@@ -759,6 +759,27 @@ final class TpcdsParquetSupport
                 new UnionAllOperator(1, List.of(catalog, web)));
     }
 
+    public static Operator query24(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator groupedSales = query24Sales(allocator, primitiveRegistry, tables, "pale");
+        groupedSales = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new Sum(10)),
+                groupedSales);
+
+        Operator averageSales = query24AverageSales(allocator, primitiveRegistry, tables);
+        averageSales = new AggregationOperator(
+                allocator,
+                List.of(new Sum(5), new CountColumn(5)),
+                averageSales);
+
+        Operator joined = new NestedLoopJoinOperator(allocator, groupedSales, averageSales);
+        joined = filter(allocator, primitiveRegistry, joined, query24ThresholdPredicate(3, 4, 5));
+        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3);
+        return new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined);
+    }
+
     public static Operator query81(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator customerTotalReturn = query81CustomerTotalReturn(allocator, primitiveRegistry, tables);
@@ -1825,6 +1846,175 @@ final class TpcdsParquetSupport
         return projectQuery14ChannelOutput(allocator, primitiveRegistry, branch, channelName);
     }
 
+    private static Operator query24Sales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String colorFilter)
+    {
+        Operator sales = query24CustomerStoreItemSales(allocator, primitiveRegistry, tables);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                3,
+                projectQuery24StoreDetails(
+                        allocator,
+                        primitiveRegistry,
+                        filteredProjectedTable(
+                                allocator,
+                                primitiveRegistry,
+                                tables,
+                                "store",
+                                equal(1, 8),
+                                new String[] {"s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"},
+                                0, 2, 3, 4)),
+                0);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                4,
+                colorFilter == null
+                        ? scannedTable(allocator, tables, "item", "i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id")
+                        : filteredProjectedTable(
+                                allocator,
+                                primitiveRegistry,
+                                tables,
+                                "item",
+                                equalUtf8(3, colorFilter),
+                                new String[] {"i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id"}),
+                0);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                9,
+                query24AddressLookup(allocator, primitiveRegistry, tables),
+                0);
+        sales = filter(allocator, primitiveRegistry, sales, equalUtf8Columns(2, 17));
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 7, 18, 8, 13, 11, 15, 14, 12),
+                List.of(new Sum(5)),
+                sales);
+    }
+
+    private static Operator query24AverageSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator sales = query24CustomerStoreItemSales(allocator, primitiveRegistry, tables);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                3,
+                projectQuery24StoreJoinKey(
+                        allocator,
+                        primitiveRegistry,
+                        filteredProjectedTable(
+                                allocator,
+                                primitiveRegistry,
+                                tables,
+                                "store",
+                                equal(1, 8),
+                                new String[] {"s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"},
+                                0, 4)),
+                0);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                7,
+                query24AddressLookup(allocator, primitiveRegistry, tables),
+                0);
+        sales = filter(allocator, primitiveRegistry, sales, equalUtf8Columns(2, 9));
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 10, 3, 4),
+                List.of(new Sum(5)),
+                sales);
+    }
+
+    private static Operator query24CustomerStoreItemSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator sales = factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid");
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                new int[] {0, 1},
+                scannedTable(allocator, tables, "store_returns", "sr_ticket_number", "sr_item_sk"),
+                new int[] {0, 1});
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                2,
+                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"),
+                0);
+        sales = projectInputs(allocator, primitiveRegistry, sales, 8, 9, 10, 3, 1, 4);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 4),
+                List.of(new Sum(5)),
+                sales);
+    }
+
+    private static Operator query24AddressLookup(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator address = projectQuery24AddressCountry(
+                allocator,
+                primitiveRegistry,
+                scannedTable(allocator, tables, "customer_address", "ca_zip", "ca_state", "ca_country"));
+        address = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new CountAll()),
+                address);
+        return projectInputs(allocator, primitiveRegistry, address, 0, 1, 2);
+    }
+
+    private static Operator projectQuery24StoreDetails(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zipKey = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(new Assignment(zipKey, new Call("cast_utf8_to_i64", List.of(
+                                new Reference(new Input(3), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(zipKey, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery24StoreJoinKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zipKey = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(new Assignment(zipKey, new Call("cast_utf8_to_i64", List.of(
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(zipKey, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery24AddressCountry(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zipKey = new Variable(0);
+        Variable upperCountry = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(zipKey, new Call("cast_utf8_to_i64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(upperCountry, new Call("upper_utf8", List.of(
+                                        new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(zipKey, Stream.VALUES),
+                                new Reference(upperCountry, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
     private static Operator query32ItemAverageDiscounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator discounts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt");
@@ -2345,6 +2535,30 @@ final class TpcdsParquetSupport
         return and(
                 isNotNullI64(salesIndex),
                 isNotNullI64(averageIndex),
+                new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
+    }
+
+    private static FilterSpec query24ThresholdPredicate(int salesIndex, int totalSumIndex, int countIndex)
+    {
+        Variable twenty = new Variable(0);
+        Variable countTimesSales = new Variable(1);
+        Variable scaledSales = new Variable(2);
+        Variable greaterThan = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(twenty, new Literal(20L), AllMask.ALL),
+                new Assignment(countTimesSales, new Call("multiply", List.of(
+                        new Reference(new Input(countIndex), Stream.VALUES),
+                        new Reference(new Input(salesIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(scaledSales, new Call("multiply", List.of(
+                        new Reference(countTimesSales, Stream.VALUES),
+                        new Reference(twenty, Stream.VALUES))), AllMask.ALL),
+                new Assignment(greaterThan, new Call("lt", List.of(
+                        new Reference(new Input(totalSumIndex), Stream.VALUES),
+                        new Reference(scaledSales, Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                isNotNullI64(salesIndex),
+                isNotNullI64(totalSumIndex),
+                isNotNullI64(countIndex),
                 new FilterSpec(plan, new ReferenceMask(new Reference(greaterThan, Stream.VALUES))));
     }
 
@@ -3663,6 +3877,16 @@ final class TpcdsParquetSupport
         Variable equals = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(List.of(
                 new Assignment(equals, new Call("eq", List.of(
+                        new Reference(new Input(leftInputIndex), Stream.VALUES),
+                        new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(equals, Stream.VALUES)));
+    }
+
+    private static FilterSpec equalUtf8Columns(int leftInputIndex, int rightInputIndex)
+    {
+        Variable equals = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(equals, new Call("eq_utf8", List.of(
                         new Reference(new Input(leftInputIndex), Stream.VALUES),
                         new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(equals, Stream.VALUES)));

@@ -204,12 +204,12 @@ public class GroupedAggregationOperator
             return;
         }
         Vector[] values = new Vector[groupByColumns.length];
-        BooleanVector[] nulls = new BooleanVector[groupByColumns.length];
+        Vector[] nulls = new Vector[groupByColumns.length];
         for (int index = 0; index < groupByColumns.length; index++) {
             Output output = batch.output(groupByColumns[index]);
             try {
                 values[index] = output.borrowOrNull(Stream.VALUES);
-                nulls[index] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+                nulls[index] = output.borrowOrNull(Stream.NULLS);
             }
             catch (IllegalArgumentException ignored) {
                 return;
@@ -234,11 +234,11 @@ public class GroupedAggregationOperator
         }
 
         Vector[] values = new Vector[groupByColumns.length];
-        BooleanVector[] nulls = new BooleanVector[groupByColumns.length];
+        Vector[] nulls = new Vector[groupByColumns.length];
         for (int index = 0; index < groupByColumns.length; index++) {
             Output output = batch.output(groupByColumns[index]);
             values[index] = output.borrow(Stream.VALUES);
-            nulls[index] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+            nulls[index] = output.borrowOrNull(Stream.NULLS);
         }
         inlineGroupingState.assignGroups(values, nulls, mask, groups);
     }
