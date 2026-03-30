@@ -30,6 +30,7 @@ import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
+import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -269,6 +270,32 @@ final class TpcdsParquetSupport
         quarterlySales = filter(allocator, primitiveRegistry, quarterlySales, query53QuarterlyDeviationPredicate(2, 3));
         quarterlySales = projectInputs(allocator, primitiveRegistry, quarterlySales, 0, 2, 3);
         return new TopNOperator(allocator, 100, new int[] {2, 1, 0}, new boolean[] {false, false, false}, quarterlySales);
+    }
+
+    public static Operator query54(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator lowerMonthSequence = query54ScalarMonthBoundary(allocator, primitiveRegistry, tables, 1);
+        Operator upperMonthSequence = query54ScalarMonthBoundary(allocator, primitiveRegistry, tables, 3);
+
+        Operator revenue = query54RevenueByCustomer(allocator, primitiveRegistry, tables);
+        revenue = new NestedLoopJoinOperator(allocator, revenue, lowerMonthSequence);
+        revenue = new NestedLoopJoinOperator(allocator, revenue, upperMonthSequence);
+        revenue = filter(allocator, primitiveRegistry, revenue, query54MonthBetweenPredicate(2, 3, 4));
+        revenue = projectInputs(allocator, primitiveRegistry, revenue, 0, 1);
+        revenue = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1)),
+                revenue);
+        revenue = projectQuery54Segment(allocator, primitiveRegistry, revenue);
+
+        Operator grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                revenue);
+        grouped = new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, grouped);
+        return projectQuery54Output(allocator, primitiveRegistry, grouped);
     }
 
     public static Operator query57(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -1831,6 +1858,176 @@ final class TpcdsParquetSupport
                 List.of(0, 1),
                 List.of(new Sum(2)),
                 facts);
+    }
+
+    private static Operator query54RevenueByCustomer(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator revenue = factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_sales_price");
+        revenue = new HashJoinOperator(allocator, revenue, 0, query54MyCustomers(allocator, primitiveRegistry, tables), 0);
+        revenue = new HashJoinOperator(
+                allocator,
+                revenue,
+                4,
+                scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_county", "ca_state"),
+                0);
+        revenue = new HashJoinOperator(
+                allocator,
+                revenue,
+                new int[] {6, 7},
+                scannedTable(allocator, tables, "store", "s_county", "s_state"),
+                new int[] {0, 1});
+        revenue = new HashJoinOperator(
+                allocator,
+                revenue,
+                1,
+                scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_month_seq"),
+                0);
+        return projectInputs(allocator, primitiveRegistry, revenue, 3, 2, 11);
+    }
+
+    private static Operator query54MyCustomers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator customerSales = new UnionAllOperator(3, List.of(
+                factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk"),
+                factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_item_sk")));
+        customerSales = new HashJoinOperator(
+                allocator,
+                customerSales,
+                2,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        and(equalUtf8(1, "Women"), equalUtf8(2, "maternity")),
+                        new String[] {"i_item_sk", "i_category", "i_class"},
+                        0),
+                0);
+        customerSales = new HashJoinOperator(
+                allocator,
+                customerSales,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(equal(1, 12), equal(2, 1998)),
+                        new String[] {"d_date_sk", "d_moy", "d_year"},
+                        0),
+                0);
+        customerSales = new HashJoinOperator(
+                allocator,
+                customerSales,
+                1,
+                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk"),
+                0);
+        customerSales = projectInputs(allocator, primitiveRegistry, customerSales, 1, 6);
+        return new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales);
+    }
+
+    private static Operator query54ScalarMonthBoundary(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int offset)
+    {
+        Operator boundary = filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                and(equal(1, 1998), equal(2, 12)),
+                new String[] {"d_month_seq", "d_year", "d_moy"},
+                0);
+        boundary = projectQuery54ScalarMonthBoundary(allocator, primitiveRegistry, boundary, offset);
+        boundary = new MarkDistinctOperator(allocator, 0, boundary);
+        return new EnforceSingleRowOperator(allocator, boundary);
+    }
+
+    private static Operator projectQuery54ScalarMonthBoundary(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int offset)
+    {
+        Variable offsetValue = new Variable(0);
+        Variable boundary = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(offsetValue, new Literal((long) offset), AllMask.ALL),
+                        new Assignment(boundary, new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(offsetValue, Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(boundary, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static FilterSpec query54MonthBetweenPredicate(int monthSequenceIndex, int minimumIndex, int maximumIndex)
+    {
+        Variable greaterThanMinimum = new Variable(0);
+        Variable equalsMinimum = new Variable(1);
+        Variable minimumSatisfied = new Variable(2);
+        Variable lessThanMaximum = new Variable(3);
+        Variable equalsMaximum = new Variable(4);
+        Variable maximumSatisfied = new Variable(5);
+        Variable result = new Variable(6);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(greaterThanMinimum, new Call("lt", List.of(
+                        new Reference(new Input(minimumIndex), Stream.VALUES),
+                        new Reference(new Input(monthSequenceIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(equalsMinimum, new Call("eq", List.of(
+                        new Reference(new Input(monthSequenceIndex), Stream.VALUES),
+                        new Reference(new Input(minimumIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(minimumSatisfied, new Call("or", List.of(
+                        new Reference(greaterThanMinimum, Stream.VALUES),
+                        new Reference(equalsMinimum, Stream.VALUES))), AllMask.ALL),
+                new Assignment(lessThanMaximum, new Call("lt", List.of(
+                        new Reference(new Input(monthSequenceIndex), Stream.VALUES),
+                        new Reference(new Input(maximumIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(equalsMaximum, new Call("eq", List.of(
+                        new Reference(new Input(monthSequenceIndex), Stream.VALUES),
+                        new Reference(new Input(maximumIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(maximumSatisfied, new Call("or", List.of(
+                        new Reference(lessThanMaximum, Stream.VALUES),
+                        new Reference(equalsMaximum, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("and", List.of(
+                        new Reference(maximumSatisfied, Stream.VALUES),
+                        new Reference(minimumSatisfied, Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                isNotNullI64(monthSequenceIndex),
+                isNotNullI64(minimumIndex),
+                isNotNullI64(maximumIndex),
+                new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES))));
+    }
+
+    private static Operator projectQuery54Segment(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable divisor = new Variable(0);
+        Variable segment = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(divisor, new Literal(5_000L), AllMask.ALL),
+                        new Assignment(segment, new Call("divide", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(divisor, Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(segment, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery54Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable multiplier = new Variable(0);
+        Variable segmentBase = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(multiplier, new Literal(50L), AllMask.ALL),
+                        new Assignment(segmentBase, new Call("multiply", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(multiplier, Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(segmentBase, Stream.VALUES))),
+                primitiveRegistry,
+                source);
     }
 
     private static Operator query57MonthlyRankedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)

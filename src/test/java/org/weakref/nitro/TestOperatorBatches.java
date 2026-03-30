@@ -1417,6 +1417,42 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorSupportsTwoUtf8JoinKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row("AL", "Walker County", 11L),
+                        row("AL", "Madison County", 12L),
+                        row("TN", "Williamson County", 13L))),
+                new int[] {0, 1},
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row("AL", "Walker County", 101L),
+                        row("AL", "Mobile County", 102L),
+                        row("TN", "Williamson County", 103L),
+                        row("TN", "Shelby County", 104L))),
+                new int[] {0, 1});
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector leftStates = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        BinaryVector leftCounties = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector leftPayload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+        I64Vector rightPayload = (I64Vector) batch.output(5).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(2);
+        assertThat(utf8(leftStates, 0)).isEqualTo("AL");
+        assertThat(utf8(leftCounties, 0)).isEqualTo("Walker County");
+        assertThat(leftPayload.values()[0]).isEqualTo(11L);
+        assertThat(rightPayload.values()[0]).isEqualTo(101L);
+        assertThat(utf8(leftStates, 1)).isEqualTo("TN");
+        assertThat(utf8(leftCounties, 1)).isEqualTo("Williamson County");
+        assertThat(leftPayload.values()[1]).isEqualTo(13L);
+        assertThat(rightPayload.values()[1]).isEqualTo(103L);
+    }
+
+    @Test
     void testHashJoinOperatorPreservesArrayPayloadColumn()
     {
         ArrayVector payload = new ArrayVector(3);

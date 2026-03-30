@@ -45,6 +45,9 @@ import io.trino.operator.aggregation.TestingAggregationFunction;
 import io.trino.operator.join.JoinBridgeManager;
 import io.trino.operator.join.LookupOuterOperator;
 import io.trino.operator.join.LookupSource;
+import io.trino.operator.join.NestedLoopBuildOperator;
+import io.trino.operator.join.NestedLoopJoinOperator;
+import io.trino.operator.join.NestedLoopJoinPagesSupplier;
 import io.trino.operator.window.AggregationWindowFunctionSupplier;
 import io.trino.operator.window.FrameInfo;
 import io.trino.operator.window.RegularPartitionerSupplier;
@@ -52,6 +55,7 @@ import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
 import io.trino.spi.connector.SortOrder;
 import io.trino.spi.function.OperatorType;
+import io.trino.spi.type.Int128;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeOperators;
 import io.trino.spiller.SpillerFactory;
@@ -629,6 +633,108 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query54(TpcdsParquetTables tables)
+    {
+        List<Type> myCustomersTypes = List.of(BIGINT, BIGINT);
+        List<Type> salesTypes = tableColumnTypes(tables, "store_sales", List.of("ss_customer_sk", "ss_sold_date_sk", "ss_ext_sales_price"));
+        Type revenueType = salesTypes.get(2);
+        TestingAggregationFunction revenueSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(revenueType));
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_county", "ca_state"));
+        List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_county", "s_state"));
+        List<Type> soldDateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_month_seq"));
+        List<Type> projectedRevenueTypes = List.of(BIGINT, revenueType, INTEGER);
+        List<Type> lowerBoundTypes = concatTypes(projectedRevenueTypes, List.of(INTEGER));
+        List<Type> boundedRevenueTypes = concatTypes(lowerBoundTypes, List.of(INTEGER));
+        List<Type> customerRevenueTypes = List.of(BIGINT, revenueSum.getFinalType());
+        List<Type> decimalSegmentTypes = List.of(revenueType);
+        List<Type> rawSegmentTypes = List.of(BIGINT);
+        List<Type> groupedSegmentTypes = List.of(BIGINT, BIGINT);
+        List<Type> outputTypes = List.of(BIGINT, BIGINT, BIGINT);
+
+        List<Page> myCustomersPages = query54MyCustomersPages(tables);
+        List<Page> lowerMonthPages = query54ScalarMonthBoundaryPages(tables, 1);
+        List<Page> upperMonthPages = query54ScalarMonthBoundaryPages(tables, 3);
+
+        List<Page> baseRevenuePages = executePipelinePages(
+                tables.tableFiles("store_sales"),
+                List.of("ss_customer_sk", "ss_sold_date_sk", "ss_ext_sales_price"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(540, salesTypes, List.of(0), myCustomersPages, myCustomersTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(541, concatTypes(salesTypes, myCustomersTypes), List.of(4), relationPages(
+                                tables,
+                                "customer_address",
+                                List.of("ca_address_sk", "ca_county", "ca_state"),
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(1, addressTypes.get(1)), field(2, addressTypes.get(2))),
+                                addressTypes), addressTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(542, concatTypes(concatTypes(salesTypes, myCustomersTypes), addressTypes), List.of(6, 7), relationPages(
+                                tables,
+                                "store",
+                                List.of("s_county", "s_state"),
+                                Optional.empty(),
+                                List.of(field(0, storeTypes.get(0)), field(1, storeTypes.get(1))),
+                                storeTypes), storeTypes, List.of(0, 1))),
+                        hashJoinStep(new HashJoinSpec(543, concatTypes(concatTypes(concatTypes(salesTypes, myCustomersTypes), addressTypes), storeTypes), List.of(1), relationPages(
+                                tables,
+                                "date_dim",
+                                List.of("d_date_sk", "d_month_seq"),
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(1, INTEGER)),
+                                soldDateTypes), soldDateTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                544,
+                                Optional.empty(),
+                                List.of(field(3, BIGINT), field(2, revenueType), field(11, INTEGER)),
+                                projectedRevenueTypes))));
+
+        List<Page> withLowerBoundPages = executeNestedLoopPages(baseRevenuePages, projectedRevenueTypes, lowerMonthPages, List.of(INTEGER));
+        List<Page> withBoundsPages = executeNestedLoopPages(withLowerBoundPages, lowerBoundTypes, upperMonthPages, List.of(INTEGER));
+        List<Page> customerRevenuePages = executePipelinePages(
+                withBoundsPages,
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                545,
+                                Optional.of(query54MonthBetweenPredicate()),
+                                List.of(field(0, BIGINT), field(1, revenueType)),
+                                List.of(BIGINT, revenueType))),
+                        factoryStep(hashAggregationFactory(
+                                546,
+                                List.of(BIGINT),
+                                List.of(0),
+                                revenueSum.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty())))));
+
+        return executePagesPipeline(
+                customerRevenuePages,
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                547,
+                                Optional.empty(),
+                                List.of(query54SegmentExpression(revenueSum.getFinalType())),
+                                decimalSegmentTypes)),
+                        factoryStep(filterAndProjectFactory(
+                                547_1,
+                                Optional.empty(),
+                                List.of(cast(field(0, revenueSum.getFinalType()), revenueSum.getFinalType(), BIGINT)),
+                                rawSegmentTypes)),
+                        factoryStep(filterAndProjectFactory(
+                                547_2,
+                                Optional.empty(),
+                                List.of(divide(field(0, BIGINT), constant(10_000L, BIGINT), BIGINT)),
+                                List.of(BIGINT))),
+                        factoryStep(hashAggregationFactory(
+                                548,
+                                List.of(BIGINT),
+                                List.of(0),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                        factoryStep(topNFactory(549, groupedSegmentTypes, 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                550,
+                                Optional.empty(),
+                                List.of(field(0, BIGINT), field(1, BIGINT), multiply(field(0, BIGINT), constant(50L, BIGINT), BIGINT)),
+                                outputTypes))),
+                outputTypes);
+    }
+
     public MaterializedResult query57(TpcdsParquetTables tables)
     {
         List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", List.of("cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
@@ -845,6 +951,81 @@ public final class TrinoTpcdsParquetSupport
                                         field(5, salesSum.getFinalType()),
                                         field(6, BIGINT)),
                                 outputTypes))));
+    }
+
+    private List<Page> query54MyCustomersPages(TpcdsParquetTables tables)
+    {
+        List<Type> salesTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Type> customerTypes = List.of(BIGINT, BIGINT);
+        List<Page> catalogSalesPages = relationPages(
+                tables,
+                "catalog_sales",
+                List.of("cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, BIGINT), field(2, BIGINT)),
+                salesTypes);
+        List<Page> webSalesPages = relationPages(
+                tables,
+                "web_sales",
+                List.of("ws_sold_date_sk", "ws_bill_customer_sk", "ws_item_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, BIGINT), field(2, BIGINT)),
+                salesTypes);
+        List<Page> customerSalesPages = new ArrayList<>(catalogSalesPages);
+        customerSalesPages.addAll(webSalesPages);
+
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_category", "i_class"));
+        List<Page> itemKeys = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_category", "i_class"),
+                Optional.of(and(
+                        equal(1, itemTypes.get(1), "Women"),
+                        equal(2, itemTypes.get(2), "maternity"))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> dateKeys = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_moy", "d_year"),
+                Optional.of(and(equal(1, 12, INTEGER), equal(2, 1998, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> customers = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_current_addr_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, BIGINT)),
+                customerTypes);
+
+        return executePipelinePages(
+                customerSalesPages,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(551, salesTypes, List.of(2), itemKeys, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(552, concatTypes(salesTypes, List.of(BIGINT)), List.of(0), dateKeys, List.of(BIGINT), List.of(0))),
+                        hashJoinStep(new HashJoinSpec(553, concatTypes(concatTypes(salesTypes, List.of(BIGINT)), List.of(BIGINT)), List.of(1), customers, customerTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                554,
+                                Optional.empty(),
+                                List.of(field(1, BIGINT), field(6, BIGINT)),
+                                customerTypes)),
+                        factoryStep(hashAggregationFactory(555, customerTypes, List.of(0, 1)))));
+    }
+
+    private List<Page> query54ScalarMonthBoundaryPages(TpcdsParquetTables tables, int offset)
+    {
+        return executePipelinePages(
+                relationPages(
+                        tables,
+                        "date_dim",
+                        List.of("d_month_seq", "d_year", "d_moy"),
+                        Optional.of(and(equal(1, 1998, INTEGER), equal(2, 12, INTEGER))),
+                        List.of(add(field(0, INTEGER), constant((long) offset, INTEGER), INTEGER)),
+                        List.of(INTEGER)),
+                List.of(
+                        factoryStep(hashAggregationFactory(556 + offset, List.of(INTEGER), List.of(0))),
+                        factoryStep(enforceSingleRowFactory(558 + offset, List.of(INTEGER)))));
     }
 
     private List<Page> query70ActiveStatesPages(TpcdsParquetTables tables)
@@ -2096,6 +2277,72 @@ public final class TrinoTpcdsParquetSupport
         return outputPages;
     }
 
+    private List<Page> executeNestedLoopPages(List<Page> probePages, List<Type> probeTypes, List<Page> buildPages, List<Type> buildTypes)
+    {
+        List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
+        JoinBridgeManager<io.trino.operator.join.NestedLoopJoinBridge> joinBridgeManager = new JoinBridgeManager<>(
+                false,
+                new NestedLoopJoinPagesSupplier(),
+                buildTypes);
+
+        NestedLoopBuildOperator.NestedLoopBuildOperatorFactory buildFactory = new NestedLoopBuildOperator.NestedLoopBuildOperatorFactory(
+                9_700,
+                new PlanNodeId("nested-loop-build"),
+                joinBridgeManager);
+        ValuesOperator.ValuesOperatorFactory buildSourceFactory = new ValuesOperator.ValuesOperatorFactory(
+                9_701,
+                new PlanNodeId("nested-loop-build-values"),
+                buildPages);
+        DriverContext probeDriverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
+        ValuesOperator.ValuesOperatorFactory probeSourceFactory = new ValuesOperator.ValuesOperatorFactory(
+                9_702,
+                new PlanNodeId("nested-loop-probe-values"),
+                probePages);
+        OperatorFactory nestedLoopFactory = new NestedLoopJoinOperator.NestedLoopJoinOperatorFactory(
+                9_703,
+                new PlanNodeId("nested-loop-join"),
+                joinBridgeManager,
+                rangeList(probeTypes.size()),
+                rangeList(buildTypes.size()));
+
+        DriverContext buildDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
+        try (Driver buildDriver = Driver.createDriver(
+                buildDriverContext,
+                buildSourceFactory.createOperator(buildDriverContext),
+                buildFactory.createOperator(buildDriverContext))) {
+            buildSourceFactory.noMoreOperators();
+            buildFactory.noMoreOperators();
+            ListenableFuture<Void> buildFinished = joinBridgeManager.getJoinBridge().whenBuildFinishes();
+            while (!buildFinished.isDone()) {
+                buildDriver.processForNumberOfIterations(1);
+            }
+            buildFinished.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to build Trino nested-loop pages", exception);
+        }
+
+        List<Operator> operators = new ArrayList<>();
+        operators.add(probeSourceFactory.createOperator(probeDriverContext));
+        operators.add(nestedLoopFactory.createOperator(probeDriverContext));
+        probeSourceFactory.noMoreOperators();
+        nestedLoopFactory.noMoreOperators();
+        operators.add(new PageConsumerOperator(
+                probeDriverContext.addOperatorContext(9_704, new PlanNodeId("nested-loop-sink"), PageConsumerOperator.class.getSimpleName()),
+                outputPages::add,
+                java.util.function.Function.identity()));
+
+        try (Driver driver = Driver.createDriver(probeDriverContext, operators)) {
+            processDriver(driver, operators);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to execute Trino nested-loop probe pipeline", exception);
+        }
+
+        return outputPages;
+    }
+
     private List<Page> executePipelinePages(List<Page> inputPages, List<PipelineStep> steps)
     {
         List<Page> outputPages = new ArrayList<>();
@@ -3113,6 +3360,28 @@ public final class TrinoTpcdsParquetSupport
                 cast(field(1, priceType), priceType, scaledAverage.type()),
                 scaledAverage,
                 scaledAverage.type());
+    }
+
+    private static RowExpression query54MonthBetweenPredicate()
+    {
+        RowExpression month = field(2, INTEGER);
+        RowExpression minimum = field(3, INTEGER);
+        RowExpression maximum = field(4, INTEGER);
+        RowExpression minimumSatisfied = or(
+                equal(month, minimum, INTEGER),
+                greaterThan(month, minimum, INTEGER));
+        RowExpression maximumSatisfied = or(
+                equal(month, maximum, INTEGER),
+                lessThan(month, maximum, INTEGER));
+        return and(minimumSatisfied, maximumSatisfied);
+    }
+
+    private static RowExpression query54SegmentExpression(Type revenueType)
+    {
+        return divide(
+                field(1, revenueType),
+                constant(Int128.valueOf(5_000L), revenueType),
+                revenueType);
     }
 
     private static RowExpression query44AverageKey(RowExpression sum, RowExpression count)

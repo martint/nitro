@@ -180,7 +180,7 @@ Representative plans:
 Status:
 
 - implemented in Nitro and in the Trino parquet harness
-- validated by `Q06` and `Q44`
+- validated by `Q06`, `Q44`, and `Q54`
 - no longer a blocking operator family for scalar-subquery expansion
 
 ## Already-covered advanced shapes
