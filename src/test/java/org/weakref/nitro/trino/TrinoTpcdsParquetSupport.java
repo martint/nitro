@@ -282,6 +282,11 @@ public final class TrinoTpcdsParquetSupport
         return queryRevenueRatioByClass(tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price");
     }
 
+    public MaterializedResult query98(TpcdsParquetTables tables)
+    {
+        return queryRevenueRatioByClass(tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
+    }
+
     private MaterializedResult queryRevenueRatioByClass(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         List<String> factColumns = List.of(soldDateColumn, itemColumn, salesColumn);

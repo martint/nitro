@@ -44,6 +44,7 @@ Supported parquet-backed queries today:
 - `Q92`
 - `Q96`
 - `Q97`
+- `Q98`
 - `Q99`
 
 Everything else is currently unsupported in the parquet-backed operator
