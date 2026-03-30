@@ -19,6 +19,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -273,6 +274,33 @@ public class TestPlanEvaluator
         Streams projectedInput = evaluator.evaluate(new Reference(new Input(0), Stream.VALUES), Mask.all(2));
         assertThat(utf8((BinaryVector) projectedInput.get(Stream.VALUES), 0)).isEqualTo("alpha");
         assertThat(((BooleanVector) projectedInput.get(Stream.NULLS)).values()).containsExactly(false, true);
+    }
+
+    @Test
+    void testMultiplyPreservesNullsForProjectedValues()
+    {
+        Variable product = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        product,
+                        new Call("multiply", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(product, Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {7, 11}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true}),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {3, 5}))),
+                new Allocator());
+
+        Streams productStreams = evaluator.evaluate(new Reference(product, Stream.VALUES), Mask.all(2));
+        assertThat(((I64Vector) productStreams.get(Stream.VALUES)).values()[0]).isEqualTo(21L);
+        assertThat(((BooleanVector) productStreams.get(Stream.NULLS)).values()).containsExactly(false, true);
     }
 
     @Test
@@ -1808,6 +1836,65 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testCoalesceI64ReplacesNullWithFallbackValue()
+    {
+        Variable zero = new Variable(0);
+        Variable value = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(
+                                value,
+                                new Call("coalesce_i64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(
+                        new Reference(value, Stream.VALUES),
+                        new Reference(value, Stream.NULLS)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {7L, 0L, 9L}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false}))),
+                new Allocator());
+
+        Streams valuesResult = evaluator.evaluate(new Reference(value, Stream.VALUES), Mask.all(3));
+        assertThat(((I64Vector) valuesResult.get(Stream.VALUES)).values()).containsExactly(7L, 0L, 9L);
+        assertThat(((BooleanVector) valuesResult.get(Stream.NULLS)).values()).containsExactly(false, false, false);
+    }
+
+    @Test
+    void testDivideI64ToF64ProjectsFloatingPointAverage()
+    {
+        Variable average = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        average,
+                        new Call("divide_i64_to_f64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(average, Stream.VALUES),
+                        new Reference(average, Stream.NULLS)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {9L, 5L}),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {2L, 0L}))),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(average, Stream.VALUES), Mask.all(2));
+        assertThat(((F64Vector) result.get(Stream.VALUES)).values()).containsExactly(4.5, 0.0);
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true);
+    }
+
+    @Test
     void testOrMaskAllowsLaterTrueToSuppressNullAndError()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
@@ -2026,9 +2113,61 @@ public class TestPlanEvaluator
         assertThat(result.position(2)).isEqualTo(4);
     }
 
+    @Test
+    void testSubstringUtf8KeepsLiteralScalarPositionsSeparateFromDictionaryValuePositions()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(2L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(substring, Stream.VALUES)));
+
+        BinaryVector dictionary = new BinaryVector(4, 32);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        dictionary.setBytes(0, "70000".getBytes(UTF_8));
+        dictionary.setBytes(1, "81111".getBytes(UTF_8));
+        dictionary.setBytes(2, "92222".getBytes(UTF_8));
+        dictionary.setBytes(3, "10333".getBytes(UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {3, 1, 0}, dictionary);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
+        assertThat(decodeUtf8(result, 0)).isEqualTo("10");
+        assertThat(decodeUtf8(result, 1)).isEqualTo("81");
+        assertThat(decodeUtf8(result, 2)).isEqualTo("70");
+    }
+
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);
+    }
+
+    private static String decodeUtf8(org.weakref.nitro.data.Vector vector, int position)
+    {
+        return switch (vector) {
+            case BinaryVector binaryVector -> new String(binaryVector.copyBytes(position), UTF_8);
+            case DictionaryVector dictionaryVector -> decodeUtf8(dictionaryVector.values(), dictionaryVector.ids()[position]);
+            case RleVector rleVector -> decodeUtf8(rleVector.values(), rleVector.runIndex(position));
+            default -> throw new IllegalArgumentException("Unsupported utf8 vector type: " + vector.getClass().getSimpleName());
+        };
     }
 
     private static PrimitiveRegistry builtinPrimitiveRegistry()

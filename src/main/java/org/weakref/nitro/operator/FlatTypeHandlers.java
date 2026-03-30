@@ -567,7 +567,11 @@ final class FlatTypeHandlers
             Arrays.fill(result.offsets(), 0);
             result.clearTraits();
             result.addTraits(binaryTraits);
+            int previousIndex = 0;
             for (int index : mask) {
+                while (previousIndex < index) {
+                    result.setNull(previousIndex++);
+                }
                 OperatorKeySemantics.Key key = keysByGroup.get(index);
                 if (key instanceof OperatorKeySemantics.BinaryKey value) {
                     result.setBytes(index, value.bytes());
@@ -575,6 +579,10 @@ final class FlatTypeHandlers
                 else {
                     result.setNull(index);
                 }
+                previousIndex = index + 1;
+            }
+            while (previousIndex < size) {
+                result.setNull(previousIndex++);
             }
             return Streams.ofValues(result);
         }

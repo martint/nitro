@@ -57,6 +57,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query02()
+    {
+        consume(TpcdsParquetSupport.query02(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query06()
     {
         consume(TpcdsParquetSupport.query06(allocator, primitiveRegistry, tables));
@@ -69,9 +75,183 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query13()
+    {
+        consume(TpcdsParquetSupport.query13(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query20()
     {
         consume(TpcdsParquetSupport.query20(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query39()
+    {
+        consume(TpcdsParquetSupport.query39(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query17()
+    {
+        consume(TpcdsParquetSupport.query17(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query16()
+    {
+        consume(TpcdsParquetSupport.query16(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query18()
+    {
+        consume(TpcdsParquetSupport.query18(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query22()
+    {
+        consume(TpcdsParquetSupport.query22(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query27()
+    {
+        consume(TpcdsParquetSupport.query27(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query28()
+    {
+        consume(TpcdsParquetSupport.query28(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query42()
+    {
+        consume(TpcdsParquetSupport.query42(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query43()
+    {
+        consume(TpcdsParquetSupport.query43(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query46()
+    {
+        consume(TpcdsParquetSupport.query46(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query34()
+    {
+        consume(TpcdsParquetSupport.query34(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query50()
+    {
+        consume(TpcdsParquetSupport.query50(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query52()
+    {
+        consume(TpcdsParquetSupport.query52(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query68()
+    {
+        consume(TpcdsParquetSupport.query68(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query79()
+    {
+        consume(TpcdsParquetSupport.query79(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query93()
+    {
+        consume(TpcdsParquetSupport.query93(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query91()
+    {
+        consume(TpcdsParquetSupport.query91(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query82()
+    {
+        consume(TpcdsParquetSupport.query82(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query37()
+    {
+        consume(TpcdsParquetSupport.query37(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query40()
+    {
+        consume(TpcdsParquetSupport.query40(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query55()
+    {
+        consume(TpcdsParquetSupport.query55(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query71()
+    {
+        consume(TpcdsParquetSupport.query71(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query72()
+    {
+        consume(TpcdsParquetSupport.query72(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query33()
+    {
+        consume(TpcdsParquetSupport.query33(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query56()
+    {
+        consume(TpcdsParquetSupport.query56(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query60()
+    {
+        consume(TpcdsParquetSupport.query60(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query65()
+    {
+        consume(TpcdsParquetSupport.query65(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query66()
+    {
+        consume(TpcdsParquetSupport.query66(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
@@ -90,6 +270,12 @@ public class BenchmarkQueries
     public void query63()
     {
         consume(TpcdsParquetSupport.query63(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query64()
+    {
+        consume(TpcdsParquetSupport.query64(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
@@ -159,6 +345,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query59()
+    {
+        consume(TpcdsParquetSupport.query59(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query61()
     {
         consume(TpcdsParquetSupport.query61(allocator, primitiveRegistry, tables));
@@ -183,6 +375,24 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query29()
+    {
+        consume(TpcdsParquetSupport.query29(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query76()
+    {
+        consume(TpcdsParquetSupport.query76(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query31()
+    {
+        consume(TpcdsParquetSupport.query31(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query32()
     {
         consume(TpcdsParquetSupport.query32(allocator, primitiveRegistry, tables));
@@ -192,6 +402,42 @@ public class BenchmarkQueries
     public void query81()
     {
         consume(TpcdsParquetSupport.query81(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query83()
+    {
+        consume(TpcdsParquetSupport.query83(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query74()
+    {
+        consume(TpcdsParquetSupport.query74(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query75()
+    {
+        consume(TpcdsParquetSupport.query75(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query78()
+    {
+        consume(TpcdsParquetSupport.query78(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query87()
+    {
+        consume(TpcdsParquetSupport.query87(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query85()
+    {
+        consume(TpcdsParquetSupport.query85(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
@@ -213,15 +459,111 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query25()
+    {
+        consume(TpcdsParquetSupport.query25(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query77()
+    {
+        consume(TpcdsParquetSupport.query77(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query05()
+    {
+        consume(TpcdsParquetSupport.query05(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query94()
+    {
+        consume(TpcdsParquetSupport.query94(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query95()
+    {
+        consume(TpcdsParquetSupport.query95(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query38()
+    {
+        consume(TpcdsParquetSupport.query38(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query48()
+    {
+        consume(TpcdsParquetSupport.query48(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query09()
     {
         consume(TpcdsParquetSupport.query09(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
+    public void query03()
+    {
+        consume(TpcdsParquetSupport.query03(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query04()
+    {
+        consume(TpcdsParquetSupport.query04(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query07()
+    {
+        consume(TpcdsParquetSupport.query07(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query08()
+    {
+        consume(TpcdsParquetSupport.query08(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query11()
+    {
+        consume(TpcdsParquetSupport.query11(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query14()
     {
         consume(TpcdsParquetSupport.query14(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query15()
+    {
+        consume(TpcdsParquetSupport.query15(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query19()
+    {
+        consume(TpcdsParquetSupport.query19(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query21()
+    {
+        consume(TpcdsParquetSupport.query21(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query26()
+    {
+        consume(TpcdsParquetSupport.query26(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark

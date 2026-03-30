@@ -76,7 +76,7 @@ public final class SubstringUtf8
                 if (isNull(valueNulls, position) || isNull(startNulls, position) || isNull(lengthNulls, position)) {
                     continue;
                 }
-                totalBytes += substringValue(values, startValues, lengthValues, position).length;
+                totalBytes += substringValue(values, position, startValues, position, lengthValues, position).length;
             }
         }
 
@@ -130,7 +130,7 @@ public final class SubstringUtf8
                 }
             }
             else {
-                byte[] substring = substringValue(values, startValues, lengthValues, position);
+                byte[] substring = substringValue(values, position, startValues, position, lengthValues, position);
                 outputValues.setBytes(position, substring);
                 currentOffset = outputValues.endOffset(position);
                 if (outputNulls != null) {
@@ -148,13 +148,14 @@ public final class SubstringUtf8
         }
     }
 
-    private static byte[] substringValue(Vector values, Vector startValues, Vector lengthValues, int position)
+    private static byte[] substringValue(Vector values, int valuePosition, Vector startValues, int startPosition, Vector lengthValues, int lengthPosition)
     {
-        long start = longValue(startValues, position);
+        long start = longValue(startValues, startPosition);
+        long length = longValue(lengthValues, lengthPosition);
         return switch (values) {
-            case BinaryVector vector -> Utf8Support.substring(vector, position, start, longValue(lengthValues, position));
-            case DictionaryVector vector -> substringValue(vector.values(), startValues, lengthValues, vector.ids()[position]);
-            case RleVector vector -> substringValue(vector.values(), startValues, lengthValues, vector.runIndex(position));
+            case BinaryVector vector -> Utf8Support.substring(vector, valuePosition, start, length);
+            case DictionaryVector vector -> substringValue(vector.values(), vector.ids()[valuePosition], startValues, startPosition, lengthValues, lengthPosition);
+            case RleVector vector -> substringValue(vector.values(), vector.runIndex(valuePosition), startValues, startPosition, lengthValues, lengthPosition);
             default -> throw new IllegalArgumentException("Unsupported substring_utf8 vector type: " + values.getClass().getSimpleName());
         };
     }

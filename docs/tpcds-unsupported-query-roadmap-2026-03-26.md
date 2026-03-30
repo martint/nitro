@@ -110,6 +110,8 @@ Representative plans:
 Status:
 
 - implemented in Nitro and in the Trino parquet harness
+- validated by `Q22`, `Q27`, `Q36`, `Q67`, `Q70`, `Q77`, `Q86`, `Q94`,
+  and `Q95`
 - validated by `Q51`, `Q53`, and `Q70`
 - still needs broader coverage across the remaining window-heavy queries
 
@@ -153,6 +155,8 @@ Representative plans:
 Status:
 
 - implemented in Nitro and in the Trino parquet harness
+- validated by `Q16`, `Q18`, `Q22`, `Q27`, `Q28`, `Q36`, `Q67`, `Q77`,
+  `Q86`, `Q94`, and `Q95`
 - no longer a blocking operator family for the next expansion batch
 
 ### FullJoin

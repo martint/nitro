@@ -343,6 +343,25 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorKeepsAllNullSumGroupsNull()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1)),
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, null),
+                        row(1L, null),
+                        row(2L, 0L),
+                        row(2L, null))));
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator)).containsExactly(
+                row(1L, null),
+                row(2L, 0L));
+    }
+
+    @Test
     void testFullJoinOperatorNullExtendsUnmatchedRows()
     {
         Allocator allocator = new Allocator();
@@ -748,7 +767,6 @@ public class TestOperatorBatches
         assertThat(operator.supportsRetainedBatches()).isTrue();
     }
 
-    @Test
     void testLimitOperatorProducesLimitedBatch()
     {
         Allocator allocator = new Allocator();
@@ -1171,7 +1189,6 @@ public class TestOperatorBatches
                 row("beta"));
     }
 
-    @Test
     void testTopNOperatorOrdersDoubles()
     {
         Operator operator = new TopNOperator(
@@ -1281,6 +1298,77 @@ public class TestOperatorBatches
         assertThat(payload.length(0)).isZero();
         assertThat(payload.length(1)).isZero();
         assertThat(utf8(payload, 2)).isEqualTo("a");
+    }
+
+    @Test
+    void testTopNOperatorClearsNullablePayloadWhenSlotIsReused()
+    {
+        List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
+                new Allocator(),
+                2,
+                0,
+                new ConstantTableOperator(
+                        new Allocator(),
+                        3,
+                        List.of(
+                                row(1L, null, null),
+                                row(3L, 0L, 0L),
+                                row(2L, 5L, 7L)))));
+
+        assertThat(rows).containsExactly(
+                row(3L, 0L, 0L),
+                row(2L, 5L, 7L));
+    }
+
+    @Test
+    void testTopNOperatorClearsNullableOrderingAndPayloadWhenSlotIsReused()
+    {
+        List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
+                new Allocator(),
+                2,
+                new int[] {2},
+                new boolean[] {false},
+                new ConstantTableOperator(
+                        new Allocator(),
+                        3,
+                        List.of(
+                                row(10L, null, null),
+                                row(20L, 0L, 0L),
+                                row(30L, 5L, 7L)))));
+
+        assertThat(rows).containsExactly(
+                row(20L, 0L, 0L),
+                row(30L, 5L, 7L));
+    }
+
+    @Test
+    void testTopNOperatorPreservesZeroNullablePayloadWithUtf8Ordering()
+    {
+        List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
+                new Allocator(),
+                6,
+                new int[] {0, 1, 2, 5},
+                new boolean[] {false, false, false, false},
+                new ConstantTableOperator(
+                        new Allocator(),
+                        6,
+                        List.of(
+                                row("Zulu", "Zulu", "Zulu", 1_000_000L, null, null),
+                                row("Yankee", "Yankee", "Yankee", 1_000_001L, null, null),
+                                row("Abney", "Leif", "Oak Grove", 1_797_015L, 41_140L, -1_657_813L),
+                                row("Abney", "Leif", "Oak Grove", 1_797_015L, 0L, -157_588L),
+                                row("Abraham", "Ann", "Pleasant Hill", 1_505_848L, 21_592L, -174_653L),
+                                row("Abraham", "Ann", "Pleasant Hill", 1_505_848L, 0L, 0L),
+                                row("Abrams", "Glayds", "Oak Grove", 638_006L, 6_370L, -998_310L),
+                                row("Abrams", "Glayds", "Oak Grove", 638_006L, 0L, 0L)))));
+
+        assertThat(rows).containsExactly(
+                row("Abney", "Leif", "Oak Grove", 1_797_015L, 41_140L, -1_657_813L),
+                row("Abney", "Leif", "Oak Grove", 1_797_015L, 0L, -157_588L),
+                row("Abraham", "Ann", "Pleasant Hill", 1_505_848L, 21_592L, -174_653L),
+                row("Abraham", "Ann", "Pleasant Hill", 1_505_848L, 0L, 0L),
+                row("Abrams", "Glayds", "Oak Grove", 638_006L, 6_370L, -998_310L),
+                row("Abrams", "Glayds", "Oak Grove", 638_006L, 0L, 0L));
     }
 
     @Test

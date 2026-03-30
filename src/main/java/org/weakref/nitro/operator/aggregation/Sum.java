@@ -70,19 +70,30 @@ public class Sum
         boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
 
         long sum = 0;
+        boolean sawNonNull = false;
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                sum += isNull(inputNulls, position) ? 0 : value(inputValues, position);
+                if (isNull(inputNulls, position)) {
+                    continue;
+                }
+                sawNonNull = true;
+                sum += value(inputValues, position);
             }
         }
         else {
             for (int position : mask) {
-                sum += isNull(inputNulls, position) ? 0 : value(inputValues, position);
+                if (isNull(inputNulls, position)) {
+                    continue;
+                }
+                sawNonNull = true;
+                sum += value(inputValues, position);
             }
         }
 
-        stateVector.increment(group, sum);
+        if (sawNonNull) {
+            stateVector.increment(group, sum);
+        }
     }
 
     @Override
@@ -95,14 +106,20 @@ public class Sum
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
+                if (isNull(inputNulls, position)) {
+                    continue;
+                }
                 int group = toIntExact(groupVector.values()[position]);
-                stateVector.increment(group, isNull(inputNulls, position) ? 0 : value(inputValues, position));
+                stateVector.increment(group, value(inputValues, position));
             }
         }
         else {
             for (int position : mask) {
+                if (isNull(inputNulls, position)) {
+                    continue;
+                }
                 int group = toIntExact(groupVector.values()[position]);
-                stateVector.increment(group, isNull(inputNulls, position) ? 0 : value(inputValues, position));
+                stateVector.increment(group, value(inputValues, position));
             }
         }
     }

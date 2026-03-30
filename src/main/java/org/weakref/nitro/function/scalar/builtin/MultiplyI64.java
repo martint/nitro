@@ -14,6 +14,7 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -42,35 +43,78 @@ public final class MultiplyI64
     }
 
     @Override
+    public boolean requiresInputCompanionStreams()
+    {
+        return true;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for multiply");
-        if (!requestedStreams.contains(Stream.VALUES)) {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
         Allocator.Context allocationContext = context.allocationContext("MultiplyI64");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
+        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
+        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
-        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
-            return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, MultiplyI64::apply));
+        Streams result = Streams.empty();
+        BooleanVector outputNulls = null;
+        if (requestedStreams.contains(Stream.NULLS)) {
+            outputNulls = context.allocator().allocateOrGrow(
+                    allocationContext,
+                    existingNulls,
+                    BooleanVector.class,
+                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
+                    BooleanVector::new);
+            applyNulls(leftNulls, rightNulls, mask, outputNulls);
+            result = result.with(Stream.NULLS, outputNulls);
+        }
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return result;
         }
 
-        I64Vector result = context.allocator().allocateOrGrow(
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && leftNulls == null && rightNulls == null) {
+            I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+            return result.with(Stream.VALUES, I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, MultiplyI64::apply));
+        }
+
+        I64Vector resultValues = context.allocator().allocateOrGrow(
                 allocationContext,
-                existing instanceof I64Vector vector ? vector : null,
+                existingValues instanceof I64Vector vector ? vector : null,
                 I64Vector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
-        I64BinaryDispatch.applyLong(left, right, mask, result, MultiplyI64::apply);
-        return Streams.ofValues(result);
+        I64BinaryDispatch.applyLong(left, right, mask, resultValues, MultiplyI64::apply);
+        return result(resultValues, outputNulls);
     }
 
     private static long apply(long leftValue, long rightValue)
     {
         return leftValue * rightValue;
+    }
+
+    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    {
+        boolean[] nulls = outputNulls.values();
+        java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
+        for (int position : mask) {
+            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
+                    (rightNulls != null && rightNulls.values()[position]);
+        }
+    }
+
+    private static Streams result(I64Vector values, BooleanVector nulls)
+    {
+        if (nulls == null) {
+            return Streams.ofValues(values);
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 }

@@ -60,6 +60,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query02()
+    {
+        return support.query02(tables);
+    }
+
+    @Benchmark
     public Object query06()
     {
         return support.query06(tables);
@@ -72,9 +78,183 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query13()
+    {
+        return support.query13(tables);
+    }
+
+    @Benchmark
     public Object query20()
     {
         return support.query20(tables);
+    }
+
+    @Benchmark
+    public Object query39()
+    {
+        return support.query39(tables);
+    }
+
+    @Benchmark
+    public Object query17()
+    {
+        return support.query17(tables);
+    }
+
+    @Benchmark
+    public Object query16()
+    {
+        return support.query16(tables);
+    }
+
+    @Benchmark
+    public Object query18()
+    {
+        return support.query18(tables);
+    }
+
+    @Benchmark
+    public Object query22()
+    {
+        return support.query22(tables);
+    }
+
+    @Benchmark
+    public Object query27()
+    {
+        return support.query27(tables);
+    }
+
+    @Benchmark
+    public Object query28()
+    {
+        return support.query28(tables);
+    }
+
+    @Benchmark
+    public Object query42()
+    {
+        return support.query42(tables);
+    }
+
+    @Benchmark
+    public Object query43()
+    {
+        return support.query43(tables);
+    }
+
+    @Benchmark
+    public Object query46()
+    {
+        return support.query46(tables);
+    }
+
+    @Benchmark
+    public Object query34()
+    {
+        return support.query34(tables);
+    }
+
+    @Benchmark
+    public Object query50()
+    {
+        return support.query50(tables);
+    }
+
+    @Benchmark
+    public Object query52()
+    {
+        return support.query52(tables);
+    }
+
+    @Benchmark
+    public Object query68()
+    {
+        return support.query68(tables);
+    }
+
+    @Benchmark
+    public Object query79()
+    {
+        return support.query79(tables);
+    }
+
+    @Benchmark
+    public Object query93()
+    {
+        return support.query93(tables);
+    }
+
+    @Benchmark
+    public Object query91()
+    {
+        return support.query91(tables);
+    }
+
+    @Benchmark
+    public Object query82()
+    {
+        return support.query82(tables);
+    }
+
+    @Benchmark
+    public Object query37()
+    {
+        return support.query37(tables);
+    }
+
+    @Benchmark
+    public Object query40()
+    {
+        return support.query40(tables);
+    }
+
+    @Benchmark
+    public Object query55()
+    {
+        return support.query55(tables);
+    }
+
+    @Benchmark
+    public Object query71()
+    {
+        return support.query71(tables);
+    }
+
+    @Benchmark
+    public Object query72()
+    {
+        return support.query72(tables);
+    }
+
+    @Benchmark
+    public Object query33()
+    {
+        return support.query33(tables);
+    }
+
+    @Benchmark
+    public Object query56()
+    {
+        return support.query56(tables);
+    }
+
+    @Benchmark
+    public Object query60()
+    {
+        return support.query60(tables);
+    }
+
+    @Benchmark
+    public Object query65()
+    {
+        return support.query65(tables);
+    }
+
+    @Benchmark
+    public Object query66()
+    {
+        return support.query66(tables);
     }
 
     @Benchmark
@@ -93,6 +273,12 @@ public class BenchmarkQueries
     public Object query63()
     {
         return support.query63(tables);
+    }
+
+    @Benchmark
+    public Object query64()
+    {
+        return support.query64(tables);
     }
 
     @Benchmark
@@ -162,6 +348,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query59()
+    {
+        return support.query59(tables);
+    }
+
+    @Benchmark
     public Object query61()
     {
         return support.query61(tables);
@@ -186,6 +378,24 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query29()
+    {
+        return support.query29(tables);
+    }
+
+    @Benchmark
+    public Object query76()
+    {
+        return support.query76(tables);
+    }
+
+    @Benchmark
+    public Object query31()
+    {
+        return support.query31(tables);
+    }
+
+    @Benchmark
     public Object query32()
     {
         return support.query32(tables);
@@ -195,6 +405,42 @@ public class BenchmarkQueries
     public Object query81()
     {
         return support.query81(tables);
+    }
+
+    @Benchmark
+    public Object query83()
+    {
+        return support.query83(tables);
+    }
+
+    @Benchmark
+    public Object query74()
+    {
+        return support.query74(tables);
+    }
+
+    @Benchmark
+    public Object query75()
+    {
+        return support.query75(tables);
+    }
+
+    @Benchmark
+    public Object query78()
+    {
+        return support.query78(tables);
+    }
+
+    @Benchmark
+    public Object query87()
+    {
+        return support.query87(tables);
+    }
+
+    @Benchmark
+    public Object query85()
+    {
+        return support.query85(tables);
     }
 
     @Benchmark
@@ -216,15 +462,111 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query25()
+    {
+        return support.query25(tables);
+    }
+
+    @Benchmark
+    public Object query77()
+    {
+        return support.query77(tables);
+    }
+
+    @Benchmark
+    public Object query05()
+    {
+        return support.query05(tables);
+    }
+
+    @Benchmark
+    public Object query94()
+    {
+        return support.query94(tables);
+    }
+
+    @Benchmark
+    public Object query95()
+    {
+        return support.query95(tables);
+    }
+
+    @Benchmark
+    public Object query38()
+    {
+        return support.query38(tables);
+    }
+
+    @Benchmark
+    public Object query48()
+    {
+        return support.query48(tables);
+    }
+
+    @Benchmark
     public Object query09()
     {
         return support.query09(tables);
     }
 
     @Benchmark
+    public Object query03()
+    {
+        return support.query03(tables);
+    }
+
+    @Benchmark
+    public Object query04()
+    {
+        return support.query04(tables);
+    }
+
+    @Benchmark
+    public Object query07()
+    {
+        return support.query07(tables);
+    }
+
+    @Benchmark
+    public Object query08()
+    {
+        return support.query08(tables);
+    }
+
+    @Benchmark
+    public Object query11()
+    {
+        return support.query11(tables);
+    }
+
+    @Benchmark
     public Object query14()
     {
         return support.query14(tables);
+    }
+
+    @Benchmark
+    public Object query15()
+    {
+        return support.query15(tables);
+    }
+
+    @Benchmark
+    public Object query19()
+    {
+        return support.query19(tables);
+    }
+
+    @Benchmark
+    public Object query21()
+    {
+        return support.query21(tables);
+    }
+
+    @Benchmark
+    public Object query26()
+    {
+        return support.query26(tables);
     }
 
     @Benchmark

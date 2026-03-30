@@ -24,9 +24,11 @@ import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI32;
 import org.weakref.nitro.function.scalar.builtin.CastUtf8ToI64;
+import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
+import org.weakref.nitro.function.scalar.builtin.DivideI64ToF64;
 import org.weakref.nitro.function.scalar.builtin.DivideRoundI64;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleI64;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
@@ -78,6 +80,7 @@ public final class TestPrimitiveFunctions
                 Cardinality.class,
                 CastI64ToI32.class,
                 CastUtf8ToI64.class,
+                CoalesceI64.class,
                 ConcatUtf8.class,
                 ContainsUtf8.class,
                 ExtractHostUtf8.class,
@@ -103,6 +106,7 @@ public final class TestPrimitiveFunctions
                 SubtractExactI64.class,
                 MultiplyI64.class,
                 DivideI64.class,
+                DivideI64ToF64.class,
                 DivideRoundI64.class,
                 DivideScaleI64.class,
                 DivideScaleRoundI64.class,
