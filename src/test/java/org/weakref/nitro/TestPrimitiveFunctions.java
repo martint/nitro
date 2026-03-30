@@ -28,6 +28,7 @@ import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.DivideRoundI64;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleI64;
+import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
 import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
@@ -101,6 +102,7 @@ public final class TestPrimitiveFunctions
                 DivideI64.class,
                 DivideRoundI64.class,
                 DivideScaleI64.class,
+                DivideScaleRoundI64.class,
                 ModuloI64.class,
                 AndBoolean.class,
                 OrBoolean.class,

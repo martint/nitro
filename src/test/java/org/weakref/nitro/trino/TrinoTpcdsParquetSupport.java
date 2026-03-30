@@ -772,6 +772,32 @@ public final class TrinoTpcdsParquetSupport
                 outputTypes);
     }
 
+    public MaterializedResult query61(TpcdsParquetTables tables)
+    {
+        List<Type> salesPriceTypes = tableColumnTypes(tables, "store_sales", List.of("ss_ext_sales_price"));
+        Type salesPriceType = salesPriceTypes.getFirst();
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesPriceType));
+        Type revenueType = salesSum.getFinalType();
+        Type percentType = createDecimalType(38, 12);
+        List<Type> scalarTypes = List.of(revenueType);
+        List<Type> joinedTypes = List.of(revenueType, revenueType);
+        List<Type> outputTypes = List.of(revenueType, revenueType, percentType);
+
+        List<Page> promotionalSales = query61SalesPages(tables, true, 61_00);
+        List<Page> totalSales = query61SalesPages(tables, false, 61_10);
+
+        return executePagesPipeline(
+                executeNestedLoopPages(promotionalSales, scalarTypes, totalSales, scalarTypes),
+                List.of(
+                        factoryStep(topNFactory(61_20, joinedTypes, 100, List.of(0, 1), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                61_21,
+                                Optional.empty(),
+                                List.of(field(0, revenueType), field(1, revenueType), query61PercentExpression(revenueType, percentType)),
+                                outputTypes))),
+                outputTypes);
+    }
+
     public MaterializedResult query57(TpcdsParquetTables tables)
     {
         List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", List.of("cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
@@ -1118,6 +1144,89 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(itemTypes.get(1)),
                                 List.of(4),
                                 salesSum.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))));
+    }
+
+    private List<Page> query61SalesPages(TpcdsParquetTables tables, boolean promotionalOnly, int operatorIdBase)
+    {
+        List<String> salesColumns = promotionalOnly
+                ? List.of("ss_sold_date_sk", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_promo_sk", "ss_ext_sales_price")
+                : List.of("ss_sold_date_sk", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_ext_sales_price");
+        List<Type> salesTypes = tableColumnTypes(tables, "store_sales", salesColumns);
+        Type salesPriceType = salesTypes.getLast();
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesPriceType));
+        Type storeOffsetType = tableColumnTypes(tables, "store", List.of("s_gmt_offset")).getFirst();
+        Type customerOffsetType = tableColumnTypes(tables, "customer_address", List.of("ca_gmt_offset")).getFirst();
+        Type itemCategoryType = tableColumnTypes(tables, "item", List.of("i_category")).getFirst();
+        Type promotionFlagType = tableColumnTypes(tables, "promotion", List.of("p_channel_dmail")).getFirst();
+
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_gmt_offset"),
+                Optional.of(equal(1, -500L, storeOffsetType)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                Optional.of(and(equal(1, 1998, INTEGER), equal(2, 11, INTEGER))),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> customerPages = relationPages(
+                tables,
+                "customer",
+                List.of("c_customer_sk", "c_current_addr_sk"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, BIGINT)),
+                List.of(BIGINT, BIGINT));
+        List<Page> addressPages = relationPages(
+                tables,
+                "customer_address",
+                List.of("ca_address_sk", "ca_gmt_offset"),
+                Optional.of(equal(1, -500L, customerOffsetType)),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_category"),
+                Optional.of(equal(1, itemCategoryType, "Jewelry")),
+                List.of(field(0, BIGINT)),
+                List.of(BIGINT));
+
+        List<PipelineStep> steps = new ArrayList<>();
+        steps.add(hashJoinStep(new HashJoinSpec(operatorIdBase, salesTypes, List.of(3), storePages, List.of(BIGINT), List.of(0))));
+
+        List<Type> afterStoreTypes = concatTypes(salesTypes, List.of(BIGINT));
+        List<Type> afterPromotionTypes = afterStoreTypes;
+        if (promotionalOnly) {
+            List<Page> promotionPages = relationPages(
+                    tables,
+                    "promotion",
+                    List.of("p_promo_sk", "p_channel_dmail", "p_channel_email", "p_channel_tv"),
+                    Optional.of(or(equal(1, promotionFlagType, "Y"), equal(2, promotionFlagType, "Y"), equal(3, promotionFlagType, "Y"))),
+                    List.of(field(0, BIGINT)),
+                    List.of(BIGINT));
+            steps.add(hashJoinStep(new HashJoinSpec(operatorIdBase + 1, afterStoreTypes, List.of(4), promotionPages, List.of(BIGINT), List.of(0))));
+            afterPromotionTypes = concatTypes(afterStoreTypes, List.of(BIGINT));
+        }
+
+        steps.add(hashJoinStep(new HashJoinSpec(operatorIdBase + 2, afterPromotionTypes, List.of(0), datePages, List.of(BIGINT), List.of(0))));
+        List<Type> afterDateTypes = concatTypes(afterPromotionTypes, List.of(BIGINT));
+        steps.add(hashJoinStep(new HashJoinSpec(operatorIdBase + 3, afterDateTypes, List.of(2), customerPages, List.of(BIGINT, BIGINT), List.of(0))));
+        List<Type> afterCustomerTypes = concatTypes(afterDateTypes, List.of(BIGINT, BIGINT));
+        steps.add(hashJoinStep(new HashJoinSpec(operatorIdBase + 4, afterCustomerTypes, List.of(afterCustomerTypes.size() - 1), addressPages, List.of(BIGINT), List.of(0))));
+        List<Type> afterAddressTypes = concatTypes(afterCustomerTypes, List.of(BIGINT));
+        steps.add(hashJoinStep(new HashJoinSpec(operatorIdBase + 5, afterAddressTypes, List.of(1), itemPages, List.of(BIGINT), List.of(0))));
+        steps.add(factoryStep(aggregationFactory(
+                operatorIdBase + 6,
+                salesSum.createAggregatorFactory(Step.SINGLE, List.of(promotionalOnly ? 5 : 4), OptionalInt.empty()))));
+
+        return executePipelinePages(
+                tables.tableFiles("store_sales"),
+                salesColumns,
+                steps);
     }
 
     private List<Page> query58AllowedDatesPages(TpcdsParquetTables tables)
@@ -3570,6 +3679,18 @@ public final class TrinoTpcdsParquetSupport
                 field(3, revenueType),
                 cast(webDeviationBase, webDeviationBase.type(), percentType),
                 cast(averageBase, averageBase.type(), averageType));
+    }
+
+    private static RowExpression query61PercentExpression(Type revenueType, Type percentType)
+    {
+        Type castType = createDecimalType(15, 4);
+        Type multiplierType = createDecimalType(10, 0);
+        RowExpression percentBase = multiply(
+                divide(
+                        cast(field(0, revenueType), revenueType, castType),
+                        cast(field(1, revenueType), revenueType, castType)),
+                constant(100L, multiplierType));
+        return cast(percentBase, percentBase.type(), percentType);
     }
 
     private static RowExpression query44AverageKey(RowExpression sum, RowExpression count)

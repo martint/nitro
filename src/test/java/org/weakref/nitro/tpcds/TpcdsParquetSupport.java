@@ -312,6 +312,15 @@ final class TpcdsParquetSupport
         return projectQuery58Output(allocator, primitiveRegistry, joined);
     }
 
+    public static Operator query61(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator promotionalSales = query61Sales(allocator, primitiveRegistry, tables, true);
+        Operator totalSales = query61Sales(allocator, primitiveRegistry, tables, false);
+        Operator joined = new NestedLoopJoinOperator(allocator, promotionalSales, totalSales);
+        joined = new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
+        return projectQuery61Output(allocator, primitiveRegistry, joined);
+    }
+
     public static Operator query57(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         List<Row> monthlyRankedRows;
@@ -2068,6 +2077,67 @@ final class TpcdsParquetSupport
                 facts);
     }
 
+    private static Operator query61Sales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean promotionalOnly)
+    {
+        Operator sales = promotionalOnly
+                ? factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_promo_sk", "ss_ext_sales_price")
+                : factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_ext_sales_price");
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                promotionalOnly ? 3 : 3,
+                filteredProjectedTable(allocator, primitiveRegistry, tables, "store", equal(1, -500L), new String[] {"s_store_sk", "s_gmt_offset"}, 0),
+                0);
+        if (promotionalOnly) {
+            sales = new HashJoinOperator(
+                    allocator,
+                    sales,
+                    4,
+                    filteredProjectedTable(
+                            allocator,
+                            primitiveRegistry,
+                            tables,
+                            "promotion",
+                            or(equalUtf8(1, "Y"), equalUtf8(2, "Y"), equalUtf8(3, "Y")),
+                            new String[] {"p_promo_sk", "p_channel_dmail", "p_channel_email", "p_channel_tv"},
+                            0),
+                    0);
+        }
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        and(equal(1, 1998), equal(2, 11)),
+                        new String[] {"d_date_sk", "d_year", "d_moy"},
+                        0),
+                0);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                2,
+                customerScan(allocator, tables, "c_customer_sk", "c_current_addr_sk"),
+                0);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                promotionalOnly ? 10 : 8,
+                filteredProjectedTable(allocator, primitiveRegistry, tables, "customer_address", equal(1, -500L), new String[] {"ca_address_sk", "ca_gmt_offset"}, 0),
+                0);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                1,
+                filteredProjectedTable(allocator, primitiveRegistry, tables, "item", equalUtf8(1, "Jewelry"), new String[] {"i_item_sk", "i_category"}, 0),
+                0);
+        sales = projectInputs(allocator, primitiveRegistry, sales, promotionalOnly ? 5 : 4);
+        return new AggregationOperator(allocator, List.of(new Sum(0)), sales);
+    }
+
     private static Operator query58AllowedDates(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator allowedDates = scannedTable(allocator, tables, "date_dim", "d_date", "d_week_seq");
@@ -2216,6 +2286,26 @@ final class TpcdsParquetSupport
                         new Reference(new Input(3), Stream.VALUES),
                         new Reference(webDeviation, Stream.VALUES),
                         new Reference(average, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery61Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable scale = new Variable(0);
+        Variable percent = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(scale, new Literal(100_000_000_000_000L), AllMask.ALL),
+                        new Assignment(percent, new Call("divide_scale_round_i64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(scale, Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(percent, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }

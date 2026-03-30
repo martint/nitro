@@ -26,6 +26,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
@@ -794,6 +795,24 @@ public class TestPlanEvaluator
         RleVector vector = (RleVector) result.values();
         assertThat(vector.counts()).containsExactly(1, 1, 2);
         assertThat(((BooleanVector) vector.values()).values()).containsExactly(true, true, false);
+    }
+
+    @Test
+    void testDivideScaleRoundFunctionRoundsScaledDivision()
+    {
+        PrimitiveFunction divideScaleRound = builtinPrimitiveRegistry().get("divide_scale_round_i64");
+
+        Streams result = divideScaleRound.apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {1, 2, 5})),
+                        Streams.ofValues(new I64Vector(new long[] {6, 3, 2})),
+                        Streams.ofValues(new I64Vector(new long[] {100, 100, 10}))),
+                Mask.all(3),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(((I64Vector) result.values()).values()).containsExactly(17L, 67L, 25L);
     }
 
     @Test
@@ -1943,6 +1962,7 @@ public class TestPlanEvaluator
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         primitiveRegistry.register(scalarRegistry.register(AddI64.class));
+        primitiveRegistry.register(scalarRegistry.register(DivideScaleRoundI64.class));
         primitiveRegistry.register(scalarRegistry.register(EqualI64.class));
         primitiveRegistry.register(scalarRegistry.register(InUtf8.class));
         primitiveRegistry.register(scalarRegistry.register(LessThanI64.class));
