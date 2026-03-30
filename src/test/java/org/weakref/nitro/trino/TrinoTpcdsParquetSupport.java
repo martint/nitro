@@ -287,6 +287,86 @@ public final class TrinoTpcdsParquetSupport
         return queryRevenueRatioByClass(tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
     }
 
+    public MaterializedResult query89(TpcdsParquetTables tables)
+    {
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        Type salesType = factTypes.get(3);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        TestingAggregationFunction monthlyAverage = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(salesSum.getFinalType()));
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_category", "i_class", "i_brand"));
+        List<Type> projectedItemTypes = List.of(BIGINT, itemTypes.get(1), itemTypes.get(2), itemTypes.get(3));
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_moy", "d_year"));
+        List<Type> projectedDateTypes = List.of(BIGINT, dateTypes.get(1));
+        List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_name", "s_company_name"));
+        List<Type> groupedTypes = List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), storeTypes.get(1), storeTypes.get(2), dateTypes.get(1), salesSum.getFinalType());
+        List<Type> outputTypes = List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), storeTypes.get(1), storeTypes.get(2), dateTypes.get(1), salesSum.getFinalType(), monthlyAverage.getFinalType());
+        List<Type> sortedTypes = concatTypes(outputTypes, List.of(DOUBLE));
+
+        List<Page> itemPages = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_category", "i_class", "i_brand"),
+                Optional.of(query89ItemPredicate()),
+                List.of(field(0, BIGINT), field(1, itemTypes.get(1)), field(2, itemTypes.get(2)), field(3, itemTypes.get(3))),
+                projectedItemTypes);
+        List<Page> datePages = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_moy", "d_year"),
+                Optional.of(equal(2, 1999, INTEGER)),
+                List.of(field(0, BIGINT), field(1, dateTypes.get(1))),
+                projectedDateTypes);
+        List<Page> storePages = relationPages(
+                tables,
+                "store",
+                List.of("s_store_sk", "s_store_name", "s_company_name"),
+                Optional.empty(),
+                List.of(field(0, BIGINT), field(1, storeTypes.get(1)), field(2, storeTypes.get(2))),
+                storeTypes);
+
+        return executePipeline(
+                tables.tableFiles("store_sales"),
+                List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"),
+                List.of(
+                        hashJoinStep(new HashJoinSpec(89_0, factTypes, List.of(1), itemPages, projectedItemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(89_1, concatTypes(factTypes, projectedItemTypes), List.of(0), datePages, projectedDateTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(89_2, concatTypes(concatTypes(factTypes, projectedItemTypes), projectedDateTypes), List.of(2), storePages, storeTypes, List.of(0))),
+                        factoryStep(hashAggregationFactory(
+                                89_3,
+                                groupedTypes.subList(0, 6),
+                                List.of(5, 6, 7, 11, 12, 9),
+                                salesSum.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()))),
+                        factoryStep(windowFactory(
+                                89_4,
+                                groupedTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6),
+                                List.of(0, 2, 3, 4),
+                                List.of(),
+                                List.of(),
+                                List.of(aggregateWindowFunction("avg", List.of(salesSum.getFinalType()), monthlyAverage.getFinalType(), PARTITION_ROWS_FRAME, 6)))),
+                        factoryStep(filterAndProjectFactory(
+                                89_5,
+                                Optional.of(queryRelativeDeviationPredicate(6, 7, salesSum.getFinalType(), monthlyAverage.getFinalType())),
+                                List.of(
+                                        field(0, itemTypes.get(1)),
+                                        field(1, itemTypes.get(2)),
+                                        field(2, itemTypes.get(3)),
+                                        field(3, storeTypes.get(1)),
+                                        field(4, storeTypes.get(2)),
+                                        field(5, dateTypes.get(1)),
+                                        field(6, salesSum.getFinalType()),
+                                        field(7, monthlyAverage.getFinalType()),
+                                        subtract(cast(field(6, salesSum.getFinalType()), salesSum.getFinalType(), DOUBLE), cast(field(7, monthlyAverage.getFinalType()), monthlyAverage.getFinalType(), DOUBLE), DOUBLE)),
+                                sortedTypes)),
+                        factoryStep(topNFactory(89_6, sortedTypes, 100, List.of(8, 3), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                89_7,
+                                Optional.empty(),
+                                identityProjections(outputTypes),
+                                outputTypes))),
+                outputTypes);
+    }
+
     private MaterializedResult queryRevenueRatioByClass(TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         List<String> factColumns = List.of(soldDateColumn, itemColumn, salesColumn);
@@ -5231,6 +5311,17 @@ public final class TrinoTpcdsParquetSupport
     private static RowExpression query12CategoryPredicate()
     {
         return varcharAnyOf(3, Set.of("Sports", "Books", "Home"));
+    }
+
+    private static RowExpression query89ItemPredicate()
+    {
+        RowExpression firstBranch = and(
+                varcharAnyOf(1, Set.of("Books", "Electronics", "Sports")),
+                varcharAnyOf(2, Set.of("computers", "stereo", "football")));
+        RowExpression secondBranch = and(
+                varcharAnyOf(1, Set.of("Men", "Jewelry", "Women")),
+                varcharAnyOf(2, Set.of("shirts", "birdal", "dresses")));
+        return or(firstBranch, secondBranch);
     }
 
     private static RowExpression query53DeviationPredicate(Type sumType, Type averageType)

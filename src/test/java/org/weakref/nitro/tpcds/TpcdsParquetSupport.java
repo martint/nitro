@@ -162,6 +162,22 @@ final class TpcdsParquetSupport
         return queryRevenueRatioByClass(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
     }
 
+    public static Operator query89(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator monthlySales = query89MonthlySalesByCategoryClassBrandStore(allocator, primitiveRegistry, tables);
+        monthlySales = new WindowOperator(
+                allocator,
+                monthlySales,
+                new int[] {0, 2, 3, 4},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(6)));
+        monthlySales = filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(6, 7));
+        monthlySales = projectQuery89SortKey(allocator, primitiveRegistry, monthlySales);
+        monthlySales = new TopNOperator(allocator, 100, new int[] {8, 3}, new boolean[] {false, false}, monthlySales);
+        return projectInputs(allocator, primitiveRegistry, monthlySales, 0, 1, 2, 3, 4, 5, 6, 7);
+    }
+
     private static Operator queryRevenueRatioByClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
     {
         Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
@@ -1116,6 +1132,17 @@ final class TpcdsParquetSupport
     private static FilterSpec query12CategoryPredicate()
     {
         return utf8AnyOf(3, Set.of("Sports", "Books", "Home"));
+    }
+
+    private static FilterSpec query89ItemPredicate()
+    {
+        FilterSpec firstBranch = and(
+                utf8AnyOf(1, Set.of("Books", "Electronics", "Sports")),
+                utf8AnyOf(2, Set.of("computers", "stereo", "football")));
+        FilterSpec secondBranch = and(
+                utf8AnyOf(1, Set.of("Men", "Jewelry", "Women")),
+                utf8AnyOf(2, Set.of("shirts", "birdal", "dresses")));
+        return or(firstBranch, secondBranch);
     }
 
     private static FilterSpec query53QuarterlyDeviationPredicate(int sumIndex, int averageIndex)
@@ -2916,6 +2943,49 @@ final class TpcdsParquetSupport
                 facts);
     }
 
+    private static Operator query89MonthlySalesByCategoryClassBrandStore(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query89ItemPredicate(),
+                        new String[] {"i_item_sk", "i_category", "i_class", "i_brand"}),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        equal(2, 1999),
+                        new String[] {"d_date_sk", "d_moy", "d_year"},
+                        0,
+                        1),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                2,
+                scannedTable(allocator, tables, "store", "s_store_sk", "s_store_name", "s_company_name"),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 5, 6, 7, 11, 12, 9, 3);
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3, 4, 5),
+                List.of(new Sum(6)),
+                facts);
+    }
+
     private static Operator query54RevenueByCustomer(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator revenue = factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_sales_price");
@@ -3529,6 +3599,29 @@ final class TpcdsParquetSupport
                                 new Reference(new Input(4), Stream.VALUES),
                                 new Reference(new Input(5), Stream.VALUES),
                                 new Reference(ratio, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery89SortKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable difference = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(new Assignment(difference, new Call("subtract", List.of(
+                                new Reference(new Input(6), Stream.VALUES),
+                                new Reference(new Input(7), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES),
+                                new Reference(new Input(6), Stream.VALUES),
+                                new Reference(new Input(7), Stream.VALUES),
+                                new Reference(difference, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
