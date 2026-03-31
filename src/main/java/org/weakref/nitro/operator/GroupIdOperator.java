@@ -30,6 +30,7 @@ public final class GroupIdOperator
     private final Operator source;
     private final int[][] groupingSetInputs;
     private final boolean[] outputCanBeNullExtended;
+    private int[] currentSourcePositions;
 
     private Batch currentSourceBatch;
     private Mask currentSourceMask;
@@ -101,6 +102,7 @@ public final class GroupIdOperator
                 currentSourceBatch.close();
                 currentSourceBatch = null;
                 currentSourceMask = null;
+                currentSourcePositions = null;
                 currentGroupingSet = 0;
                 continue;
             }
@@ -120,6 +122,7 @@ public final class GroupIdOperator
             }
             currentSourceBatch = batch;
             currentSourceMask = mask;
+            currentSourcePositions = materializedPositions(mask);
             currentGroupingSet = 0;
             return true;
         }
@@ -146,21 +149,21 @@ public final class GroupIdOperator
     private Streams materializeOutput(int outputIndex, int sourceIndex, int rowCount)
     {
         Output sourceOutput = currentSourceBatch.output(sourceIndex >= 0 ? sourceIndex : outputIndex);
-        Vector values = allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.VALUES), currentSourceMask);
+        Vector values = allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.VALUES), currentSourcePositions);
 
         Streams.Builder streams = Streams.builder()
                 .put(Stream.VALUES, values);
 
         if (sourceIndex >= 0) {
             if (sourceOutput.streams().contains(Stream.NULLS)) {
-                streams.put(Stream.NULLS, allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.NULLS), currentSourceMask));
+                streams.put(Stream.NULLS, allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.NULLS), currentSourcePositions));
             }
             else if (outputCanBeNullExtended[outputIndex]) {
                 streams.put(Stream.NULLS, booleanVector(rowCount, false));
             }
 
             if (sourceOutput.streams().contains(Stream.ERRORS)) {
-                streams.put(Stream.ERRORS, allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.ERRORS), currentSourceMask));
+                streams.put(Stream.ERRORS, allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.ERRORS), currentSourcePositions));
             }
             return streams.build();
         }
@@ -170,6 +173,15 @@ public final class GroupIdOperator
             streams.put(Stream.ERRORS, booleanVector(rowCount, false));
         }
         return streams.build();
+    }
+
+    private static int[] materializedPositions(Mask mask)
+    {
+        int[] positions = new int[mask.count()];
+        for (int index = 0; index < positions.length; index++) {
+            positions[index] = mask.position(index);
+        }
+        return positions;
     }
 
     private Streams groupIdStreams(int groupingSetIndex, int rowCount)

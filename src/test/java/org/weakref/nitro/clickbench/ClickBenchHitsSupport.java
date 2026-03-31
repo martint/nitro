@@ -23,7 +23,6 @@ import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.FilterOperator;
@@ -31,6 +30,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
+import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
@@ -726,7 +726,7 @@ public final class ClickBenchHitsSupport
         };
         try {
             if (Files.isDirectory(file)) {
-                return new MultiFileScanOperator(parquetFiles(file), columns.length, operatorFactory);
+                return new MultiStageOperator(columns.length, parquetFiles(file), operatorFactory);
             }
         }
         catch (IOException exception) {
@@ -1344,77 +1344,6 @@ public final class ClickBenchHitsSupport
                     dontCountHits,
                     refererHash,
                     urlHash);
-        }
-    }
-
-    private static final class MultiFileScanOperator
-            implements Operator
-    {
-        private final List<Path> files;
-        private final int outputCount;
-        private final Function<Path, Operator> operatorFactory;
-
-        private int fileIndex;
-        private Operator current;
-
-        private MultiFileScanOperator(List<Path> files, int outputCount, Function<Path, Operator> operatorFactory)
-        {
-            this.files = List.copyOf(files);
-            this.outputCount = outputCount;
-            this.operatorFactory = operatorFactory;
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return outputCount;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            advanceIfNecessary();
-            return current != null && current.hasNext();
-        }
-
-        @Override
-        public org.weakref.nitro.operator.Batch next()
-        {
-            if (!hasNext()) {
-                throw new IllegalStateException("No more Parquet rows");
-            }
-            return current.next();
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            if (current != null) {
-                current.constrain(mask);
-            }
-        }
-
-        @Override
-        public void close()
-        {
-            closeCurrent();
-        }
-
-        private void advanceIfNecessary()
-        {
-            while ((current == null || !current.hasNext()) && fileIndex < files.size()) {
-                closeCurrent();
-                current = operatorFactory.apply(files.get(fileIndex++));
-            }
-        }
-
-        private void closeCurrent()
-        {
-            if (current == null) {
-                return;
-            }
-            current.close();
-            current = null;
         }
     }
 

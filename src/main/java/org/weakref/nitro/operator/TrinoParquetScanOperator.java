@@ -891,7 +891,6 @@ public final class TrinoParquetScanOperator
         private void constrain(Mask mask)
         {
             maskHolder[0] = mask;
-            Arrays.fill(buffers, null);
         }
 
         private void releaseBlock(int columnIndex)

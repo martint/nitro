@@ -32,6 +32,7 @@ public final class TpcdsParquetDumper
         Session session = testSessionBuilder()
                 .setCatalog("hive")
                 .setSchema("default")
+                .setCatalogSessionProperty("hive", "compression_codec", arguments.parquetCompression())
                 .build();
 
         try (QueryRunner queryRunner = new StandaloneQueryRunner(session)) {
@@ -44,7 +45,6 @@ public final class TpcdsParquetDumper
                     "hive.metastore.catalog.dir", arguments.outputRoot().toAbsolutePath().toString(),
                     "fs.hadoop.enabled", "true",
                     "hive.security", "allow-all"));
-
             String targetSchema = arguments.targetSchema();
             execute(queryRunner, "CREATE SCHEMA IF NOT EXISTS hive." + quotedIdentifier(targetSchema));
 
@@ -168,7 +168,7 @@ public final class TpcdsParquetDumper
         return "%d.%03ds".formatted(remainingSeconds, millis);
     }
 
-    private record Arguments(Path outputRoot, String sourceSchema, String targetSchema, List<String> tables, boolean overwrite)
+    private record Arguments(Path outputRoot, String sourceSchema, String targetSchema, List<String> tables, boolean overwrite, String parquetCompression)
     {
         private static Arguments parse(String[] args)
         {
@@ -177,6 +177,7 @@ public final class TpcdsParquetDumper
             String targetSchema = null;
             List<String> tables = List.of();
             boolean overwrite = false;
+            String parquetCompression = "GZIP";
 
             for (int index = 0; index < args.length; index++) {
                 String argument = args[index];
@@ -185,6 +186,7 @@ public final class TpcdsParquetDumper
                     case "--source-schema" -> sourceSchema = requireValue(args, ++index, argument);
                     case "--target-schema" -> targetSchema = requireValue(args, ++index, argument);
                     case "--tables" -> tables = parseTables(requireValue(args, ++index, argument));
+                    case "--parquet-compression" -> parquetCompression = requireValue(args, ++index, argument).toUpperCase(Locale.ENGLISH);
                     case "--overwrite" -> overwrite = true;
                     case "--help", "-h" -> {
                         printUsage();
@@ -202,7 +204,7 @@ public final class TpcdsParquetDumper
                 targetSchema = defaultTargetSchema(sourceSchema);
             }
 
-            return new Arguments(outputRoot, sourceSchema, targetSchema, tables, overwrite);
+            return new Arguments(outputRoot, sourceSchema, targetSchema, tables, overwrite, parquetCompression);
         }
 
         private static String requireValue(String[] args, int index, String option)
@@ -239,6 +241,7 @@ public final class TpcdsParquetDumper
                       --source-schema <schema>  TPC-DS source schema, default: sf1
                       --target-schema <schema>  Hive target schema, default: source schema with '.' replaced by '_'
                       --tables <a,b,c>         Comma-separated subset of tables, default: all tables in the source schema
+                      --parquet-compression    Parquet compression codec, default: GZIP
                       --overwrite              Drop and recreate target tables if they already exist
                       --help                   Show this message
                     """);

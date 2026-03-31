@@ -45,9 +45,9 @@ public final class ConcatUtf8
     }
 
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
     }
 
     @Override

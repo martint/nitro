@@ -47,9 +47,15 @@ public final class EqualI64
     }
 
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
+    }
+
+    @Override
+    public Set<Stream> requiredMaskInputStreams(int inputIndex)
+    {
+        return PrimitiveFunction.VALUES_AND_NULLS_INPUT_STREAMS;
     }
 
     @Override

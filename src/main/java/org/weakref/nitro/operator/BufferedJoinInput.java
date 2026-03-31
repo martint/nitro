@@ -147,8 +147,14 @@ final class BufferedJoinInput
         }
         Output output = firstRetainedBatch.output(outputIndex);
         Streams.Builder streams = Streams.builder();
-        for (Stream stream : output.streams()) {
-            streams.put(stream, output.borrow(stream));
+        if (output.hasValues()) {
+            streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
+        }
+        if (output.hasNulls()) {
+            streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+        }
+        if (output.hasErrors()) {
+            streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
         }
         schema[outputIndex] = streams.build();
         return schema[outputIndex];
@@ -162,8 +168,14 @@ final class BufferedJoinInput
             }
             Output output = batch.output(outputIndex);
             Streams.Builder streams = Streams.builder();
-            for (Stream stream : output.streams()) {
-                streams.put(stream, output.borrow(stream));
+            if (output.hasValues()) {
+                streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
+            }
+            if (output.hasNulls()) {
+                streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+            }
+            if (output.hasErrors()) {
+                streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
             }
             schema[outputIndex] = streams.build();
         }
@@ -173,7 +185,7 @@ final class BufferedJoinInput
     {
         for (int outputIndex = 0; outputIndex < outputStreams.length; outputIndex++) {
             if (outputStreams[outputIndex] == null) {
-                outputStreams[outputIndex] = java.util.Set.copyOf(batch.output(outputIndex).streams());
+                outputStreams[outputIndex] = batch.output(outputIndex).streams();
             }
         }
     }

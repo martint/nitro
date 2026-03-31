@@ -123,6 +123,32 @@ public final class Output
         return borrow(stream);
     }
 
+    public boolean has(Stream stream)
+    {
+        requireNonNull(stream, "stream is null");
+        return (exposedFlags & streamFlag(stream)) != 0;
+    }
+
+    public boolean hasValues()
+    {
+        return (exposedFlags & VALUES_FLAG) != 0;
+    }
+
+    public boolean hasNulls()
+    {
+        return (exposedFlags & NULLS_FLAG) != 0;
+    }
+
+    public boolean hasErrors()
+    {
+        return (exposedFlags & ERRORS_FLAG) != 0;
+    }
+
+    public boolean isValuesOnly()
+    {
+        return exposedFlags == VALUES_FLAG;
+    }
+
     public Vector take(Stream stream)
     {
         checkOpen();
@@ -134,6 +160,11 @@ public final class Output
     public Set<Stream> streams()
     {
         return STREAM_SETS[exposedFlags];
+    }
+
+    int flags()
+    {
+        return exposedFlags;
     }
 
     public Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size)

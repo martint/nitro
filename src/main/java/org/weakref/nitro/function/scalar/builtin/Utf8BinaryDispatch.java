@@ -507,7 +507,7 @@ public final class Utf8BinaryDispatch
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
         Vector leftValues = inputs.getFirst().values();
-        BooleanVector leftNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.getFirst().getOrNull(Stream.NULLS));
 
         if (!(leftValues instanceof DictionaryVector leftDictionary) || !allSingleValueRle(functionName, inputs.subList(1, inputs.size()))) {
             return false;
@@ -517,7 +517,7 @@ public final class Utf8BinaryDispatch
         BinaryVector[] literals = literalVectors(functionName, inputs.subList(1, inputs.size()));
         boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
         int[] ids = leftDictionary.ids();
-        mask.retainIf(position -> !isNull(leftNulls, position) && dictionaryMatches[ids[position]] == selectMatches);
+        mask.retainIf(position -> !leftNulls.value(position) && dictionaryMatches[ids[position]] == selectMatches);
         return true;
     }
 

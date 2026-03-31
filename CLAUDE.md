@@ -75,4 +75,7 @@ A work-in-progress expression evaluator with an IR layer:
 ### Code Style and others
 
 - Do not use abbreviations in class, method or variable names, except for well-known terms (e.g. `Rle` for run-length encoding, `max`, `min`, etc).
+- Tests and benchmark harnesses must not simulate query-engine execution by draining intermediate operator or page results and replaying them from rows, pages, constant tables, values sources, or other cached intermediate forms.
+- If a subplan appears multiple times and the engine does not support reuse or CTE semantics for that shape, the harness must assemble and evaluate that subplan multiple times as operators instead of caching and replaying intermediate results in test code.
+- Only the final consumer may iterate a query plan's top-level operator output. Intermediate harness code must compose operators, not execute them.
 - This project uses Jujutsu VCS for version control

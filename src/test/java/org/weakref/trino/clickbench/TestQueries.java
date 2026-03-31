@@ -106,6 +106,56 @@ public class TestQueries
     }
 
     @Test
+    void testQuery39()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query39(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isEmpty();
+        }
+    }
+
+    @Test
+    void testQuery40()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query40(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isEmpty();
+        }
+    }
+
+    @Test
+    void testQuery41()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query41(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isEmpty();
+        }
+    }
+
+    @Test
+    void testQuery42()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query42(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isEmpty();
+        }
+    }
+
+    @Test
+    void testQuery43()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query43(writeHitsFixture());
+            assertThat(result.getMaterializedRows()).isEmpty();
+        }
+    }
+
+    @Test
     void testQuery21()
             throws IOException
     {

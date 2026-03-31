@@ -20,6 +20,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -54,6 +55,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -1867,6 +1869,111 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testCastI64ToI32ProjectsDictionaryEncodedValues()
+    {
+        Variable castValue = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        castValue,
+                        new Call("cast_i64_to_i32", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(castValue, Stream.VALUES)));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {7L, 11L, 13L}));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(castValue, Stream.VALUES), Mask.all(4));
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+
+        DictionaryVector encoded = (DictionaryVector) result.values();
+        assertThat(encoded.ids()).containsExactly(2, 0, 1, 2);
+        assertThat(((I32Vector) encoded.values()).values()).containsExactly(7, 11, 13);
+    }
+
+    @Test
+    void testCastI64ToI32DoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
+    {
+        Variable castValue = new Variable(0);
+        Variable zero = new Variable(1);
+        Variable sum = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(
+                                castValue,
+                                new Call("cast_i64_to_i32", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(
+                                sum,
+                                new Call("add", List.of(
+                                        new Reference(castValue, Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(sum, Stream.VALUES)));
+
+        AtomicBoolean requestedNulls = new AtomicBoolean();
+        DictionaryVector values = DictionaryVector.wrap(new int[] {1, 0, 1}, new I64Vector(new long[] {17L, 29L}));
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        requestedNulls.set(true);
+                        throw new AssertionError("cast_i64_to_i32 should not request input nulls for values-only output");
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        return values;
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(sum, Stream.VALUES), Mask.all(3));
+        assertThat(result.get(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+        DictionaryVector encoded = (DictionaryVector) result.get(Stream.VALUES);
+        assertThat(encoded.ids()).containsExactly(1, 0, 1);
+        assertThat(((I64Vector) encoded.values()).values()).containsExactly(17L, 29L);
+        assertThat(requestedNulls).isFalse();
+    }
+
+    @Test
+    void testIsNullI64RequestsOnlyInputNullStream()
+    {
+        Variable isNull = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        isNull,
+                        new Call("is_null_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(isNull, Stream.VALUES)));
+
+        AtomicBoolean requestedValues = new AtomicBoolean();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        requestedValues.set(true);
+                        throw new AssertionError("is_null_i64 should not request the VALUES stream");
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        return new BooleanVector(new boolean[] {false, true, false});
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(3));
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(false, true, false);
+        assertThat(requestedValues).isFalse();
+    }
+
+    @Test
     void testDivideI64ToF64ProjectsFloatingPointAverage()
     {
         Variable average = new Variable(0);
@@ -1892,6 +1999,204 @@ public class TestPlanEvaluator
         Streams result = evaluator.evaluate(new Reference(average, Stream.VALUES), Mask.all(2));
         assertThat(((F64Vector) result.get(Stream.VALUES)).values()).containsExactly(4.5, 0.0);
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true);
+    }
+
+    @Test
+    void testSubtractExactErrorPathDoesNotRequestInputNulls()
+    {
+        Variable difference = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        difference,
+                        new Call("subtract_exact", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(difference, Stream.ERRORS)));
+
+        AtomicBoolean requestedNulls = new AtomicBoolean();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS)) || reference.equals(new Reference(new Input(1), Stream.NULLS))) {
+                        requestedNulls.set(true);
+                        throw new AssertionError("subtract_exact error-only path should not request input nulls");
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        return new I64Vector(new long[] {Long.MIN_VALUE, 10L});
+                    }
+                    if (reference.equals(new Reference(new Input(1), Stream.VALUES))) {
+                        return new I64Vector(new long[] {1L, 3L});
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(difference, Stream.ERRORS), Mask.all(2));
+        assertThat(((BooleanVector) result.get(Stream.ERRORS)).values()).containsExactly(true, false);
+        assertThat(requestedNulls).isFalse();
+    }
+
+    @Test
+    void testLengthUtf8DoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
+    {
+        Variable length = new Variable(0);
+        Variable one = new Variable(1);
+        Variable shifted = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(
+                                length,
+                                new Call("length_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(
+                                shifted,
+                                new Call("add", List.of(
+                                        new Reference(length, Stream.VALUES),
+                                        new Reference(one, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(shifted, Stream.VALUES)));
+
+        AtomicBoolean requestedNulls = new AtomicBoolean();
+        BinaryVector values = utf8Vector("go", "nitro", "x");
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        requestedNulls.set(true);
+                        throw new AssertionError("length_utf8 values-only path should not request input nulls");
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        return values;
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(shifted, Stream.VALUES), Mask.all(3));
+        assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(3L, 6L, 2L);
+        assertThat(requestedNulls).isFalse();
+    }
+
+    @Test
+    void testEqualMaskEvaluationRequestsInputNulls()
+    {
+        Variable seven = new Variable(0);
+        Variable equalsSeven = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(seven, new Literal(7L), AllMask.ALL),
+                        new Assignment(
+                                equalsSeven,
+                                new Call("eq", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(seven, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        AtomicBoolean requestedNulls = new AtomicBoolean();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        return new I64Vector(new long[] {7L, 7L, 8L});
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        requestedNulls.set(true);
+                        return new BooleanVector(new boolean[] {false, true, false});
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(equalsSeven, Stream.VALUES)), Mask.all(3));
+        assertThat(result.selectedCount()).isEqualTo(1);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(requestedNulls).isTrue();
+    }
+
+    @Test
+    void testLessThanNullEvaluationStillRequestsInputValues()
+    {
+        Variable threshold = new Variable(0);
+        Variable lessThan = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(threshold, new Literal(10L), AllMask.ALL),
+                        new Assignment(
+                                lessThan,
+                                new Call("lt", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(threshold, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(lessThan, Stream.NULLS)));
+
+        AtomicBoolean requestedValues = new AtomicBoolean();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        requestedValues.set(true);
+                        return new I64Vector(new long[] {1L, 2L, 3L});
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        return new BooleanVector(new boolean[] {false, true, false});
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(lessThan, Stream.NULLS), Mask.all(3));
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
+        assertThat(requestedValues).isTrue();
+    }
+
+    @Test
+    void testMultiplyNullEvaluationStillRequestsInputValues()
+    {
+        Variable product = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        product,
+                        new Call("multiply", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(product, Stream.NULLS)));
+
+        AtomicBoolean requestedLeftValues = new AtomicBoolean();
+        AtomicBoolean requestedRightValues = new AtomicBoolean();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        requestedLeftValues.set(true);
+                        return new I64Vector(new long[] {3L, 4L});
+                    }
+                    if (reference.equals(new Reference(new Input(1), Stream.VALUES))) {
+                        requestedRightValues.set(true);
+                        return new I64Vector(new long[] {5L, 6L});
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        return new BooleanVector(new boolean[] {false, true});
+                    }
+                    if (reference.equals(new Reference(new Input(1), Stream.NULLS))) {
+                        return new BooleanVector(new boolean[] {false, false});
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(product, Stream.NULLS), Mask.all(2));
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true);
+        assertThat(requestedLeftValues).isTrue();
+        assertThat(requestedRightValues).isTrue();
     }
 
     @Test
@@ -2204,6 +2509,24 @@ public class TestPlanEvaluator
         BooleanVector valueNulls = new BooleanVector(new boolean[] {false, false, true, false, false});
         maps.setEntries(Streams.ofValues(keys), Streams.ofValues(values).with(Stream.NULLS, valueNulls));
         return maps;
+    }
+
+    private static BinaryVector utf8Vector(String... values)
+    {
+        int totalBytes = 0;
+        byte[][] encoded = new byte[values.length][];
+        for (int index = 0; index < values.length; index++) {
+            encoded[index] = values[index].getBytes(UTF_8);
+            totalBytes += encoded[index].length;
+        }
+
+        BinaryVector vector = new BinaryVector(values.length, totalBytes);
+        vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        vector.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        for (int index = 0; index < values.length; index++) {
+            vector.setBytes(index, encoded[index]);
+        }
+        return vector;
     }
 
     private static String utf8(BinaryVector vector, int position)

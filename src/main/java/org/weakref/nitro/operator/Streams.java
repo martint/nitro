@@ -99,6 +99,14 @@ public final class Streams
         return new Streams(values, nulls, null);
     }
 
+    public static Streams of(Vector values, Vector nulls, Vector errors)
+    {
+        if (values == null && nulls == null && errors == null) {
+            return EMPTY;
+        }
+        return new Streams(values, nulls, errors);
+    }
+
     public Streams with(Stream stream, Vector vector)
     {
         requireNonNull(stream, "stream is null");
@@ -119,6 +127,26 @@ public final class Streams
             case NULLS -> nulls != null;
             case ERRORS -> errors != null;
         };
+    }
+
+    public boolean hasValues()
+    {
+        return values != null;
+    }
+
+    public boolean hasNulls()
+    {
+        return nulls != null;
+    }
+
+    public boolean hasErrors()
+    {
+        return errors != null;
+    }
+
+    public boolean isValuesOnly()
+    {
+        return flags == VALUES_FLAG;
     }
 
     public Vector get(Stream stream)
@@ -153,6 +181,11 @@ public final class Streams
     static Set<Stream> streamSet(int flags)
     {
         return STREAM_SETS[flags];
+    }
+
+    int flags()
+    {
+        return flags;
     }
 
     public Map<Stream, Vector> asMap()

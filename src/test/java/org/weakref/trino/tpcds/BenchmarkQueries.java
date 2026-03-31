@@ -90,18 +90,6 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public Object query39()
-    {
-        return support.query39(tables);
-    }
-
-    @Benchmark
-    public Object query17()
-    {
-        return support.query17(tables);
-    }
-
-    @Benchmark
     public Object query16()
     {
         return support.query16(tables);
@@ -222,12 +210,6 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public Object query72()
-    {
-        return support.query72(tables);
-    }
-
-    @Benchmark
     public Object query33()
     {
         return support.query33(tables);
@@ -273,12 +255,6 @@ public class BenchmarkQueries
     public Object query63()
     {
         return support.query63(tables);
-    }
-
-    @Benchmark
-    public Object query64()
-    {
-        return support.query64(tables);
     }
 
     @Benchmark

@@ -103,7 +103,10 @@ public class ProjectOperator
     @Override
     public boolean supportsRetainedBatches()
     {
-        return source.supportsRetainedBatches();
+        // Project outputs are mask-sensitive and can be recomputed after constrain().
+        // Downstream operators that defer payload materialization, such as TopN, must
+        // not retain projected batches across later constrain calls.
+        return false;
     }
 
     private org.weakref.nitro.data.Vector evaluateOutput(BatchState batchState, Reference outputReference, Stream stream)

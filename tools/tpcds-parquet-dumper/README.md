@@ -35,11 +35,24 @@ java --add-modules jdk.incubator.vector \
   --output-root /Users/martin/tmp/tpcds-parquet --source-schema sf1 --overwrite
 ```
 
+Select a parquet compression codec explicitly:
+
+```bash
+java --add-modules jdk.incubator.vector \
+  --enable-native-access=ALL-UNNAMED \
+  -jar tools/tpcds-parquet-dumper/target/tpcds-parquet-dumper-1-SNAPSHOT.jar \
+  --output-root /Users/martin/tmp/tpcds-parquet --source-schema sf1 \
+  --parquet-compression LZ4 --overwrite
+```
+
 ## Notes
 
 - Source tables come from Trino's `tpcds` connector.
 - Target tables are written through Trino's `hive` connector with
   `format = 'PARQUET'`.
+- The dumper defaults to `GZIP`, but can request a different parquet codec with
+  `--parquet-compression` (for example `LZ4`); it applies that via the Hive
+  session's `compression_codec` setting before running the `CREATE TABLE AS`.
 - Trino's local Hive writer produces Parquet data files without a `.parquet`
   suffix; they are still standard Parquet files.
 - By default, the target schema name is:

@@ -71,9 +71,9 @@ final class OperatorKeySemantics
         };
     }
 
-    public static Streams materializeGroupedValues(Vector sample, int size, Mask mask, List<Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
+    public static Streams materializeGroupedValues(FlatTypeHandler handler, int size, Mask mask, List<Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext, Set<BinaryVector.Trait> binaryTraits)
     {
-        return requireHandler(sample).materializeFallbackValues(size, mask, keysByGroup, output, allocator, allocationContext, binaryTraits);
+        return requireNonNull(handler, "handler is null").materializeFallbackValues(size, mask, keysByGroup, output, allocator, allocationContext, binaryTraits);
     }
 
     private static FlatTypeHandler requireHandler(Vector values)

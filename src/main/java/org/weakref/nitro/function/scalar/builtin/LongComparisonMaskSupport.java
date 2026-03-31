@@ -102,17 +102,7 @@ final class LongComparisonMaskSupport
         Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
         Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
-        int trueCount = 0;
-        for (int position : mask) {
-            if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                continue;
-            }
-            if (kernel.test(integerValue(leftValues, position), integerValue(rightValues, position))) {
-                trueCount++;
-            }
-        }
-
-        int[] truePositions = new int[trueCount];
+        int[] truePositions = new int[mask.count()];
         int trueIndex = 0;
         for (int position : mask) {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
@@ -138,17 +128,7 @@ final class LongComparisonMaskSupport
         Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
         Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
 
-        int falseCount = 0;
-        for (int position : mask) {
-            if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                continue;
-            }
-            if (!kernel.test(integerValue(leftValues, position), integerValue(rightValues, position))) {
-                falseCount++;
-            }
-        }
-
-        int[] falsePositions = new int[falseCount];
+        int[] falsePositions = new int[mask.count()];
         int falseIndex = 0;
         for (int position : mask) {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {

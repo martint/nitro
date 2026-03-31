@@ -210,12 +210,12 @@ public final class PlanEvaluator
     private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)
     {
         PrimitiveFunction function = primitiveRegistry.get(call.name());
-        List<Streams> inputs = new ArrayList<>(call.arguments().size());
-        boolean requiresInputCompanionStreams = function.requiresInputCompanionStreams();
-        for (Reference argument : call.arguments()) {
-            inputs.add(requiresInputCompanionStreams ? evaluateArgument(argument, mask) : evaluate(argument, mask));
-        }
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
+        List<Streams> inputs = new ArrayList<>(call.arguments().size());
+        for (int index = 0; index < call.arguments().size(); index++) {
+            Reference argument = call.arguments().get(index);
+            inputs.add(evaluateArgument(argument, mask, function.requiredInputStreams(index, requestedStreams), false));
+        }
         Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
         if (peeledResult != null) {
             return completeRequestedStreams(requestedStreams, peeledResult, mask);
@@ -335,21 +335,30 @@ public final class PlanEvaluator
 
     private Streams evaluateArgument(Reference argument, Mask mask)
     {
-        Streams result = evaluate(argument, mask);
-        if (argument.stream() != Stream.VALUES) {
-            return result;
+        return evaluateArgument(argument, mask, PrimitiveFunction.ALL_INPUT_STREAMS, false);
+    }
+
+    private Streams evaluateArgument(Reference argument, Mask mask, Set<Stream> requiredStreams, boolean allowAvailableCompanionStreams)
+    {
+        if (requiredStreams.isEmpty()) {
+            return Streams.empty();
         }
 
-        Streams nullBundle = evaluate(new Reference(argument.producer(), Stream.NULLS), mask);
-        if (nullBundle.has(Stream.NULLS)) {
-            result = result.with(Stream.NULLS, nullBundle.get(Stream.NULLS));
-        }
+        Streams.Builder result = Streams.builder();
+        for (Stream stream : requiredStreams) {
+            Reference requestedReference = remapReference(argument, stream);
+            if (requestedReference == null) {
+                continue;
+            }
 
-        Streams errorBundle = evaluate(new Reference(argument.producer(), Stream.ERRORS), mask);
-        if (errorBundle.has(Stream.ERRORS)) {
-            result = result.with(Stream.ERRORS, errorBundle.get(Stream.ERRORS));
+            Streams streams = allowAvailableCompanionStreams
+                    ? evaluateAvailableReference(requestedReference, mask)
+                    : evaluate(requestedReference, mask);
+            if (streams.has(requestedReference.stream())) {
+                result.put(stream, streams.get(requestedReference.stream()));
+            }
         }
-        return result;
+        return result.build();
     }
 
     private Set<Stream> requestedStreamsFor(Reference reference)
@@ -928,12 +937,14 @@ public final class PlanEvaluator
         }
 
         List<Streams> inputs = new ArrayList<>(call.arguments().size());
-        for (Reference argument : call.arguments()) {
+        for (int index = 0; index < call.arguments().size(); index++) {
+            Reference argument = call.arguments().get(index);
+            Set<Stream> requiredInputStreams = maskFunction.requiredMaskInputStreams(index);
             if (maskFunction.requiresCompletedInputCompanionStreamsForMask()) {
-                inputs.add(function.requiresInputCompanionStreams() ? evaluateArgument(argument, mask) : evaluate(argument, mask));
+                inputs.add(evaluateArgument(argument, mask, requiredInputStreams, false));
                 continue;
             }
-            inputs.add(function.requiresInputCompanionStreams() ? evaluateAvailableArgument(argument, mask) : evaluate(argument, mask));
+            inputs.add(evaluateArgument(argument, mask, requiredInputStreams, true));
         }
         return new PrimitiveMaskInvocation(maskFunction, List.copyOf(inputs));
     }
@@ -949,32 +960,23 @@ public final class PlanEvaluator
         };
     }
 
-    private Streams evaluateAvailableArgument(Reference argument, Mask mask)
+    private Streams evaluateAvailableReference(Reference reference, Mask mask)
     {
-        Streams result = evaluate(argument, mask);
-        if (argument.stream() != Stream.VALUES) {
-            return result;
+        if (reference.stream() == Stream.VALUES) {
+            return evaluate(reference, mask);
         }
 
-        return switch (argument.producer()) {
+        return switch (reference.producer()) {
             case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> {
-                Vector nulls = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(index), Stream.NULLS), mask);
-                Vector errors = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(index), Stream.ERRORS), mask);
-                Streams available = result;
-                if (nulls != null) {
-                    available = available.with(Stream.NULLS, nulls);
-                }
-                if (errors != null) {
-                    available = available.with(Stream.ERRORS, errors);
-                }
-                yield available;
+                Vector available = input.resolve(reference, mask);
+                yield available == null ? Streams.empty() : Streams.of(reference.stream(), available);
             }
             case Variable variable -> {
                 Assignment assignment = assignments.get(variable);
                 if (assignment != null && assignment.operation() instanceof Literal) {
-                    yield result;
+                    yield Streams.empty();
                 }
-                yield evaluateArgument(argument, mask);
+                yield evaluate(reference, mask);
             }
         };
     }

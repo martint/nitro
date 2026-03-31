@@ -14,11 +14,8 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
@@ -45,9 +42,12 @@ public final class CastI64ToI32
     }
 
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.inputStreams(
+                requestedOutputStreams.contains(Stream.VALUES),
+                requestedOutputStreams.contains(Stream.NULLS),
+                false);
     }
 
     @Override
@@ -80,18 +80,9 @@ public final class CastI64ToI32
 
     private static void applyValues(Vector values, Mask mask, I32Vector output)
     {
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(values);
         for (int position : mask) {
-            output.values()[position] = toIntExact(longValue(values, position));
+            output.values()[position] = toIntExact(inputValues.value(position));
         }
-    }
-
-    private static long longValue(Vector values, int position)
-    {
-        return switch (values) {
-            case I64Vector vector -> vector.values()[position];
-            case DictionaryVector vector -> longValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> longValue(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported cast_i64_to_i32 input vector type: " + values.getClass().getSimpleName());
-        };
     }
 }

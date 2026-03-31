@@ -39,7 +39,7 @@ final class GroupingState
     private OperatorKeySemantics.Key[] reusableProbeKeys;
     private OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey;
     private FlatGroupingTable flatGroupingTable;
-    private Vector[] samples;
+    private FlatTypeHandler[] keyHandlers;
     private Set<BinaryVector.Trait>[] binaryTraits;
     private long[] longKeysByGroup = new long[0];
     private long[] firstLongPairKeysByGroup = new long[0];
@@ -150,10 +150,10 @@ final class GroupingState
         }
         initialized = true;
 
-        samples = new Vector[values.length];
+        keyHandlers = new FlatTypeHandler[values.length];
         binaryTraits = (Set<BinaryVector.Trait>[]) new Set<?>[values.length];
         for (int index = 0; index < values.length; index++) {
-            samples[index] = values[index];
+            keyHandlers[index] = FlatTypeHandlers.forVector(values[index]);
             binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
         }
 
@@ -400,7 +400,7 @@ final class GroupingState
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         List<OperatorKeySemantics.Key> keysByGroup = keysByGroupColumns.get(groupedColumnIndex);
         Streams values = OperatorKeySemantics.materializeGroupedValues(
-                samples[groupedColumnIndex],
+                keyHandlers[groupedColumnIndex],
                 size,
                 mask,
                 keysByGroup,

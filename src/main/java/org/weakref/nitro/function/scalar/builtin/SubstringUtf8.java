@@ -16,11 +16,7 @@ package org.weakref.nitro.function.scalar.builtin;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -46,9 +42,9 @@ public final class SubstringUtf8
     }
 
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.valuesAndNullsWhenRequested(requestedOutputStreams);
     }
 
     @Override
@@ -59,24 +55,24 @@ public final class SubstringUtf8
             return Streams.empty();
         }
 
-        BooleanVector valueNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector startNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
-        BooleanVector lengthNulls = (BooleanVector) inputs.get(2).getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues valueNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues startNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues lengthNulls = VectorAccess.booleanValues(inputs.get(2).getOrNull(Stream.NULLS));
         int requiredLength = mask.none() ? 0 : mask.maxPosition() + 1;
         int totalBytes = 0;
-        Vector values = null;
-        Vector startValues = null;
-        Vector lengthValues = null;
+        VectorAccess.BinaryValues values = null;
+        VectorAccess.LongValues startValues = null;
+        VectorAccess.LongValues lengthValues = null;
         if (requestedStreams.contains(Stream.VALUES)) {
-            values = inputs.get(0).values();
-            startValues = inputs.get(1).values();
-            lengthValues = inputs.get(2).values();
-            requiredLength = Math.max(requiredLength, values.length());
+            values = VectorAccess.binaryValues(inputs.get(0).values());
+            startValues = VectorAccess.longValues(inputs.get(1).values());
+            lengthValues = VectorAccess.longValues(inputs.get(2).values());
+            requiredLength = Math.max(requiredLength, inputs.get(0).values().length());
             for (int position : mask) {
-                if (isNull(valueNulls, position) || isNull(startNulls, position) || isNull(lengthNulls, position)) {
+                if (valueNulls.value(position) || startNulls.value(position) || lengthNulls.value(position)) {
                     continue;
                 }
-                totalBytes += substringValue(values, position, startValues, position, lengthValues, position).length;
+                totalBytes += substringValue(values.value(position), startValues.value(position), lengthValues.value(position)).length;
             }
         }
 
@@ -107,15 +103,15 @@ public final class SubstringUtf8
         return result;
     }
 
-    private static void applyNulls(BooleanVector valueNulls, BooleanVector startNulls, BooleanVector lengthNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(VectorAccess.BooleanValues valueNulls, VectorAccess.BooleanValues startNulls, VectorAccess.BooleanValues lengthNulls, Mask mask, BooleanVector outputNulls)
     {
         Arrays.fill(outputNulls.values(), false);
         for (int position : mask) {
-            outputNulls.values()[position] = isNull(valueNulls, position) || isNull(startNulls, position) || isNull(lengthNulls, position);
+            outputNulls.values()[position] = valueNulls.value(position) || startNulls.value(position) || lengthNulls.value(position);
         }
     }
 
-    private static void applyValues(Vector values, Vector startValues, Vector lengthValues, BooleanVector valueNulls, BooleanVector startNulls, BooleanVector lengthNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
+    private static void applyValues(VectorAccess.BinaryValues values, VectorAccess.LongValues startValues, VectorAccess.LongValues lengthValues, VectorAccess.BooleanValues valueNulls, VectorAccess.BooleanValues startNulls, VectorAccess.BooleanValues lengthNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
         int currentOffset = 0;
         int lastPosition = -1;
@@ -123,14 +119,14 @@ public final class SubstringUtf8
         for (int position : mask) {
             fillOffsets(outputValues, lastPosition + 1, position, currentOffset);
             outputValues.offsets()[position] = currentOffset;
-            if (isNull(valueNulls, position) || isNull(startNulls, position) || isNull(lengthNulls, position)) {
+            if (valueNulls.value(position) || startNulls.value(position) || lengthNulls.value(position)) {
                 outputValues.setNull(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
                 }
             }
             else {
-                byte[] substring = substringValue(values, position, startValues, position, lengthValues, position);
+                byte[] substring = substringValue(values.value(position), startValues.value(position), lengthValues.value(position));
                 outputValues.setBytes(position, substring);
                 currentOffset = outputValues.endOffset(position);
                 if (outputNulls != null) {
@@ -148,26 +144,9 @@ public final class SubstringUtf8
         }
     }
 
-    private static byte[] substringValue(Vector values, int valuePosition, Vector startValues, int startPosition, Vector lengthValues, int lengthPosition)
+    private static byte[] substringValue(VectorAccess.BinarySlice value, long start, long length)
     {
-        long start = longValue(startValues, startPosition);
-        long length = longValue(lengthValues, lengthPosition);
-        return switch (values) {
-            case BinaryVector vector -> Utf8Support.substring(vector, valuePosition, start, length);
-            case DictionaryVector vector -> substringValue(vector.values(), vector.ids()[valuePosition], startValues, startPosition, lengthValues, lengthPosition);
-            case RleVector vector -> substringValue(vector.values(), vector.runIndex(valuePosition), startValues, startPosition, lengthValues, lengthPosition);
-            default -> throw new IllegalArgumentException("Unsupported substring_utf8 vector type: " + values.getClass().getSimpleName());
-        };
-    }
-
-    private static long longValue(Vector values, int position)
-    {
-        return switch (values) {
-            case I64Vector vector -> vector.values()[position];
-            case DictionaryVector vector -> longValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> longValue(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported substring_utf8 index vector type: " + values.getClass().getSimpleName());
-        };
+        return Utf8Support.substring(value.data(), value.offset(), value.length(), start, length);
     }
 
     private static void fillOffsets(BinaryVector outputValues, int startInclusive, int endExclusive, int offset)
@@ -175,11 +154,6 @@ public final class SubstringUtf8
         for (int index = startInclusive; index <= endExclusive; index++) {
             outputValues.offsets()[index] = offset;
         }
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 
     private static boolean isAsciiOnly(byte[] value)

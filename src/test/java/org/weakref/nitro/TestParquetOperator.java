@@ -271,6 +271,37 @@ public class TestParquetOperator
     }
 
     @Test
+    void testTrinoParquetScanCanBorrowValuesAfterNullsAcrossConstrain()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("trino-nulls-then-values-constrained.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, null),
+                new ParquetRow(13, true, 103L)));
+
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("x", "maybe"))) {
+            operator.next();
+            Batch batch = operator.next();
+
+            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+            assertThat(nulls.values()[0]).isTrue();
+            assertThat(nulls.values()[1]).isFalse();
+
+            Mask constrainedMask = Mask.sparse(new int[] {1}, 2);
+            operator.constrain(constrainedMask);
+            batch.constrain(constrainedMask);
+
+            I64Vector values = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+            BooleanVector constrainedNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+
+            assertThat(values.length()).isGreaterThan(0);
+            assertThat(constrainedNulls.length()).isEqualTo(values.length());
+            assertThat(values.values()[values.length() - 1]).isEqualTo(103L);
+            assertThat(constrainedNulls.values()[constrainedNulls.length() - 1]).isFalse();
+        }
+    }
+
+    @Test
     void testTrinoParquetScanReadsMultipleFiles()
             throws IOException
     {

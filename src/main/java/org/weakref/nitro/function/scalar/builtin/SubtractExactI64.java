@@ -44,9 +44,12 @@ public final class SubtractExactI64
     }
 
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.inputStreams(
+                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS) || requestedOutputStreams.contains(Stream.ERRORS),
+                requestedOutputStreams.contains(Stream.NULLS),
+                false);
     }
 
     @Override

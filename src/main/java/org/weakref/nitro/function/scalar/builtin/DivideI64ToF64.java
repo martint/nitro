@@ -15,12 +15,8 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
-import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
@@ -38,9 +34,9 @@ public final class DivideI64ToF64
         implements PrimitiveFunction
 {
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
     }
 
     @Override
@@ -54,11 +50,13 @@ public final class DivideI64ToF64
         }
 
         Allocator.Context allocationContext = context.allocationContext("DivideI64ToF64");
-        Vector numeratorValues = inputs.get(0).values();
-        Vector denominatorValues = inputs.get(1).values();
-        Vector numeratorNulls = inputs.get(0).getOrNull(Stream.NULLS);
-        Vector denominatorNulls = inputs.get(1).getOrNull(Stream.NULLS);
-        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(numeratorValues.length(), denominatorValues.length()));
+        VectorAccess.LongValues numeratorValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues denominatorValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.BooleanValues numeratorNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues denominatorNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
+        Vector numeratorValueVector = inputs.get(0).values();
+        Vector denominatorValueVector = inputs.get(1).values();
+        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(numeratorValueVector.length(), denominatorValueVector.length()));
 
         Streams result = Streams.empty();
         if (requestNulls) {
@@ -70,7 +68,8 @@ public final class DivideI64ToF64
                     BooleanVector::new);
             boolean[] nullValues = nulls.values();
             for (int position : mask) {
-                nullValues[position] = isNull(numeratorNulls, position) || isNull(denominatorNulls, position) || value(denominatorValues, position) == 0;
+                long denominator = denominatorValues.value(position);
+                nullValues[position] = numeratorNulls.value(position) || denominatorNulls.value(position) || denominator == 0;
             }
             result = result.with(Stream.NULLS, nulls);
         }
@@ -86,31 +85,9 @@ public final class DivideI64ToF64
                 F64Vector::new);
         double[] outputValues = values.values();
         for (int position : mask) {
-            long denominator = value(denominatorValues, position);
-            outputValues[position] = denominator == 0 ? 0 : ((double) value(numeratorValues, position) / denominator);
+            long denominator = denominatorValues.value(position);
+            outputValues[position] = denominator == 0 ? 0 : ((double) numeratorValues.value(position) / denominator);
         }
         return result.with(Stream.VALUES, values);
-    }
-
-    private static long value(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I64Vector values -> values.values()[position];
-            case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> value(values.values(), values.ids()[position]);
-            case RleVector values -> value(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
-            case RleVector values -> isNull(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
     }
 }

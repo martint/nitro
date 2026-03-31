@@ -29,6 +29,7 @@ import io.trino.operator.MarkDistinctOperator.MarkDistinctOperatorFactory;
 import io.trino.operator.Operator;
 import io.trino.operator.OperatorFactory;
 import io.trino.operator.TopNOperator;
+import io.trino.operator.ValuesOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
 import io.trino.spi.Page;
 import io.trino.spi.connector.SortOrder;
@@ -852,7 +853,7 @@ public final class TrinoClickBenchSupport
     public MaterializedResult query39(Path input)
     {
         List<Type> outputTypes = List.of(VARCHAR, BIGINT);
-        return materialize(
+        return sliceResult(materialize(
                 input,
                 List.of("URL", "CounterID", "EventDate", "IsRefresh", "IsLink", "IsDownload"),
                 List.of(
@@ -868,17 +869,15 @@ public final class TrinoClickBenchSupport
                                 List.of(field(0, VARCHAR)),
                                 List.of(VARCHAR)),
                         hashAggregationFactory(2, List.of(VARCHAR), List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        topNFactory(3, outputTypes, 1_010, List.of(1), List.of(DESC_NULLS_LAST)),
-                        offsetFactory(4, 1_000),
-                        limitFactory(5, 10)),
-                outputTypes);
+                        topNFactory(3, outputTypes, 1_010, List.of(1), List.of(DESC_NULLS_LAST))),
+                outputTypes), outputTypes, 1_000, 10);
     }
 
     public MaterializedResult query40(Path input)
     {
         List<Type> projectedTypes = List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR);
         List<Type> outputTypes = List.of(INTEGER, INTEGER, INTEGER, VARCHAR, VARCHAR, BIGINT);
-        return materialize(
+        return sliceResult(materialize(
                 input,
                 List.of("TraficSourceID", "SearchEngineID", "AdvEngineID", "Referer", "URL", "CounterID", "EventDate", "IsRefresh"),
                 List.of(
@@ -897,16 +896,14 @@ public final class TrinoClickBenchSupport
                                         field(4, VARCHAR)),
                                 projectedTypes),
                         hashAggregationFactory(2, projectedTypes, List.of(0, 1, 2, 3, 4), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        topNFactory(3, outputTypes, 1_010, List.of(5), List.of(DESC_NULLS_LAST)),
-                        offsetFactory(4, 1_000),
-                        limitFactory(5, 10)),
-                outputTypes);
+                        topNFactory(3, outputTypes, 1_010, List.of(5), List.of(DESC_NULLS_LAST))),
+                outputTypes), outputTypes, 1_000, 10);
     }
 
     public MaterializedResult query41(Path input)
     {
         List<Type> outputTypes = List.of(BIGINT, INTEGER, BIGINT);
-        return materialize(
+        return sliceResult(materialize(
                 input,
                 List.of("URLHash", "EventDate", "CounterID", "IsRefresh", "TraficSourceID", "RefererHash"),
                 List.of(
@@ -922,16 +919,14 @@ public final class TrinoClickBenchSupport
                                 List.of(field(0, BIGINT), field(1, INTEGER)),
                                 List.of(BIGINT, INTEGER)),
                         hashAggregationFactory(2, List.of(BIGINT, INTEGER), List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        topNFactory(3, outputTypes, 110, List.of(2), List.of(DESC_NULLS_LAST)),
-                        offsetFactory(4, 100),
-                        limitFactory(5, 10)),
-                outputTypes);
+                        topNFactory(3, outputTypes, 110, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes), outputTypes, 100, 10);
     }
 
     public MaterializedResult query42(Path input)
     {
         List<Type> outputTypes = List.of(INTEGER, INTEGER, BIGINT);
-        return materialize(
+        return sliceResult(materialize(
                 input,
                 List.of("WindowClientWidth", "WindowClientHeight", "CounterID", "EventDate", "IsRefresh", "DontCountHits", "URLHash"),
                 List.of(
@@ -947,17 +942,15 @@ public final class TrinoClickBenchSupport
                                 List.of(field(0, INTEGER), field(1, INTEGER)),
                                 List.of(INTEGER, INTEGER)),
                         hashAggregationFactory(2, List.of(INTEGER, INTEGER), List.of(0, 1), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        topNFactory(3, outputTypes, 10_010, List.of(2), List.of(DESC_NULLS_LAST)),
-                        offsetFactory(4, 10_000),
-                        limitFactory(5, 10)),
-                outputTypes);
+                        topNFactory(3, outputTypes, 10_010, List.of(2), List.of(DESC_NULLS_LAST))),
+                outputTypes), outputTypes, 10_000, 10);
     }
 
     public MaterializedResult query43(Path input)
     {
         List<Type> projectedTypes = List.of(BIGINT);
         List<Type> outputTypes = List.of(BIGINT, BIGINT);
-        return materialize(
+        return sliceResult(materialize(
                 input,
                 List.of("EventTime", "CounterID", "EventDate", "DontCountHits", "IsRefresh"),
                 List.of(
@@ -972,10 +965,8 @@ public final class TrinoClickBenchSupport
                                 List.of(minuteBucket(field(0, BIGINT))),
                                 projectedTypes),
                         hashAggregationFactory(2, projectedTypes, List.of(0), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        topNFactory(3, outputTypes, 1_010, List.of(0), List.of(ascending())),
-                        offsetFactory(4, 1_000),
-                        limitFactory(5, 10)),
-                outputTypes);
+                        topNFactory(3, outputTypes, 1_010, List.of(0), List.of(ascending()))),
+                outputTypes), outputTypes, 1_000, 10);
     }
 
     @Override
@@ -999,6 +990,7 @@ public final class TrinoClickBenchSupport
     {
         List<Page> outputPages = collectOutput ? new ArrayList<>() : null;
         try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(input, columns)) {
+            List<Page> inputPages = readPages(reader);
             DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
                     .setQueryMaxMemory(queryMaxMemory)
                     .setMemoryPoolSize(queryMaxMemory)
@@ -1007,8 +999,9 @@ public final class TrinoClickBenchSupport
                     .addDriverContext();
 
             List<Operator> operators = new ArrayList<>();
-            TrinoPageSequenceSourceOperator.Factory sourceFactory = new TrinoPageSequenceSourceOperator.Factory(0, new PlanNodeId("source"), reader);
+            ValuesOperator.ValuesOperatorFactory sourceFactory = new ValuesOperator.ValuesOperatorFactory(0, new PlanNodeId("source"), inputPages);
             operators.add(sourceFactory.createOperator(driverContext));
+            sourceFactory.noMoreOperators();
 
             for (OperatorFactory factory : factories) {
                 operators.add(factory.createOperator(driverContext));
@@ -1044,6 +1037,15 @@ public final class TrinoClickBenchSupport
             }
             return result.build();
         }
+    }
+
+    private static List<Page> readPages(TrinoClickBenchPageReader reader)
+    {
+        List<Page> pages = new ArrayList<>();
+        while (reader.hasNext()) {
+            pages.add(reader.nextPage());
+        }
+        return pages;
     }
 
     private AggregationOperatorFactory aggregationFactory(int operatorId, io.trino.operator.aggregation.AggregatorFactory... aggregators)
@@ -1096,11 +1098,6 @@ public final class TrinoClickBenchSupport
         return new DistinctLimitOperatorFactory(operatorId, new PlanNodeId("distinct-limit-" + operatorId), types, channels, limit, hashStrategyCompiler);
     }
 
-    private static OperatorFactory offsetFactory(int operatorId, long offset)
-    {
-        return new TrinoOffsetOperator.Factory(operatorId, new PlanNodeId("offset-" + operatorId), offset);
-    }
-
     private OperatorFactory filterAndProjectFactory(int operatorId, List<Type> inputTypes, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
     {
         return FilterAndProjectOperator.createOperatorFactory(
@@ -1119,6 +1116,17 @@ public final class TrinoClickBenchSupport
             projections.add(field(index, types.get(index)));
         }
         return projections;
+    }
+
+    private MaterializedResult sliceResult(MaterializedResult source, List<Type> outputTypes, int offset, int limit)
+    {
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(TestingSession.testSessionBuilder().build(), outputTypes);
+        List<io.trino.testing.MaterializedRow> rows = source.getMaterializedRows();
+        int end = Math.min(rows.size(), offset + limit);
+        for (int index = offset; index < end; index++) {
+            result.row(rows.get(index).getFields());
+        }
+        return result.build();
     }
 
     private static RowExpression castField(int inputChannel, Type fromType, Type toType)

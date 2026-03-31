@@ -87,18 +87,6 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query39()
-    {
-        consume(TpcdsParquetSupport.query39(allocator, primitiveRegistry, tables));
-    }
-
-    @Benchmark
-    public void query17()
-    {
-        consume(TpcdsParquetSupport.query17(allocator, primitiveRegistry, tables));
-    }
-
-    @Benchmark
     public void query16()
     {
         consume(TpcdsParquetSupport.query16(allocator, primitiveRegistry, tables));
@@ -219,12 +207,6 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query72()
-    {
-        consume(TpcdsParquetSupport.query72(allocator, primitiveRegistry, tables));
-    }
-
-    @Benchmark
     public void query33()
     {
         consume(TpcdsParquetSupport.query33(allocator, primitiveRegistry, tables));
@@ -270,12 +252,6 @@ public class BenchmarkQueries
     public void query63()
     {
         consume(TpcdsParquetSupport.query63(allocator, primitiveRegistry, tables));
-    }
-
-    @Benchmark
-    public void query64()
-    {
-        consume(TpcdsParquetSupport.query64(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark

@@ -15,11 +15,8 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
@@ -37,9 +34,9 @@ public final class CoalesceI64
         implements PrimitiveFunction
 {
     @Override
-    public boolean requiresInputCompanionStreams()
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return true;
+        return PrimitiveFunction.valuesAndNullsWhenRequested(requestedOutputStreams);
     }
 
     @Override
@@ -53,11 +50,13 @@ public final class CoalesceI64
         }
 
         Allocator.Context allocationContext = context.allocationContext("CoalesceI64");
-        Vector primaryValues = inputs.get(0).values();
-        Vector fallbackValues = inputs.get(1).values();
-        Vector primaryNulls = inputs.get(0).getOrNull(Stream.NULLS);
-        Vector fallbackNulls = inputs.get(1).getOrNull(Stream.NULLS);
-        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(primaryValues.length(), fallbackValues.length()));
+        VectorAccess.LongValues primaryValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues fallbackValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.BooleanValues primaryNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues fallbackNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
+        Vector primaryValueVector = inputs.get(0).values();
+        Vector fallbackValueVector = inputs.get(1).values();
+        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(primaryValueVector.length(), fallbackValueVector.length()));
 
         Streams result = Streams.empty();
         if (requestNulls) {
@@ -69,7 +68,7 @@ public final class CoalesceI64
                     BooleanVector::new);
             boolean[] nullValues = nulls.values();
             for (int position : mask) {
-                nullValues[position] = isNull(primaryNulls, position) && isNull(fallbackNulls, position);
+                nullValues[position] = primaryNulls.value(position) && fallbackNulls.value(position);
             }
             result = result.with(Stream.NULLS, nulls);
         }
@@ -85,30 +84,8 @@ public final class CoalesceI64
                 I64Vector::new);
         long[] outputValues = values.values();
         for (int position : mask) {
-            outputValues[position] = isNull(primaryNulls, position) ? value(fallbackValues, position) : value(primaryValues, position);
+            outputValues[position] = primaryNulls.value(position) ? fallbackValues.value(position) : primaryValues.value(position);
         }
         return result.with(Stream.VALUES, values);
-    }
-
-    private static long value(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I64Vector values -> values.values()[position];
-            case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> value(values.values(), values.ids()[position]);
-            case RleVector values -> value(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
-            case RleVector values -> isNull(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
     }
 }

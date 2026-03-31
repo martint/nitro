@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.CountingNextOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.FullJoinOperator;
@@ -41,12 +42,14 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SemiJoinOperator;
+import org.weakref.nitro.operator.SingleBatchOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -64,7 +67,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
-import java.util.function.Function;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -850,6 +853,81 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testProjectOperatorCountsNonNullI32Zeros()
+    {
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+
+        Streams[] columns = new Streams[] {
+                Streams.ofValuesAndNulls(
+                        new I32Vector(new int[] {0, 7, 0}),
+                        new BooleanVector(new boolean[] {false, false, true}))};
+        Operator source = new TableOperator(1, List.of(new TableOperator.Page(3, columns, Mask.all(3))));
+
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable quantityNull = new Variable(2);
+        Variable countContribution = new Variable(3);
+        Operator operator = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                                new Assignment(one, new Literal(1L), AllMask.ALL),
+                                new Assignment(quantityNull, new Call("is_null_i64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(countContribution, new Call("if_i64", List.of(
+                                        new Reference(quantityNull, Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES),
+                                        new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                        List.of(new Reference(countContribution, Stream.VALUES))),
+                primitiveRegistry,
+                source);
+
+        Batch batch = operator.next();
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(1L, 1L, 0L);
+    }
+
+    @Test
+    void testHashJoinOperatorPreservesNullableI32ZerosForCountExpression()
+    {
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+
+        Streams[] outerColumns = new Streams[] {
+                Streams.ofValues(new I64Vector(new long[] {1L, 1L, 2L})),
+                Streams.ofValuesAndNulls(
+                        new I32Vector(new int[] {0, 7, 0}),
+                        new BooleanVector(new boolean[] {false, false, true}))};
+        Operator outer = new TableOperator(2, List.of(new TableOperator.Page(3, outerColumns, Mask.all(3))));
+        Operator inner = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L)));
+        Operator joined = new HashJoinOperator(allocator, outer, 0, inner, 0);
+
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable quantityNull = new Variable(2);
+        Variable countContribution = new Variable(3);
+        Operator operator = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                                new Assignment(one, new Literal(1L), AllMask.ALL),
+                                new Assignment(quantityNull, new Call("is_null_i64", List.of(
+                                        new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(countContribution, new Call("if_i64", List.of(
+                                        new Reference(quantityNull, Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES),
+                                        new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                        List.of(new Reference(countContribution, Stream.VALUES))),
+                primitiveRegistry,
+                joined);
+
+        Batch batch = operator.next();
+        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), batch.borrowMask().count())).containsExactly(1L, 1L, 0L);
+    }
+
+    @Test
     void testHashJoinOperatorSupportsI64EquiJoinWithDuplicateMatches()
     {
         Allocator allocator = new Allocator();
@@ -1014,6 +1092,37 @@ public class TestOperatorBatches
                     .containsExactly(
                             row(1L, "matched", 1L, 100L),
                             row(2L, "unmatched", null, null));
+        }
+    }
+
+    @Test
+    void testHashJoinOperatorPreservesNullableOuterPayloadForAggregations()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator joined = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(1L, 100L, null),
+                        row(1L, 100L, 10L),
+                        row(2L, 200L, null),
+                        row(3L, 300L, 5L))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(1L),
+                        row(2L),
+                        row(3L))),
+                0);
+                Operator aggregated = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(1),
+                        List.of(1),
+                        List.of(new Sum(2), new CountColumn(2)),
+                        joined)) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(aggregated))
+                    .containsExactly(
+                            row(100L, 10L, 1L),
+                            row(200L, null, 0L),
+                            row(300L, 5L, 1L));
         }
     }
 
@@ -1241,28 +1350,77 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOperatorSupportsProjectedUtf8OrderingWithSlotReuse()
+    {
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(new Input(4), Stream.VALUES)));
+
+        Operator operator = new TopNOperator(
+                allocator,
+                3,
+                new int[] {0, 1, 2, 3},
+                new boolean[] {false, false, false, false},
+                new ProjectOperator(
+                        allocator,
+                        evaluationPlan,
+                        primitiveRegistry,
+                        new ConstantTableOperator(
+                                allocator,
+                                5,
+                                List.of(
+                                        row("VA", "M", "D", 4L, 40L),
+                                        row("MS", "M", "D", 3L, 30L),
+                                        row("OR", "M", "S", 5L, 50L),
+                                        row("AL", "F", "M", 2L, 20L),
+                                        row("AK", "F", "D", 1L, 10L),
+                                        row("NJ", "F", "D", 6L, 60L)))));
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                .containsExactly(
+                        row("AK", "F", "D", 1L, 10L),
+                        row("AL", "F", "M", 2L, 20L),
+                        row("MS", "M", "D", 3L, 30L));
+    }
+
+    @Test
     void testTopNOperatorDefersPayloadBorrowUntilOutputIsRequested()
     {
-        TrackingOperator source = new TrackingOperator(new TableOperator(
+        AtomicInteger keyBorrows = new AtomicInteger();
+        AtomicInteger payloadBorrows = new AtomicInteger();
+        I64Vector keys = new I64Vector(new long[] {1L, 5L, 3L, 4L});
+        I64Vector payloads = new I64Vector(new long[] {10L, 20L, 30L, 40L});
+        Operator source = new SingleBatchOperator(
                 2,
-                List.of(TableOperator.Page.values(
-                        4,
-                        new Vector[] {
-                                new I64Vector(new long[] {1L, 5L, 3L, 4L}),
-                                new I64Vector(new long[] {10L, 20L, 30L, 40L}),
-                        },
-                        org.weakref.nitro.data.Mask.all(4)))));
+                org.weakref.nitro.data.Mask.all(4),
+                () -> new Output[] {
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            keyBorrows.incrementAndGet();
+                            return keys;
+                        }),
+                        new Output(Set.of(Stream.VALUES), ignored -> {
+                            payloadBorrows.incrementAndGet();
+                            return payloads;
+                        }),
+                });
 
         Operator operator = new TopNOperator(new Allocator(), 2, 0, source);
 
         Batch batch = operator.next();
 
-        assertThat(source.borrowCount(0)).isGreaterThan(0);
-        assertThat(source.borrowCount(1)).isZero();
+        assertThat(keyBorrows.get()).isGreaterThan(0);
+        assertThat(payloadBorrows.get()).isZero();
 
         I64Vector payload = (I64Vector) batch.output(1).borrow(Stream.VALUES);
         assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(20L, 40L);
-        assertThat(source.borrowCount(1)).isGreaterThan(0);
+        assertThat(payloadBorrows.get()).isGreaterThan(0);
     }
 
     @Test
@@ -1728,7 +1886,7 @@ public class TestOperatorBatches
 
         try (Operator join = new HashJoinOperator(
                 allocator,
-                new LazyNonRetainedOuterOperator(
+                lazyNonRetainedOuterOperator(
                         new long[] {1L, 2L, 3L},
                         new long[] {10L, 20L, 30L}),
                 0,
@@ -1822,194 +1980,38 @@ public class TestOperatorBatches
         assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, true);
     }
 
-    private static final class TrackingOperator
-            implements Operator
-    {
-        private final Operator delegate;
-        private final int[] borrowCounts;
-
-        private TrackingOperator(Operator delegate)
-        {
-            this.delegate = delegate;
-            this.borrowCounts = new int[delegate.outputCount()];
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return delegate.outputCount();
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            return delegate.hasNext();
-        }
-
-        @Override
-        public Batch next()
-        {
-            Batch batch = delegate.next();
-            Output[] outputs = new Output[delegate.outputCount()];
-            for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-                int trackedOutput = outputIndex;
-                Output output = batch.output(outputIndex);
-                outputs[outputIndex] = new Output(
-                        output.streams(),
-                        stream -> {
-                            borrowCounts[trackedOutput]++;
-                            return output.borrow(stream);
-                        },
-                        (stream, vector) -> output.take(stream));
-            }
-            return new Batch(batch.borrowMask(), Function.identity(), outputs);
-        }
-
-        @Override
-        public void constrain(org.weakref.nitro.data.Mask mask)
-        {
-            delegate.constrain(mask);
-        }
-
-        @Override
-        public boolean supportsRetainedBatches()
-        {
-            return delegate.supportsRetainedBatches();
-        }
-
-        @Override
-        public void close()
-        {
-            delegate.close();
-        }
-
-        private int borrowCount(int output)
-        {
-            return borrowCounts[output];
-        }
-    }
-
-    private static final class CountingNextOperator
-            implements Operator
-    {
-        private final Operator delegate;
-        private int nextCount;
-
-        private CountingNextOperator(Operator delegate)
-        {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return delegate.outputCount();
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            return delegate.hasNext();
-        }
-
-        @Override
-        public Batch next()
-        {
-            nextCount++;
-            return delegate.next();
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            delegate.constrain(mask);
-        }
-
-        @Override
-        public boolean supportsRetainedBatches()
-        {
-            return delegate.supportsRetainedBatches();
-        }
-
-        @Override
-        public void close()
-        {
-            delegate.close();
-        }
-
-        private int nextCount()
-        {
-            return nextCount;
-        }
-    }
-
     private static String utf8(BinaryVector vector, int position)
     {
         return new String(vector.copyBytes(position), UTF_8);
     }
 
-    private static final class LazyNonRetainedOuterOperator
-            implements Operator
+    private static Operator lazyNonRetainedOuterOperator(long[] keys, long[] payloadValues)
     {
-        private final I64Vector keys;
-        private final long[] payloadValues;
-        private Mask currentMask;
-        private boolean emitted;
+        I64Vector keyVector = new I64Vector(keys);
+        long[] payloadCopy = Arrays.copyOf(payloadValues, payloadValues.length);
+        SingleBatchOperator[] operatorHolder = new SingleBatchOperator[1];
+        SingleBatchOperator operator = new SingleBatchOperator(
+                2,
+                Mask.all(keys.length),
+                () -> new Output[] {
+                        new Output(Set.of(Stream.VALUES), ignored -> keyVector),
+                        new Output(Set.of(Stream.VALUES), ignored -> lazyPayload(payloadCopy, operatorHolder[0].currentMask())),
+                });
+        operatorHolder[0] = operator;
+        return operator;
+    }
 
-        private LazyNonRetainedOuterOperator(long[] keys, long[] payloadValues)
-        {
-            this.keys = new I64Vector(keys);
-            this.payloadValues = Arrays.copyOf(payloadValues, payloadValues.length);
-            this.currentMask = Mask.all(keys.length);
-        }
-
-        @Override
-        public int outputCount()
-        {
-            return 2;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            return !emitted;
-        }
-
-        @Override
-        public Batch next()
-        {
-            emitted = true;
-            return new Batch(
-                    currentMask,
-                    this::constrain,
-                    Function.identity(),
-                    new Output(Set.of(Stream.VALUES), ignored -> keys),
-                    new Output(Set.of(Stream.VALUES), ignored -> lazyPayload()));
-        }
-
-        @Override
-        public void constrain(Mask mask)
-        {
-            currentMask = mask;
-        }
-
-        @Override
-        public void close()
-        {
-        }
-
-        private I64Vector lazyPayload()
-        {
-            I64Vector payload = new I64Vector(payloadValues.length);
-            if (currentMask.all()) {
-                System.arraycopy(payloadValues, 0, payload.values(), 0, payloadValues.length);
-                return payload;
-            }
-            for (int index = 0; index < currentMask.count(); index++) {
-                int position = currentMask.position(index);
-                payload.values()[position] = payloadValues[position];
-            }
+    private static I64Vector lazyPayload(long[] payloadValues, Mask mask)
+    {
+        I64Vector payload = new I64Vector(payloadValues.length);
+        if (mask.all()) {
+            System.arraycopy(payloadValues, 0, payload.values(), 0, payloadValues.length);
             return payload;
         }
+        for (int index = 0; index < mask.count(); index++) {
+            int position = mask.position(index);
+            payload.values()[position] = payloadValues[position];
+        }
+        return payload;
     }
 }

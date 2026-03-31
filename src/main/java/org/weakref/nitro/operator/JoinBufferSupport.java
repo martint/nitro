@@ -47,8 +47,14 @@ final class JoinBufferSupport
     public Streams borrowStreams(Output output)
     {
         Streams.Builder streams = Streams.builder();
-        for (Stream stream : output.streams()) {
-            streams.put(stream, output.borrow(stream));
+        if (output.hasValues()) {
+            streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
+        }
+        if (output.hasNulls()) {
+            streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+        }
+        if (output.hasErrors()) {
+            streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
         }
         return streams.build();
     }
@@ -63,11 +69,19 @@ final class JoinBufferSupport
 
     public Streams copyAndCompact(Output input, Mask mask, int maskStart, Streams existing, int outputStart, int copied, int size)
     {
-        Streams.Builder result = Streams.builder();
         int[] positions = positions(mask, maskStart, copied);
-        for (Stream stream : input.streams()) {
-            Vector existingVector = existing != null ? existing.getOrNull(stream) : null;
-            result.put(stream, copyVectorPositions(existingVector, input.borrow(stream), positions, outputStart, size));
+        Streams.Builder result = Streams.builder();
+        if (input.hasValues()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.VALUES) : null;
+            result.put(Stream.VALUES, copyVectorPositions(existingVector, input.borrow(Stream.VALUES), positions, outputStart, size));
+        }
+        if (input.hasNulls()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.NULLS) : null;
+            result.put(Stream.NULLS, copyVectorPositions(existingVector, input.borrow(Stream.NULLS), positions, outputStart, size));
+        }
+        if (input.hasErrors()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.ERRORS) : null;
+            result.put(Stream.ERRORS, copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), positions, outputStart, size));
         }
         return result.build();
     }
@@ -84,9 +98,17 @@ final class JoinBufferSupport
         }
 
         Streams.Builder result = Streams.builder();
-        for (Stream stream : input.streams()) {
-            Vector existingVector = existing != null ? existing.getOrNull(stream) : null;
-            result.put(stream, copyVectorPositions(existingVector, input.borrow(stream), sourcePositions, sourceCount, outputStart, size));
+        if (input.hasValues()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.VALUES) : null;
+            result.put(Stream.VALUES, copyVectorPositions(existingVector, input.borrow(Stream.VALUES), sourcePositions, sourceCount, outputStart, size));
+        }
+        if (input.hasNulls()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.NULLS) : null;
+            result.put(Stream.NULLS, copyVectorPositions(existingVector, input.borrow(Stream.NULLS), sourcePositions, sourceCount, outputStart, size));
+        }
+        if (input.hasErrors()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.ERRORS) : null;
+            result.put(Stream.ERRORS, copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), sourcePositions, sourceCount, outputStart, size));
         }
         return result.build();
     }
@@ -98,9 +120,17 @@ final class JoinBufferSupport
         }
 
         Streams.Builder result = Streams.builder();
-        for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
-            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
-            result.put(entry.getKey(), copyVectorPositions(existingVector, entry.getValue(), sourcePositions, sourceCount, outputStart, size));
+        if (input.hasValues()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.VALUES) : null;
+            result.put(Stream.VALUES, copyVectorPositions(existingVector, input.values(), sourcePositions, sourceCount, outputStart, size));
+        }
+        if (input.hasNulls()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.NULLS) : null;
+            result.put(Stream.NULLS, copyVectorPositions(existingVector, input.get(Stream.NULLS), sourcePositions, sourceCount, outputStart, size));
+        }
+        if (input.hasErrors()) {
+            Vector existingVector = existing != null ? existing.getOrNull(Stream.ERRORS) : null;
+            result.put(Stream.ERRORS, copyVectorPositions(existingVector, input.get(Stream.ERRORS), sourcePositions, sourceCount, outputStart, size));
         }
         return result.build();
     }
@@ -112,7 +142,7 @@ final class JoinBufferSupport
             return specialized;
         }
 
-        if (isValuesOnly(input)) {
+        if (input.isValuesOnly()) {
             Vector existingValues = existing != null ? existing.values() : null;
             Vector copied = copyVectorSinglePosition(existingValues, input.borrow(Stream.VALUES), sourcePosition, outputPosition, size);
             if (existing != null && copied == existingValues) {
@@ -124,14 +154,30 @@ final class JoinBufferSupport
         if (existing != null) {
             Streams.Builder updated = null;
             boolean changed = false;
-            for (Stream stream : input.streams()) {
-                Vector existingVector = existing.getOrNull(stream);
-                Vector copied = copyVectorSinglePosition(existingVector, input.borrow(stream), sourcePosition, outputPosition, size);
-                if (copied != existingVector) {
-                    if (updated == null) {
-                        updated = Streams.builder().putAll(existing);
-                    }
-                    updated.put(stream, copied);
+            if (input.hasValues()) {
+                Vector existingValues = existing.getOrNull(Stream.VALUES);
+                Vector copied = copyVectorSinglePosition(existingValues, input.borrow(Stream.VALUES), sourcePosition, outputPosition, size);
+                if (copied != existingValues) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.VALUES, copied);
+                    changed = true;
+                }
+            }
+            if (input.hasNulls()) {
+                Vector existingNulls = existing.getOrNull(Stream.NULLS);
+                Vector copied = copyVectorSinglePosition(existingNulls, input.borrow(Stream.NULLS), sourcePosition, outputPosition, size);
+                if (copied != existingNulls) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.NULLS, copied);
+                    changed = true;
+                }
+            }
+            if (input.hasErrors()) {
+                Vector existingErrors = existing.getOrNull(Stream.ERRORS);
+                Vector copied = copyVectorSinglePosition(existingErrors, input.borrow(Stream.ERRORS), sourcePosition, outputPosition, size);
+                if (copied != existingErrors) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.ERRORS, copied);
                     changed = true;
                 }
             }
@@ -139,15 +185,21 @@ final class JoinBufferSupport
         }
 
         Streams.Builder result = Streams.builder();
-        for (Stream stream : input.streams()) {
-            result.put(stream, copyVectorSinglePosition(null, input.borrow(stream), sourcePosition, outputPosition, size));
+        if (input.hasValues()) {
+            result.put(Stream.VALUES, copyVectorSinglePosition(null, input.borrow(Stream.VALUES), sourcePosition, outputPosition, size));
+        }
+        if (input.hasNulls()) {
+            result.put(Stream.NULLS, copyVectorSinglePosition(null, input.borrow(Stream.NULLS), sourcePosition, outputPosition, size));
+        }
+        if (input.hasErrors()) {
+            result.put(Stream.ERRORS, copyVectorSinglePosition(null, input.borrow(Stream.ERRORS), sourcePosition, outputPosition, size));
         }
         return result.build();
     }
 
     public Streams copySinglePosition(Streams existing, Streams input, int size, int outputPosition, int sourcePosition)
     {
-        if (isValuesOnly(input)) {
+        if (input.isValuesOnly()) {
             Vector existingValues = existing != null ? existing.values() : null;
             Vector copied = copyVectorSinglePosition(existingValues, input.values(), sourcePosition, outputPosition, size);
             if (existing != null && copied == existingValues) {
@@ -159,14 +211,30 @@ final class JoinBufferSupport
         if (existing != null) {
             Streams.Builder updated = null;
             boolean changed = false;
-            for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
-                Vector existingVector = existing.getOrNull(entry.getKey());
-                Vector copied = copyVectorSinglePosition(existingVector, entry.getValue(), sourcePosition, outputPosition, size);
-                if (copied != existingVector) {
-                    if (updated == null) {
-                        updated = Streams.builder().putAll(existing);
-                    }
-                    updated.put(entry.getKey(), copied);
+            if (input.hasValues()) {
+                Vector existingValues = existing.getOrNull(Stream.VALUES);
+                Vector copied = copyVectorSinglePosition(existingValues, input.values(), sourcePosition, outputPosition, size);
+                if (copied != existingValues) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.VALUES, copied);
+                    changed = true;
+                }
+            }
+            if (input.hasNulls()) {
+                Vector existingNulls = existing.getOrNull(Stream.NULLS);
+                Vector copied = copyVectorSinglePosition(existingNulls, input.get(Stream.NULLS), sourcePosition, outputPosition, size);
+                if (copied != existingNulls) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.NULLS, copied);
+                    changed = true;
+                }
+            }
+            if (input.hasErrors()) {
+                Vector existingErrors = existing.getOrNull(Stream.ERRORS);
+                Vector copied = copyVectorSinglePosition(existingErrors, input.get(Stream.ERRORS), sourcePosition, outputPosition, size);
+                if (copied != existingErrors) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.ERRORS, copied);
                     changed = true;
                 }
             }
@@ -174,8 +242,14 @@ final class JoinBufferSupport
         }
 
         Streams.Builder result = Streams.builder();
-        for (Map.Entry<Stream, Vector> entry : input.asMap().entrySet()) {
-            result.put(entry.getKey(), copyVectorSinglePosition(null, entry.getValue(), sourcePosition, outputPosition, size));
+        if (input.hasValues()) {
+            result.put(Stream.VALUES, copyVectorSinglePosition(null, input.values(), sourcePosition, outputPosition, size));
+        }
+        if (input.hasNulls()) {
+            result.put(Stream.NULLS, copyVectorSinglePosition(null, input.get(Stream.NULLS), sourcePosition, outputPosition, size));
+        }
+        if (input.hasErrors()) {
+            result.put(Stream.ERRORS, copyVectorSinglePosition(null, input.get(Stream.ERRORS), sourcePosition, outputPosition, size));
         }
         return result.build();
     }
@@ -183,8 +257,14 @@ final class JoinBufferSupport
     public Streams emptyLike(Streams schema)
     {
         Streams.Builder empty = Streams.builder();
-        for (Map.Entry<Stream, Vector> entry : schema.asMap().entrySet()) {
-            empty.put(entry.getKey(), emptyVector(entry.getValue()));
+        if (schema.hasValues()) {
+            empty.put(Stream.VALUES, emptyVector(schema.values()));
+        }
+        if (schema.hasNulls()) {
+            empty.put(Stream.NULLS, emptyVector(schema.get(Stream.NULLS)));
+        }
+        if (schema.hasErrors()) {
+            empty.put(Stream.ERRORS, emptyVector(schema.get(Stream.ERRORS)));
         }
         return empty.build();
     }
@@ -845,13 +925,11 @@ final class JoinBufferSupport
         return toIntExact(Math.min(Integer.MAX_VALUE, estimated));
     }
 
-    private static boolean isValuesOnly(Output output)
+    private static Streams.Builder ensureBuilder(Streams.Builder builder, Streams existing)
     {
-        return output.streams().size() == 1 && output.streams().contains(Stream.VALUES);
-    }
-
-    private static boolean isValuesOnly(Streams streams)
-    {
-        return streams.asMap().size() == 1 && streams.has(Stream.VALUES);
+        if (builder != null) {
+            return builder;
+        }
+        return Streams.builder().putAll(existing);
     }
 }
