@@ -291,12 +291,27 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
+        existing = compatibleExisting(existing, source);
         return source.copyPositionsInto(allocator, allocationContext, existing, sourcePositions, sourceCount, outputStart, size);
     }
 
     private Vector copyVectorSinglePosition(Vector existing, Vector source, int sourcePosition, int outputPosition, int size)
     {
+        existing = compatibleExisting(existing, source);
         return source.copySinglePositionInto(allocator, allocationContext, existing, sourcePosition, outputPosition, size);
+    }
+
+    private Vector compatibleExisting(Vector existing, Vector source)
+    {
+        if (!(existing instanceof DictionaryVector dictionary)) {
+            return existing;
+        }
+        if (source instanceof DictionaryVector sourceDictionary &&
+                sourceDictionary.values() == dictionary.values() &&
+                dictionary.length() == source.length()) {
+            return existing;
+        }
+        return dictionary.values().copy(allocator, allocationContext, dictionary.ids());
     }
 
     private I64Vector copyLongPositions(I64Vector source, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)

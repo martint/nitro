@@ -21,11 +21,14 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 public final class WindowOperator
         implements Operator
 {
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.window.maxBatchRows", 10_000);
+
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("WindowOperator");
     private final Operator source;
@@ -34,10 +37,12 @@ public final class WindowOperator
     private final boolean[] descendingByColumn;
     private final List<RunningWindowFunction> windowFunctions;
 
-    private Streams[] materialized;
-    private Mask outputMask;
+    private Streams[] sourceSchema;
+    private List<TableOperator.Page> pages;
+    private List<RowReference> rows;
+    private Streams[] windowOutputs;
+    private int currentOutputPosition;
     private boolean loaded;
-    private boolean done;
 
     public WindowOperator(Allocator allocator, Operator source, int[] partitionColumns, int[] orderingColumns, boolean[] descendingByColumn, List<RunningWindowFunction> windowFunctions)
     {
@@ -67,7 +72,7 @@ public final class WindowOperator
         if (!loaded) {
             load();
         }
-        return !done;
+        return currentOutputPosition < rows.size();
     }
 
     @Override
@@ -76,16 +81,33 @@ public final class WindowOperator
         if (!loaded) {
             load();
         }
-        done = true;
+        int batchSize = Math.min(BATCH_SIZE, rows.size() - currentOutputPosition);
         Output[] outputs = new Output[outputCount()];
-        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int index = outputIndex;
+        for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
+            Streams batchStreams = materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize);
             outputs[outputIndex] = new Output(
-                    materialized[index].streams(),
-                    materialized[index]::get,
-                    (stream, vector) -> allocator.transfer(allocationContext, vector));
+                    batchStreams.streams(),
+                    batchStreams::get,
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
         }
-        return new Batch(outputMask, takenMask -> allocator.transfer(allocationContext, takenMask), outputs);
+        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+            Streams batchStreams = materializeWindowBatch(functionIndex, currentOutputPosition, batchSize);
+            outputs[source.outputCount() + functionIndex] = new Output(
+                    batchStreams.streams(),
+                    batchStreams::get,
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
+        }
+        currentOutputPosition += batchSize;
+        Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, batchSize);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                batchMask -> allocator.release(allocationContext, batchMask),
+                () -> {},
+                outputs);
     }
 
     @Override
@@ -110,17 +132,25 @@ public final class WindowOperator
     {
         loaded = true;
 
-        List<TableOperator.Page> pages = new ArrayList<>();
-        Streams[] schema = new Streams[source.outputCount()];
+        pages = new ArrayList<>();
+        sourceSchema = new Streams[source.outputCount()];
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
                 Mask mask = batch.borrowMask();
                 for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-                    if (schema[outputIndex] == null) {
-                        schema[outputIndex] = emptyStreamsLike(batch.output(outputIndex));
+                    if (sourceSchema[outputIndex] == null) {
+                        sourceSchema[outputIndex] = emptyStreamsLike(batch.output(outputIndex));
                     }
                 }
                 if (mask.none()) {
+                    continue;
+                }
+                if (source.supportsRetainedBatches()) {
+                    Streams[] retainedColumns = new Streams[source.outputCount()];
+                    for (int outputIndex = 0; outputIndex < retainedColumns.length; outputIndex++) {
+                        retainedColumns[outputIndex] = takeStreams(batch.output(outputIndex));
+                    }
+                    pages.add(new TableOperator.Page(mask.count(), retainedColumns, allocator.transfer(allocationContext, batch.takeMask())));
                     continue;
                 }
                 Streams[] columns = new Streams[source.outputCount()];
@@ -131,16 +161,12 @@ public final class WindowOperator
             }
         }
 
-        List<RowReference> rows = rows(pages);
+        rows = rows(pages);
         rows.sort(this::compareRows);
-        materialized = new Streams[outputCount()];
-        for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            materialized[outputIndex] = materializeColumn(schema[outputIndex], outputIndex, rows, pages);
-        }
+        windowOutputs = new Streams[windowFunctions.size()];
         for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-            materialized[source.outputCount() + functionIndex] = materializeWindow(windowFunctions.get(functionIndex), rows);
+            windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex), rows);
         }
-        outputMask = allocator.allocateRangeMask(allocationContext, 0, rows.size());
     }
 
     private Streams materializeWindow(RunningWindowFunction function, List<RowReference> rows)
@@ -221,26 +247,63 @@ public final class WindowOperator
                 right.position());
     }
 
-    private Streams materializeColumn(Streams schema, int outputIndex, List<RowReference> rows, List<TableOperator.Page> pages)
+    private Streams materializeSourceColumnBatch(int outputIndex, int startPosition, int batchSize)
     {
         Streams.Builder builder = Streams.builder();
+        Streams schema = sourceSchema[outputIndex];
         for (Stream stream : schema.streams()) {
             Vector result = null;
-            for (int outputPosition = 0; outputPosition < rows.size(); outputPosition++) {
-                RowReference row = rows.get(outputPosition);
-                Streams sourceStreams = pages.get(row.pageIndex()).columns()[outputIndex];
+            int outputPosition = 0;
+            while (outputPosition < batchSize) {
+                RowReference firstRow = rows.get(startPosition + outputPosition);
+                Streams sourceStreams = pages.get(firstRow.pageIndex()).columns()[outputIndex];
                 if (!sourceStreams.has(stream)) {
+                    outputPosition++;
                     continue;
                 }
-                result = sourceStreams.get(stream).copySinglePositionInto(
+
+                int groupStart = outputPosition;
+                int groupPageIndex = firstRow.pageIndex();
+                while (outputPosition < batchSize && rows.get(startPosition + outputPosition).pageIndex() == groupPageIndex) {
+                    outputPosition++;
+                }
+
+                int groupSize = outputPosition - groupStart;
+                int[] positions = new int[groupSize];
+                for (int index = 0; index < groupSize; index++) {
+                    positions[index] = rows.get(startPosition + groupStart + index).position();
+                }
+                result = sourceStreams.get(stream).copyPositionsInto(
                         allocator,
                         allocationContext,
                         result,
-                        row.position(),
-                        outputPosition,
-                        rows.size());
+                        positions,
+                        groupSize,
+                        groupStart,
+                        batchSize);
             }
             builder.put(stream, result == null ? schema.get(stream).emptyLike(allocator, allocationContext) : result);
+        }
+        return builder.build();
+    }
+
+    private Streams materializeWindowBatch(int functionIndex, int startPosition, int batchSize)
+    {
+        Streams fullOutput = windowOutputs[functionIndex];
+        Streams.Builder builder = Streams.builder();
+        for (Stream stream : fullOutput.streams()) {
+            Vector result = null;
+            Vector source = fullOutput.get(stream);
+            for (int outputPosition = 0; outputPosition < batchSize; outputPosition++) {
+                result = source.copySinglePositionInto(
+                        allocator,
+                        allocationContext,
+                        result,
+                        startPosition + outputPosition,
+                        outputPosition,
+                        batchSize);
+            }
+            builder.put(stream, result == null ? source.emptyLike(allocator, allocationContext) : result);
         }
         return builder.build();
     }
@@ -250,8 +313,14 @@ public final class WindowOperator
         List<RowReference> rows = new ArrayList<>();
         for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
             TableOperator.Page page = pages.get(pageIndex);
-            for (int position = 0; position < page.rows(); position++) {
-                rows.add(new RowReference(pageIndex, page, position));
+            if (page.mask().all()) {
+                for (int position = 0; position < page.rows(); position++) {
+                    rows.add(new RowReference(pageIndex, page, position));
+                }
+                continue;
+            }
+            for (int index = 0; index < page.mask().selectedCount(); index++) {
+                rows.add(new RowReference(pageIndex, page, page.mask().position(index)));
             }
         }
         return rows;
@@ -271,6 +340,15 @@ public final class WindowOperator
         Streams.Builder builder = Streams.builder();
         for (Stream stream : output.streams()) {
             builder.put(stream, output.borrow(stream));
+        }
+        return builder.build();
+    }
+
+    private Streams takeStreams(Output output)
+    {
+        Streams.Builder builder = Streams.builder();
+        for (Stream stream : output.streams()) {
+            builder.put(stream, allocator.transfer(allocationContext, output.take(stream)));
         }
         return builder.build();
     }
@@ -505,6 +583,80 @@ public final class WindowOperator
                 }
             }
             return output;
+        }
+    }
+
+    public static final class PartitionOffsetI64WindowFunction
+            implements RunningWindowFunction
+    {
+        private final int inputColumn;
+        private final int offset;
+
+        private long[] partitionValues = new long[0];
+        private boolean[] partitionNulls = new boolean[0];
+        private int partitionCount;
+
+        public PartitionOffsetI64WindowFunction(int inputColumn, int offset)
+        {
+            this.inputColumn = inputColumn;
+            this.offset = offset;
+        }
+
+        @Override
+        public Streams emptyOutput(Allocator allocator, Allocator.Context allocationContext, int size)
+        {
+            return Streams.ofValuesAndNulls(
+                    allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
+                    allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));
+        }
+
+        @Override
+        public void reset()
+        {
+            partitionCount = 0;
+        }
+
+        @Override
+        public Streams append(Allocator allocator, Allocator.Context allocationContext, Streams output, Streams[] sourceColumns, int inputPosition, int outputPosition, int outputSize)
+        {
+            ensureCapacity(partitionCount + 1);
+            Streams input = sourceColumns[inputColumn];
+            Vector values = input.values();
+            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            boolean isNull = OperatorVectorSupport.isNull(nulls, inputPosition);
+            partitionNulls[partitionCount] = isNull;
+            if (!isNull) {
+                partitionValues[partitionCount] = OperatorVectorSupport.longValue(values, inputPosition);
+            }
+            partitionCount++;
+            return output;
+        }
+
+        @Override
+        public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
+        {
+            I64Vector outputValues = (I64Vector) output.values();
+            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            for (int partitionPosition = 0; partitionPosition < partitionCount; partitionPosition++) {
+                int sourcePosition = partitionPosition + offset;
+                int outputPosition = partitionStart + partitionPosition;
+                boolean isNull = sourcePosition < 0 || sourcePosition >= partitionCount || partitionNulls[sourcePosition];
+                outputNulls.values()[outputPosition] = isNull;
+                if (!isNull) {
+                    outputValues.values()[outputPosition] = partitionValues[sourcePosition];
+                }
+            }
+            return output;
+        }
+
+        private void ensureCapacity(int requiredSize)
+        {
+            if (partitionValues.length >= requiredSize) {
+                return;
+            }
+            int newSize = Math.max(requiredSize, Math.max(8, partitionValues.length * 2));
+            partitionValues = Arrays.copyOf(partitionValues, newSize);
+            partitionNulls = Arrays.copyOf(partitionNulls, newSize);
         }
     }
 

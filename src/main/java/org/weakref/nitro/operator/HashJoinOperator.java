@@ -32,7 +32,7 @@ import java.util.Set;
 public class HashJoinOperator
         implements Operator
 {
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final BooleanVector[] NO_NULL_STREAMS = new BooleanVector[0];
 
@@ -463,7 +463,7 @@ public class HashJoinOperator
         }
 
         int sourcePosition = innerBatch.sourcePosition(logicalPosition);
-        constrainRetainedInnerBatch(innerBatch, new int[] {logicalPosition}, 1);
+        constrainRetainedInnerBatch(innerBatch, logicalPosition);
         return withSyntheticNulls(existing, buffers.copySinglePosition(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
     }
 
@@ -488,10 +488,17 @@ public class HashJoinOperator
         if (!innerBatch.retained()) {
             return;
         }
+        boolean sorted = true;
+        int previousSourcePosition = -1;
         for (int index = 0; index < positionCount; index++) {
-            retainedInnerMaskPositionsScratch[index] = innerBatch.sourcePosition(logicalPositions[index]);
+            int sourcePosition = innerBatch.sourcePosition(logicalPositions[index]);
+            retainedInnerMaskPositionsScratch[index] = sourcePosition;
+            sorted &= sourcePosition >= previousSourcePosition;
+            previousSourcePosition = sourcePosition;
         }
-        Arrays.sort(retainedInnerMaskPositionsScratch, 0, positionCount);
+        if (!sorted) {
+            Arrays.sort(retainedInnerMaskPositionsScratch, 0, positionCount);
+        }
         int uniqueCount = 0;
         int previous = -1;
         for (int index = 0; index < positionCount; index++) {
@@ -503,7 +510,21 @@ public class HashJoinOperator
         }
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
                 allocationContext,
-                Arrays.copyOf(retainedInnerMaskPositionsScratch, uniqueCount),
+                retainedInnerMaskPositionsScratch,
+                uniqueCount,
+                innerBatch.retainedBatch().borrowMask().size()));
+    }
+
+    private void constrainRetainedInnerBatch(BufferedJoinInput.InnerBatch innerBatch, int logicalPosition)
+    {
+        if (!innerBatch.retained()) {
+            return;
+        }
+        retainedInnerMaskPositionsScratch[0] = innerBatch.sourcePosition(logicalPosition);
+        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+                allocationContext,
+                retainedInnerMaskPositionsScratch,
+                1,
                 innerBatch.retainedBatch().borrowMask().size()));
     }
 

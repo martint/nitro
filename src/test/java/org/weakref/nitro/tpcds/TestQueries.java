@@ -573,6 +573,32 @@ public class TestQueries
     }
 
     @Test
+    void testQuery57OperatorAssembly()
+    {
+        assertApplesToApplesOperatorMatches(
+                "57",
+                tables -> TpcdsParquetSupport.query57(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables),
+                support -> support.query57(TpcdsParquetTables.requiredActual("sf10")),
+                TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery57StageCounts()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        try (Operator joinedFacts = TpcdsParquetSupport.query57JoinedFacts(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+                Operator groupedSales = TpcdsParquetSupport.query57MonthlyGroupedSales(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+                Operator rankedSales = TpcdsParquetSupport.query57MonthlyRankedSales(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+                TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(joinedFacts)).hasSize(support.query57JoinedFacts(tables).getMaterializedRows().size());
+            assertThat(OperatorAssertions.OperatorAssert.toRows(groupedSales)).hasSize(support.query57MonthlyGroupedSales(tables).getMaterializedRows().size());
+            assertThat(OperatorAssertions.OperatorAssert.toRows(rankedSales)).hasSize(support.query57MonthlyRankedSales(tables).getMaterializedRows().size());
+        }
+    }
+
+    @Test
     void testQuery57TrinoSql()
     {
         assertTrinoOperatorMatchesSql("57", support -> support.query57(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
@@ -987,8 +1013,19 @@ public class TestQueries
 
     private static void assertOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
     {
+        assertNitroMatchesSql(queryId, nitroQuery, valueNormalizer);
+    }
+
+    private static void assertApplesToApplesOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery)
+    {
+        assertApplesToApplesOperatorMatches(queryId, nitroQuery, trinoQuery, TestQueries::normalizeValue);
+    }
+
+    private static void assertApplesToApplesOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
+    {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+        assumeTrue(TrinoTpcdsParquetSupport.supportsOperatorAssembly(queryId), "Trino operator assembly is not implemented for Q" + queryId);
 
         List<org.weakref.nitro.data.Row> nitroRows;
         try (Operator query = nitroQuery.apply(tables)) {
@@ -1033,6 +1070,7 @@ public class TestQueries
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+        assumeTrue(TrinoTpcdsParquetSupport.supportsOperatorAssembly(queryId), "Trino operator assembly is not implemented for Q" + queryId);
 
         try (TrinoTpcdsParquetSupport operatorSupport = new TrinoTpcdsParquetSupport();
                 TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {

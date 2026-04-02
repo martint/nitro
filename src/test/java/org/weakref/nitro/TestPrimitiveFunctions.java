@@ -54,6 +54,7 @@ import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
+import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
@@ -101,6 +102,7 @@ public final class TestPrimitiveFunctions
                 MapContainsKeyUtf8.class,
                 MapKeys.class,
                 MapValues.class,
+                ScaledRelativeDifferenceGtI64.class,
                 AddExactI64.class,
                 SubtractI64.class,
                 SubtractExactI64.class,

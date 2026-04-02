@@ -101,6 +101,7 @@ public class TopNOperator
                 state.flushPendingBatch(batch, queue.stream()
                         .map(Entry::position)
                         .toList());
+                batch.close();
             }
         }
 

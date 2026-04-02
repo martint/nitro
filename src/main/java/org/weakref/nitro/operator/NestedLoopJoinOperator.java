@@ -25,7 +25,7 @@ public class NestedLoopJoinOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NestedLoopJoinOperator");
-    private static final int BATCH_SIZE = 1024;
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.nestedloop.maxBatchRows", 10_000);
 
     private final Allocator allocator;
     private final Operator outer;

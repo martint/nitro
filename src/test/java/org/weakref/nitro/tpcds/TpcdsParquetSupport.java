@@ -17,6 +17,7 @@ import it.unimi.dsi.fastutil.ints.IntSet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
@@ -26,7 +27,6 @@ import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
-import org.weakref.nitro.operator.MaterializeOperator;
 import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
@@ -1874,6 +1874,7 @@ final class TpcdsParquetSupport
         Operator joined = new HashJoinOperator(allocator, current, new int[] {0, 1, 2, 3, 8}, previous, new int[] {0, 1, 2, 3, 5});
         joined = new HashJoinOperator(allocator, joined, new int[] {0, 1, 2, 3, 8}, next, new int[] {0, 1, 2, 3, 5});
         joined = projectQuery47Output(allocator, primitiveRegistry, joined);
+        joined = new BatchSliceOperator(allocator, 4_096, joined);
         joined = filter(allocator, primitiveRegistry, joined, query53QuarterlyDeviationPredicate(7, 6));
         joined = projectQuery47SortKey(allocator, primitiveRegistry, joined);
         joined = new TopNOperator(allocator, 100, new int[] {10, 2}, new boolean[] {false, false}, joined);
@@ -2202,17 +2203,18 @@ final class TpcdsParquetSupport
 
     public static Operator query57(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator current = projectQuery57CurrentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables));
-        Operator previous = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), true);
-        Operator next = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), false);
+        Operator rankedMonthlySales = query57MonthlyRankedSales(allocator, primitiveRegistry, tables);
+        Operator currentRows = projectQuery57CurrentRows(allocator, primitiveRegistry, rankedMonthlySales);
+        Operator previousRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), true);
+        Operator nextRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), false);
 
-        Operator joined = new HashJoinOperator(allocator, current, new int[] {0, 1, 2, 7}, previous, new int[] {0, 1, 2, 4});
-        joined = new HashJoinOperator(allocator, joined, new int[] {0, 1, 2, 7}, next, new int[] {0, 1, 2, 4});
-        joined = projectQuery57Output(allocator, primitiveRegistry, joined);
-        joined = filter(allocator, primitiveRegistry, joined, query53QuarterlyDeviationPredicate(6, 5));
-        joined = projectQuery57SortKey(allocator, primitiveRegistry, joined);
-        joined = new TopNOperator(allocator, 100, new int[] {9, 2}, new boolean[] {false, false}, joined);
-        return projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5, 6, 7, 8);
+        Operator monthlySales = new HashJoinOperator(allocator, currentRows, new int[] {0, 1, 2, 7}, previousRows, new int[] {0, 1, 2, 4});
+        monthlySales = new HashJoinOperator(allocator, monthlySales, new int[] {0, 1, 2, 7}, nextRows, new int[] {0, 1, 2, 4});
+        monthlySales = filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(6, 5));
+        monthlySales = projectQuery57Output(allocator, primitiveRegistry, monthlySales);
+        monthlySales = projectQuery57SortKey(allocator, primitiveRegistry, monthlySales);
+        monthlySales = new TopNOperator(allocator, 100, new int[] {9, 2}, new boolean[] {false, false}, monthlySales);
+        return projectInputs(allocator, primitiveRegistry, monthlySales, 0, 1, 2, 3, 4, 5, 6, 7, 8);
     }
 
     public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -3562,45 +3564,15 @@ final class TpcdsParquetSupport
 
     private static FilterSpec query53QuarterlyDeviationPredicate(int sumIndex, int averageIndex)
     {
-        Variable zero = new Variable(0);
-        Variable ten = new Variable(1);
-        Variable averagePositive = new Variable(2);
-        Variable sumLessThanAverage = new Variable(3);
-        Variable averageMinusSum = new Variable(4);
-        Variable sumMinusAverage = new Variable(5);
-        Variable absoluteDifference = new Variable(6);
-        Variable scaledDifference = new Variable(7);
-        Variable deviationLarge = new Variable(8);
-        Variable result = new Variable(9);
+        Variable ten = new Variable(0);
+        Variable result = new Variable(1);
 
         EvaluationPlan plan = new EvaluationPlan(List.of(
-                new Assignment(zero, new Literal(0L), AllMask.ALL),
                 new Assignment(ten, new Literal(10L), AllMask.ALL),
-                new Assignment(averagePositive, new Call("lt", List.of(
-                        new Reference(zero, Stream.VALUES),
-                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(sumLessThanAverage, new Call("lt", List.of(
+                new Assignment(result, new Call("scaled_relative_difference_gt_i64", List.of(
                         new Reference(new Input(sumIndex), Stream.VALUES),
-                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(averageMinusSum, new Call("subtract", List.of(
                         new Reference(new Input(averageIndex), Stream.VALUES),
-                        new Reference(new Input(sumIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(sumMinusAverage, new Call("subtract", List.of(
-                        new Reference(new Input(sumIndex), Stream.VALUES),
-                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(absoluteDifference, new Call("if_i64", List.of(
-                        new Reference(sumLessThanAverage, Stream.VALUES),
-                        new Reference(averageMinusSum, Stream.VALUES),
-                        new Reference(sumMinusAverage, Stream.VALUES))), AllMask.ALL),
-                new Assignment(scaledDifference, new Call("multiply", List.of(
-                        new Reference(absoluteDifference, Stream.VALUES),
-                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
-                new Assignment(deviationLarge, new Call("lt", List.of(
-                        new Reference(new Input(averageIndex), Stream.VALUES),
-                        new Reference(scaledDifference, Stream.VALUES))), AllMask.ALL),
-                new Assignment(result, new Call("and", List.of(
-                        new Reference(averagePositive, Stream.VALUES),
-                        new Reference(deviationLarge, Stream.VALUES))), AllMask.ALL)), List.of());
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
     }
 
@@ -3861,12 +3833,10 @@ final class TpcdsParquetSupport
 
     private static Operator scannedTable(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
-        return new MaterializeOperator(
-                allocator,
-                multiFileScan(
-                        tables.tableFiles(tableName),
-                        columns.length,
-                        path -> new TrinoParquetScanOperator(allocator, path, List.of(columns))));
+        return multiFileScan(
+                tables.tableFiles(tableName),
+                columns.length,
+                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
     }
 
     private static Operator itemScan(Allocator allocator, TpcdsParquetTables tables, String... columns)
@@ -8079,7 +8049,7 @@ final class TpcdsParquetSupport
                 source);
     }
 
-    private static Operator query57MonthlyRankedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    static Operator query57JoinedFacts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator facts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price");
         facts = new HashJoinOperator(
@@ -8107,12 +8077,23 @@ final class TpcdsParquetSupport
                 1,
                 scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"),
                 0);
-        facts = projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 8, 9, 3);
+        return projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 8, 9, 3);
+    }
+
+    static Operator query57MonthlyGroupedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = query57JoinedFacts(allocator, primitiveRegistry, tables);
         facts = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4),
                 List.of(new Sum(5)),
                 facts);
+        return facts;
+    }
+
+    static Operator query57MonthlyRankedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator facts = query57MonthlyGroupedSales(allocator, primitiveRegistry, tables);
         facts = new TopNRankingOperator(
                 allocator,
                 32,
@@ -8120,20 +8101,30 @@ final class TpcdsParquetSupport
                 new int[] {3, 4},
                 new boolean[] {false, false},
                 facts);
-        facts = new WindowOperator(
-                allocator,
-                facts,
-                new int[] {0, 1, 2, 3},
-                new int[0],
-                new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(5)));
-        return projectInputs(allocator, primitiveRegistry, facts, 0, 1, 2, 3, 4, 7, 5, 6);
+        return projectInputs(allocator, primitiveRegistry, facts, 0, 1, 2, 3, 4, 5, 6);
+    }
+
+    private static Operator query57MonthlyWindowedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator currentRows = projectQuery57CurrentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables));
+        Operator previousRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), true);
+        Operator nextRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), false);
+        Operator facts = new HashJoinOperator(allocator, currentRows, new int[] {0, 1, 2, 7}, previousRows, new int[] {0, 1, 2, 4});
+        facts = new HashJoinOperator(allocator, facts, new int[] {0, 1, 2, 7}, nextRows, new int[] {0, 1, 2, 4});
+        return projectQuery57Output(allocator, primitiveRegistry, facts);
     }
 
     private static Operator projectQuery57CurrentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         source = filter(allocator, primitiveRegistry, source, equal(3, 1999));
-        return projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 6, 7);
+        source = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0, 1, 2, 3},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(5)));
+        return projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 7, 5, 6);
     }
 
     private static Operator projectQuery57AdjacentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, boolean previous)
@@ -8143,13 +8134,13 @@ final class TpcdsParquetSupport
         List<Assignment> assignments = List.of(
                 new Assignment(one, new Literal(1L), AllMask.ALL),
                 new Assignment(adjustedRank, new Call(previous ? "add" : "subtract", List.of(
-                        new Reference(new Input(7), Stream.VALUES),
+                        new Reference(new Input(6), Stream.VALUES),
                         new Reference(one, Stream.VALUES))), AllMask.ALL));
         List<Reference> outputs = List.of(
                 new Reference(new Input(0), Stream.VALUES),
                 new Reference(new Input(1), Stream.VALUES),
                 new Reference(new Input(2), Stream.VALUES),
-                new Reference(new Input(6), Stream.VALUES),
+                new Reference(new Input(5), Stream.VALUES),
                 new Reference(adjustedRank, Stream.VALUES));
         return new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source);
     }

@@ -48,9 +48,16 @@ final class DistinctKeySet
         return index.add(values, nulls, position);
     }
 
+    public void reserveAdditional(int additionalEntries)
+    {
+        index.reserveAdditional(additionalEntries);
+    }
+
     private interface DistinctIndex
     {
         boolean add(Vector[] values, BooleanVector[] nulls, int position);
+
+        default void reserveAdditional(int additionalEntries) {}
     }
 
     private static final class LongDistinctIndex
@@ -61,6 +68,12 @@ final class DistinctKeySet
         private LongDistinctIndex(int expectedSize)
         {
             this.keys = new LongOpenHashSet(expectedSize);
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            keys.ensureCapacity(keys.size() + Math.max(0, additionalEntries));
         }
 
         @Override
@@ -121,6 +134,12 @@ final class DistinctKeySet
         {
             this.probeKeys = new OperatorKeySemantics.Key[keyCount];
             this.compositeProbeKey = keyCount > 1 ? OperatorKeySemantics.reusableCompositeProbeKey(keyCount) : null;
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            keys.ensureCapacity(keys.size() + Math.max(0, additionalEntries));
         }
 
         @Override

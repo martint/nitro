@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
 import java.util.Set;
 
 final class FlatKeyLayout
@@ -24,6 +25,8 @@ final class FlatKeyLayout
     private final int[] inputChannels;
     private final FlatTypeHandler[] handlers;
     private final int[] fixedOffsets;
+    private final int[] comparisonOrder;
+    private final int nullByteCount;
     private final boolean singleField;
     private final int singleInputChannel;
     private final FlatTypeHandler singleHandler;
@@ -31,12 +34,14 @@ final class FlatKeyLayout
     private final int fixedRecordSize;
     private final boolean anyVariableWidth;
 
-    private FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int fixedRecordSize, boolean anyVariableWidth)
+    private FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
         this.fields = fields;
         this.inputChannels = inputChannels;
         this.handlers = handlers;
         this.fixedOffsets = fixedOffsets;
+        this.comparisonOrder = comparisonOrder;
+        this.nullByteCount = nullByteCount;
         this.singleField = handlers.length == 1;
         this.singleInputChannel = singleField ? inputChannels[0] : -1;
         this.singleHandler = singleField ? handlers[0] : null;
@@ -45,13 +50,14 @@ final class FlatKeyLayout
         this.anyVariableWidth = anyVariableWidth;
     }
 
-    public static FlatKeyLayout tryCreate(Vector[] values)
+    public static FlatKeyLayout tryCreate(Vector[] values, boolean nullable)
     {
         Field[] fields = new Field[values.length];
         int[] inputChannels = new int[values.length];
         FlatTypeHandler[] handlers = new FlatTypeHandler[values.length];
         int[] fixedOffsets = new int[values.length];
-        int fixedOffset = 0;
+        int nullByteCount = nullable ? Math.max(1, (values.length + Byte.SIZE - 1) / Byte.SIZE) : 0;
+        int fixedOffset = nullByteCount;
         boolean anyVariableWidth = false;
         for (int index = 0; index < values.length; index++) {
             FlatTypeHandler handler = FlatTypeHandlers.forVector(values[index]);
@@ -65,7 +71,12 @@ final class FlatKeyLayout
             fixedOffset += handler.fixedSize();
             anyVariableWidth |= handler.variableWidth();
         }
-        return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, fixedOffset, anyVariableWidth);
+        return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth);
+    }
+
+    public static FlatKeyLayout tryCreate(Vector[] values)
+    {
+        return tryCreate(values, false);
     }
 
     public int fieldCount()
@@ -78,6 +89,11 @@ final class FlatKeyLayout
         return fixedRecordSize;
     }
 
+    public int nullByteCount()
+    {
+        return nullByteCount;
+    }
+
     public boolean anyVariableWidth()
     {
         return anyVariableWidth;
@@ -88,40 +104,112 @@ final class FlatKeyLayout
         return fields[index];
     }
 
-    public long hash(Vector[] values, int position)
+    public long hash(Vector[] values, Vector[] nulls, int position)
     {
         if (singleField) {
+            if (fieldNull(nulls, singleInputChannel, position)) {
+                return 31;
+            }
             return 31 + singleHandler.hashInput(values[singleInputChannel], position);
         }
         long result = 1;
         for (int index = 0; index < handlers.length; index++) {
-            result = 31 * result + handlers[index].hashInput(values[inputChannels[index]], position);
+            if (fieldNull(nulls, inputChannels[index], position)) {
+                result = 31 * result + 1;
+            }
+            else {
+                result = 31 * result + handlers[index].hashInput(values[inputChannels[index]], position);
+            }
         }
         return result;
     }
 
-    public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, int position)
+    public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position)
     {
+        if (nullByteCount > 0) {
+            Arrays.fill(fixedChunk, fixedOffset, fixedOffset + nullByteCount, (byte) 0);
+        }
         if (singleField) {
-            singleHandler.writeFlat(values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena);
+            if (fieldNull(nulls, singleInputChannel, position)) {
+                fixedChunk[fixedOffset] = 1;
+            }
+            else {
+                singleHandler.writeFlat(values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena);
+            }
             return;
         }
         for (int index = 0; index < handlers.length; index++) {
-            handlers[index].writeFlat(values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
+            if (fieldNull(nulls, inputChannels[index], position)) {
+                setNullBit(fixedChunk, fixedOffset, index);
+            }
+            else {
+                handlers[index].writeFlat(values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
+            }
         }
     }
 
-    public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, int position)
+    public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position)
     {
         if (singleField) {
+            if (fieldNull(nulls, singleInputChannel, position)) {
+                return isNull(fixedChunk, fixedOffset, 0);
+            }
+            if (isNull(fixedChunk, fixedOffset, 0)) {
+                return false;
+            }
             return singleHandler.identicalFlatToInput(fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position);
         }
-        for (int index = 0; index < handlers.length; index++) {
-            if (!handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
+        for (int index : comparisonOrder) {
+            boolean inputNull = fieldNull(nulls, inputChannels[index], position);
+            boolean recordNull = isNull(fixedChunk, fixedOffset, index);
+            if (inputNull != recordNull) {
+                return false;
+            }
+            if (!inputNull && !handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
             }
         }
         return true;
+    }
+
+    public boolean fieldNull(byte[] fixedChunk, int fixedOffset, int fieldIndex)
+    {
+        return isNull(fixedChunk, fixedOffset, fieldIndex);
+    }
+
+    private static boolean fieldNull(Vector[] nulls, int inputChannel, int position)
+    {
+        return nulls != null && nulls.length > inputChannel && OperatorVectorSupport.isNull(nulls[inputChannel], position);
+    }
+
+    private static int[] comparisonOrder(FlatTypeHandler[] handlers)
+    {
+        int[] order = new int[handlers.length];
+        int next = 0;
+        for (int index = 0; index < handlers.length; index++) {
+            if (!handlers[index].variableWidth()) {
+                order[next++] = index;
+            }
+        }
+        for (int index = 0; index < handlers.length; index++) {
+            if (handlers[index].variableWidth()) {
+                order[next++] = index;
+            }
+        }
+        return order;
+    }
+
+    private void setNullBit(byte[] fixedChunk, int fixedOffset, int fieldIndex)
+    {
+        fixedChunk[fixedOffset + fieldIndex / Byte.SIZE] |= (byte) (1 << (fieldIndex % Byte.SIZE));
+    }
+
+    private boolean isNull(byte[] fixedChunk, int fixedOffset, int fieldIndex)
+    {
+        if (nullByteCount == 0) {
+            return false;
+        }
+        return (fixedChunk[fixedOffset + fieldIndex / Byte.SIZE] & (1 << (fieldIndex % Byte.SIZE))) != 0;
     }
 
     public record Field(int inputChannel, FlatTypeHandler handler, int fixedOffset, Set<BinaryVector.Trait> binaryTraits)

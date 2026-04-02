@@ -194,7 +194,7 @@ final class OperatorVectorSupport
         return values.runIndex(position);
     }
 
-    static int binaryHash(byte[] bytes, int offset, int length)
+    public static int binaryHash(byte[] bytes, int offset, int length)
     {
         long hash = HASH_SEED ^ length;
         int index = offset;

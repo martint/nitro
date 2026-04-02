@@ -25,6 +25,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.CountingNextOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
@@ -46,6 +47,7 @@ import org.weakref.nitro.operator.SingleBatchOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -72,6 +74,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
 
 public class TestOperatorBatches
@@ -492,6 +495,423 @@ public class TestOperatorBatches
                             row(1L, "first-b", 1L),
                             row(2L, "second", 3L),
                             row(3L, "third", 4L));
+        }
+    }
+
+    @Test
+    void testWindowOperatorEmitsLargeResultsAcrossMultipleBatches()
+    {
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        for (int value = 1; value <= 5_000; value++) {
+            rows.add(row(1L, (long) value));
+        }
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, rows),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new WindowOperator.RunningSumI64WindowFunction(1)))) {
+            int batchCount = 0;
+            int rowCount = 0;
+            long firstValue = Long.MIN_VALUE;
+            long boundaryValue = Long.MIN_VALUE;
+            long finalValue = Long.MIN_VALUE;
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    batchCount++;
+                    Mask mask = batch.borrowMask();
+                    I64Vector runningSum = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+                    for (int position : mask) {
+                        long value = runningSum.values()[position];
+                        if (rowCount == 0) {
+                            firstValue = value;
+                        }
+                        if (rowCount == 4_095) {
+                            boundaryValue = value;
+                        }
+                        finalValue = value;
+                        rowCount++;
+                    }
+                }
+            }
+            assertThat(batchCount).isEqualTo(2);
+            assertThat(rowCount).isEqualTo(5_000);
+            assertThat(firstValue).isEqualTo(1L);
+            assertThat(boundaryValue).isEqualTo(8_390_656L);
+            assertThat(finalValue).isEqualTo(12_502_500L);
+        }
+    }
+
+    @Test
+    void testTopNRankingOperatorEmitsLargeResultsAcrossMultipleBatches()
+    {
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        for (int value = 5_000; value >= 1; value--) {
+            rows.add(row((long) value));
+        }
+
+        try (Operator operator = new org.weakref.nitro.operator.TopNRankingOperator(
+                allocator,
+                5_000,
+                new int[] {0},
+                new boolean[] {false},
+                new ConstantTableOperator(allocator, 1, rows))) {
+            int batchCount = 0;
+            int rowCount = 0;
+            long firstRank = Long.MIN_VALUE;
+            long boundaryRank = Long.MIN_VALUE;
+            long finalRank = Long.MIN_VALUE;
+            long firstValue = Long.MIN_VALUE;
+            long boundaryValue = Long.MIN_VALUE;
+            long finalValue = Long.MIN_VALUE;
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    batchCount++;
+                    Mask mask = batch.borrowMask();
+                    I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+                    I64Vector ranks = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+                    for (int position : mask) {
+                        long value = values.values()[position];
+                        long rank = ranks.values()[position];
+                        if (rowCount == 0) {
+                            firstValue = value;
+                            firstRank = rank;
+                        }
+                        if (rowCount == 4_095) {
+                            boundaryValue = value;
+                            boundaryRank = rank;
+                        }
+                        finalValue = value;
+                        finalRank = rank;
+                        rowCount++;
+                    }
+                }
+            }
+            assertThat(batchCount).isEqualTo(2);
+            assertThat(rowCount).isEqualTo(5_000);
+            assertThat(firstValue).isEqualTo(1L);
+            assertThat(firstRank).isEqualTo(1L);
+            assertThat(boundaryValue).isEqualTo(4_096L);
+            assertThat(boundaryRank).isEqualTo(4_096L);
+            assertThat(finalValue).isEqualTo(5_000L);
+            assertThat(finalRank).isEqualTo(5_000L);
+        }
+    }
+
+    @Test
+    void testBatchSliceOperatorSplitsLargeBatchWithoutDroppingRows()
+    {
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        for (long value = 0; value < 5_000; value++) {
+            rows.add(row(value));
+        }
+
+        try (Operator operator = new BatchSliceOperator(
+                allocator,
+                1_024,
+                new ConstantTableOperator(allocator, 1, rows))) {
+            List<Long> actual = new ArrayList<>();
+            int batchCount = 0;
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    batchCount++;
+                    assertThat(batch.borrowMask().selectedCount()).isLessThanOrEqualTo(1_024);
+                    I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+                    for (int position : batch.borrowMask()) {
+                        actual.add(values.values()[position]);
+                    }
+                }
+            }
+
+            assertThat(batchCount).isGreaterThan(1);
+            assertThat(actual).hasSize(5_000);
+            assertThat(actual.get(0)).isEqualTo(0L);
+            assertThat(actual.get(actual.size() - 1)).isEqualTo(4_999L);
+        }
+    }
+
+    @Test
+    void testTopNOperatorSupportsProjectedOrderingAfterBatchSlicing()
+    {
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        for (long value = 0; value < 5_000; value++) {
+            rows.add(row(value, 2_500L));
+        }
+
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        new Variable(0),
+                        new Call("subtract", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Variable(0), Stream.VALUES)));
+
+        try (Operator operator = new TopNOperator(
+                allocator,
+                5,
+                new int[] {1},
+                new boolean[] {false},
+                new ProjectOperator(
+                        allocator,
+                        evaluationPlan,
+                        primitiveRegistry,
+                        new BatchSliceOperator(
+                                allocator,
+                                1_024,
+                                new ConstantTableOperator(allocator, 2, rows))))) {
+            List<Long> actual = new ArrayList<>();
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+                    for (int position : batch.borrowMask()) {
+                        actual.add(values.values()[position]);
+                    }
+                }
+            }
+
+            assertThat(actual).containsExactly(0L, 1L, 2L, 3L, 4L);
+        }
+    }
+
+    @Test
+    void testTopNRankingOperatorPreservesUtf8PayloadColumns()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new TopNRankingOperator(
+                allocator,
+                5,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("alpha", 3L),
+                        row("alpha", 2L),
+                        row("alpha", 1L),
+                        row("beta", 2L),
+                        row("beta", 1L))))) {
+            assertThat(operator(operator)).matchesExactly(List.of(
+                    row("alpha", 1L, 1L),
+                    row("alpha", 2L, 2L),
+                    row("alpha", 3L, 3L),
+                    row("beta", 1L, 1L),
+                    row("beta", 2L, 2L)));
+        }
+    }
+
+    @Test
+    void testTopNRankingOperatorPreservesUtf8PayloadColumnsAcrossMultipleBatches()
+    {
+        Allocator allocator = new Allocator();
+
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
+        for (int partition = 0; partition < 2_500; partition++) {
+            String category = "category-" + partition;
+            String brand = "brand-" + partition;
+            String callCenter = "call-center-" + partition;
+            long monthOneSales = partition * 10L;
+            long monthTwoSales = monthOneSales + 2;
+            rows.add(row(category, brand, callCenter, 1999L, 1L, monthOneSales));
+            rows.add(row(category, brand, callCenter, 1999L, 2L, monthTwoSales));
+            expected.add(row(category, brand, callCenter, 1999L, 1L, monthOneSales, 1L));
+            expected.add(row(category, brand, callCenter, 1999L, 2L, monthTwoSales, 2L));
+        }
+        sortRowsByQuery57Keys(expected);
+
+        try (Operator operator = new TopNRankingOperator(
+                allocator,
+                32,
+                new int[] {0, 1, 2},
+                new int[] {3, 4},
+                new boolean[] {false, false},
+                new BatchSliceOperator(
+                        allocator,
+                        257,
+                        new ConstantTableOperator(allocator, 6, rows)))) {
+            assertThat(operator(operator)).matchesExactly(expected);
+        }
+    }
+
+    @Test
+    void testTopNRankingAndSingleWindowOperatorPreserveUtf8PayloadColumnsAcrossMultipleBatches()
+    {
+        Allocator allocator = new Allocator();
+
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
+        for (int partition = 0; partition < 2_500; partition++) {
+            String category = "category-" + partition;
+            String brand = "brand-" + partition;
+            String callCenter = "call-center-" + partition;
+            long monthOneSales = partition * 10L;
+            long monthTwoSales = monthOneSales + 2;
+            long averageSales = monthOneSales + 1;
+            rows.add(row(category, brand, callCenter, 1999L, 1L, monthOneSales));
+            rows.add(row(category, brand, callCenter, 1999L, 2L, monthTwoSales));
+            expected.add(row(category, brand, callCenter, 1999L, 1L, monthOneSales, 1L, averageSales));
+            expected.add(row(category, brand, callCenter, 1999L, 2L, monthTwoSales, 2L, averageSales));
+        }
+        sortRowsByQuery57Keys(expected);
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new TopNRankingOperator(
+                        allocator,
+                        32,
+                        new int[] {0, 1, 2},
+                        new int[] {3, 4},
+                        new boolean[] {false, false},
+                        new BatchSliceOperator(
+                                allocator,
+                                257,
+                                new ConstantTableOperator(allocator, 6, rows))),
+                new int[] {0, 1, 2, 3},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(5)))) {
+            assertThat(operator(operator)).matchesExactly(expected);
+        }
+    }
+
+    @Test
+    void testTopNRankingAndWindowOperatorsPreserveUtf8PayloadColumnsAcrossMultipleBatches()
+    {
+        Allocator allocator = new Allocator();
+
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
+        for (int partition = 0; partition < 2_500; partition++) {
+            String category = "category-" + partition;
+            String brand = "brand-" + partition;
+            String callCenter = "call-center-" + partition;
+            long monthOneSales = partition * 10L;
+            long monthTwoSales = monthOneSales + 2;
+            long averageSales = monthOneSales + 1;
+            rows.add(row(category, brand, callCenter, 1999L, 1L, monthOneSales));
+            rows.add(row(category, brand, callCenter, 1999L, 2L, monthTwoSales));
+            expected.add(row(category, brand, callCenter, 1999L, 1L, monthOneSales, 1L, averageSales, null, monthTwoSales));
+            expected.add(row(category, brand, callCenter, 1999L, 2L, monthTwoSales, 2L, averageSales, monthOneSales, null));
+        }
+        sortRowsByQuery57Keys(expected);
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new WindowOperator(
+                        allocator,
+                        new TopNRankingOperator(
+                                allocator,
+                                32,
+                                new int[] {0, 1, 2},
+                                new int[] {3, 4},
+                                new boolean[] {false, false},
+                                new BatchSliceOperator(
+                                        allocator,
+                                        257,
+                                        new ConstantTableOperator(allocator, 6, rows))),
+                        new int[] {0, 1, 2, 3},
+                        new int[0],
+                        new boolean[0],
+                        List.of(new WindowOperator.PartitionAverageI64WindowFunction(5))),
+                new int[] {0, 1, 2},
+                new int[] {3, 4},
+                new boolean[] {false, false},
+                List.of(
+                        new WindowOperator.PartitionOffsetI64WindowFunction(5, -1),
+                        new WindowOperator.PartitionOffsetI64WindowFunction(5, 1)))) {
+            assertThat(operator(operator)).matchesExactly(expected);
+        }
+    }
+
+    private static void sortRowsByQuery57Keys(List<org.weakref.nitro.data.Row> rows)
+    {
+        rows.sort((left, right) -> {
+            int categoryComparison = ((String) left.values()[0]).compareTo((String) right.values()[0]);
+            if (categoryComparison != 0) {
+                return categoryComparison;
+            }
+            int brandComparison = ((String) left.values()[1]).compareTo((String) right.values()[1]);
+            if (brandComparison != 0) {
+                return brandComparison;
+            }
+            int callCenterComparison = ((String) left.values()[2]).compareTo((String) right.values()[2]);
+            if (callCenterComparison != 0) {
+                return callCenterComparison;
+            }
+            int yearComparison = Long.compare((Long) left.values()[3], (Long) right.values()[3]);
+            if (yearComparison != 0) {
+                return yearComparison;
+            }
+            return Long.compare((Long) left.values()[4], (Long) right.values()[4]);
+        });
+    }
+
+    @Test
+    void testChainedWindowOperatorsPreserveUtf8PayloadColumns()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new WindowOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 4, List.of(
+                                row("alpha", 1998L, 12L, 10L),
+                                row("alpha", 1999L, 1L, 20L),
+                                row("alpha", 1999L, 2L, 30L),
+                                row("beta", 1999L, 1L, 40L),
+                                row("beta", 1999L, 2L, 50L))),
+                        new int[] {0, 1},
+                        new int[0],
+                        new boolean[0],
+                        List.of(new WindowOperator.PartitionAverageI64WindowFunction(3))),
+                new int[] {0},
+                new int[] {1, 2},
+                new boolean[] {false, false},
+                List.of(new WindowOperator.PartitionOffsetI64WindowFunction(3, -1)))) {
+            assertThat(operator(operator)).matchesExactly(List.of(
+                    row("alpha", 1998L, 12L, 10L, 10L, null),
+                    row("alpha", 1999L, 1L, 20L, 25L, 10L),
+                    row("alpha", 1999L, 2L, 30L, 25L, 20L),
+                    row("beta", 1999L, 1L, 40L, 45L, null),
+                    row("beta", 1999L, 2L, 50L, 45L, 40L)));
+        }
+    }
+
+    @Test
+    void testSingleWindowOperatorPreservesUtf8PayloadColumns()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 4, List.of(
+                        row("alpha", 1998L, 12L, 10L),
+                        row("alpha", 1999L, 1L, 20L),
+                        row("alpha", 1999L, 2L, 30L),
+                        row("beta", 1999L, 1L, 40L),
+                        row("beta", 1999L, 2L, 50L))),
+                new int[] {0, 1},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionAverageI64WindowFunction(3)))) {
+            assertThat(operator(operator)).matchesExactly(List.of(
+                    row("alpha", 1998L, 12L, 10L, 10L),
+                    row("alpha", 1999L, 1L, 20L, 25L),
+                    row("alpha", 1999L, 2L, 30L, 25L),
+                    row("beta", 1999L, 1L, 40L, 45L),
+                    row("beta", 1999L, 2L, 50L, 45L)));
         }
     }
 

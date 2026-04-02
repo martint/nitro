@@ -136,6 +136,7 @@ public class MarkDistinctOperator
         if (distinctKeySet == null) {
             distinctKeySet = DistinctKeySet.create(values);
         }
+        distinctKeySet.reserveAdditional(sourceMask.selectedCount());
 
         if (distinctPositions.length < sourceMask.selectedCount()) {
             distinctPositions = new int[sourceMask.selectedCount()];

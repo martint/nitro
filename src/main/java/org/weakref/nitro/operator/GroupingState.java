@@ -93,7 +93,7 @@ final class GroupingState
             return longGroups.containsKey(OperatorVectorSupport.longValue(values, position));
         }
         if (useFlatGrouping) {
-            return flatGroupingTable.findGroup(new Vector[] {values}, position) != -1;
+            return flatGroupingTable.findGroup(new Vector[] {values}, new Vector[] {nulls}, position) != -1;
         }
 
         OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(values, nulls, position, reusableProbeKeys[0]);
@@ -185,7 +185,7 @@ final class GroupingState
             return;
         }
 
-        FlatKeyLayout flatKeyLayout = nullableCompositeKeys ? null : FlatKeyLayout.tryCreate(values);
+        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys);
         if (flatKeyLayout != null) {
             useFlatGrouping = true;
             flatGroupingTable = new FlatGroupingTable(flatKeyLayout, Math.max(16, values[0].length()));
@@ -204,7 +204,7 @@ final class GroupingState
 
     private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
-        if (nulls.length == 1) {
+        if (values.length == 1) {
             Vector nullVector = nulls[0];
             for (int position : mask) {
                 if (OperatorVectorSupport.isNull(nullVector, position)) {
@@ -212,7 +212,7 @@ final class GroupingState
                 }
                 else {
                     long newGroupId = nextGroupId;
-                    long groupId = flatGroupingTable.assignGroup(values, position, newGroupId);
+                    long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
                     if (groupId == newGroupId) {
                         nextGroupId++;
                     }
@@ -223,17 +223,12 @@ final class GroupingState
         }
 
         for (int position : mask) {
-            if (hasNull(nulls, position)) {
-                result.values()[position] = nullGroup();
+            long newGroupId = nextGroupId;
+            long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+            if (groupId == newGroupId) {
+                nextGroupId++;
             }
-            else {
-                long newGroupId = nextGroupId;
-                long groupId = flatGroupingTable.assignGroup(values, position, newGroupId);
-                if (groupId == newGroupId) {
-                    nextGroupId++;
-                }
-                result.values()[position] = groupId;
-            }
+            result.values()[position] = groupId;
         }
     }
 
@@ -395,7 +390,7 @@ final class GroupingState
                     materializeLongNulls(mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         }
         if (useFlatGrouping) {
-            return flatGroupingTable.groupedValues(groupedColumnIndex, mask, nullGroup, output, allocator, allocationContext);
+            return flatGroupingTable.groupedValues(groupedColumnIndex, mask, output, allocator, allocationContext);
         }
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         List<OperatorKeySemantics.Key> keysByGroup = keysByGroupColumns.get(groupedColumnIndex);

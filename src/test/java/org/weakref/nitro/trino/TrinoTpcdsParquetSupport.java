@@ -13,17 +13,119 @@
  */
 package org.weakref.nitro.trino;
 
+import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.units.DataSize;
+import io.trino.metadata.ResolvedFunction;
+import io.trino.metadata.TestingFunctionResolution;
+import io.trino.operator.Driver;
+import io.trino.operator.DriverContext;
+import io.trino.operator.FilterAndProjectOperator;
+import io.trino.operator.FlatHashStrategyCompiler;
+import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
+import io.trino.operator.HashArraySizeSupplier;
+import io.trino.operator.Operator;
+import io.trino.operator.OperatorFactory;
+import io.trino.operator.PagesIndex;
+import io.trino.operator.TopNOperator;
+import io.trino.operator.TopNRankingOperator;
+import io.trino.operator.ValuesOperator;
+import io.trino.operator.WindowFunctionDefinition;
+import io.trino.operator.WindowOperator;
+import io.trino.operator.aggregation.TestingAggregationFunction;
+import io.trino.operator.join.JoinBridgeManager;
+import io.trino.operator.window.AggregationWindowFunctionSupplier;
+import io.trino.operator.window.FrameInfo;
+import io.trino.operator.window.RegularPartitionerSupplier;
+import io.trino.spi.Page;
+import io.trino.spi.connector.SortOrder;
+import io.trino.spi.function.OperatorType;
+import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeOperators;
+import io.trino.spiller.SpillerFactory;
+import io.trino.sql.gen.OrderingCompiler;
+import io.trino.sql.planner.plan.AggregationNode.Step;
+import io.trino.sql.planner.plan.PlanNodeId;
+import io.trino.sql.relational.CallExpression;
+import io.trino.sql.relational.RowExpression;
+import io.trino.sql.relational.SpecialForm;
 import io.trino.testing.MaterializedResult;
+import io.trino.testing.PageConsumerOperator;
+import io.trino.testing.TestingSession;
+import io.trino.testing.TestingTaskContext;
+import io.trino.type.BlockTypeOperators;
 import org.weakref.nitro.tpcds.TpcdsParquetTables;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static io.airlift.units.DataSize.Unit.GIGABYTE;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.trino.operator.WindowFunctionDefinition.window;
+import static io.trino.spi.connector.SortOrder.ASC_NULLS_LAST;
+import static io.trino.spi.type.BigintType.BIGINT;
+import static io.trino.spi.type.BooleanType.BOOLEAN;
+import static io.trino.spi.type.DoubleType.DOUBLE;
+import static io.trino.spi.type.IntegerType.INTEGER;
+import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static io.trino.sql.planner.plan.FrameBoundType.CURRENT_ROW;
+import static io.trino.sql.planner.plan.FrameBoundType.UNBOUNDED_FOLLOWING;
+import static io.trino.sql.planner.plan.FrameBoundType.UNBOUNDED_PRECEDING;
+import static io.trino.sql.planner.plan.TopNRankingNode.RankingType.RANK;
+import static io.trino.sql.planner.plan.WindowFrameType.ROWS;
+import static io.trino.sql.relational.Expressions.constant;
+import static io.trino.sql.relational.Expressions.field;
+import static java.util.concurrent.Executors.newCachedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 
 public final class TrinoTpcdsParquetSupport
         implements AutoCloseable
 {
+    private static final String TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY = "nitro.clickbench.trino.blockedWaitTimeoutSeconds";
+    private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 5;
+    private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
+    private static final FrameInfo RUNNING_ROWS_FRAME = new FrameInfo(
+            ROWS,
+            UNBOUNDED_PRECEDING,
+            Optional.empty(),
+            Optional.empty(),
+            CURRENT_ROW,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.of(FrameInfo.Ordering.ASCENDING));
+    private static final FrameInfo PARTITION_ROWS_FRAME = new FrameInfo(
+            ROWS,
+            UNBOUNDED_PRECEDING,
+            Optional.empty(),
+            Optional.empty(),
+            UNBOUNDED_FOLLOWING,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty());
+
     private Path currentRootDirectory;
     private String currentSchema;
     private TrinoTpcdsParquetSqlSupport sqlSupport;
+    private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("TrinoTpcdsParquetSupport"));
+    private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoTpcdsParquetSupport-scheduled"));
+    private final OrderingCompiler orderingCompiler = new OrderingCompiler(new TypeOperators());
+    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
+    private final int blockedWaitTimeoutSeconds = blockedWaitTimeoutSeconds();
+
+    public static boolean supportsOperatorAssembly(String queryId)
+    {
+        return "57".equals(queryId);
+    }
 
     public MaterializedResult query01(TpcdsParquetTables tables)
     {
@@ -307,7 +409,57 @@ public final class TrinoTpcdsParquetSupport
 
     public MaterializedResult query57(TpcdsParquetTables tables)
     {
-        return support(tables).executeBenchmarkQuery("57");
+        List<Page> currentPages = query57CurrentPages(tables);
+        List<Page> previousPages = query57PreviousPages(tables);
+        List<Page> nextPages = query57NextPages(tables);
+
+        Type sumType = query57SumType(tables);
+        Type averageType = query57AverageType(tables);
+        List<Type> currentTypes = query57CurrentTypes(tables);
+        List<Type> adjacentTypes = List.of(currentTypes.get(0), currentTypes.get(1), currentTypes.get(2), sumType, BIGINT);
+        List<Type> afterPreviousTypes = concatTypes(currentTypes, adjacentTypes);
+        List<Type> afterNextTypes = concatTypes(afterPreviousTypes, adjacentTypes);
+        List<Type> sortedTypes = concatTypes(
+                List.of(currentTypes.get(0), currentTypes.get(1), currentTypes.get(2), currentTypes.get(3), currentTypes.get(4), currentTypes.get(5), currentTypes.get(6), sumType, sumType),
+                List.of(DOUBLE));
+        List<Type> outputTypes = List.of(currentTypes.get(0), currentTypes.get(1), currentTypes.get(2), currentTypes.get(3), currentTypes.get(4), currentTypes.get(5), currentTypes.get(6), sumType, sumType);
+
+        return executePagesPipeline(
+                currentPages,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(57_20, currentTypes, List.of(0, 1, 2, 7), previousPages, adjacentTypes, List.of(0, 1, 2, 4))),
+                        hashJoinStep(new HashJoinSpec(57_21, afterPreviousTypes, List.of(0, 1, 2, 7), nextPages, adjacentTypes, List.of(0, 1, 2, 4))),
+                        factoryStep(filterAndProjectFactory(
+                                57_22,
+                                Optional.of(queryRelativeDeviationPredicate(6, 5, sumType, averageType)),
+                                List.of(
+                                        field(0, currentTypes.get(0)),
+                                        field(1, currentTypes.get(1)),
+                                        field(2, currentTypes.get(2)),
+                                        field(3, currentTypes.get(3)),
+                                        field(4, currentTypes.get(4)),
+                                        field(5, currentTypes.get(5)),
+                                        field(6, currentTypes.get(6)),
+                                        field(11, sumType),
+                                        field(16, sumType),
+                                        subtract(cast(field(6, sumType), sumType, DOUBLE), cast(field(5, averageType), averageType, DOUBLE), DOUBLE)),
+                                sortedTypes)),
+                        factoryStep(topNFactory(57_23, sortedTypes, 100, List.of(9, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        factoryStep(filterAndProjectFactory(
+                                57_24,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, outputTypes.get(0)),
+                                        field(1, outputTypes.get(1)),
+                                        field(2, outputTypes.get(2)),
+                                        field(3, outputTypes.get(3)),
+                                        field(4, outputTypes.get(4)),
+                                        field(5, outputTypes.get(5)),
+                                        field(6, outputTypes.get(6)),
+                                        field(7, outputTypes.get(7)),
+                                        field(8, outputTypes.get(8))),
+                                outputTypes))),
+                outputTypes);
     }
 
     public MaterializedResult query58(TpcdsParquetTables tables)
@@ -520,9 +672,695 @@ public final class TrinoTpcdsParquetSupport
         return support(tables).executeBenchmarkQuery("99");
     }
 
+    public MaterializedResult query57JoinedFacts(TpcdsParquetTables tables)
+    {
+        List<Type> outputTypes = query57JoinedFactTypes(tables);
+        return executePagesPipeline(query57JoinedFactsPages(tables), List.of(), outputTypes);
+    }
+
+    public MaterializedResult query57MonthlyGroupedSales(TpcdsParquetTables tables)
+    {
+        List<Type> outputTypes = query57MonthlyGroupedTypes(tables);
+        return executePagesPipeline(query57MonthlyGroupedSalesPages(tables), List.of(), outputTypes);
+    }
+
+    public MaterializedResult query57MonthlyRankedSales(TpcdsParquetTables tables)
+    {
+        List<Type> outputTypes = query57MonthlyRankedTypes(tables);
+        return executePagesPipeline(query57MonthlyRankedSalesPages(tables), List.of(), outputTypes);
+    }
+
+    public MaterializedResult query57CurrentRows(TpcdsParquetTables tables)
+    {
+        List<Type> outputTypes = query57CurrentTypes(tables);
+        return executePagesPipeline(query57CurrentPages(tables), List.of(), outputTypes);
+    }
+
+    public MaterializedResult query57PreviousRows(TpcdsParquetTables tables)
+    {
+        Type sumType = query57SumType(tables);
+        List<Type> outputTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
+        return executePagesPipeline(query57PreviousPages(tables), List.of(), outputTypes);
+    }
+
+    public MaterializedResult query57NextRows(TpcdsParquetTables tables)
+    {
+        Type sumType = query57SumType(tables);
+        List<Type> outputTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
+        return executePagesPipeline(query57NextPages(tables), List.of(), outputTypes);
+    }
+
+    private List<Page> query57JoinedFactsPages(TpcdsParquetTables tables)
+    {
+        List<String> factColumns = List.of("cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price");
+        List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", factColumns);
+        Type salesType = factTypes.get(3);
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_brand", "i_category"));
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"));
+        List<Type> callCenterTypes = tableColumnTypes(tables, "call_center", List.of("cc_call_center_sk", "cc_name"));
+        List<Type> projectedTypes = query57JoinedFactTypes(tables);
+
+        List<Page> itemKeys = relationPages(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_brand", "i_category"),
+                Optional.empty(),
+                identityProjections(itemTypes),
+                itemTypes);
+        List<Page> allowedDates = relationPages(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_year", "d_moy"),
+                Optional.of(query57DatePredicate()),
+                identityProjections(dateTypes),
+                dateTypes);
+        List<Page> callCenters = relationPages(
+                tables,
+                "call_center",
+                List.of("cc_call_center_sk", "cc_name"),
+                Optional.empty(),
+                identityProjections(callCenterTypes),
+                callCenterTypes);
+
+        return executePipelinePages(
+                tables.tableFiles("catalog_sales"),
+                factColumns,
+                List.of(
+                        hashJoinStep(new HashJoinSpec(57_0, factTypes, List.of(2), itemKeys, itemTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(57_1, concatTypes(factTypes, itemTypes), List.of(0), allowedDates, dateTypes, List.of(0))),
+                        hashJoinStep(new HashJoinSpec(57_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(1), callCenters, callCenterTypes, List.of(0))),
+                        factoryStep(filterAndProjectFactory(
+                                57_3,
+                                Optional.empty(),
+                                List.of(
+                                        field(6, itemTypes.get(2)),
+                                        field(5, itemTypes.get(1)),
+                                        field(11, callCenterTypes.get(1)),
+                                        field(8, dateTypes.get(1)),
+                                        field(9, dateTypes.get(2)),
+                                        field(3, salesType)),
+                                projectedTypes))));
+    }
+
+    private List<Page> query57MonthlyGroupedSalesPages(TpcdsParquetTables tables)
+    {
+        List<Type> joinedTypes = query57JoinedFactTypes(tables);
+        Type salesType = joinedTypes.get(5);
+        TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
+        List<Type> groupedTypes = query57MonthlyGroupedTypes(tables);
+        return executePipelinePages(
+                query57JoinedFactsPages(tables),
+                List.of(factoryStep(hashAggregationFactory(
+                        57_4,
+                        groupedTypes.subList(0, 5),
+                        List.of(0, 1, 2, 3, 4),
+                        salesSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))));
+    }
+
+    private List<Page> query57MonthlyRankedSalesPages(TpcdsParquetTables tables)
+    {
+        List<Type> groupedTypes = query57MonthlyGroupedTypes(tables);
+        return executePipelinePages(
+                query57MonthlyGroupedSalesPages(tables),
+                List.of(factoryStep(topNRankingFactory(
+                        57_5,
+                        groupedTypes,
+                        List.of(0, 1, 2, 3, 4, 5),
+                        List.of(0, 1, 2),
+                        List.of(3, 4),
+                        List.of(ASC_NULLS_LAST, ASC_NULLS_LAST),
+                        32))));
+    }
+
+    private List<Page> query57CurrentPages(TpcdsParquetTables tables)
+    {
+        List<Type> rankedTypes = query57MonthlyRankedTypes(tables);
+        Type averageType = query57AverageType(tables);
+        Type sumType = query57SumType(tables);
+        List<Type> currentTypes = query57CurrentTypes(tables);
+        return executePipelinePages(
+                query57MonthlyRankedSalesPages(tables),
+                List.of(
+                        factoryStep(filterAndProjectFactory(
+                                57_10,
+                                Optional.of(equal(3, 1999, INTEGER)),
+                                identityProjections(rankedTypes),
+                                rankedTypes)),
+                        factoryStep(windowFactory(
+                                57_11,
+                                rankedTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6),
+                                List.of(0, 1, 2, 3),
+                                List.of(),
+                                List.of(),
+                                List.of(aggregateWindowFunction("avg", List.of(sumType), averageType, PARTITION_ROWS_FRAME, 5)))),
+                        factoryStep(filterAndProjectFactory(
+                                57_12,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, currentTypes.get(0)),
+                                        field(1, currentTypes.get(1)),
+                                        field(2, currentTypes.get(2)),
+                                        field(3, currentTypes.get(3)),
+                                        field(4, currentTypes.get(4)),
+                                        field(7, averageType),
+                                        field(5, sumType),
+                                        field(6, BIGINT)),
+                                currentTypes))));
+    }
+
+    private List<Page> query57PreviousPages(TpcdsParquetTables tables)
+    {
+        Type sumType = query57SumType(tables);
+        List<Type> rankedTypes = query57MonthlyRankedTypes(tables);
+        List<Type> adjacentTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
+        return executePipelinePages(
+                query57MonthlyRankedSalesPages(tables),
+                List.of(factoryStep(filterAndProjectFactory(
+                        57_13,
+                        Optional.empty(),
+                        List.of(
+                                field(0, rankedTypes.get(0)),
+                                field(1, rankedTypes.get(1)),
+                                field(2, rankedTypes.get(2)),
+                                field(5, sumType),
+                                add(field(6, BIGINT), constant(1L, BIGINT), BIGINT)),
+                        adjacentTypes))));
+    }
+
+    private List<Page> query57NextPages(TpcdsParquetTables tables)
+    {
+        Type sumType = query57SumType(tables);
+        List<Type> rankedTypes = query57MonthlyRankedTypes(tables);
+        List<Type> adjacentTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
+        return executePipelinePages(
+                query57MonthlyRankedSalesPages(tables),
+                List.of(factoryStep(filterAndProjectFactory(
+                        57_14,
+                        Optional.empty(),
+                        List.of(
+                                field(0, rankedTypes.get(0)),
+                                field(1, rankedTypes.get(1)),
+                                field(2, rankedTypes.get(2)),
+                                field(5, sumType),
+                                subtract(field(6, BIGINT), constant(1L, BIGINT), BIGINT)),
+                        adjacentTypes))));
+    }
+
+    private List<Type> query57JoinedFactTypes(TpcdsParquetTables tables)
+    {
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_brand", "i_category"));
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"));
+        List<Type> callCenterTypes = tableColumnTypes(tables, "call_center", List.of("cc_call_center_sk", "cc_name"));
+        Type salesType = tableColumnTypes(tables, "catalog_sales", List.of("cs_sales_price")).getFirst();
+        return List.of(itemTypes.get(2), itemTypes.get(1), callCenterTypes.get(1), dateTypes.get(1), dateTypes.get(2), salesType);
+    }
+
+    private List<Type> query57MonthlyGroupedTypes(TpcdsParquetTables tables)
+    {
+        List<Type> joinedTypes = query57JoinedFactTypes(tables);
+        return List.of(joinedTypes.get(0), joinedTypes.get(1), joinedTypes.get(2), joinedTypes.get(3), joinedTypes.get(4), query57SumType(tables));
+    }
+
+    private List<Type> query57MonthlyRankedTypes(TpcdsParquetTables tables)
+    {
+        return concatTypes(query57MonthlyGroupedTypes(tables), List.of(BIGINT));
+    }
+
+    private List<Type> query57CurrentTypes(TpcdsParquetTables tables)
+    {
+        List<Type> groupedTypes = query57MonthlyGroupedTypes(tables);
+        return List.of(groupedTypes.get(0), groupedTypes.get(1), groupedTypes.get(2), groupedTypes.get(3), groupedTypes.get(4), query57AverageType(tables), groupedTypes.get(5), BIGINT);
+    }
+
+    private Type query57CategoryType(TpcdsParquetTables tables)
+    {
+        return tableColumnTypes(tables, "item", List.of("i_category")).getFirst();
+    }
+
+    private Type query57BrandType(TpcdsParquetTables tables)
+    {
+        return tableColumnTypes(tables, "item", List.of("i_brand")).getFirst();
+    }
+
+    private Type query57CallCenterNameType(TpcdsParquetTables tables)
+    {
+        return tableColumnTypes(tables, "call_center", List.of("cc_name")).getFirst();
+    }
+
+    private Type query57SumType(TpcdsParquetTables tables)
+    {
+        Type salesType = tableColumnTypes(tables, "catalog_sales", List.of("cs_sales_price")).getFirst();
+        return FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType)).getFinalType();
+    }
+
+    private Type query57AverageType(TpcdsParquetTables tables)
+    {
+        return FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(query57SumType(tables))).getFinalType();
+    }
+
+    private MaterializedResult executePagesPipeline(List<Page> inputPages, List<PipelineStep> steps, List<Type> outputTypes)
+    {
+        List<Page> outputPages = executePipelinePages(inputPages, steps);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(taskContext().getSession(), outputTypes);
+        for (Page page : outputPages) {
+            result.page(page);
+        }
+        return result.build();
+    }
+
+    private List<Page> executePipelinePages(List<Path> files, List<String> columns, List<PipelineStep> steps)
+    {
+        try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(files, columns)) {
+            return executePipelinePages(readPages(reader), steps);
+        }
+    }
+
+    private List<Page> executePipelinePages(List<Page> inputPages, List<PipelineStep> steps)
+    {
+        List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
+        List<Operator> operators = new ArrayList<>();
+        ValuesOperator.ValuesOperatorFactory sourceFactory = new ValuesOperator.ValuesOperatorFactory(0, new PlanNodeId("values-source"), inputPages);
+        operators.add(sourceFactory.createOperator(driverContext));
+        sourceFactory.noMoreOperators();
+
+        for (PipelineStep step : steps) {
+            OperatorFactory factory = step.createOperatorFactory(taskContext, this);
+            operators.add(factory.createOperator(driverContext));
+            factory.noMoreOperators();
+        }
+
+        operators.add(new PageConsumerOperator(
+                driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                outputPages::add,
+                java.util.function.Function.identity()));
+
+        try (Driver driver = Driver.createDriver(driverContext, operators)) {
+            processDriver(driver);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to execute Trino TPC-DS parquet pages pipeline", exception);
+        }
+
+        return outputPages;
+    }
+
+    private io.trino.operator.TaskContext taskContext()
+    {
+        return TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
+                .setQueryMaxMemory(DataSize.of(4, GIGABYTE))
+                .setMemoryPoolSize(DataSize.of(4, GIGABYTE))
+                .build();
+    }
+
+    private void processDriver(Driver driver)
+            throws Exception
+    {
+        while (!driver.isFinished()) {
+            ListenableFuture<Void> blocked = driver.processUntilBlocked();
+            if (!blocked.isDone()) {
+                waitForBlocked(blocked);
+            }
+        }
+    }
+
+    private List<Page> relationPages(TpcdsParquetTables tables, String tableName, List<String> columns, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
+    {
+        return executePipelinePages(
+                tables.tableFiles(tableName),
+                columns,
+                List.of(factoryStep(filterAndProjectFactory(7_000 + Math.abs(tableName.hashCode() % 1_000), filter, projections, outputTypes))));
+    }
+
+    private List<Type> tableColumnTypes(TpcdsParquetTables tables, String tableName, List<String> columns)
+    {
+        return TrinoClickBenchPageReader.columnTypes(tables.tableFiles(tableName).getFirst(), columns);
+    }
+
+    private HashAggregationOperatorFactory hashAggregationFactory(int operatorId, List<Type> groupTypes, List<Integer> groupChannels, io.trino.operator.aggregation.AggregatorFactory... aggregators)
+    {
+        return new HashAggregationOperatorFactory(
+                operatorId,
+                new PlanNodeId("grouped-aggregation-" + operatorId),
+                groupTypes,
+                groupChannels,
+                List.of(),
+                Step.SINGLE,
+                List.of(aggregators),
+                OptionalInt.empty(),
+                100_000,
+                Optional.of(DataSize.of(16, MEGABYTE)),
+                hashStrategyCompiler,
+                Optional.empty());
+    }
+
+    private OperatorFactory topNFactory(int operatorId, List<Type> types, int n, List<Integer> sortChannels, List<SortOrder> sortOrders)
+    {
+        List<Type> sortTypes = sortChannels.stream()
+                .map(types::get)
+                .toList();
+        return TopNOperator.createOperatorFactory(
+                operatorId,
+                new PlanNodeId("topn-" + operatorId),
+                types,
+                n,
+                orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders));
+    }
+
+    private OperatorFactory topNRankingFactory(int operatorId, List<Type> sourceTypes, List<Integer> outputChannels, List<Integer> partitionChannels, List<Integer> sortChannels, List<SortOrder> sortOrders, int limit)
+    {
+        List<Type> sortTypes = sortChannels.stream()
+                .map(sourceTypes::get)
+                .toList();
+        List<Type> partitionTypes = partitionChannels.stream()
+                .map(sourceTypes::get)
+                .toList();
+        return new TopNRankingOperator.TopNRankingOperatorFactory(
+                operatorId,
+                new PlanNodeId("topn-ranking-" + operatorId),
+                RANK,
+                sourceTypes,
+                outputChannels,
+                partitionChannels,
+                partitionTypes,
+                sortChannels,
+                limit,
+                false,
+                100_000,
+                Optional.empty(),
+                hashStrategyCompiler,
+                orderingCompiler.compilePageWithPositionComparator(sortTypes, sortChannels, sortOrders),
+                new BlockTypeOperators());
+    }
+
+    private OperatorFactory windowFactory(int operatorId, List<Type> sourceTypes, List<Integer> outputChannels, List<Integer> partitionChannels, List<Integer> sortChannels, List<SortOrder> sortOrders, List<WindowFunctionDefinition> windowFunctions)
+    {
+        SpillerFactory spillerFactory = (types, spillContext, aggregatedMemoryContext) -> {
+            throw new UnsupportedOperationException("Window spilling is disabled in TrinoTpcdsParquetSupport");
+        };
+        return new WindowOperator.WindowOperatorFactory(
+                operatorId,
+                new PlanNodeId("window-" + operatorId),
+                sourceTypes,
+                outputChannels,
+                windowFunctions,
+                partitionChannels,
+                List.of(),
+                sortChannels,
+                sortOrders,
+                0,
+                10_000,
+                new PagesIndex.TestingFactory(false),
+                false,
+                spillerFactory,
+                orderingCompiler,
+                List.of(),
+                new RegularPartitionerSupplier());
+    }
+
+    private OperatorFactory filterAndProjectFactory(int operatorId, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
+    {
+        return FilterAndProjectOperator.createOperatorFactory(
+                operatorId,
+                new PlanNodeId("filter-project-" + operatorId),
+                FUNCTION_RESOLUTION.getExpressionCompiler().compilePageProcessor(filter, projections),
+                outputTypes,
+                DataSize.of(1, MEGABYTE),
+                1);
+    }
+
+    private OperatorFactory createHashJoinFactory(io.trino.operator.TaskContext taskContext, HashJoinSpec hashJoinSpec)
+    {
+        io.trino.operator.join.unspilled.PartitionedLookupSourceFactory lookupSourceFactory = new io.trino.operator.join.unspilled.PartitionedLookupSourceFactory(
+                hashJoinSpec.buildTypes(),
+                hashJoinSpec.buildTypes(),
+                hashJoinSpec.buildHashChannels().stream()
+                        .map(hashJoinSpec.buildTypes()::get)
+                        .toList(),
+                1,
+                false,
+                new TypeOperators());
+        JoinBridgeManager<io.trino.operator.join.unspilled.PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
+                false,
+                lookupSourceFactory,
+                lookupSourceFactory.getOutputTypes());
+        OperatorFactory joinFactory = io.trino.operator.OperatorFactories.join(
+                io.trino.operator.JoinOperatorType.innerJoin(false, false),
+                hashJoinSpec.operatorId(),
+                new PlanNodeId("join-" + hashJoinSpec.operatorId()),
+                joinBridgeManager,
+                false,
+                hashJoinSpec.probeTypes(),
+                hashJoinSpec.probeJoinChannels(),
+                Optional.empty());
+        io.trino.operator.join.unspilled.HashBuilderOperator.HashBuilderOperatorFactory buildOperatorFactory = new io.trino.operator.join.unspilled.HashBuilderOperator.HashBuilderOperatorFactory(
+                9_000 + hashJoinSpec.operatorId(),
+                new PlanNodeId("build-" + hashJoinSpec.operatorId()),
+                joinBridgeManager,
+                rangeList(hashJoinSpec.buildTypes().size()),
+                hashJoinSpec.buildHashChannels(),
+                Optional.empty(),
+                Optional.empty(),
+                List.of(),
+                100,
+                new PagesIndex.TestingFactory(false),
+                HashArraySizeSupplier.incrementalLoadFactorHashArraySizeSupplier(taskContext.getSession()));
+        ValuesOperator.ValuesOperatorFactory valuesOperatorFactory = new ValuesOperator.ValuesOperatorFactory(
+                8_000 + hashJoinSpec.operatorId(),
+                new PlanNodeId("values-" + hashJoinSpec.operatorId()),
+                hashJoinSpec.buildPages());
+
+        DriverContext buildDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
+        try (Driver buildDriver = Driver.createDriver(
+                buildDriverContext,
+                valuesOperatorFactory.createOperator(buildDriverContext),
+                buildOperatorFactory.createOperator(buildDriverContext))) {
+            valuesOperatorFactory.noMoreOperators();
+            buildOperatorFactory.noMoreOperators();
+            java.util.concurrent.Future<io.trino.operator.join.LookupSource> lookupSource = joinBridgeManager.getJoinBridge().createLookupSource();
+            while (!lookupSource.isDone()) {
+                buildDriver.processForNumberOfIterations(1);
+            }
+            lookupSource.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to build Trino hash-join lookup source", exception);
+        }
+
+        return joinFactory;
+    }
+
+    private static PipelineStep factoryStep(OperatorFactory factory)
+    {
+        return new FactoryStep(factory);
+    }
+
+    private static PipelineStep hashJoinStep(HashJoinSpec spec)
+    {
+        return new HashJoinStep(spec);
+    }
+
+    private static List<Type> concatTypes(List<Type> left, List<Type> right)
+    {
+        List<Type> types = new ArrayList<>(left.size() + right.size());
+        types.addAll(left);
+        types.addAll(right);
+        return types;
+    }
+
+    private static List<RowExpression> identityProjections(List<Type> types)
+    {
+        List<RowExpression> projections = new ArrayList<>(types.size());
+        for (int index = 0; index < types.size(); index++) {
+            projections.add(field(index, types.get(index)));
+        }
+        return projections;
+    }
+
+    private static List<Page> readPages(TrinoClickBenchPageReader reader)
+    {
+        List<Page> pages = new ArrayList<>();
+        while (reader.hasNext()) {
+            pages.add(reader.nextPage());
+        }
+        return pages;
+    }
+
+    private static WindowFunctionDefinition aggregateWindowFunction(String functionName, List<Type> argumentTypes, Type outputType, FrameInfo frameInfo, int... inputChannels)
+    {
+        ResolvedFunction resolvedFunction = FUNCTION_RESOLUTION.resolveFunction(functionName, fromTypes(argumentTypes));
+        AggregationWindowFunctionSupplier supplier = new AggregationWindowFunctionSupplier(
+                resolvedFunction.signature(),
+                FUNCTION_RESOLUTION.getPlannerContext().getFunctionManager().getAggregationImplementation(resolvedFunction),
+                resolvedFunction.functionNullability());
+        return window(
+                supplier,
+                outputType,
+                frameInfo,
+                false,
+                List.of(),
+                java.util.Arrays.stream(inputChannels)
+                        .boxed()
+                        .toList());
+    }
+
+    private static RowExpression query57DatePredicate()
+    {
+        return or(
+                equal(1, 1999, INTEGER),
+                and(equal(1, 1998, INTEGER), equal(2, 12, INTEGER)),
+                and(equal(1, 2000, INTEGER), equal(2, 1, INTEGER)));
+    }
+
+    private static RowExpression queryRelativeDeviationPredicate(int sumIndex, int averageIndex, Type sumType, Type averageType)
+    {
+        RowExpression sum = cast(field(sumIndex, sumType), sumType, DOUBLE);
+        RowExpression average = cast(field(averageIndex, averageType), averageType, DOUBLE);
+        RowExpression sumLessThanAverage = lessThan(sum, average, DOUBLE);
+        RowExpression absoluteDifference = ifExpression(
+                sumLessThanAverage,
+                subtract(average, sum, DOUBLE),
+                subtract(sum, average, DOUBLE),
+                DOUBLE);
+        return and(
+                greaterThan(average, constant(0.0, DOUBLE), DOUBLE),
+                greaterThan(multiply(absoluteDifference, constant(10.0, DOUBLE), DOUBLE), average, DOUBLE));
+    }
+
+    private static RowExpression equal(int inputChannel, long constantValue, Type type)
+    {
+        return new CallExpression(
+                FUNCTION_RESOLUTION.resolveOperator(OperatorType.EQUAL, List.of(type, type)),
+                List.of(field(inputChannel, type), constant(constantValue, type)));
+    }
+
+    private static RowExpression and(RowExpression first, RowExpression second)
+    {
+        return new SpecialForm(SpecialForm.Form.AND, BOOLEAN, List.of(first, second), List.of());
+    }
+
+    private static RowExpression or(RowExpression first, RowExpression second, RowExpression... rest)
+    {
+        RowExpression result = new SpecialForm(SpecialForm.Form.OR, BOOLEAN, List.of(first, second), List.of());
+        for (RowExpression expression : rest) {
+            result = new SpecialForm(SpecialForm.Form.OR, BOOLEAN, List.of(result, expression), List.of());
+        }
+        return result;
+    }
+
+    private static RowExpression greaterThan(RowExpression left, RowExpression right, Type type)
+    {
+        return lessThan(right, left, type);
+    }
+
+    private static RowExpression lessThan(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.LESS_THAN, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression add(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.ADD, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression subtract(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.SUBTRACT, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression multiply(RowExpression left, RowExpression right, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.MULTIPLY, List.of(type, type)), List.of(left, right));
+    }
+
+    private static RowExpression cast(RowExpression expression, Type fromType, Type toType)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.getCoercion(fromType, toType), List.of(expression));
+    }
+
+    private static RowExpression ifExpression(RowExpression condition, RowExpression whenTrue, RowExpression whenFalse, Type outputType)
+    {
+        return new SpecialForm(SpecialForm.Form.IF, outputType, List.of(condition, whenTrue, whenFalse), List.of());
+    }
+
+    private static List<Integer> rangeList(int size)
+    {
+        return java.util.stream.IntStream.range(0, size)
+                .boxed()
+                .toList();
+    }
+
+    private static int blockedWaitTimeoutSeconds()
+    {
+        String configured = System.getProperty(TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY);
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS;
+        }
+        return Integer.parseInt(configured);
+    }
+
+    private void waitForBlocked(ListenableFuture<Void> blocked)
+            throws Exception
+    {
+        try {
+            blocked.get(blockedWaitTimeoutSeconds, TimeUnit.SECONDS);
+        }
+        catch (TimeoutException exception) {
+            throw new IllegalStateException("Timed out waiting for blocked Trino TPC-DS driver", exception);
+        }
+    }
+
+    private record HashJoinSpec(
+            int operatorId,
+            List<Type> probeTypes,
+            List<Integer> probeJoinChannels,
+            List<Page> buildPages,
+            List<Type> buildTypes,
+            List<Integer> buildHashChannels) {}
+
+    private sealed interface PipelineStep
+            permits FactoryStep, HashJoinStep
+    {
+        OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support);
+    }
+
+    private record FactoryStep(OperatorFactory factory)
+            implements PipelineStep
+    {
+        @Override
+        public OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support)
+        {
+            return factory;
+        }
+    }
+
+    private record HashJoinStep(HashJoinSpec spec)
+            implements PipelineStep
+    {
+        @Override
+        public OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support)
+        {
+            return support.createHashJoinFactory(taskContext, spec);
+        }
+    }
+
+    private static ThreadFactory daemonThreadsNamed(String nameFormat)
+    {
+        AtomicInteger counter = new AtomicInteger();
+        return runnable -> {
+            Thread thread = new Thread(runnable, nameFormat + "-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
     @Override
     public void close()
     {
+        executor.shutdownNow();
+        scheduledExecutor.shutdownNow();
         if (sqlSupport != null) {
             sqlSupport.close();
             sqlSupport = null;

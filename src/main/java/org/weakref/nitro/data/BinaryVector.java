@@ -84,7 +84,7 @@ public final class BinaryVector
     private final int positionCount;
     private final int[] offsets;
     private final byte[] data;
-    private final Set<Trait> traits = new LinkedHashSet<>();
+    private Set<Trait> traits = Set.of();
 
     public BinaryVector(int positionCount, int byteCapacity)
     {
@@ -134,7 +134,7 @@ public final class BinaryVector
         if (existing.length() < positionCount || existing.byteCapacity() < byteCapacity) {
             BinaryVector grown = allocate(allocator, allocationContext, positionCount, Allocator.growthCapacity(byteCapacity));
             System.arraycopy(existing.offsets(), 0, grown.offsets(), 0, existing.length() + 1);
-            int bytesUsed = Arrays.stream(existing.offsets()).max().orElse(0);
+            int bytesUsed = bytesUsed(existing);
             System.arraycopy(existing.data(), 0, grown.data(), 0, bytesUsed);
             grown.addTraits(existing.traits());
             allocator.discard(allocationContext, existing);
@@ -145,7 +145,7 @@ public final class BinaryVector
 
     public Set<Trait> traits()
     {
-        return Set.copyOf(traits);
+        return traits;
     }
 
     public boolean hasTrait(Trait trait)
@@ -171,17 +171,38 @@ public final class BinaryVector
 
     public void addTrait(Trait trait)
     {
-        traits.add(requireNonNull(trait, "trait is null"));
+        Trait newTrait = requireNonNull(trait, "trait is null");
+        if (traits.contains(newTrait)) {
+            return;
+        }
+        if (traits.isEmpty()) {
+            traits = Set.of(newTrait);
+            return;
+        }
+        LinkedHashSet<Trait> merged = new LinkedHashSet<>(traits);
+        merged.add(newTrait);
+        traits = Set.copyOf(merged);
     }
 
     public void addTraits(Set<Trait> traits)
     {
-        this.traits.addAll(requireNonNull(traits, "traits is null"));
+        Set<Trait> newTraits = requireNonNull(traits, "traits is null");
+        if (newTraits.isEmpty() || this.traits.equals(newTraits)) {
+            return;
+        }
+        if (this.traits.isEmpty()) {
+            this.traits = Set.copyOf(newTraits);
+            return;
+        }
+        LinkedHashSet<Trait> merged = new LinkedHashSet<>(this.traits);
+        if (merged.addAll(newTraits)) {
+            this.traits = Set.copyOf(merged);
+        }
     }
 
     public void clearTraits()
     {
-        traits.clear();
+        traits = Set.of();
     }
 
     public int byteCapacity()
@@ -313,8 +334,11 @@ public final class BinaryVector
         if (outputStart == 0) {
             Arrays.fill(target.offsets(), 0);
             target.clearTraits();
+            target.addTraits(traits);
         }
-        target.addTraits(traits);
+        else if (target.traits.isEmpty() && !traits.isEmpty()) {
+            target.addTraits(traits);
+        }
 
         int currentOffset = prepareWriteOffset(target, outputStart);
         for (int index = 0; index < sourceCount; index++) {
@@ -345,8 +369,11 @@ public final class BinaryVector
         if (outputPosition == 0) {
             Arrays.fill(target.offsets(), 0);
             target.clearTraits();
+            target.addTraits(traits);
         }
-        target.addTraits(traits);
+        else if (target.traits.isEmpty() && !traits.isEmpty()) {
+            target.addTraits(traits);
+        }
 
         int currentOffset = prepareWriteOffset(target, outputPosition);
         int valueLength = length(sourcePosition);
@@ -375,6 +402,17 @@ public final class BinaryVector
             offsets[index] = currentOffset;
         }
         return currentOffset;
+    }
+
+    private static int bytesUsed(BinaryVector vector)
+    {
+        int[] offsets = vector.offsets();
+        for (int index = vector.length(); index > 0; index--) {
+            if (offsets[index] != 0) {
+                return offsets[index];
+            }
+        }
+        return 0;
     }
 
     @Override

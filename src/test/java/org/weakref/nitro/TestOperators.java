@@ -79,6 +79,7 @@ import java.util.function.Function;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
 
@@ -871,6 +872,22 @@ public class TestOperators
                         Mask.all(1))))))
                 .matchesExactly(List.of(
                         row(List.of(10L, 20L), expected)));
+    }
+
+    @Test
+    void testBinaryVectorTraitsRemainImmutableAndDetachedFromCaller()
+    {
+        BinaryVector values = new BinaryVector(1, 5);
+        Set<BinaryVector.Trait> callerTraits = new java.util.LinkedHashSet<>();
+        callerTraits.add(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+
+        values.addTraits(callerTraits);
+        callerTraits.add(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+
+        assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+        assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isFalse();
+        assertThatThrownBy(() -> values.traits().add(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test

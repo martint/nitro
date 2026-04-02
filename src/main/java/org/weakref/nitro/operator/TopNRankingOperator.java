@@ -26,6 +26,8 @@ import java.util.List;
 public class TopNRankingOperator
         implements Operator
 {
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.topnranking.maxBatchRows", 10_000);
+
     private final Allocator.Context allocationContext = new Allocator.Context("TopNRankingOperator");
 
     private final Allocator allocator;
@@ -35,11 +37,12 @@ public class TopNRankingOperator
     private final int[] partitionColumns;
     private final int limit;
 
-    private Streams[] materialized;
+    private Streams[] sourceSchema;
+    private List<TableOperator.Page> pages;
+    private List<RowReference> selectedRows;
     private I64Vector ranks;
-    private Mask outputMask;
+    private int currentOutputPosition;
     private boolean loaded;
-    private boolean done;
 
     public TopNRankingOperator(Allocator allocator, int limit, int[] orderingColumns, boolean[] descendingByColumn, Operator source)
     {
@@ -74,7 +77,7 @@ public class TopNRankingOperator
         if (!loaded) {
             load();
         }
-        return !done;
+        return currentOutputPosition < selectedRows.size();
     }
 
     @Override
@@ -83,17 +86,31 @@ public class TopNRankingOperator
         if (!loaded) {
             load();
         }
-        done = true;
+        int batchSize = Math.min(BATCH_SIZE, selectedRows.size() - currentOutputPosition);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            int index = outputIndex;
+            Streams batchStreams = materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize);
             outputs[outputIndex] = new Output(
-                    materialized[index].streams(),
-                    stream -> materialized[index].get(stream),
-                    (stream, vector) -> allocator.transfer(allocationContext, vector));
+                    batchStreams.streams(),
+                    batchStreams::get,
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
         }
-        outputs[source.outputCount()] = Output.of(Streams.ofValues(ranks));
-        return new Batch(outputMask, takenMask -> allocator.transfer(allocationContext, takenMask), outputs);
+        Streams ranksBatch = materializeRanksBatch(currentOutputPosition, batchSize);
+        outputs[source.outputCount()] = new Output(
+                ranksBatch.streams(),
+                ranksBatch::get,
+                (stream, vector) -> allocator.transfer(allocationContext, vector),
+                (stream, vector) -> allocator.release(allocationContext, vector));
+        currentOutputPosition += batchSize;
+        Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, batchSize);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                batchMask -> allocator.release(allocationContext, batchMask),
+                () -> {},
+                outputs);
     }
 
     @Override
@@ -118,17 +135,25 @@ public class TopNRankingOperator
     {
         loaded = true;
 
-        List<TableOperator.Page> pages = new ArrayList<>();
-        Streams[] schema = new Streams[source.outputCount()];
+        pages = new ArrayList<>();
+        sourceSchema = new Streams[source.outputCount()];
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
                 Mask mask = batch.borrowMask();
                 for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-                    if (schema[outputIndex] == null) {
-                        schema[outputIndex] = emptyStreamsLike(batch.output(outputIndex));
+                    if (sourceSchema[outputIndex] == null) {
+                        sourceSchema[outputIndex] = emptyStreamsLike(batch.output(outputIndex));
                     }
                 }
                 if (mask.none()) {
+                    continue;
+                }
+                if (source.supportsRetainedBatches()) {
+                    Streams[] retainedColumns = new Streams[source.outputCount()];
+                    for (int outputIndex = 0; outputIndex < retainedColumns.length; outputIndex++) {
+                        retainedColumns[outputIndex] = takeStreams(batch.output(outputIndex));
+                    }
+                    pages.add(new TableOperator.Page(mask.count(), retainedColumns, allocator.transfer(allocationContext, batch.takeMask())));
                     continue;
                 }
                 Streams[] columns = new Streams[source.outputCount()];
@@ -165,15 +190,11 @@ public class TopNRankingOperator
             previous = row;
         }
 
-        materialized = new Streams[source.outputCount()];
-        for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            materialized[outputIndex] = materializeColumn(schema[outputIndex], outputIndex, selected, pages);
-        }
+        selectedRows = selected;
         ranks = allocator.allocate(allocationContext, I64Vector.class, selectedRanks.size(), I64Vector::new);
         for (int index = 0; index < selectedRanks.size(); index++) {
             ranks.values()[index] = selectedRanks.get(index);
         }
-        outputMask = allocator.allocateRangeMask(allocationContext, 0, selected.size());
     }
 
     private int compareRows(RowReference left, RowReference right)
@@ -242,28 +263,51 @@ public class TopNRankingOperator
                 right.position());
     }
 
-    private Streams materializeColumn(Streams schema, int outputIndex, List<RowReference> rows, List<TableOperator.Page> pages)
+    private Streams materializeSourceColumnBatch(int outputIndex, int startPosition, int batchSize)
     {
         Streams.Builder builder = Streams.builder();
+        Streams schema = sourceSchema[outputIndex];
         for (Stream stream : schema.streams()) {
             Vector result = null;
-            for (int outputPosition = 0; outputPosition < rows.size(); outputPosition++) {
-                RowReference row = rows.get(outputPosition);
-                Streams sourceStreams = pages.get(row.pageIndex()).columns()[outputIndex];
+            int outputPosition = 0;
+            while (outputPosition < batchSize) {
+                RowReference firstRow = selectedRows.get(startPosition + outputPosition);
+                Streams sourceStreams = pages.get(firstRow.pageIndex()).columns()[outputIndex];
                 if (!sourceStreams.has(stream)) {
+                    outputPosition++;
                     continue;
                 }
-                result = sourceStreams.get(stream).copySinglePositionInto(
+
+                int groupStart = outputPosition;
+                int groupPageIndex = firstRow.pageIndex();
+                while (outputPosition < batchSize && selectedRows.get(startPosition + outputPosition).pageIndex() == groupPageIndex) {
+                    outputPosition++;
+                }
+
+                int groupSize = outputPosition - groupStart;
+                int[] positions = new int[groupSize];
+                for (int index = 0; index < groupSize; index++) {
+                    positions[index] = selectedRows.get(startPosition + groupStart + index).position();
+                }
+                result = sourceStreams.get(stream).copyPositionsInto(
                         allocator,
                         allocationContext,
                         result,
-                        row.position(),
-                        outputPosition,
-                        rows.size());
+                        positions,
+                        groupSize,
+                        groupStart,
+                        batchSize);
             }
             builder.put(stream, result == null ? schema.get(stream).emptyLike(allocator, allocationContext) : result);
         }
         return builder.build();
+    }
+
+    private Streams materializeRanksBatch(int startPosition, int batchSize)
+    {
+        I64Vector batchRanks = allocator.allocate(allocationContext, I64Vector.class, batchSize, I64Vector::new);
+        System.arraycopy(ranks.values(), startPosition, batchRanks.values(), 0, batchSize);
+        return Streams.ofValues(batchRanks);
     }
 
     private List<RowReference> rows(List<TableOperator.Page> pages)
@@ -271,8 +315,14 @@ public class TopNRankingOperator
         List<RowReference> rows = new ArrayList<>();
         for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
             TableOperator.Page page = pages.get(pageIndex);
-            for (int position = 0; position < page.rows(); position++) {
-                rows.add(new RowReference(pageIndex, page, position));
+            if (page.mask().all()) {
+                for (int position = 0; position < page.rows(); position++) {
+                    rows.add(new RowReference(pageIndex, page, position));
+                }
+                continue;
+            }
+            for (int index = 0; index < page.mask().selectedCount(); index++) {
+                rows.add(new RowReference(pageIndex, page, page.mask().position(index)));
             }
         }
         return rows;
@@ -292,6 +342,15 @@ public class TopNRankingOperator
         Streams.Builder builder = Streams.builder();
         for (Stream stream : output.streams()) {
             builder.put(stream, output.borrow(stream));
+        }
+        return builder.build();
+    }
+
+    private Streams takeStreams(Output output)
+    {
+        Streams.Builder builder = Streams.builder();
+        for (Stream stream : output.streams()) {
+            builder.put(stream, allocator.transfer(allocationContext, output.take(stream)));
         }
         return builder.build();
     }

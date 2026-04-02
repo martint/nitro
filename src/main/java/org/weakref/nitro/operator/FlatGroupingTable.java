@@ -68,41 +68,51 @@ final class FlatGroupingTable
         Arrays.fill(recordIndexByGroupId, -1);
     }
 
-    public long assignGroup(Vector[] values, int position, long newGroupId)
+    public long assignGroup(Vector[] values, Vector[] nulls, int position, long newGroupId)
     {
-        long hash = layout.hash(values, position);
-        int index = getIndex(values, position, hash);
+        long hash = layout.hash(values, nulls, position);
+        int index = getIndex(values, nulls, position, hash);
         if (index >= 0) {
             return groupIdsByHash[index];
         }
 
-        addNewGroup(-index - 1, values, position, hash, newGroupId);
+        addNewGroup(-index - 1, values, nulls, position, hash, newGroupId);
         if (nextRecordIndex >= maxFill) {
             rehash();
         }
         return newGroupId;
     }
 
-    public long findGroup(Vector[] values, int position)
+    public long assignGroup(Vector[] values, int position, long newGroupId)
     {
-        long hash = layout.hash(values, position);
-        int index = getIndex(values, position, hash);
+        return assignGroup(values, null, position, newGroupId);
+    }
+
+    public long findGroup(Vector[] values, Vector[] nulls, int position)
+    {
+        long hash = layout.hash(values, nulls, position);
+        int index = getIndex(values, nulls, position, hash);
         if (index < 0) {
             return -1;
         }
         return groupIdsByHash[index];
     }
 
-    public Streams groupedValues(int groupedColumnIndex, Mask mask, long nullGroup, Streams output, Allocator allocator, Allocator.Context allocationContext)
+    public long findGroup(Vector[] values, int position)
+    {
+        return findGroup(values, null, position);
+    }
+
+    public Streams groupedValues(int groupedColumnIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
         return Streams.ofValuesAndNulls(
-                field.handler().materializeValues(this, field, size, mask, nullGroup, output == null ? null : output.values(), allocator, allocationContext),
-                materializeNulls(size, mask, nullGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                field.handler().materializeValues(this, field, size, mask, -1, output == null ? null : output.values(), allocator, allocationContext),
+                materializeNulls(groupedColumnIndex, size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 
-    private int getIndex(Vector[] values, int position, long hash)
+    private int getIndex(Vector[] values, Vector[] nulls, int position, long hash)
     {
         byte hashPrefix = (byte) (hash & 0x7F | 0x80);
         int bucket = bucket((int) (hash >> 7));
@@ -115,7 +125,7 @@ final class FlatGroupingTable
             while (controlMatches != 0) {
                 int index = bucket(bucket + (Long.numberOfTrailingZeros(controlMatches) >>> 3));
                 int recordIndex = recordIndexesByHash[index];
-                if (recordIndex >= 0 && identical(recordIndex, hash, values, position)) {
+                if (recordIndex >= 0 && identical(recordIndex, hash, values, nulls, position)) {
                     return index;
                 }
                 controlMatches &= controlMatches - 1;
@@ -131,7 +141,7 @@ final class FlatGroupingTable
         }
     }
 
-    private boolean identical(int recordIndex, long hash, Vector[] values, int position)
+    private boolean identical(int recordIndex, long hash, Vector[] values, Vector[] nulls, int position)
     {
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
@@ -139,10 +149,10 @@ final class FlatGroupingTable
         if (storedHash != hash) {
             return false;
         }
-        return layout.identicalRecordToInput(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, position);
+        return layout.identicalRecordToInput(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, nulls, position);
     }
 
-    private void addNewGroup(int index, Vector[] values, int position, long hash, long groupId)
+    private void addNewGroup(int index, Vector[] values, Vector[] nulls, int position, long hash, long groupId)
     {
         setControl(index, (byte) (hash & 0x7F | 0x80));
         groupIdsByHash[index] = toIntExact(groupId);
@@ -154,7 +164,7 @@ final class FlatGroupingTable
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
         LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
-        layout.writeRecord(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, position);
+        layout.writeRecord(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, nulls, position);
     }
 
     private void ensureGroupIdCapacity(int groupId)
@@ -210,12 +220,18 @@ final class FlatGroupingTable
         }
     }
 
-    private BooleanVector materializeNulls(int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    public boolean fieldNull(int recordIndex, int fieldIndex)
+    {
+        return layout.fieldNull(fixedChunk(recordIndex), fixedOffset(recordIndex) + Long.BYTES, fieldIndex);
+    }
+
+    private BooleanVector materializeNulls(int fieldIndex, int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
         Arrays.fill(result.values(), true);
         for (int index : mask) {
-            result.values()[index] = index == nullGroup || recordIndex(index) < 0;
+            int recordIndex = recordIndex(index);
+            result.values()[index] = recordIndex < 0 || fieldNull(recordIndex, fieldIndex);
         }
         return result;
     }

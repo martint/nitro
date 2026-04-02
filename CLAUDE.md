@@ -78,4 +78,5 @@ A work-in-progress expression evaluator with an IR layer:
 - Tests and benchmark harnesses must not simulate query-engine execution by draining intermediate operator or page results and replaying them from rows, pages, constant tables, values sources, or other cached intermediate forms.
 - If a subplan appears multiple times and the engine does not support reuse or CTE semantics for that shape, the harness must assemble and evaluate that subplan multiple times as operators instead of caching and replaying intermediate results in test code.
 - Only the final consumer may iterate a query plan's top-level operator output. Intermediate harness code must compose operators, not execute them.
+- Cross-engine tests and benchmarks must be apples-to-apples: both sides must be assembled from the same logical sequence of operators and stage boundaries. Do not compare a Nitro operator tree against a Trino SQL query and treat that as an operator-level comparison.
 - This project uses Jujutsu VCS for version control

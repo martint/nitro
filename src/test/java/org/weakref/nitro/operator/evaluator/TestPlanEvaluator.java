@@ -32,6 +32,7 @@ import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
+import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
@@ -2157,6 +2158,38 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testScaledRelativeDifferenceGtI64OptimizesQuarterlyDeviationMask()
+    {
+        Variable ten = new Variable(0);
+        Variable deviationLarge = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(ten, new Literal(10L), AllMask.ALL),
+                        new Assignment(
+                                deviationLarge,
+                                new Call("scaled_relative_difference_gt_i64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES),
+                                        new Reference(ten, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                builtinPrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {100L, 105L, 80L, 100L}),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {90L, 100L, 100L, 0L}),
+                        new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, false}))),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(deviationLarge, Stream.VALUES)), Mask.all(4));
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
     void testMultiplyNullEvaluationStillRequestsInputValues()
     {
         Variable product = new Variable(0);
@@ -2484,6 +2517,7 @@ public class TestPlanEvaluator
         primitiveRegistry.register(scalarRegistry.register(EqualI64.class));
         primitiveRegistry.register(scalarRegistry.register(InUtf8.class));
         primitiveRegistry.register(scalarRegistry.register(LessThanI64.class));
+        primitiveRegistry.register(scalarRegistry.register(ScaledRelativeDifferenceGtI64.class));
         return primitiveRegistry;
     }
 

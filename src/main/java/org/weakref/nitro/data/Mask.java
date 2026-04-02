@@ -25,6 +25,9 @@ public class Mask
 {
     private static final int[] EMPTY_POSITIONS = new int[0];
 
+    private Mask trackedPrevious;
+    private Mask trackedNext;
+    private boolean trackedInUse;
     private int size;
     private int selectedCount;
     private boolean allSelected;
@@ -40,7 +43,6 @@ public class Mask
     {
         checkArgument(start >= 0, "start is negative");
         checkArgument(length >= 0, "length is negative");
-
         if (start == 0) {
             return all(length);
         }
@@ -617,6 +619,43 @@ public class Mask
     int capacity()
     {
         return positions.length;
+    }
+
+    boolean trackedInUse()
+    {
+        return trackedInUse;
+    }
+
+    Mask trackedPrevious()
+    {
+        return trackedPrevious;
+    }
+
+    void trackedPrevious(Mask trackedPrevious)
+    {
+        this.trackedPrevious = trackedPrevious;
+    }
+
+    Mask trackedNext()
+    {
+        return trackedNext;
+    }
+
+    void trackedNext(Mask trackedNext)
+    {
+        this.trackedNext = trackedNext;
+    }
+
+    void markTrackedInUse()
+    {
+        trackedInUse = true;
+    }
+
+    void clearTrackedInUse()
+    {
+        trackedInUse = false;
+        trackedPrevious = null;
+        trackedNext = null;
     }
 
     int[] positionsArray(int requiredCapacity)

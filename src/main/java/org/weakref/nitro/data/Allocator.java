@@ -36,6 +36,8 @@ public class Allocator
     private static final int MAX_POOLED_MASKS_PER_BUCKET = 4;
 
     private final Map<Context, ContextState> states = new HashMap<>();
+    private Context lastContext;
+    private ContextState lastContextState;
 
     /**
      * Calculates the capacity of a vector that can hold the desired size, plus some extra space.
@@ -158,7 +160,8 @@ public class Allocator
     public Mask allocateRangeMask(Context context, int start, int length)
     {
         ContextState state = state(context);
-        Mask mask = state.borrowMask(length);
+        int requiredCapacity = start == 0 ? 0 : length;
+        Mask mask = state.borrowMask(requiredCapacity);
         boolean reused = mask != null;
         if (!reused) {
             mask = Mask.range(start, length);
@@ -674,7 +677,6 @@ public class Allocator
     private void transferVector(Vector vector, Context preferredContext)
     {
         vector.forEachChildVector(child -> transferVector(child, preferredContext));
-
         ContextState preferredState = states.get(preferredContext);
         if (preferredState != null && preferredState.transferVector(vector)) {
             return;
@@ -714,7 +716,14 @@ public class Allocator
 
     private ContextState state(Context context)
     {
-        return states.computeIfAbsent(context, _ -> new ContextState());
+        if (context == lastContext) {
+            return lastContextState;
+        }
+
+        ContextState state = states.computeIfAbsent(context, _ -> new ContextState());
+        lastContext = context;
+        lastContextState = state;
+        return state;
     }
 
     private static int[] positions(Mask mask)
@@ -765,7 +774,7 @@ public class Allocator
         private final Map<Object, ArrayDeque<Vector>> vectorPoolOrder = new HashMap<>();
         private final TreeMap<Integer, ArrayDeque<Mask>> maskPool = new TreeMap<>();
         private final Set<Vector> inUseVectors = Collections.newSetFromMap(new IdentityHashMap<>());
-        private final Set<Mask> inUseMasks = Collections.newSetFromMap(new IdentityHashMap<>());
+        private Mask inUseMasksHead;
 
         public Stats stats()
         {
@@ -857,24 +866,34 @@ public class Allocator
 
         public void trackMask(Mask mask, boolean reused)
         {
-            inUseMasks.add(mask);
+            if (!mask.trackedInUse()) {
+                mask.markTrackedInUse();
+                mask.trackedPrevious(null);
+                mask.trackedNext(inUseMasksHead);
+                if (inUseMasksHead != null) {
+                    inUseMasksHead.trackedPrevious(mask);
+                }
+                inUseMasksHead = mask;
+            }
             stats.acquire(maskBytes(mask), reused);
         }
 
         public boolean transferMask(Mask mask)
         {
-            if (!inUseMasks.remove(mask)) {
+            if (!mask.trackedInUse()) {
                 return false;
             }
+            unlinkTrackedMask(mask);
             stats.releaseBytes(maskBytes(mask));
             return true;
         }
 
         public void releaseMask(Mask mask)
         {
-            if (!inUseMasks.remove(mask)) {
+            if (!mask.trackedInUse()) {
                 return;
             }
+            unlinkTrackedMask(mask);
             stats.releaseBytes(maskBytes(mask));
             ArrayDeque<Mask> bucket = maskPool
                     .computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
@@ -892,17 +911,37 @@ public class Allocator
                     addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
                 }
             }
-            for (Mask mask : inUseMasks) {
+            Mask mask = inUseMasksHead;
+            while (mask != null) {
+                Mask next = mask.trackedNext();
                 ArrayDeque<Mask> bucket = maskPool
                         .computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
                 bucket.addLast(mask);
                 while (bucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
                     bucket.removeFirst();
                 }
+                mask.clearTrackedInUse();
+                mask = next;
             }
+            inUseMasksHead = null;
             inUseVectors.clear();
-            inUseMasks.clear();
             stats.release();
+        }
+
+        private void unlinkTrackedMask(Mask mask)
+        {
+            Mask previous = mask.trackedPrevious();
+            Mask next = mask.trackedNext();
+            if (previous != null) {
+                previous.trackedNext(next);
+            }
+            else {
+                inUseMasksHead = next;
+            }
+            if (next != null) {
+                next.trackedPrevious(previous);
+            }
+            mask.clearTrackedInUse();
         }
 
         private void addVectorToPool(Object family, int capacity, int maxRetained, Vector vector)
