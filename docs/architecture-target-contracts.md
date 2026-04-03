@@ -115,6 +115,24 @@ layer is to:
 This keeps the benchmark harness close to the SQL engine's real lowering
 behavior and makes missing execution features explicit.
 
+Cross-engine operator comparisons must also align execution shape, not just
+logical result shape. In practice that means:
+
+- Nitro and Trino harnesses should use the same operator sequence and the same
+  stage boundaries
+- harness code must not drain an intermediate operator/page result and replay
+  it from rows, pages, constants, or values sources unless both engines are
+  explicitly being measured with that same barrier
+- repeated subplans must be rebuilt at each use site unless the engine being
+  compared actually supports reuse or CTE semantics for that shape
+- a Nitro operator tree versus a Trino SQL query is not an apples-to-apples
+  operator benchmark, even if the final rows match
+
+The `Q57` investigation showed why this matters: a staged Trino harness with
+intermediate page materialization exaggerated the apparent Nitro-vs-Trino gap.
+Once both sides used aligned operator assemblies, the remaining difference was
+much smaller and much more representative of real engine behavior.
+
 ## Architectural Principles
 
 ### Operators orchestrate batches
@@ -1277,6 +1295,24 @@ shape is therefore:
 - assemble output columns from those matched positions in batched columnar
   copies rather than per-row append loops
 
+Join-input buffering policy should belong to the join operator itself, not to
+benchmark or test harness code. If a build side needs to be buffered,
+compacted, retained, or hashed eagerly, the join operator should own that
+decision internally. Harness code should feed the join raw operator subplans,
+not pre-materialized tables inserted "for convenience," because that leaks
+execution policy out of the engine and distorts cross-engine comparisons.
+
+The same separation applies to build-side replay. If a build subplan appears
+multiple times and the engine has no reuse semantics for that shape, the
+harness should assemble it multiple times rather than caching and replaying an
+intermediate result in host code.
+
+Cross-engine comparison work also sharpened a second join-specific lesson:
+batched probing matters. Row-at-a-time probe loops are easy to write, but they
+pay avoidable control-flow and dispatch overhead in join-heavy paths. Join
+implementations should therefore prefer batch-oriented probe APIs where the key
+representation allows it, especially for primitive-key hash tables.
+
 This same principle should apply outside joins too. Filters, projections,
 source scans, and future operators should all treat masks as the common
 currency for "only do the work still needed" whenever their execution model can
@@ -1894,6 +1930,22 @@ The following execution choices should guide the runtime design:
   where a particular variable-width or nested representation cannot safely
   participate in an overwrite-oriented buffer layout, but that should be the
   exception rather than the default buffering model.
+- Operators should preserve indirection as long as downstream consumers can
+  honor it. In particular, joins should prefer passing probe/build outputs
+  forward as dictionary/RLE/retained-position views when that avoids rebuilding
+  fresh vectors, especially for variable-width payloads.
+- That in turn requires wrapper transparency at consumer boundaries. Scalar
+  dispatch, ordering, null/error inspection, and other post-join consumers must
+  treat dictionary- and RLE-backed streams as ordinary physical encodings
+  rather than assuming flat `BooleanVector`, `I64Vector`, `BinaryVector`, and
+  so on. Flat-only assumptions after a join reintroduce eager flattening as a
+  hidden architectural requirement.
+- The Trino-vs-Nitro join comparison made this concrete: Trino largely keeps
+  row identity and appends through page/block builders, while Nitro historically
+  paid extra cost by turning matched rows back into freshly materialized output
+  vectors too early. Nitro should therefore treat "preserve row indirection
+  longer" as a first-class design goal, not just as an optional micro-
+  optimization.
 - Runtime adaptive reordering is allowed for deterministic boolean mask forms
   such as `AndMask` and `OrMask`, provided that short-circuit, null, and error
   semantics remain unchanged.
