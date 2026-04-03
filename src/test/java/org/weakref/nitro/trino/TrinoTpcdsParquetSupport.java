@@ -24,6 +24,7 @@ import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import io.trino.operator.HashArraySizeSupplier;
 import io.trino.operator.Operator;
+import io.trino.operator.OperatorContext;
 import io.trino.operator.OperatorFactory;
 import io.trino.operator.PagesIndex;
 import io.trino.operator.TopNOperator;
@@ -66,6 +67,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -89,6 +91,7 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 public final class TrinoTpcdsParquetSupport
         implements AutoCloseable
 {
+    private static final ThreadLocal<TrinoOperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
     private static final String TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY = "nitro.clickbench.trino.blockedWaitTimeoutSeconds";
     private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 5;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
@@ -118,6 +121,24 @@ public final class TrinoTpcdsParquetSupport
     private TrinoTpcdsParquetSqlSupport sqlSupport;
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("TrinoTpcdsParquetSupport"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("TrinoTpcdsParquetSupport-scheduled"));
+
+    public static <T> T withOperatorCpuProfile(TrinoOperatorCpuProfile profile, Supplier<T> supplier)
+    {
+        TrinoOperatorCpuProfile previous = CURRENT_OPERATOR_CPU_PROFILE.get();
+        CURRENT_OPERATOR_CPU_PROFILE.set(profile);
+        try {
+            return supplier.get();
+        }
+        finally {
+            if (previous == null) {
+                CURRENT_OPERATOR_CPU_PROFILE.remove();
+            }
+            else {
+                CURRENT_OPERATOR_CPU_PROFILE.set(previous);
+            }
+        }
+    }
+
     private final OrderingCompiler orderingCompiler = new OrderingCompiler(new TypeOperators());
     private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
     private final int blockedWaitTimeoutSeconds = blockedWaitTimeoutSeconds();
@@ -409,10 +430,6 @@ public final class TrinoTpcdsParquetSupport
 
     public MaterializedResult query57(TpcdsParquetTables tables)
     {
-        List<Page> currentPages = query57CurrentPages(tables);
-        List<Page> previousPages = query57PreviousPages(tables);
-        List<Page> nextPages = query57NextPages(tables);
-
         Type sumType = query57SumType(tables);
         Type averageType = query57AverageType(tables);
         List<Type> currentTypes = query57CurrentTypes(tables);
@@ -424,12 +441,16 @@ public final class TrinoTpcdsParquetSupport
                 List.of(DOUBLE));
         List<Type> outputTypes = List.of(currentTypes.get(0), currentTypes.get(1), currentTypes.get(2), currentTypes.get(3), currentTypes.get(4), currentTypes.get(5), currentTypes.get(6), sumType, sumType);
 
-        return executePagesPipeline(
-                currentPages,
+        PipelinePlan currentPlan = query57CurrentPlan(tables);
+        PipelinePlan previousPlan = query57PreviousPlan(tables);
+        PipelinePlan nextPlan = query57NextPlan(tables);
+
+        PipelinePlan queryPlan = appendPlan(
+                currentPlan,
                 List.of(
-                        hashJoinStep(new HashJoinSpec(57_20, currentTypes, List.of(0, 1, 2, 7), previousPages, adjacentTypes, List.of(0, 1, 2, 4))),
-                        hashJoinStep(new HashJoinSpec(57_21, afterPreviousTypes, List.of(0, 1, 2, 7), nextPages, adjacentTypes, List.of(0, 1, 2, 4))),
-                        factoryStep(filterAndProjectFactory(
+                        namedHashJoinStep("q57.join.previous", new HashJoinSpec(57_20, currentTypes, List.of(0, 1, 2, 7), previousPlan, adjacentTypes, List.of(0, 1, 2, 4))),
+                        namedHashJoinStep("q57.join.next", new HashJoinSpec(57_21, afterPreviousTypes, List.of(0, 1, 2, 7), nextPlan, adjacentTypes, List.of(0, 1, 2, 4))),
+                        namedFactoryStep("q57.filter.project.deviation", filterAndProjectFactory(
                                 57_22,
                                 Optional.of(queryRelativeDeviationPredicate(6, 5, sumType, averageType)),
                                 List.of(
@@ -444,8 +465,8 @@ public final class TrinoTpcdsParquetSupport
                                         field(16, sumType),
                                         subtract(cast(field(6, sumType), sumType, DOUBLE), cast(field(5, averageType), averageType, DOUBLE), DOUBLE)),
                                 sortedTypes)),
-                        factoryStep(topNFactory(57_23, sortedTypes, 100, List.of(9, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
-                        factoryStep(filterAndProjectFactory(
+                        namedFactoryStep("q57.topn", topNFactory(57_23, sortedTypes, 100, List.of(9, 2), List.of(ASC_NULLS_LAST, ASC_NULLS_LAST))),
+                        namedFactoryStep("q57.project.final", filterAndProjectFactory(
                                 57_24,
                                 Optional.empty(),
                                 List.of(
@@ -459,7 +480,9 @@ public final class TrinoTpcdsParquetSupport
                                         field(7, outputTypes.get(7)),
                                         field(8, outputTypes.get(8))),
                                 outputTypes))),
-                outputTypes);
+                "q57.sink.final");
+
+        return executePipelinePlan(queryPlan, outputTypes);
     }
 
     public MaterializedResult query58(TpcdsParquetTables tables)
@@ -675,42 +698,42 @@ public final class TrinoTpcdsParquetSupport
     public MaterializedResult query57JoinedFacts(TpcdsParquetTables tables)
     {
         List<Type> outputTypes = query57JoinedFactTypes(tables);
-        return executePagesPipeline(query57JoinedFactsPages(tables), List.of(), outputTypes);
+        return executePipelinePlan(query57JoinedFactsPlan(tables), outputTypes);
     }
 
     public MaterializedResult query57MonthlyGroupedSales(TpcdsParquetTables tables)
     {
         List<Type> outputTypes = query57MonthlyGroupedTypes(tables);
-        return executePagesPipeline(query57MonthlyGroupedSalesPages(tables), List.of(), outputTypes);
+        return executePipelinePlan(query57MonthlyGroupedSalesPlan(tables), outputTypes);
     }
 
     public MaterializedResult query57MonthlyRankedSales(TpcdsParquetTables tables)
     {
         List<Type> outputTypes = query57MonthlyRankedTypes(tables);
-        return executePagesPipeline(query57MonthlyRankedSalesPages(tables), List.of(), outputTypes);
+        return executePipelinePlan(query57MonthlyRankedSalesPlan(tables), outputTypes);
     }
 
     public MaterializedResult query57CurrentRows(TpcdsParquetTables tables)
     {
         List<Type> outputTypes = query57CurrentTypes(tables);
-        return executePagesPipeline(query57CurrentPages(tables), List.of(), outputTypes);
+        return executePipelinePlan(query57CurrentPlan(tables), outputTypes);
     }
 
     public MaterializedResult query57PreviousRows(TpcdsParquetTables tables)
     {
         Type sumType = query57SumType(tables);
         List<Type> outputTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
-        return executePagesPipeline(query57PreviousPages(tables), List.of(), outputTypes);
+        return executePipelinePlan(query57PreviousPlan(tables), outputTypes);
     }
 
     public MaterializedResult query57NextRows(TpcdsParquetTables tables)
     {
         Type sumType = query57SumType(tables);
         List<Type> outputTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
-        return executePagesPipeline(query57NextPages(tables), List.of(), outputTypes);
+        return executePipelinePlan(query57NextPlan(tables), outputTypes);
     }
 
-    private List<Page> query57JoinedFactsPages(TpcdsParquetTables tables)
+    private PipelinePlan query57JoinedFactsPlan(TpcdsParquetTables tables)
     {
         List<String> factColumns = List.of("cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price");
         List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", factColumns);
@@ -720,36 +743,41 @@ public final class TrinoTpcdsParquetSupport
         List<Type> callCenterTypes = tableColumnTypes(tables, "call_center", List.of("cc_call_center_sk", "cc_name"));
         List<Type> projectedTypes = query57JoinedFactTypes(tables);
 
-        List<Page> itemKeys = relationPages(
+        PipelinePlan itemKeys = relationPlan(
                 tables,
                 "item",
                 List.of("i_item_sk", "i_brand", "i_category"),
                 Optional.empty(),
                 identityProjections(itemTypes),
-                itemTypes);
-        List<Page> allowedDates = relationPages(
+                itemTypes,
+                "q57.scan.item",
+                "q57.sink.item");
+        PipelinePlan allowedDates = relationPlan(
                 tables,
                 "date_dim",
                 List.of("d_date_sk", "d_year", "d_moy"),
                 Optional.of(query57DatePredicate()),
                 identityProjections(dateTypes),
-                dateTypes);
-        List<Page> callCenters = relationPages(
+                dateTypes,
+                "q57.scan.date_dim",
+                "q57.sink.date_dim");
+        PipelinePlan callCenters = relationPlan(
                 tables,
                 "call_center",
                 List.of("cc_call_center_sk", "cc_name"),
                 Optional.empty(),
                 identityProjections(callCenterTypes),
-                callCenterTypes);
+                callCenterTypes,
+                "q57.scan.call_center",
+                "q57.sink.call_center");
 
-        return executePipelinePages(
-                tables.tableFiles("catalog_sales"),
-                factColumns,
+        return new PipelinePlan(
+                new FilesPipelineSource(tables.tableFiles("catalog_sales"), factColumns, "q57.scan.catalog_sales"),
                 List.of(
-                        hashJoinStep(new HashJoinSpec(57_0, factTypes, List.of(2), itemKeys, itemTypes, List.of(0))),
-                        hashJoinStep(new HashJoinSpec(57_1, concatTypes(factTypes, itemTypes), List.of(0), allowedDates, dateTypes, List.of(0))),
-                        hashJoinStep(new HashJoinSpec(57_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(1), callCenters, callCenterTypes, List.of(0))),
-                        factoryStep(filterAndProjectFactory(
+                        namedHashJoinStep("q57.join.item", new HashJoinSpec(57_0, factTypes, List.of(2), itemKeys, itemTypes, List.of(0))),
+                        namedHashJoinStep("q57.join.date_dim", new HashJoinSpec(57_1, concatTypes(factTypes, itemTypes), List.of(0), allowedDates, dateTypes, List.of(0))),
+                        namedHashJoinStep("q57.join.call_center", new HashJoinSpec(57_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(1), callCenters, callCenterTypes, List.of(0))),
+                        namedFactoryStep("q57.project.joined_facts", filterAndProjectFactory(
                                 57_3,
                                 Optional.empty(),
                                 List.of(
@@ -759,54 +787,57 @@ public final class TrinoTpcdsParquetSupport
                                         field(8, dateTypes.get(1)),
                                         field(9, dateTypes.get(2)),
                                         field(3, salesType)),
-                                projectedTypes))));
+                                projectedTypes))),
+                "q57.sink.joined_facts");
     }
 
-    private List<Page> query57MonthlyGroupedSalesPages(TpcdsParquetTables tables)
+    private PipelinePlan query57MonthlyGroupedSalesPlan(TpcdsParquetTables tables)
     {
         List<Type> joinedTypes = query57JoinedFactTypes(tables);
         Type salesType = joinedTypes.get(5);
         TestingAggregationFunction salesSum = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(salesType));
         List<Type> groupedTypes = query57MonthlyGroupedTypes(tables);
-        return executePipelinePages(
-                query57JoinedFactsPages(tables),
-                List.of(factoryStep(hashAggregationFactory(
+        return appendPlan(
+                query57JoinedFactsPlan(tables),
+                List.of(namedFactoryStep("q57.group.monthly_sales", hashAggregationFactory(
                         57_4,
                         groupedTypes.subList(0, 5),
                         List.of(0, 1, 2, 3, 4),
-                        salesSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))));
+                        salesSum.createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))),
+                "q57.sink.monthly_grouped");
     }
 
-    private List<Page> query57MonthlyRankedSalesPages(TpcdsParquetTables tables)
+    private PipelinePlan query57MonthlyRankedSalesPlan(TpcdsParquetTables tables)
     {
         List<Type> groupedTypes = query57MonthlyGroupedTypes(tables);
-        return executePipelinePages(
-                query57MonthlyGroupedSalesPages(tables),
-                List.of(factoryStep(topNRankingFactory(
+        return appendPlan(
+                query57MonthlyGroupedSalesPlan(tables),
+                List.of(namedFactoryStep("q57.rank.monthly_sales", topNRankingFactory(
                         57_5,
                         groupedTypes,
                         List.of(0, 1, 2, 3, 4, 5),
                         List.of(0, 1, 2),
                         List.of(3, 4),
                         List.of(ASC_NULLS_LAST, ASC_NULLS_LAST),
-                        32))));
+                        32))),
+                "q57.sink.monthly_ranked");
     }
 
-    private List<Page> query57CurrentPages(TpcdsParquetTables tables)
+    private PipelinePlan query57CurrentPlan(TpcdsParquetTables tables)
     {
         List<Type> rankedTypes = query57MonthlyRankedTypes(tables);
         Type averageType = query57AverageType(tables);
         Type sumType = query57SumType(tables);
         List<Type> currentTypes = query57CurrentTypes(tables);
-        return executePipelinePages(
-                query57MonthlyRankedSalesPages(tables),
+        return appendPlan(
+                query57MonthlyRankedSalesPlan(tables),
                 List.of(
-                        factoryStep(filterAndProjectFactory(
+                        namedFactoryStep("q57.filter.current_year", filterAndProjectFactory(
                                 57_10,
                                 Optional.of(equal(3, 1999, INTEGER)),
                                 identityProjections(rankedTypes),
                                 rankedTypes)),
-                        factoryStep(windowFactory(
+                        namedFactoryStep("q57.window.current_avg", windowFactory(
                                 57_11,
                                 rankedTypes,
                                 List.of(0, 1, 2, 3, 4, 5, 6),
@@ -814,7 +845,7 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(),
                                 List.of(),
                                 List.of(aggregateWindowFunction("avg", List.of(sumType), averageType, PARTITION_ROWS_FRAME, 5)))),
-                        factoryStep(filterAndProjectFactory(
+                        namedFactoryStep("q57.project.current", filterAndProjectFactory(
                                 57_12,
                                 Optional.empty(),
                                 List.of(
@@ -826,17 +857,18 @@ public final class TrinoTpcdsParquetSupport
                                         field(7, averageType),
                                         field(5, sumType),
                                         field(6, BIGINT)),
-                                currentTypes))));
+                                currentTypes))),
+                "q57.sink.current");
     }
 
-    private List<Page> query57PreviousPages(TpcdsParquetTables tables)
+    private PipelinePlan query57PreviousPlan(TpcdsParquetTables tables)
     {
         Type sumType = query57SumType(tables);
         List<Type> rankedTypes = query57MonthlyRankedTypes(tables);
         List<Type> adjacentTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
-        return executePipelinePages(
-                query57MonthlyRankedSalesPages(tables),
-                List.of(factoryStep(filterAndProjectFactory(
+        return appendPlan(
+                query57MonthlyRankedSalesPlan(tables),
+                List.of(namedFactoryStep("q57.project.previous", filterAndProjectFactory(
                         57_13,
                         Optional.empty(),
                         List.of(
@@ -845,17 +877,18 @@ public final class TrinoTpcdsParquetSupport
                                 field(2, rankedTypes.get(2)),
                                 field(5, sumType),
                                 add(field(6, BIGINT), constant(1L, BIGINT), BIGINT)),
-                        adjacentTypes))));
+                        adjacentTypes))),
+                "q57.sink.previous");
     }
 
-    private List<Page> query57NextPages(TpcdsParquetTables tables)
+    private PipelinePlan query57NextPlan(TpcdsParquetTables tables)
     {
         Type sumType = query57SumType(tables);
         List<Type> rankedTypes = query57MonthlyRankedTypes(tables);
         List<Type> adjacentTypes = List.of(query57CategoryType(tables), query57BrandType(tables), query57CallCenterNameType(tables), sumType, BIGINT);
-        return executePipelinePages(
-                query57MonthlyRankedSalesPages(tables),
-                List.of(factoryStep(filterAndProjectFactory(
+        return appendPlan(
+                query57MonthlyRankedSalesPlan(tables),
+                List.of(namedFactoryStep("q57.project.next", filterAndProjectFactory(
                         57_14,
                         Optional.empty(),
                         List.of(
@@ -864,7 +897,8 @@ public final class TrinoTpcdsParquetSupport
                                 field(2, rankedTypes.get(2)),
                                 field(5, sumType),
                                 subtract(field(6, BIGINT), constant(1L, BIGINT), BIGINT)),
-                        adjacentTypes))));
+                        adjacentTypes))),
+                "q57.sink.next");
     }
 
     private List<Type> query57JoinedFactTypes(TpcdsParquetTables tables)
@@ -929,39 +963,88 @@ public final class TrinoTpcdsParquetSupport
         return result.build();
     }
 
+    private MaterializedResult executePipelinePlan(PipelinePlan plan, List<Type> outputTypes)
+    {
+        List<Page> outputPages = executePipelinePlan(plan);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(taskContext().getSession(), outputTypes);
+        for (Page page : outputPages) {
+            result.page(page);
+        }
+        return result.build();
+    }
+
+    private MaterializedResult executePagesPipeline(List<Page> inputPages, List<PipelineStep> steps, List<Type> outputTypes, String sourceName, String sinkName)
+    {
+        List<Page> outputPages = executePipelinePages(inputPages, steps, sourceName, sinkName);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(taskContext().getSession(), outputTypes);
+        for (Page page : outputPages) {
+            result.page(page);
+        }
+        return result.build();
+    }
+
     private List<Page> executePipelinePages(List<Path> files, List<String> columns, List<PipelineStep> steps)
     {
         try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(files, columns)) {
-            return executePipelinePages(readPages(reader), steps);
+            return executePipelinePages(readPages(reader), steps, "values-source", "sink");
         }
     }
 
     private List<Page> executePipelinePages(List<Page> inputPages, List<PipelineStep> steps)
+    {
+        return executePipelinePages(inputPages, steps, "values-source", "sink");
+    }
+
+    private List<Page> executePipelinePages(List<Path> files, List<String> columns, List<PipelineStep> steps, String sourceName, String sinkName)
+    {
+        try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(files, columns)) {
+            return executePipelinePages(readPages(reader), steps, sourceName, sinkName);
+        }
+    }
+
+    private List<Page> executePipelinePages(List<Page> inputPages, List<PipelineStep> steps, String sourceName, String sinkName)
     {
         List<Page> outputPages = new ArrayList<>();
         io.trino.operator.TaskContext taskContext = taskContext();
         DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
         List<Operator> operators = new ArrayList<>();
         ValuesOperator.ValuesOperatorFactory sourceFactory = new ValuesOperator.ValuesOperatorFactory(0, new PlanNodeId("values-source"), inputPages);
-        operators.add(sourceFactory.createOperator(driverContext));
+        operators.add(profiled(sourceName, sourceFactory.createOperator(driverContext)));
         sourceFactory.noMoreOperators();
 
         for (PipelineStep step : steps) {
             OperatorFactory factory = step.createOperatorFactory(taskContext, this);
-            operators.add(factory.createOperator(driverContext));
+            operators.add(profiled(step.profileName(), factory.createOperator(driverContext)));
             factory.noMoreOperators();
         }
 
-        operators.add(new PageConsumerOperator(
+        operators.add(profiled(sinkName, new PageConsumerOperator(
                 driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
                 outputPages::add,
-                java.util.function.Function.identity()));
+                java.util.function.Function.identity())));
 
         try (Driver driver = Driver.createDriver(driverContext, operators)) {
             processDriver(driver);
         }
         catch (Exception exception) {
             throw new RuntimeException("Unable to execute Trino TPC-DS parquet pages pipeline", exception);
+        }
+
+        return outputPages;
+    }
+
+    private List<Page> executePipelinePlan(PipelinePlan plan)
+    {
+        List<Page> outputPages = new ArrayList<>();
+        io.trino.operator.TaskContext taskContext = taskContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
+        List<Operator> operators = createOperators(taskContext, driverContext, plan, outputPages::add);
+
+        try (Driver driver = Driver.createDriver(driverContext, operators)) {
+            processDriver(driver);
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to execute Trino TPC-DS parquet pipeline plan", exception);
         }
 
         return outputPages;
@@ -986,12 +1069,43 @@ public final class TrinoTpcdsParquetSupport
         }
     }
 
-    private List<Page> relationPages(TpcdsParquetTables tables, String tableName, List<String> columns, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
+    private List<Operator> createOperators(io.trino.operator.TaskContext taskContext, DriverContext driverContext, PipelinePlan plan, java.util.function.Consumer<Page> pageConsumer)
     {
-        return executePipelinePages(
-                tables.tableFiles(tableName),
-                columns,
-                List.of(factoryStep(filterAndProjectFactory(7_000 + Math.abs(tableName.hashCode() % 1_000), filter, projections, outputTypes))));
+        List<Operator> operators = new ArrayList<>();
+        operators.add(createSourceOperator(driverContext, plan.source()));
+
+        for (PipelineStep step : plan.steps()) {
+            OperatorFactory factory = step.createOperatorFactory(taskContext, this);
+            operators.add(profiled(step.profileName(), factory.createOperator(driverContext)));
+            factory.noMoreOperators();
+        }
+
+        operators.add(profiled(plan.sinkName(), new PageConsumerOperator(
+                driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                pageConsumer,
+                java.util.function.Function.identity())));
+        return operators;
+    }
+
+    private Operator createSourceOperator(DriverContext driverContext, PipelineSource source)
+    {
+        if (source instanceof FilesPipelineSource filesSource) {
+            return profiled(
+                    filesSource.profileName(),
+                    new ParquetPageSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("parquet-source-" + Math.abs(filesSource.profileName().hashCode())), ParquetPageSourceOperator.class.getSimpleName()),
+                            filesSource.files(),
+                            filesSource.columns()));
+        }
+        throw new IllegalArgumentException("Unsupported pipeline source: " + source);
+    }
+
+    private PipelinePlan relationPlan(TpcdsParquetTables tables, String tableName, List<String> columns, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes, String operatorName, String sinkName)
+    {
+        return new PipelinePlan(
+                new FilesPipelineSource(tables.tableFiles(tableName), columns, operatorName + ".source"),
+                List.of(namedFactoryStep(operatorName, filterAndProjectFactory(7_000 + Math.abs(tableName.hashCode() % 1_000), filter, projections, outputTypes))),
+                sinkName);
     }
 
     private List<Type> tableColumnTypes(TpcdsParquetTables tables, String tableName, List<String> columns)
@@ -1127,17 +1241,12 @@ public final class TrinoTpcdsParquetSupport
                 100,
                 new PagesIndex.TestingFactory(false),
                 HashArraySizeSupplier.incrementalLoadFactorHashArraySizeSupplier(taskContext.getSession()));
-        ValuesOperator.ValuesOperatorFactory valuesOperatorFactory = new ValuesOperator.ValuesOperatorFactory(
-                8_000 + hashJoinSpec.operatorId(),
-                new PlanNodeId("values-" + hashJoinSpec.operatorId()),
-                hashJoinSpec.buildPages());
 
         DriverContext buildDriverContext = taskContext.addPipelineContext(1, true, true, false).addDriverContext();
-        try (Driver buildDriver = Driver.createDriver(
-                buildDriverContext,
-                valuesOperatorFactory.createOperator(buildDriverContext),
-                buildOperatorFactory.createOperator(buildDriverContext))) {
-            valuesOperatorFactory.noMoreOperators();
+        List<Operator> buildOperators = new ArrayList<>(createOperators(taskContext, buildDriverContext, hashJoinSpec.buildPlan(), ignoredPage -> {}));
+        buildOperators.removeLast();
+        buildOperators.add(profiled(hashJoinSpec.profileName() + ".build", buildOperatorFactory.createOperator(buildDriverContext)));
+        try (Driver buildDriver = Driver.createDriver(buildDriverContext, buildOperators)) {
             buildOperatorFactory.noMoreOperators();
             java.util.concurrent.Future<io.trino.operator.join.LookupSource> lookupSource = joinBridgeManager.getJoinBridge().createLookupSource();
             while (!lookupSource.isDone()) {
@@ -1154,12 +1263,30 @@ public final class TrinoTpcdsParquetSupport
 
     private static PipelineStep factoryStep(OperatorFactory factory)
     {
-        return new FactoryStep(factory);
+        return new FactoryStep(null, factory);
+    }
+
+    private static PipelineStep namedFactoryStep(String name, OperatorFactory factory)
+    {
+        return new FactoryStep(name, factory);
     }
 
     private static PipelineStep hashJoinStep(HashJoinSpec spec)
     {
-        return new HashJoinStep(spec);
+        return new HashJoinStep(null, spec);
+    }
+
+    private static PipelineStep namedHashJoinStep(String name, HashJoinSpec spec)
+    {
+        return new HashJoinStep(name, spec.withProfileName(name));
+    }
+
+    private static PipelinePlan appendPlan(PipelinePlan plan, List<PipelineStep> additionalSteps, String sinkName)
+    {
+        List<PipelineStep> steps = new ArrayList<>(plan.steps().size() + additionalSteps.size());
+        steps.addAll(plan.steps());
+        steps.addAll(additionalSteps);
+        return new PipelinePlan(plan.source(), List.copyOf(steps), sinkName);
     }
 
     private static List<Type> concatTypes(List<Type> left, List<Type> right)
@@ -1316,17 +1443,116 @@ public final class TrinoTpcdsParquetSupport
             int operatorId,
             List<Type> probeTypes,
             List<Integer> probeJoinChannels,
-            List<Page> buildPages,
+            PipelinePlan buildPlan,
             List<Type> buildTypes,
-            List<Integer> buildHashChannels) {}
+            List<Integer> buildHashChannels,
+            String profileName)
+    {
+        private HashJoinSpec(int operatorId, List<Type> probeTypes, List<Integer> probeJoinChannels, PipelinePlan buildPlan, List<Type> buildTypes, List<Integer> buildHashChannels)
+        {
+            this(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, "join-" + operatorId);
+        }
+
+        private HashJoinSpec withProfileName(String profileName)
+        {
+            return new HashJoinSpec(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, profileName);
+        }
+    }
+
+    private sealed interface PipelineSource
+            permits FilesPipelineSource
+    {
+        String profileName();
+    }
+
+    private record FilesPipelineSource(List<Path> files, List<String> columns, String profileName)
+            implements PipelineSource
+    {
+    }
+
+    private record PipelinePlan(PipelineSource source, List<PipelineStep> steps, String sinkName)
+    {
+    }
+
+    private static final class ParquetPageSourceOperator
+            implements Operator
+    {
+        private final OperatorContext operatorContext;
+        private final TrinoClickBenchPageReader reader;
+        private boolean finished;
+
+        private ParquetPageSourceOperator(OperatorContext operatorContext, List<Path> files, List<String> columns)
+        {
+            this.operatorContext = operatorContext;
+            this.reader = new TrinoClickBenchPageReader(files, columns);
+        }
+
+        @Override
+        public OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finished = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finished || !reader.hasNext();
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return false;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            if (finished || !reader.hasNext()) {
+                return null;
+            }
+            Page page = reader.nextPage();
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
+            return page;
+        }
+
+        @Override
+        public void close()
+        {
+            reader.close();
+        }
+    }
+
+    private Operator profiled(String name, Operator operator)
+    {
+        TrinoOperatorCpuProfile profile = CURRENT_OPERATOR_CPU_PROFILE.get();
+        if (profile == null || name == null) {
+            return operator;
+        }
+        return profile.wrap(name, operator);
+    }
 
     private sealed interface PipelineStep
             permits FactoryStep, HashJoinStep
     {
         OperatorFactory createOperatorFactory(io.trino.operator.TaskContext taskContext, TrinoTpcdsParquetSupport support);
+
+        String profileName();
     }
 
-    private record FactoryStep(OperatorFactory factory)
+    private record FactoryStep(String profileName, OperatorFactory factory)
             implements PipelineStep
     {
         @Override
@@ -1336,7 +1562,7 @@ public final class TrinoTpcdsParquetSupport
         }
     }
 
-    private record HashJoinStep(HashJoinSpec spec)
+    private record HashJoinStep(String profileName, HashJoinSpec spec)
             implements PipelineStep
     {
         @Override

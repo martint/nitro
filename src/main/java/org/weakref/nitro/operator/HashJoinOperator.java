@@ -19,6 +19,7 @@ import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -53,6 +54,9 @@ public class HashJoinOperator
     private final int[] innerPositionsScratch = new int[BATCH_SIZE];
     private final int[] retainedInnerPositionsScratch = new int[BATCH_SIZE];
     private final int[] retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
+    private final int[] preparedOuterPositions = new int[BATCH_SIZE];
+    private final LongList[] preparedOuterMatches = new LongList[BATCH_SIZE];
+    private final SingleLongList[] preparedSingleMatches = createSingleLongLists(BATCH_SIZE);
     private final Streams[] currentOutputs;
     private JoinIndex joinIndex;
 
@@ -67,6 +71,8 @@ public class HashJoinOperator
     private int currentMatchIndex;
     private int currentOutputCount;
     private Mask currentOutputMask;
+    private int preparedOuterCount;
+    private int preparedOuterIndex;
 
     private boolean done;
 
@@ -161,13 +167,21 @@ public class HashJoinOperator
             }
 
             if (!currentOuterPositionReady) {
-                if (currentOuterMaskIndex >= currentOuterMask.count()) {
+                if (preparedOuterIndex >= preparedOuterCount) {
+                    if (currentOuterMaskIndex >= currentOuterMask.count()) {
+                        outerRemaining = 0;
+                        continue;
+                    }
+                    prepareOuterProbeChunk();
+                }
+                if (preparedOuterIndex >= preparedOuterCount) {
                     outerRemaining = 0;
                     continue;
                 }
-                currentOuterPosition = currentOuterMask.position(currentOuterMaskIndex++);
+                currentOuterPosition = preparedOuterPositions[preparedOuterIndex];
+                currentMatches = preparedOuterMatches[preparedOuterIndex];
+                preparedOuterIndex++;
                 currentOuterPositionReady = true;
-                currentMatches = matchesForOuterPosition();
                 currentMatchIndex = 0;
             }
 
@@ -204,6 +218,24 @@ public class HashJoinOperator
         return allocator.allocateRangeMask(allocationContext, 0, outputPosition);
     }
 
+    private void prepareOuterProbeChunk()
+    {
+        preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, BATCH_SIZE);
+        preparedOuterIndex = 0;
+        for (int index = 0; index < preparedOuterCount; index++) {
+            preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
+        }
+
+        if (joinIndex instanceof LongJoinIndex longJoinIndex && outerJoinColumns.length == 1) {
+            longJoinIndex.matchRows(currentOuterJoinValues[0], currentOuterJoinNulls[0], preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
+            return;
+        }
+
+        for (int index = 0; index < preparedOuterCount; index++) {
+            preparedOuterMatches[index] = matchesForOuterPosition(preparedOuterPositions[index]);
+        }
+    }
+
     private boolean loadNextOuterBatch()
     {
         while (outer.hasNext()) {
@@ -215,6 +247,8 @@ public class HashJoinOperator
                 currentOuterMaskIndex = 0;
                 outerRemaining = currentOuterMask.count();
                 currentOuterPositionReady = false;
+                preparedOuterCount = 0;
+                preparedOuterIndex = 0;
                 return true;
             }
         }
@@ -223,13 +257,18 @@ public class HashJoinOperator
 
     private LongList matchesForOuterPosition()
     {
+        return matchesForOuterPosition(currentOuterPosition);
+    }
+
+    private LongList matchesForOuterPosition(int outerPosition)
+    {
         if (joinIndex == null) {
             return LongLists.emptyList();
         }
         if (!currentOuterJoinHasNulls) {
-            return joinIndex.matchesNoNulls(currentOuterJoinValues, currentOuterPosition);
+            return joinIndex.matchesNoNulls(currentOuterJoinValues, outerPosition);
         }
-        return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, currentOuterPosition);
+        return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, outerPosition);
     }
 
     private void loadInnerIfNecessary()
@@ -718,6 +757,27 @@ public class HashJoinOperator
             return rowsForSlot(findSlot(OperatorVectorSupport.longValue(values[0], position)));
         }
 
+        public void matchRows(Vector values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nulls, positions, positionCount, matches, singleMatches);
+                case org.weakref.nitro.data.I32Vector intValues -> matchIntRows(intValues.values(), nulls, positions, positionCount, matches, singleMatches);
+                case DictionaryVector dictionary -> matchDictionaryRows(dictionary, nulls, positions, positionCount, matches, singleMatches);
+                case org.weakref.nitro.data.RleVector rle -> matchRleRows(rle, nulls, positions, positionCount, matches, singleMatches);
+                default -> {
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                            matches[index] = LongLists.emptyList();
+                        }
+                        else {
+                            matches[index] = batchedRowsForSlot(findSlot(OperatorVectorSupport.longValue(values, position)), singleMatches[index]);
+                        }
+                    }
+                }
+            }
+        }
+
         private int findSlot(long key)
         {
             int index = mix(key) & mask;
@@ -802,6 +862,101 @@ public class HashJoinOperator
             hash *= 0xC4CEB9FE1A85EC53L;
             hash ^= (hash >>> 33);
             return (int) hash;
+        }
+
+        private void matchLongRows(long[] values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            boolean[] nullValues = nulls == null ? null : nulls.values();
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues != null && nullValues[position]) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(values[position]), singleMatches[index]);
+                }
+            }
+        }
+
+        private void matchIntRows(int[] values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            boolean[] nullValues = nulls == null ? null : nulls.values();
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues != null && nullValues[position]) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(values[position]), singleMatches[index]);
+                }
+            }
+        }
+
+        private void matchDictionaryRows(DictionaryVector values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            int[] ids = values.ids();
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                            matches[index] = LongLists.emptyList();
+                        }
+                        else {
+                            matches[index] = batchedRowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index]);
+                        }
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                            matches[index] = LongLists.emptyList();
+                        }
+                        else {
+                            matches[index] = batchedRowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index]);
+                        }
+                    }
+                }
+                default -> {
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                            matches[index] = LongLists.emptyList();
+                        }
+                        else {
+                            matches[index] = batchedRowsForSlot(findSlot(OperatorVectorSupport.longValue(values, position)), singleMatches[index]);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void matchRleRows(org.weakref.nitro.data.RleVector values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (OperatorVectorSupport.isNull(nulls, position)) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(OperatorVectorSupport.longValue(values, position)), singleMatches[index]);
+                }
+            }
+        }
+
+        private LongList batchedRowsForSlot(int index, SingleLongList singleMatch)
+        {
+            if (isEmptySlot(index)) {
+                return LongLists.emptyList();
+            }
+            LongArrayList rows = rowsBySlot[index];
+            if (rows != null) {
+                return rows;
+            }
+            return singleMatch.withValue(singleRows[index]);
         }
     }
 
@@ -1029,6 +1184,15 @@ public class HashJoinOperator
         long[] rows = new long[capacity];
         Arrays.fill(rows, NO_MATCH_ROW_REFERENCE);
         return rows;
+    }
+
+    private static SingleLongList[] createSingleLongLists(int size)
+    {
+        SingleLongList[] matches = new SingleLongList[size];
+        for (int index = 0; index < size; index++) {
+            matches[index] = new SingleLongList();
+        }
+        return matches;
     }
 
     private static final class SingleLongList

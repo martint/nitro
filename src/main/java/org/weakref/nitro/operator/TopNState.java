@@ -108,8 +108,8 @@ final class TopNState
     {
         Vector currentValues = output.borrow(Stream.VALUES);
         Vector slotValues = slotOrdering.values();
-        BooleanVector currentNulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
-        BooleanVector slotNulls = (BooleanVector) slotOrdering.getOrNull(Stream.NULLS);
+        Vector currentNulls = output.borrowOrNull(Stream.NULLS);
+        Vector slotNulls = slotOrdering.getOrNull(Stream.NULLS);
         boolean currentNull = OperatorVectorSupport.isNull(currentNulls, position);
         boolean slotNull = OperatorVectorSupport.isNull(slotNulls, 0);
         if (currentNull || slotNull) {

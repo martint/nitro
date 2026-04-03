@@ -27,6 +27,8 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.trino.TrinoOperatorCpuProfile;
 import org.weakref.nitro.trino.TrinoTpcdsParquetSqlSupport;
 import org.weakref.nitro.trino.TrinoTpcdsParquetSupport;
 
@@ -605,6 +607,37 @@ public class TestQueries
     }
 
     @Test
+    void profileQuery57OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query57(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery57TrinoOperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query57(tables));
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
     void testQuery96()
     {
         assertOperatorMatches("96", tables -> TpcdsParquetSupport.query96(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query96(TpcdsParquetTables.requiredActual("sf10")));
@@ -1014,6 +1047,28 @@ public class TestQueries
     private static void assertOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
     {
         assertNitroMatchesSql(queryId, nitroQuery, valueNormalizer);
+    }
+
+    private static void consumeOperator(Operator operator)
+    {
+        while (operator.hasNext()) {
+            try (Batch batch = operator.next()) {
+                int count = batch.borrowMask().count();
+                for (int column = 0; column < operator.outputCount(); column++) {
+                    consumeVector(batch.output(column).borrow(Stream.VALUES));
+                }
+                if (count == Integer.MIN_VALUE) {
+                    throw new AssertionError();
+                }
+            }
+        }
+    }
+
+    private static void consumeVector(Vector vector)
+    {
+        if (vector.length() == Integer.MIN_VALUE) {
+            throw new AssertionError();
+        }
     }
 
     private static void assertApplesToApplesOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery)
