@@ -240,6 +240,117 @@ public class TestOperators
     }
 
     @Test
+    void testProjectOperatorSupportsNestedDictionaryIntegerDispatch()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable projected = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        projected,
+                        new Call("subtract", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(projected, Stream.VALUES)));
+
+        DictionaryVector left = DictionaryVector.wrap(
+                new int[] {3, 0, 2, 1},
+                DictionaryVector.wrap(new int[] {2, 1, 0, 1}, new I64Vector(new long[] {10, 20, 30})));
+        DictionaryVector right = DictionaryVector.wrap(
+                new int[] {2, 1, 0, 3},
+                DictionaryVector.wrap(new int[] {1, 0, 1, 2}, new I64Vector(new long[] {1, 2, 3})));
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(4),
+                        Output.of(Streams.ofValues(left)),
+                        Output.of(Streams.ofValues(right)));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        assertThat(operator(new ProjectOperator(allocator, evaluationPlan, primitiveRegistry, source)))
+                .matchesExactly(List.of(
+                        row(18L),
+                        row(29L),
+                        row(8L),
+                        row(17L)));
+    }
+
+    @Test
+    void testTopNOperatorOrdersNestedDictionaryValues()
+    {
+        DictionaryVector ordering = DictionaryVector.wrap(
+                new int[] {3, 0, 2, 1},
+                DictionaryVector.wrap(new int[] {2, 1, 0, 1}, new I64Vector(new long[] {10, 20, 30})));
+        DictionaryVector payload = DictionaryVector.wrap(
+                new int[] {0, 1, 2, 3},
+                new I64Vector(new long[] {100, 200, 300, 400}));
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(4),
+                        Output.of(Streams.ofValues(ordering)),
+                        Output.of(Streams.ofValues(payload)));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        assertThat(operator(new TopNOperator(allocator, 4, 0, false, source)))
+                .matchesExactly(List.of(
+                        row(10L, 300L),
+                        row(20L, 100L),
+                        row(20L, 400L),
+                        row(30L, 200L)));
+    }
+
+    @Test
     void testIfI64TreatsNullConditionAsFalseBranch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

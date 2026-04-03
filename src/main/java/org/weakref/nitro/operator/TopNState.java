@@ -141,10 +141,10 @@ final class TopNState
             Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
             int comparison = OperatorOrderingSemantics.compare(
                     leftOrdering.values(),
-                    (BooleanVector) leftOrdering.getOrNull(Stream.NULLS),
+                    leftOrdering.getOrNull(Stream.NULLS),
                     0,
                     rightOrdering.values(),
-                    (BooleanVector) rightOrdering.getOrNull(Stream.NULLS),
+                    rightOrdering.getOrNull(Stream.NULLS),
                     0);
             comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
             if (comparison != 0) {

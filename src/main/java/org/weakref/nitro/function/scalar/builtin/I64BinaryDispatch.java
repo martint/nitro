@@ -435,6 +435,8 @@ final class I64BinaryDispatch
         return switch (vector) {
             case I32Vector values -> values.values()[position];
             case I64Vector values -> values.values()[position];
+            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
+            case RleVector values -> integerValue(values.values(), values.runIndex(position));
             default -> throw unsupported(vector);
         };
     }

@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BinaryVector;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -24,7 +23,7 @@ final class OperatorOrderingSemantics
 {
     private OperatorOrderingSemantics() {}
 
-    public static int compare(Vector leftValues, BooleanVector leftNulls, int leftPosition, Vector rightValues, BooleanVector rightNulls, int rightPosition)
+    public static int compare(Vector leftValues, Vector leftNulls, int leftPosition, Vector rightValues, Vector rightNulls, int rightPosition)
     {
         boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
         boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);

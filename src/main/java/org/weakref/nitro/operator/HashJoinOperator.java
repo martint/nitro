@@ -433,16 +433,34 @@ public class HashJoinOperator
     private Streams materializeOuterOutput(int outputIndex)
     {
         Output sourceOutput = currentOuterBatch.output(outputIndex);
-        if (currentOutputMask.all()) {
-            return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+        int[] dictionaryIds = Arrays.copyOf(outputOuterPositions, currentOutputCount);
+        if (sourceOutput.isValuesOnly()) {
+            return Streams.ofValues(allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
         }
 
-        Streams result = null;
-        for (int index = 0; index < currentOutputMask.count(); index++) {
-            int outputPosition = currentOutputMask.position(index);
-            result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+        Streams.Builder streams = Streams.builder();
+        if (sourceOutput.hasValues()) {
+            streams.put(Stream.VALUES, allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
         }
-        return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+        Streams copiedSideStreams;
+        if (currentOutputMask.all()) {
+            copiedSideStreams = buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+        }
+        else {
+            Streams result = null;
+            for (int index = 0; index < currentOutputMask.count(); index++) {
+                int outputPosition = currentOutputMask.position(index);
+                result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+            }
+            copiedSideStreams = result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+        }
+        if (sourceOutput.hasNulls()) {
+            streams.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
+        }
+        if (sourceOutput.hasErrors()) {
+            streams.put(Stream.ERRORS, copiedSideStreams.get(Stream.ERRORS));
+        }
+        return streams.build();
     }
 
     private Streams materializeInnerOutput(int innerOutputIndex)
