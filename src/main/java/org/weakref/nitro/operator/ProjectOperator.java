@@ -14,10 +14,13 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -73,7 +76,7 @@ public class ProjectOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Reference outputReference = outputReferences.get(outputIndex);
             outputs[outputIndex] = new Output(
-                    exposedStreams(outputReference.stream()),
+                    exposedStreams(sourceBatch, outputReference),
                     stream -> evaluateOutput(batchState, outputReference, stream),
                     (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
@@ -114,11 +117,25 @@ public class ProjectOperator
         if (!exposedStreams(outputReference.stream()).contains(stream)) {
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
         }
+        if (outputReference.producer() instanceof Input input) {
+            return batchState.sourceBatch().output(input.index()).borrow(stream);
+        }
         Streams bundle = batchState.evaluatedOutputBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.mask()));
         if (!bundle.has(stream) && batchState.mask().none() && !batchState.schemaMask().none()) {
             bundle = batchState.schemaBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.schemaMask()));
         }
+        if (!bundle.has(stream) && batchState.mask().none() && batchState.schemaMask().none()) {
+            return emptyStreamVector(stream);
+        }
         return bundle.get(stream);
+    }
+
+    private org.weakref.nitro.data.Vector emptyStreamVector(Stream stream)
+    {
+        return switch (stream) {
+            case VALUES -> allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
+            case NULLS, ERRORS -> allocator.allocate(allocationContext, BooleanVector.class, 0, BooleanVector::new);
+        };
     }
 
     private static Set<Stream> exposedStreams(Stream stream)
@@ -127,6 +144,14 @@ public class ProjectOperator
             return Set.of(stream);
         }
         return EnumSet.of(Stream.VALUES, Stream.NULLS, Stream.ERRORS);
+    }
+
+    private static Set<Stream> exposedStreams(Batch sourceBatch, Reference outputReference)
+    {
+        if (outputReference.producer() instanceof Input input && outputReference.stream() == Stream.VALUES) {
+            return sourceBatch.output(input.index()).streams();
+        }
+        return exposedStreams(outputReference.stream());
     }
 
     @Override
@@ -153,7 +178,10 @@ public class ProjectOperator
         {
             this.sourceBatch = sourceBatch;
             this.mask = sourceBatch.borrowMask();
-            this.schemaMask = this.mask.size() == 0 ? this.mask : allocator.allocateRangeMask(allocationContext, 0, 1);
+            this.schemaMask = switch (this.mask.count()) {
+                case 0 -> this.mask;
+                default -> allocator.allocateRangeMask(allocationContext, this.mask.position(0), 1);
+            };
             this.planEvaluator = new PlanEvaluator(
                     evaluationPlan,
                     primitiveRegistry,
@@ -172,6 +200,11 @@ public class ProjectOperator
         private PlanEvaluator planEvaluator()
         {
             return planEvaluator;
+        }
+
+        private Batch sourceBatch()
+        {
+            return sourceBatch;
         }
 
         private Map<Producer, Streams> evaluatedOutputBundles()

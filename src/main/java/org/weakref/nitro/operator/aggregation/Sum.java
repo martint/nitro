@@ -67,7 +67,7 @@ public class Sum
     {
         SumStateVector stateVector = (SumStateVector) state.values();
         Vector inputValues = streams.values(inputColumn);
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
 
         long sum = 0;
         boolean sawNonNull = false;
@@ -102,7 +102,7 @@ public class Sum
         SumStateVector stateVector = (SumStateVector) state.values();
         I64Vector groupVector = (I64Vector) groups;
         Vector inputValues = streams.values(inputColumn);
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -177,13 +177,14 @@ public class Sum
         };
     }
 
-    private static boolean[] nulls(Vector v)
+    private static boolean isNull(Vector nulls, int position)
     {
-        return v == null ? null : ((BooleanVector) v).values();
-    }
-
-    private static boolean isNull(boolean[] nulls, int position)
-    {
-        return nulls != null && nulls[position];
+        return switch (nulls) {
+            case null -> false;
+            case org.weakref.nitro.data.BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
+            case RleVector values -> isNull(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
+        };
     }
 }

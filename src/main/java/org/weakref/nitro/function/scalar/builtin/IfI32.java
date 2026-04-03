@@ -59,11 +59,11 @@ public final class IfI32
         }
 
         Vector condition = inputs.get(0).values();
-        BooleanVector conditionNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        Vector conditionNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector trueValues = inputs.get(1).values();
         Vector falseValues = inputs.get(2).values();
-        BooleanVector trueNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
-        BooleanVector falseNulls = (BooleanVector) inputs.get(2).getOrNull(Stream.NULLS);
+        Vector trueNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector falseNulls = inputs.get(2).getOrNull(Stream.NULLS);
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(trueValues.length(), falseValues.length()));
 
         Streams result = Streams.empty();
@@ -92,13 +92,13 @@ public final class IfI32
         return result;
     }
 
-    private static void applyValues(Vector condition, BooleanVector conditionNulls, Vector trueValues, Vector falseValues, BooleanVector trueNulls, BooleanVector falseNulls, Mask mask, I32Vector outputValues, BooleanVector outputNulls)
+    private static void applyValues(Vector condition, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, I32Vector outputValues, BooleanVector outputNulls)
     {
         for (int position : mask) {
             boolean takeTrue = conditionValue(condition, conditionNulls, position);
             Vector selectedValues = takeTrue ? trueValues : falseValues;
-            BooleanVector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            if (selectedNulls != null && selectedNulls.values()[position]) {
+            Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
+            if (isNull(selectedNulls, position)) {
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
                 }
@@ -112,20 +112,20 @@ public final class IfI32
         }
     }
 
-    private static void applyNulls(Vector condition, BooleanVector conditionNulls, BooleanVector trueNulls, BooleanVector falseNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(Vector condition, Vector conditionNulls, Vector trueNulls, Vector falseNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
             boolean takeTrue = conditionValue(condition, conditionNulls, position);
-            BooleanVector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            nulls[position] = selectedNulls != null && selectedNulls.values()[position];
+            Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
+            nulls[position] = isNull(selectedNulls, position);
         }
     }
 
-    private static boolean conditionValue(Vector values, BooleanVector nulls, int position)
+    private static boolean conditionValue(Vector values, Vector nulls, int position)
     {
-        if (nulls != null && nulls.values()[position]) {
+        if (isNull(nulls, position)) {
             return false;
         }
         return switch (values) {
@@ -143,6 +143,17 @@ public final class IfI32
             case DictionaryVector vector -> integerValue(vector.values(), vector.ids()[position]);
             case RleVector vector -> integerValue(vector.values(), vector.runIndex(position));
             default -> throw new IllegalArgumentException("Unsupported if_i32 branch vector type: " + values.getClass().getSimpleName());
+        };
+    }
+
+    private static boolean isNull(Vector nulls, int position)
+    {
+        return switch (nulls) {
+            case null -> false;
+            case BooleanVector vector -> vector.values()[position];
+            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
+            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
+            default -> throw new IllegalArgumentException("Unsupported if_i32 null vector type: " + nulls.getClass().getSimpleName());
         };
     }
 }

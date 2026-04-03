@@ -44,13 +44,16 @@ final class GroupingState
     private long[] longKeysByGroup = new long[0];
     private long[] firstLongPairKeysByGroup = new long[0];
     private long[] secondLongPairKeysByGroup = new long[0];
+    private byte[] longPairNullMasksByGroup = new byte[0];
     private long[] firstLongTripleKeysByGroup = new long[0];
     private long[] secondLongTripleKeysByGroup = new long[0];
     private long[] thirdLongTripleKeysByGroup = new long[0];
+    private byte[] longTripleNullMasksByGroup = new byte[0];
     private long[] firstLongQuadKeysByGroup = new long[0];
     private long[] secondLongQuadKeysByGroup = new long[0];
     private long[] thirdLongQuadKeysByGroup = new long[0];
     private long[] fourthLongQuadKeysByGroup = new long[0];
+    private byte[] longQuadNullMasksByGroup = new byte[0];
     private Vector cachedDictionaryValues;
     private long[] dictionaryGroupsById = new long[0];
     private int[] dictionaryGenerations = new int[0];
@@ -109,6 +112,7 @@ final class GroupingState
     public void assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         initializeIfNecessary(values, nulls);
+        reserveAdditionalGroups(mask.count() + 1L);
         if (useLongGrouping) {
             assignLongGroups(values[0], nulls[0], mask, result);
             return;
@@ -143,6 +147,24 @@ final class GroupingState
         }
     }
 
+    private void reserveAdditionalGroups(long additionalGroups)
+    {
+        if (additionalGroups <= 0) {
+            return;
+        }
+
+        long expectedSize = nextGroupId + additionalGroups;
+        if (useLongPairGrouping) {
+            longPairGroupingTable.ensureCapacity(expectedSize);
+        }
+        else if (useLongTripleGrouping) {
+            longTripleGroupingTable.ensureCapacity(expectedSize);
+        }
+        else if (useLongQuadGrouping) {
+            longQuadGroupingTable.ensureCapacity(expectedSize);
+        }
+    }
+
     private void initializeIfNecessary(Vector[] values, Vector[] nulls)
     {
         if (initialized) {
@@ -162,12 +184,12 @@ final class GroupingState
             return;
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
-        if (!nullableCompositeKeys && values.length == 2 && isSingleLongGroupingCandidate(values[0]) && isSingleLongGroupingCandidate(values[1])) {
+        if (values.length == 2 && isSingleLongGroupingCandidate(values[0]) && isSingleLongGroupingCandidate(values[1])) {
             useLongPairGrouping = true;
             longPairGroupingTable = new LongPairGroupingTable(Math.max(16, values[0].length()));
             return;
         }
-        if (!nullableCompositeKeys && values.length == 3 &&
+        if (values.length == 3 &&
                 isSingleLongGroupingCandidate(values[0]) &&
                 isSingleLongGroupingCandidate(values[1]) &&
                 isSingleLongGroupingCandidate(values[2])) {
@@ -175,7 +197,7 @@ final class GroupingState
             longTripleGroupingTable = new LongTripleGroupingTable(Math.max(16, values[0].length()));
             return;
         }
-        if (!nullableCompositeKeys && values.length == 4 &&
+        if (values.length == 4 &&
                 isSingleLongGroupingCandidate(values[0]) &&
                 isSingleLongGroupingCandidate(values[1]) &&
                 isSingleLongGroupingCandidate(values[2]) &&
@@ -255,18 +277,15 @@ final class GroupingState
     private void assignLongPairGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            if (hasNull(nulls, position)) {
-                result.values()[position] = nullGroup();
-                continue;
-            }
-
-            long first = OperatorVectorSupport.longValue(values[0], position);
-            long second = OperatorVectorSupport.longValue(values[1], position);
-            long groupId = longPairGroupingTable.assignGroup(first, second, nextGroupId);
+            byte nullMask = nullMask(nulls, position);
+            long first = isNull(nulls[0], position) ? 0 : OperatorVectorSupport.longValue(values[0], position);
+            long second = isNull(nulls[1], position) ? 0 : OperatorVectorSupport.longValue(values[1], position);
+            long groupId = longPairGroupingTable.assignGroup(first, second, nullMask, nextGroupId);
             if (groupId == nextGroupId) {
                 ensureLongPairGroupingCapacity(groupId);
                 firstLongPairKeysByGroup[(int) groupId] = first;
                 secondLongPairKeysByGroup[(int) groupId] = second;
+                longPairNullMasksByGroup[(int) groupId] = nullMask;
                 nextGroupId++;
             }
             result.values()[position] = groupId;
@@ -276,22 +295,19 @@ final class GroupingState
     private void assignLongQuadGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            if (hasNull(nulls, position)) {
-                result.values()[position] = nullGroup();
-                continue;
-            }
-
-            long first = OperatorVectorSupport.longValue(values[0], position);
-            long second = OperatorVectorSupport.longValue(values[1], position);
-            long third = OperatorVectorSupport.longValue(values[2], position);
-            long fourth = OperatorVectorSupport.longValue(values[3], position);
-            long groupId = longQuadGroupingTable.assignGroup(first, second, third, fourth, nextGroupId);
+            byte nullMask = nullMask(nulls, position);
+            long first = isNull(nulls[0], position) ? 0 : OperatorVectorSupport.longValue(values[0], position);
+            long second = isNull(nulls[1], position) ? 0 : OperatorVectorSupport.longValue(values[1], position);
+            long third = isNull(nulls[2], position) ? 0 : OperatorVectorSupport.longValue(values[2], position);
+            long fourth = isNull(nulls[3], position) ? 0 : OperatorVectorSupport.longValue(values[3], position);
+            long groupId = longQuadGroupingTable.assignGroup(first, second, third, fourth, nullMask, nextGroupId);
             if (groupId == nextGroupId) {
                 ensureLongQuadGroupingCapacity(groupId);
                 firstLongQuadKeysByGroup[(int) groupId] = first;
                 secondLongQuadKeysByGroup[(int) groupId] = second;
                 thirdLongQuadKeysByGroup[(int) groupId] = third;
                 fourthLongQuadKeysByGroup[(int) groupId] = fourth;
+                longQuadNullMasksByGroup[(int) groupId] = nullMask;
                 nextGroupId++;
             }
             result.values()[position] = groupId;
@@ -301,20 +317,17 @@ final class GroupingState
     private void assignLongTripleGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            if (hasNull(nulls, position)) {
-                result.values()[position] = nullGroup();
-                continue;
-            }
-
-            long first = OperatorVectorSupport.longValue(values[0], position);
-            long second = OperatorVectorSupport.longValue(values[1], position);
-            long third = OperatorVectorSupport.longValue(values[2], position);
-            long groupId = longTripleGroupingTable.assignGroup(first, second, third, nextGroupId);
+            byte nullMask = nullMask(nulls, position);
+            long first = isNull(nulls[0], position) ? 0 : OperatorVectorSupport.longValue(values[0], position);
+            long second = isNull(nulls[1], position) ? 0 : OperatorVectorSupport.longValue(values[1], position);
+            long third = isNull(nulls[2], position) ? 0 : OperatorVectorSupport.longValue(values[2], position);
+            long groupId = longTripleGroupingTable.assignGroup(first, second, third, nullMask, nextGroupId);
             if (groupId == nextGroupId) {
                 ensureLongTripleGroupingCapacity(groupId);
                 firstLongTripleKeysByGroup[(int) groupId] = first;
                 secondLongTripleKeysByGroup[(int) groupId] = second;
                 thirdLongTripleKeysByGroup[(int) groupId] = third;
+                longTripleNullMasksByGroup[(int) groupId] = nullMask;
                 nextGroupId++;
             }
             result.values()[position] = groupId;
@@ -377,17 +390,17 @@ final class GroupingState
         if (useLongPairGrouping) {
             return Streams.ofValuesAndNulls(
                     materializeLongPairGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeLongNulls(mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeCompositeLongNulls(longPairNullMasksByGroup, groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         }
         if (useLongTripleGrouping) {
             return Streams.ofValuesAndNulls(
                     materializeLongTripleGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeLongNulls(mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeCompositeLongNulls(longTripleNullMasksByGroup, groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         }
         if (useLongQuadGrouping) {
             return Streams.ofValuesAndNulls(
                     materializeLongQuadGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeLongNulls(mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeCompositeLongNulls(longQuadNullMasksByGroup, groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         }
         if (useFlatGrouping) {
             return flatGroupingTable.groupedValues(groupedColumnIndex, mask, output, allocator, allocationContext);
@@ -430,6 +443,17 @@ final class GroupingState
         return result;
     }
 
+    private BooleanVector materializeCompositeLongNulls(byte[] nullMasksByGroup, int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        int size = mask.none() ? 0 : mask.maxPosition() + 1;
+        BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
+        Arrays.fill(result.values(), true);
+        for (int index : mask) {
+            result.values()[index] = index < nullMasksByGroup.length && isNull(nullMasksByGroup, index, groupedColumnIndex);
+        }
+        return result;
+    }
+
     private I64Vector materializeLongPairGroupedValues(int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
@@ -437,7 +461,7 @@ final class GroupingState
         long[] keysByGroup = groupedColumnIndex == 0 ? firstLongPairKeysByGroup : secondLongPairKeysByGroup;
         Arrays.fill(result.values(), 0);
         for (int index : mask) {
-            if (index != nullGroup && index < keysByGroup.length) {
+            if (index < keysByGroup.length && !isNull(longPairNullMasksByGroup, index, groupedColumnIndex)) {
                 result.values()[index] = keysByGroup[index];
             }
         }
@@ -457,7 +481,7 @@ final class GroupingState
         };
         Arrays.fill(result.values(), 0);
         for (int index : mask) {
-            if (index != nullGroup && index < keysByGroup.length) {
+            if (index < keysByGroup.length && !isNull(longQuadNullMasksByGroup, index, groupedColumnIndex)) {
                 result.values()[index] = keysByGroup[index];
             }
         }
@@ -476,7 +500,7 @@ final class GroupingState
         };
         Arrays.fill(result.values(), 0);
         for (int index : mask) {
-            if (index != nullGroup && index < keysByGroup.length) {
+            if (index < keysByGroup.length && !isNull(longTripleNullMasksByGroup, index, groupedColumnIndex)) {
                 result.values()[index] = keysByGroup[index];
             }
         }
@@ -557,6 +581,27 @@ final class GroupingState
         return false;
     }
 
+    private static boolean isNull(Vector nulls, int position)
+    {
+        return nulls != null && OperatorVectorSupport.isNull(nulls, position);
+    }
+
+    private static byte nullMask(Vector[] nulls, int position)
+    {
+        byte mask = 0;
+        for (int index = 0; index < nulls.length; index++) {
+            if (isNull(nulls[index], position)) {
+                mask |= (byte) (1 << index);
+            }
+        }
+        return mask;
+    }
+
+    private static boolean isNull(byte[] nullMasksByGroup, int groupId, int groupedColumnIndex)
+    {
+        return (nullMasksByGroup[groupId] & (1 << groupedColumnIndex)) != 0;
+    }
+
     private static boolean hasNullableKeys(Vector[] nulls)
     {
         for (Vector nullVector : nulls) {
@@ -616,6 +661,7 @@ final class GroupingState
         }
         firstLongPairKeysByGroup = Arrays.copyOf(firstLongPairKeysByGroup, newSize);
         secondLongPairKeysByGroup = Arrays.copyOf(secondLongPairKeysByGroup, newSize);
+        longPairNullMasksByGroup = Arrays.copyOf(longPairNullMasksByGroup, newSize);
     }
 
     private void ensureLongQuadGroupingCapacity(long groupId)
@@ -631,6 +677,7 @@ final class GroupingState
         secondLongQuadKeysByGroup = Arrays.copyOf(secondLongQuadKeysByGroup, newSize);
         thirdLongQuadKeysByGroup = Arrays.copyOf(thirdLongQuadKeysByGroup, newSize);
         fourthLongQuadKeysByGroup = Arrays.copyOf(fourthLongQuadKeysByGroup, newSize);
+        longQuadNullMasksByGroup = Arrays.copyOf(longQuadNullMasksByGroup, newSize);
     }
 
     private void ensureLongTripleGroupingCapacity(long groupId)
@@ -645,6 +692,7 @@ final class GroupingState
         firstLongTripleKeysByGroup = Arrays.copyOf(firstLongTripleKeysByGroup, newSize);
         secondLongTripleKeysByGroup = Arrays.copyOf(secondLongTripleKeysByGroup, newSize);
         thirdLongTripleKeysByGroup = Arrays.copyOf(thirdLongTripleKeysByGroup, newSize);
+        longTripleNullMasksByGroup = Arrays.copyOf(longTripleNullMasksByGroup, newSize);
     }
 
     private static final class LongPairGroupingTable
@@ -653,6 +701,7 @@ final class GroupingState
 
         private long[] firstKeys;
         private long[] secondKeys;
+        private byte[] nullMasks;
         private long[] groupIds;
         private int mask;
         private int maxFill;
@@ -666,20 +715,22 @@ final class GroupingState
             }
             firstKeys = new long[capacity];
             secondKeys = new long[capacity];
+            nullMasks = new byte[capacity];
             groupIds = new long[capacity];
             Arrays.fill(groupIds, -1);
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
         }
 
-        public long assignGroup(long first, long second, long newGroupId)
+        public long assignGroup(long first, long second, byte nullMask, long newGroupId)
         {
-            int index = mix(first, second) & mask;
+            int index = mix(first, second, nullMask) & mask;
             while (true) {
                 long groupId = groupIds[index];
                 if (groupId == -1) {
                     firstKeys[index] = first;
                     secondKeys[index] = second;
+                    nullMasks[index] = nullMask;
                     groupIds[index] = newGroupId;
                     size++;
                     if (size >= maxFill) {
@@ -687,22 +738,41 @@ final class GroupingState
                     }
                     return newGroupId;
                 }
-                if (firstKeys[index] == first && secondKeys[index] == second) {
+                if (firstKeys[index] == first && secondKeys[index] == second && nullMasks[index] == nullMask) {
                     return groupId;
                 }
                 index = (index + 1) & mask;
             }
         }
 
+        public void ensureCapacity(long expectedSize)
+        {
+            if (expectedSize < maxFill) {
+                return;
+            }
+
+            int capacity = groupIds.length;
+            while (expectedSize >= (long) (capacity * LOAD_FACTOR)) {
+                capacity <<= 1;
+            }
+            rehash(capacity);
+        }
+
         private void rehash()
+        {
+            rehash(groupIds.length * 2);
+        }
+
+        private void rehash(int capacity)
         {
             long[] previousFirstKeys = firstKeys;
             long[] previousSecondKeys = secondKeys;
+            byte[] previousNullMasks = nullMasks;
             long[] previousGroupIds = groupIds;
-            int capacity = previousGroupIds.length * 2;
 
             firstKeys = new long[capacity];
             secondKeys = new long[capacity];
+            nullMasks = new byte[capacity];
             groupIds = new long[capacity];
             Arrays.fill(groupIds, -1);
             mask = capacity - 1;
@@ -715,20 +785,21 @@ final class GroupingState
                     continue;
                 }
 
-                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index]) & mask;
+                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index], previousNullMasks[index]) & mask;
                 while (groupIds[newIndex] != -1) {
                     newIndex = (newIndex + 1) & mask;
                 }
                 firstKeys[newIndex] = previousFirstKeys[index];
                 secondKeys[newIndex] = previousSecondKeys[index];
+                nullMasks[newIndex] = previousNullMasks[index];
                 groupIds[newIndex] = groupId;
                 size++;
             }
         }
 
-        private static int mix(long first, long second)
+        private static int mix(long first, long second, byte nullMask)
         {
-            long hash = 31 * Long.hashCode(first) + Long.hashCode(second);
+            long hash = 31 * (31 * Long.hashCode(first) + Long.hashCode(second)) + nullMask;
             hash ^= (hash >>> 16);
             return (int) hash;
         }
@@ -742,6 +813,7 @@ final class GroupingState
         private long[] secondKeys;
         private long[] thirdKeys;
         private long[] fourthKeys;
+        private byte[] nullMasks;
         private long[] groupIds;
         private int mask;
         private int maxFill;
@@ -757,15 +829,16 @@ final class GroupingState
             secondKeys = new long[capacity];
             thirdKeys = new long[capacity];
             fourthKeys = new long[capacity];
+            nullMasks = new byte[capacity];
             groupIds = new long[capacity];
             Arrays.fill(groupIds, -1);
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
         }
 
-        public long assignGroup(long first, long second, long third, long fourth, long newGroupId)
+        public long assignGroup(long first, long second, long third, long fourth, byte nullMask, long newGroupId)
         {
-            int index = mix(first, second, third, fourth) & mask;
+            int index = mix(first, second, third, fourth, nullMask) & mask;
             while (true) {
                 long groupId = groupIds[index];
                 if (groupId == -1) {
@@ -773,6 +846,7 @@ final class GroupingState
                     secondKeys[index] = second;
                     thirdKeys[index] = third;
                     fourthKeys[index] = fourth;
+                    nullMasks[index] = nullMask;
                     groupIds[index] = newGroupId;
                     size++;
                     if (size >= maxFill) {
@@ -780,26 +854,45 @@ final class GroupingState
                     }
                     return newGroupId;
                 }
-                if (firstKeys[index] == first && secondKeys[index] == second && thirdKeys[index] == third && fourthKeys[index] == fourth) {
+                if (firstKeys[index] == first && secondKeys[index] == second && thirdKeys[index] == third && fourthKeys[index] == fourth && nullMasks[index] == nullMask) {
                     return groupId;
                 }
                 index = (index + 1) & mask;
             }
         }
 
+        public void ensureCapacity(long expectedSize)
+        {
+            if (expectedSize < maxFill) {
+                return;
+            }
+
+            int capacity = groupIds.length;
+            while (expectedSize >= (long) (capacity * LOAD_FACTOR)) {
+                capacity <<= 1;
+            }
+            rehash(capacity);
+        }
+
         private void rehash()
+        {
+            rehash(groupIds.length * 2);
+        }
+
+        private void rehash(int capacity)
         {
             long[] previousFirstKeys = firstKeys;
             long[] previousSecondKeys = secondKeys;
             long[] previousThirdKeys = thirdKeys;
             long[] previousFourthKeys = fourthKeys;
+            byte[] previousNullMasks = nullMasks;
             long[] previousGroupIds = groupIds;
-            int capacity = previousGroupIds.length * 2;
 
             firstKeys = new long[capacity];
             secondKeys = new long[capacity];
             thirdKeys = new long[capacity];
             fourthKeys = new long[capacity];
+            nullMasks = new byte[capacity];
             groupIds = new long[capacity];
             Arrays.fill(groupIds, -1);
             mask = capacity - 1;
@@ -812,7 +905,7 @@ final class GroupingState
                     continue;
                 }
 
-                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index], previousThirdKeys[index], previousFourthKeys[index]) & mask;
+                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index], previousThirdKeys[index], previousFourthKeys[index], previousNullMasks[index]) & mask;
                 while (groupIds[newIndex] != -1) {
                     newIndex = (newIndex + 1) & mask;
                 }
@@ -820,14 +913,15 @@ final class GroupingState
                 secondKeys[newIndex] = previousSecondKeys[index];
                 thirdKeys[newIndex] = previousThirdKeys[index];
                 fourthKeys[newIndex] = previousFourthKeys[index];
+                nullMasks[newIndex] = previousNullMasks[index];
                 groupIds[newIndex] = groupId;
                 size++;
             }
         }
 
-        private static int mix(long first, long second, long third, long fourth)
+        private static int mix(long first, long second, long third, long fourth, byte nullMask)
         {
-            long hash = 31L * (31L * (31L * Long.hashCode(first) + Long.hashCode(second)) + Long.hashCode(third)) + Long.hashCode(fourth);
+            long hash = 31L * (31L * (31L * (31L * Long.hashCode(first) + Long.hashCode(second)) + Long.hashCode(third)) + Long.hashCode(fourth)) + nullMask;
             hash ^= (hash >>> 16);
             return (int) hash;
         }
@@ -840,6 +934,7 @@ final class GroupingState
         private long[] firstKeys;
         private long[] secondKeys;
         private long[] thirdKeys;
+        private byte[] nullMasks;
         private long[] groupIds;
         private int mask;
         private int maxFill;
@@ -854,21 +949,23 @@ final class GroupingState
             firstKeys = new long[capacity];
             secondKeys = new long[capacity];
             thirdKeys = new long[capacity];
+            nullMasks = new byte[capacity];
             groupIds = new long[capacity];
             Arrays.fill(groupIds, -1);
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
         }
 
-        public long assignGroup(long first, long second, long third, long newGroupId)
+        public long assignGroup(long first, long second, long third, byte nullMask, long newGroupId)
         {
-            int index = mix(first, second, third) & mask;
+            int index = mix(first, second, third, nullMask) & mask;
             while (true) {
                 long groupId = groupIds[index];
                 if (groupId == -1) {
                     firstKeys[index] = first;
                     secondKeys[index] = second;
                     thirdKeys[index] = third;
+                    nullMasks[index] = nullMask;
                     groupIds[index] = newGroupId;
                     size++;
                     if (size >= maxFill) {
@@ -876,24 +973,43 @@ final class GroupingState
                     }
                     return newGroupId;
                 }
-                if (firstKeys[index] == first && secondKeys[index] == second && thirdKeys[index] == third) {
+                if (firstKeys[index] == first && secondKeys[index] == second && thirdKeys[index] == third && nullMasks[index] == nullMask) {
                     return groupId;
                 }
                 index = (index + 1) & mask;
             }
         }
 
+        public void ensureCapacity(long expectedSize)
+        {
+            if (expectedSize < maxFill) {
+                return;
+            }
+
+            int capacity = groupIds.length;
+            while (expectedSize >= (long) (capacity * LOAD_FACTOR)) {
+                capacity <<= 1;
+            }
+            rehash(capacity);
+        }
+
         private void rehash()
+        {
+            rehash(groupIds.length * 2);
+        }
+
+        private void rehash(int capacity)
         {
             long[] previousFirstKeys = firstKeys;
             long[] previousSecondKeys = secondKeys;
             long[] previousThirdKeys = thirdKeys;
+            byte[] previousNullMasks = nullMasks;
             long[] previousGroupIds = groupIds;
-            int capacity = previousGroupIds.length * 2;
 
             firstKeys = new long[capacity];
             secondKeys = new long[capacity];
             thirdKeys = new long[capacity];
+            nullMasks = new byte[capacity];
             groupIds = new long[capacity];
             Arrays.fill(groupIds, -1);
             mask = capacity - 1;
@@ -906,21 +1022,22 @@ final class GroupingState
                     continue;
                 }
 
-                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index], previousThirdKeys[index]) & mask;
+                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index], previousThirdKeys[index], previousNullMasks[index]) & mask;
                 while (groupIds[newIndex] != -1) {
                     newIndex = (newIndex + 1) & mask;
                 }
                 firstKeys[newIndex] = previousFirstKeys[index];
                 secondKeys[newIndex] = previousSecondKeys[index];
                 thirdKeys[newIndex] = previousThirdKeys[index];
+                nullMasks[newIndex] = previousNullMasks[index];
                 groupIds[newIndex] = groupId;
                 size++;
             }
         }
 
-        private static int mix(long first, long second, long third)
+        private static int mix(long first, long second, long third, byte nullMask)
         {
-            long hash = 31L * (31L * Long.hashCode(first) + Long.hashCode(second)) + Long.hashCode(third);
+            long hash = 31L * (31L * (31L * Long.hashCode(first) + Long.hashCode(second)) + Long.hashCode(third)) + nullMask;
             hash ^= (hash >>> 16);
             return (int) hash;
         }

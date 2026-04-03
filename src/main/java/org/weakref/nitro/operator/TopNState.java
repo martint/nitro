@@ -70,10 +70,23 @@ final class TopNState
 
     public void captureSchema(Batch batch)
     {
-        fallbackBatch = batch;
+        if (fallbackBatch == null) {
+            fallbackBatch = batch;
+        }
         for (int outputIndex = 0; outputIndex < exposedStreams.length; outputIndex++) {
             if (exposedStreams[outputIndex] == null) {
-                exposedStreams[outputIndex] = EnumSet.copyOf(batch.output(outputIndex).streams());
+                Set<Stream> outputStreams = batch.output(outputIndex).streams();
+                exposedStreams[outputIndex] = outputStreams.isEmpty() ? Set.of() : EnumSet.copyOf(outputStreams);
+            }
+            if (schema[outputIndex] == null) {
+                try {
+                    schema[outputIndex] = buffers.borrowStreams(batch.output(outputIndex));
+                }
+                catch (IllegalArgumentException ignored) {
+                    // Some projected outputs can produce only null/error streams for the
+                    // schema row. In that case, defer schema capture until a retained row is
+                    // materialized, which is sufficient for non-empty TopN results.
+                }
             }
         }
     }
@@ -230,6 +243,29 @@ final class TopNState
         return streams;
     }
 
+    public void releaseFallbackBatch()
+    {
+        if (fallbackBatch != null) {
+            fallbackBatch.close();
+            fallbackBatch = null;
+        }
+    }
+
+    public boolean shouldKeepBatchForEmptySchema(Batch batch, boolean queueEmpty)
+    {
+        return queueEmpty && batch == fallbackBatch && hasMissingSchema();
+    }
+
+    private boolean hasMissingSchema()
+    {
+        for (Streams streams : schema) {
+            if (streams == null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void ensurePendingOutputMaterialized(int outputIndex)
     {
         if (isOrderingColumn(outputIndex)) {
@@ -274,11 +310,11 @@ final class TopNState
         if (columnSchema != null) {
             return columnSchema;
         }
-        if (fallbackBatch == null) {
-            throw new IllegalStateException("TopN did not observe source output schema");
+        if (fallbackBatch != null) {
+            schema[outputIndex] = buffers.borrowStreams(fallbackBatch.output(outputIndex));
+            return schema[outputIndex];
         }
-        schema[outputIndex] = buffers.borrowStreams(fallbackBatch.output(outputIndex));
-        return schema[outputIndex];
+        throw new IllegalStateException("TopN did not observe source output schema");
     }
 
     private Streams ensureMaterializedSchema(int outputIndex)

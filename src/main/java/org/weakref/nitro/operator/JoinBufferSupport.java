@@ -292,12 +292,78 @@ final class JoinBufferSupport
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         existing = compatibleExisting(existing, source);
+        switch (source) {
+            case DictionaryVector dictionaryValues -> {
+                return copyVectorPositions(existing, dictionaryValues.values(), dictionaryPositions(dictionaryValues.ids(), sourcePositions, sourceCount), sourceCount, outputStart, size);
+            }
+            case RleVector rleValues -> {
+                return copyVectorPositions(existing, rleValues.values(), rlePositions(rleValues, sourcePositions, sourceCount), sourceCount, outputStart, size);
+            }
+            case I64Vector longValues -> {
+                return copyLongPositions(longValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case I32Vector intValues -> {
+                return copyIntPositions(intValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case BooleanVector booleanValues -> {
+                return copyBooleanPositions(booleanValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case F64Vector doubleValues -> {
+                return copyDoublePositions(doubleValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case BinaryVector binaryValues -> {
+                return copyBinaryPositions(binaryValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case ArrayVector arrayValues -> {
+                return copyArrayPositions(arrayValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case MapVector mapValues -> {
+                return copyMapPositions(mapValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            case StructVector structValues -> {
+                return copyStructPositions(structValues, existing, sourcePositions, sourceCount, outputStart, size);
+            }
+            default -> {}
+        }
         return source.copyPositionsInto(allocator, allocationContext, existing, sourcePositions, sourceCount, outputStart, size);
     }
 
     private Vector copyVectorSinglePosition(Vector existing, Vector source, int sourcePosition, int outputPosition, int size)
     {
         existing = compatibleExisting(existing, source);
+        switch (source) {
+            case DictionaryVector dictionaryValues -> {
+                return copyVectorSinglePosition(existing, dictionaryValues.values(), dictionaryValues.ids()[sourcePosition], outputPosition, size);
+            }
+            case RleVector rleValues -> {
+                return copyVectorSinglePosition(existing, rleValues.values(), rlePosition(rleValues, sourcePosition), outputPosition, size);
+            }
+            case I64Vector longValues -> {
+                return copyLongSinglePosition(longValues, existing, sourcePosition, outputPosition, size);
+            }
+            case I32Vector intValues -> {
+                return copyIntSinglePosition(intValues, existing, sourcePosition, outputPosition, size);
+            }
+            case BooleanVector booleanValues -> {
+                return copyBooleanSinglePosition(booleanValues, existing, sourcePosition, outputPosition, size);
+            }
+            case F64Vector doubleValues -> {
+                return copyDoubleSinglePosition(doubleValues, existing, sourcePosition, outputPosition, size);
+            }
+            case BinaryVector binaryValues -> {
+                return copyBinarySinglePosition(binaryValues, existing, sourcePosition, outputPosition, size);
+            }
+            case ArrayVector arrayValues -> {
+                return copyArraySinglePosition(arrayValues, existing, sourcePosition, outputPosition, size);
+            }
+            case MapVector mapValues -> {
+                return copyMapSinglePosition(mapValues, existing, sourcePosition, outputPosition, size);
+            }
+            case StructVector structValues -> {
+                return copyStructSinglePosition(structValues, existing, sourcePosition, outputPosition, size);
+            }
+            default -> {}
+        }
         return source.copySinglePositionInto(allocator, allocationContext, existing, sourcePosition, outputPosition, size);
     }
 
@@ -381,11 +447,18 @@ final class JoinBufferSupport
     private BinaryVector copyBinaryPositions(BinaryVector source, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         int byteCapacity = binaryCapacity(existing, outputStart);
+        int[] sourceOffsets = source.offsets();
         for (int index = 0; index < sourceCount; index++) {
-            byteCapacity += source.length(sourcePositions[index]);
+            int sourcePosition = sourcePositions[index];
+            byteCapacity += sourceOffsets[sourcePosition + 1] - sourceOffsets[sourcePosition];
         }
 
-        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, byteCapacity);
+        int requestedCapacity = byteCapacity;
+        if (existing == null && outputStart == 0 && size > sourceCount) {
+            requestedCapacity = Math.max(byteCapacity, estimatedBinaryCapacity(source, size));
+        }
+
+        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity);
         if (outputStart == 0) {
             Arrays.fill(output.offsets(), 0);
             output.clearTraits();
@@ -395,18 +468,24 @@ final class JoinBufferSupport
             output.addTraits(source.traits());
         }
 
-        int currentOffset = output.offsets()[outputStart];
+        int[] outputOffsets = output.offsets();
+        byte[] outputData = output.data();
+        byte[] sourceData = source.data();
+        int currentOffset = outputOffsets[outputStart];
         for (int index = 0; index < sourceCount; index++) {
             int targetPosition = outputStart + index;
-            output.offsets()[targetPosition] = currentOffset;
             int sourcePosition = sourcePositions[index];
-            int length = source.length(sourcePosition);
+            int startOffset = sourceOffsets[sourcePosition];
+            int endOffset = sourceOffsets[sourcePosition + 1];
+            int length = endOffset - startOffset;
+            outputOffsets[targetPosition] = currentOffset;
             if (length == 0) {
-                output.setNull(targetPosition);
+                outputOffsets[targetPosition + 1] = currentOffset;
             }
             else {
-                output.setBytes(targetPosition, source.data(), source.startOffset(sourcePosition), length);
-                currentOffset = output.endOffset(targetPosition);
+                System.arraycopy(sourceData, startOffset, outputData, currentOffset, length);
+                currentOffset += length;
+                outputOffsets[targetPosition + 1] = currentOffset;
             }
         }
         return output;
@@ -414,7 +493,11 @@ final class JoinBufferSupport
 
     private BinaryVector copyBinarySinglePosition(BinaryVector source, Vector existing, int sourcePosition, int outputPosition, int size)
     {
-        int requiredCapacity = binaryCapacity(existing, outputPosition) + source.length(sourcePosition);
+        int[] sourceOffsets = source.offsets();
+        int startOffset = sourceOffsets[sourcePosition];
+        int endOffset = sourceOffsets[sourcePosition + 1];
+        int length = endOffset - startOffset;
+        int requiredCapacity = binaryCapacity(existing, outputPosition) + length;
         int requestedCapacity = requiredCapacity;
         if (existing == null && outputPosition == 0 && size > 1) {
             requestedCapacity = Math.max(requiredCapacity, estimatedBinaryCapacity(source, size));
@@ -429,15 +512,18 @@ final class JoinBufferSupport
             output.addTraits(source.traits());
         }
 
-        int currentOffset = output.offsets()[outputPosition];
-        output.offsets()[outputPosition] = currentOffset;
-        int length = source.length(sourcePosition);
+        int[] outputOffsets = output.offsets();
+        byte[] outputData = output.data();
+        byte[] sourceData = source.data();
+        int currentOffset = outputOffsets[outputPosition];
+        outputOffsets[outputPosition] = currentOffset;
         if (length == 0) {
-            output.setNull(outputPosition);
+            outputOffsets[outputPosition + 1] = currentOffset;
             return output;
         }
 
-        output.setBytes(outputPosition, source.data(), source.startOffset(sourcePosition), length);
+        System.arraycopy(sourceData, startOffset, outputData, currentOffset, length);
+        outputOffsets[outputPosition + 1] = currentOffset + length;
         return output;
     }
 

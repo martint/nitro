@@ -440,8 +440,8 @@ final class TpcdsParquetSupport
                         new Sum(9), new CountColumn(9),
                         new Sum(10), new CountColumn(10)),
                 sales);
-        sales = projectQuery18Output(allocator, primitiveRegistry, sales);
-        return new TopNOperator(allocator, 100, new int[] {1, 2, 3, 0}, new boolean[] {false, false, false, false}, sales);
+        sales = new TopNOperator(allocator, 100, new int[] {1, 2, 3, 0}, new boolean[] {false, false, false, false}, sales);
+        return projectQuery18Output(allocator, primitiveRegistry, sales);
     }
 
     public static Operator query22(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -4822,7 +4822,7 @@ final class TpcdsParquetSupport
                                 primitiveRegistry,
                                 tables,
                                 "store",
-                                equal(1, 8),
+                                and(equal(1, 8), notEmptyUtf8(4)),
                                 new String[] {"s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"},
                                 0, 2, 3, 4)),
                 0);
@@ -4869,7 +4869,7 @@ final class TpcdsParquetSupport
                                 primitiveRegistry,
                                 tables,
                                 "store",
-                                equal(1, 8),
+                                and(equal(1, 8), notEmptyUtf8(4)),
                                 new String[] {"s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"},
                                 0, 4)),
                 0);
@@ -4915,7 +4915,13 @@ final class TpcdsParquetSupport
         Operator address = projectQuery24AddressCountry(
                 allocator,
                 primitiveRegistry,
-                scannedTable(allocator, tables, "customer_address", "ca_zip", "ca_state", "ca_country"));
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "customer_address",
+                        notEmptyUtf8(0),
+                        new String[] {"ca_zip", "ca_state", "ca_country"}));
         address = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
@@ -9522,6 +9528,21 @@ final class TpcdsParquetSupport
                         new Reference(new Input(inputIndex), Stream.VALUES),
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(equals, Stream.VALUES)));
+    }
+
+    private static FilterSpec notEmptyUtf8(int inputIndex)
+    {
+        Variable zero = new Variable(0);
+        Variable length = new Variable(1);
+        Variable notEmpty = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                new Assignment(length, new Call("length_utf8", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(notEmpty, new Call("lt", List.of(
+                        new Reference(zero, Stream.VALUES),
+                        new Reference(length, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(notEmpty, Stream.VALUES)));
     }
 
     private static FilterSpec utf8StartsWith(int inputIndex, String prefix)

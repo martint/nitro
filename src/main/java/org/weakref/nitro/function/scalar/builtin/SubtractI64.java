@@ -15,6 +15,7 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -58,8 +59,8 @@ public final class SubtractI64
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
         BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
@@ -94,14 +95,24 @@ public final class SubtractI64
         return result.with(Stream.VALUES, resultValues);
     }
 
-    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
-                    (rightNulls != null && rightNulls.values()[position]);
+            nulls[position] = isNull(leftNulls, position) || isNull(rightNulls, position);
         }
+    }
+
+    private static boolean isNull(Vector nulls, int position)
+    {
+        return switch (nulls) {
+            case null -> false;
+            case BooleanVector vector -> vector.values()[position];
+            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
+            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
+            default -> throw new IllegalArgumentException("Unsupported subtract null vector type: " + nulls.getClass().getSimpleName());
+        };
     }
 
     private static long apply(long leftValue, long rightValue)

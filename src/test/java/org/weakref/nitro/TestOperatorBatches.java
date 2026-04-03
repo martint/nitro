@@ -1144,6 +1144,39 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorPreservesNullableCompositeLongKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new CountAll()),
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(10L, 100L),
+                        row(10L, 100L),
+                        row(10L, (Object) null),
+                        row(10L, (Object) null),
+                        row((Object) null, 100L),
+                        row((Object) null, 100L),
+                        row((Object) null, (Object) null))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        I64Vector firstKeys = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        BooleanVector firstNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+        I64Vector secondKeys = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+        BooleanVector secondNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+        I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(4);
+        assertThat(Arrays.copyOf(firstKeys.values(), rowCount)).containsExactly(10L, 10L, 0L, 0L);
+        assertThat(Arrays.copyOf(firstNulls.values(), rowCount)).containsExactly(false, false, true, true);
+        assertThat(Arrays.copyOf(secondKeys.values(), rowCount)).containsExactly(100L, 0L, 100L, 0L);
+        assertThat(Arrays.copyOf(secondNulls.values(), rowCount)).containsExactly(false, true, false, true);
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 2L, 2L, 1L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorMaterializesOnlyConstrainedBinaryKeys()
     {
         Allocator allocator = new Allocator();
@@ -2127,16 +2160,16 @@ public class TestOperatorBatches
 
         Batch batch = operator.next();
         int rowCount = batch.borrowMask().count();
-        I64Vector leftIds = (I64Vector) batch.output(0).borrow(Stream.VALUES);
-        BinaryVector leftNames = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
-        I64Vector leftPayload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
-        I64Vector rightPayload = (I64Vector) batch.output(5).borrow(Stream.VALUES);
+        Vector leftIds = batch.output(0).borrow(Stream.VALUES);
+        Vector leftNames = batch.output(1).borrow(Stream.VALUES);
+        Vector leftPayload = batch.output(2).borrow(Stream.VALUES);
+        Vector rightPayload = batch.output(5).borrow(Stream.VALUES);
 
-        assertThat(Arrays.copyOf(leftIds.values(), rowCount)).containsExactly(1L, 1L);
+        assertThat(longValues(leftIds, rowCount)).containsExactly(1L, 1L);
         assertThat(utf8(leftNames, 0)).isEqualTo("alpha");
         assertThat(utf8(leftNames, 1)).isEqualTo("beta");
-        assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
-        assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
+        assertThat(longValues(leftPayload, rowCount)).containsExactly(10L, 20L);
+        assertThat(longValues(rightPayload, rowCount)).containsExactly(100L, 200L);
     }
 
     @Test
@@ -2158,16 +2191,49 @@ public class TestOperatorBatches
 
         Batch batch = operator.next();
         int rowCount = batch.borrowMask().count();
-        I64Vector leftIds = (I64Vector) batch.output(0).borrow(Stream.VALUES);
-        BinaryVector leftNames = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
-        I64Vector leftPayload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
-        I64Vector rightPayload = (I64Vector) batch.output(5).borrow(Stream.VALUES);
+        Vector leftIds = batch.output(0).borrow(Stream.VALUES);
+        Vector leftNames = batch.output(1).borrow(Stream.VALUES);
+        Vector leftPayload = batch.output(2).borrow(Stream.VALUES);
+        Vector rightPayload = batch.output(5).borrow(Stream.VALUES);
 
-        assertThat(Arrays.copyOf(leftIds.values(), rowCount)).containsExactly(1L, 1L);
+        assertThat(longValues(leftIds, rowCount)).containsExactly(1L, 1L);
         assertThat(utf8(leftNames, 0)).isEqualTo("alpha");
         assertThat(utf8(leftNames, 1)).isEqualTo("beta");
-        assertThat(Arrays.copyOf(leftPayload.values(), rowCount)).containsExactly(10L, 20L);
-        assertThat(Arrays.copyOf(rightPayload.values(), rowCount)).containsExactly(100L, 200L);
+        assertThat(longValues(leftPayload, rowCount)).containsExactly(10L, 20L);
+        assertThat(longValues(rightPayload, rowCount)).containsExactly(100L, 200L);
+    }
+
+    @Test
+    void testHashJoinOperatorSupportsThreeLongJoinKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 4, List.of(
+                        row(1998L, 11L, 101L, 10L),
+                        row(1998L, 11L, 102L, 20L),
+                        row(1999L, 11L, 101L, 30L))),
+                new int[] {0, 1, 2},
+                new ConstantTableOperator(allocator, 4, List.of(
+                        row(1998L, 11L, 102L, 200L),
+                        row(1998L, 11L, 101L, 100L),
+                        row(1999L, 11L, 103L, 300L))),
+                new int[] {0, 1, 2});
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        Vector years = batch.output(0).borrow(Stream.VALUES);
+        Vector items = batch.output(1).borrow(Stream.VALUES);
+        Vector customers = batch.output(2).borrow(Stream.VALUES);
+        Vector leftPayload = batch.output(3).borrow(Stream.VALUES);
+        Vector rightPayload = batch.output(7).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(2);
+        assertThat(longValues(years, rowCount)).containsExactly(1998L, 1998L);
+        assertThat(longValues(items, rowCount)).containsExactly(11L, 11L);
+        assertThat(longValues(customers, rowCount)).containsExactly(101L, 102L);
+        assertThat(longValues(leftPayload, rowCount)).containsExactly(10L, 20L);
+        assertThat(longValues(rightPayload, rowCount)).containsExactly(100L, 200L);
     }
 
     @Test
@@ -2204,6 +2270,43 @@ public class TestOperatorBatches
         assertThat(utf8(leftCounties, 1)).isEqualTo("Williamson County");
         assertThat(leftPayload.values()[1]).isEqualTo(13L);
         assertThat(rightPayload.values()[1]).isEqualTo(103L);
+    }
+
+    @Test
+    void testHashJoinOperatorCopiesDictionaryWrappedInnerPayloads()
+    {
+        Allocator allocator = new Allocator();
+        BinaryVector payloadValues = new BinaryVector(2, "alpha".length() + "beta".length());
+        payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        payloadValues.setBytes(0, "alpha".getBytes(UTF_8));
+        payloadValues.setBytes(1, "beta".getBytes(UTF_8));
+        Operator inner = new SingleBatchOperator(
+                2,
+                Mask.all(2),
+                () -> new Output[] {
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {2L, 1L}))),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(new int[] {1, 0}, payloadValues))),
+                });
+
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(2L, 20L))),
+                new int[] {0},
+                inner,
+                new int[] {0});
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        Vector leftPayload = batch.output(1).borrow(Stream.VALUES);
+        Vector rightPayload = batch.output(3).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(2);
+        assertThat(longValues(leftPayload, rowCount)).containsExactly(10L, 20L);
+        assertThat(utf8(rightPayload, 0)).isEqualTo("alpha");
+        assertThat(utf8(rightPayload, 1)).isEqualTo("beta");
     }
 
     @Test
@@ -2400,9 +2503,34 @@ public class TestOperatorBatches
         assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, true);
     }
 
-    private static String utf8(BinaryVector vector, int position)
+    private static String utf8(Vector vector, int position)
     {
-        return new String(vector.copyBytes(position), UTF_8);
+        return switch (vector) {
+            case BinaryVector binary -> new String(binary.copyBytes(position), UTF_8);
+            case DictionaryVector dictionary -> utf8(dictionary.values(), dictionary.ids()[position]);
+            case org.weakref.nitro.data.RleVector rle -> utf8(rle.values(), 0);
+            default -> throw new IllegalArgumentException("Unsupported utf8 vector: " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static long[] longValues(Vector vector, int count)
+    {
+        long[] values = new long[count];
+        for (int index = 0; index < count; index++) {
+            values[index] = longValue(vector, index);
+        }
+        return values;
+    }
+
+    private static long longValue(Vector vector, int position)
+    {
+        return switch (vector) {
+            case I64Vector longValues -> longValues.values()[position];
+            case I32Vector intValues -> intValues.values()[position];
+            case DictionaryVector dictionary -> longValue(dictionary.values(), dictionary.ids()[position]);
+            case org.weakref.nitro.data.RleVector rle -> longValue(rle.values(), 0);
+            default -> throw new IllegalArgumentException("Unsupported long vector: " + vector.getClass().getSimpleName());
+        };
     }
 
     private static Operator lazyNonRetainedOuterOperator(long[] keys, long[] payloadValues)

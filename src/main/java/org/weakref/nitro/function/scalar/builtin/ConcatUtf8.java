@@ -60,8 +60,8 @@ public final class ConcatUtf8
 
         Vector leftValues = inputs.get(0).values();
         Vector rightValues = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         int requiredLength = mask.none() ? 0 : Math.max(mask.maxPosition() + 1, Math.max(leftValues.length(), rightValues.length()));
 
         int totalBytes = 0;
@@ -104,7 +104,7 @@ public final class ConcatUtf8
         return result;
     }
 
-    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
         Arrays.fill(outputNulls.values(), false);
         for (int position : mask) {
@@ -112,7 +112,7 @@ public final class ConcatUtf8
         }
     }
 
-    private static void applyValues(Vector leftValues, Vector rightValues, BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
+    private static void applyValues(Vector leftValues, Vector rightValues, Vector leftNulls, Vector rightNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
         int currentOffset = 0;
         int lastPosition = -1;
@@ -179,8 +179,14 @@ public final class ConcatUtf8
         };
     }
 
-    private static boolean isNull(BooleanVector nulls, int position)
+    private static boolean isNull(Vector nulls, int position)
     {
-        return nulls != null && nulls.values()[position];
+        return switch (nulls) {
+            case null -> false;
+            case BooleanVector vector -> vector.values()[position];
+            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
+            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
+            default -> throw new IllegalArgumentException("Unsupported concat_utf8 null vector type: " + nulls.getClass().getSimpleName());
+        };
     }
 }

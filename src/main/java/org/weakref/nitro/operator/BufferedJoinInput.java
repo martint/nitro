@@ -142,6 +142,12 @@ final class BufferedJoinInput
         if (outputSchema != null) {
             return outputSchema;
         }
+        for (InnerBatch batch : batches) {
+            if (!batch.retained() && batch.columns()[outputIndex] != null) {
+                schema[outputIndex] = batch.columns()[outputIndex];
+                return schema[outputIndex];
+            }
+        }
         if (firstRetainedBatch == null) {
             return null;
         }
@@ -168,16 +174,23 @@ final class BufferedJoinInput
             }
             Output output = batch.output(outputIndex);
             Streams.Builder streams = Streams.builder();
-            if (output.hasValues()) {
-                streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
+            try {
+                if (output.hasValues()) {
+                    streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
+                }
+                if (output.hasNulls()) {
+                    streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+                }
+                if (output.hasErrors()) {
+                    streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
+                }
+                schema[outputIndex] = streams.build();
             }
-            if (output.hasNulls()) {
-                streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+            catch (IllegalArgumentException ignored) {
+                // Some projected outputs cannot yield a representative VALUES stream at
+                // schema-capture time. Later buffered rows or retained batches can still
+                // establish the schema when the join needs it.
             }
-            if (output.hasErrors()) {
-                streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
-            }
-            schema[outputIndex] = streams.build();
         }
     }
 

@@ -376,6 +376,12 @@ public class GroupedAggregationOperator
         if (streams != null && batchState.mask.equals(batchState.materializedMask[output])) {
             return streams;
         }
+        if (batchState.mask.none() && groupByColumns != null && !inlineGroupingState.isInitialized()) {
+            streams = emptyGroupedKeyOutput(streams);
+            groupedResults[output] = streams;
+            batchState.materializedMask[output] = batchState.mask;
+            return streams;
+        }
         if (groupByColumns == null) {
             streams = groupedKeySource.groupedKeyOutput(groupedColumns[output], batchState.mask, streams, allocator, allocationContext);
         }
@@ -389,10 +395,24 @@ public class GroupedAggregationOperator
 
     private Set<Stream> groupedKeyStreams(BatchState batchState)
     {
-        if (batchState.mask.none() && groupByColumns != null && !inlineGroupingState.isInitialized()) {
-            return Set.of();
-        }
         return EnumSet.of(Stream.VALUES, Stream.NULLS);
+    }
+
+    private Streams emptyGroupedKeyOutput(Streams output)
+    {
+        I64Vector values = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (I64Vector) output.getOrNull(Stream.VALUES),
+                I64Vector.class,
+                0,
+                I64Vector::new);
+        BooleanVector nulls = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
+                BooleanVector.class,
+                0,
+                BooleanVector::new);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     private final class BatchState

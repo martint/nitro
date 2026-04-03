@@ -15,8 +15,10 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -64,7 +66,7 @@ public class CountColumn
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
         I64Vector stateVector = (I64Vector) state.values();
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
 
         for (int position : mask) {
             if (!isNull(inputNulls, position)) {
@@ -78,7 +80,7 @@ public class CountColumn
     {
         I64Vector stateVector = (I64Vector) state.values();
         I64Vector groupVector = (I64Vector) groups;
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
@@ -94,13 +96,14 @@ public class CountColumn
         return state;
     }
 
-    private static boolean[] nulls(Vector v)
+    private static boolean isNull(Vector nulls, int position)
     {
-        return v == null ? null : ((BooleanVector) v).values();
-    }
-
-    private static boolean isNull(boolean[] nulls, int position)
-    {
-        return nulls != null && nulls[position];
+        return switch (nulls) {
+            case null -> false;
+            case BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
+            case RleVector values -> isNull(values.values(), values.runIndex(position));
+            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
+        };
     }
 }

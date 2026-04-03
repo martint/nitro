@@ -101,7 +101,12 @@ public class TopNOperator
                 state.flushPendingBatch(batch, queue.stream()
                         .map(Entry::position)
                         .toList());
-                batch.close();
+                if (!queue.isEmpty()) {
+                    state.releaseFallbackBatch();
+                }
+                if (!state.shouldKeepBatchForEmptySchema(batch, queue.isEmpty())) {
+                    batch.close();
+                }
             }
         }
 
@@ -128,6 +133,8 @@ public class TopNOperator
                 batchMask,
                 state::constrain,
                 takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                _ -> {},
+                state::releaseFallbackBatch,
                 outputs);
     }
 

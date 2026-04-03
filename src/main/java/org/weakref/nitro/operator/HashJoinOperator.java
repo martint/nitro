@@ -232,7 +232,13 @@ public class HashJoinOperator
         }
 
         for (int index = 0; index < preparedOuterCount; index++) {
-            preparedOuterMatches[index] = matchesForOuterPosition(preparedOuterPositions[index]);
+            LongList matches = matchesForOuterPosition(preparedOuterPositions[index]);
+            if (matches instanceof SingleLongList singleMatch) {
+                preparedOuterMatches[index] = preparedSingleMatches[index].withValue(singleMatch.getLong(0));
+            }
+            else {
+                preparedOuterMatches[index] = matches;
+            }
         }
     }
 
@@ -341,6 +347,9 @@ public class HashJoinOperator
         }
         if (joinValues.length == 2 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1])) {
             return new LongPairJoinIndex(expectedSize);
+        }
+        if (joinValues.length == 3 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1]) && isSingleLongJoinCandidate(joinValues[2])) {
+            return new LongTripleJoinIndex(expectedSize);
         }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues);
         if (layout != null) {
@@ -466,6 +475,10 @@ public class HashJoinOperator
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
         if (currentOutputMask.all() && !hasNoMatchRows()) {
+            Streams retainedWrapped = tryWrapRetainedInnerOutput(innerOutputIndex);
+            if (retainedWrapped != null) {
+                return retainedWrapped;
+            }
             Streams result = null;
             int outputStart = 0;
             int next = 0;
@@ -497,6 +510,56 @@ public class HashJoinOperator
             result = copyInnerSinglePosition(result, innerBatch, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference), exposeNulls);
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
+    }
+
+    private Streams tryWrapRetainedInnerOutput(int innerOutputIndex)
+    {
+        if (currentOutputCount == 0) {
+            return null;
+        }
+
+        int innerBatchIndex = batchIndex(outputInnerRows[0]);
+        for (int index = 1; index < currentOutputCount; index++) {
+            if (batchIndex(outputInnerRows[index]) != innerBatchIndex) {
+                return null;
+            }
+        }
+
+        BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+        if (!innerBatch.retained()) {
+            return null;
+        }
+
+        Output output = innerBatch.retainedBatch().output(innerOutputIndex);
+        int[] dictionaryIds = new int[currentOutputCount];
+        for (int index = 0; index < currentOutputCount; index++) {
+            dictionaryIds[index] = innerBatch.sourcePosition(rowPosition(outputInnerRows[index]));
+        }
+
+        if (output.isValuesOnly()) {
+            return Streams.ofValues(allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, output.borrow(Stream.VALUES))));
+        }
+
+        Streams.Builder wrapped = Streams.builder();
+        if (output.hasValues()) {
+            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, output.borrow(Stream.VALUES))));
+        }
+        Streams.Builder sideInput = Streams.builder();
+        if (output.hasNulls()) {
+            sideInput.put(Stream.NULLS, output.borrow(Stream.NULLS));
+        }
+        if (output.hasErrors()) {
+            sideInput.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
+        }
+        Streams sideStreams = sideInput.build();
+        Streams copiedSideStreams = sideStreams.streams().isEmpty() ? null : buffers.copyPositions((Streams) null, sideStreams, dictionaryIds, currentOutputCount, 0, currentOutputCount);
+        if (output.hasNulls()) {
+            wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
+        }
+        if (output.hasErrors()) {
+            wrapped.put(Stream.ERRORS, copiedSideStreams.get(Stream.ERRORS));
+        }
+        return wrapped.build();
     }
 
     private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int[] positions, int positionCount, int outputStart, int size)
@@ -1192,6 +1255,166 @@ public class HashJoinOperator
         private static int mix(long first, long second)
         {
             long hash = 31 * Long.hashCode(first) + Long.hashCode(second);
+            hash ^= (hash >>> 16);
+            return (int) hash;
+        }
+    }
+
+    private static final class LongTripleJoinIndex
+            implements JoinIndex
+    {
+        private static final float LOAD_FACTOR = 0.75f;
+
+        private long[] firstKeys;
+        private long[] secondKeys;
+        private long[] thirdKeys;
+        private long[] singleRows;
+        private LongArrayList[] rowsBySlot;
+        private int mask;
+        private int maxFill;
+        private int size;
+        private final SingleLongList singleMatch = new SingleLongList();
+
+        private LongTripleJoinIndex(int expectedSize)
+        {
+            int capacity = 16;
+            while (capacity < expectedSize / LOAD_FACTOR) {
+                capacity <<= 1;
+            }
+            firstKeys = new long[capacity];
+            secondKeys = new long[capacity];
+            thirdKeys = new long[capacity];
+            singleRows = emptyRows(capacity);
+            rowsBySlot = new LongArrayList[capacity];
+            mask = capacity - 1;
+            maxFill = (int) (capacity * LOAD_FACTOR);
+        }
+
+        @Override
+        public boolean isEmpty()
+        {
+            return size == 0;
+        }
+
+        @Override
+        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        {
+            if (FlatJoinIndex.hasNull(nulls, position)) {
+                return;
+            }
+            addNoNulls(values, position, rowReference);
+        }
+
+        @Override
+        public void addNoNulls(Vector[] values, int position, long rowReference)
+        {
+            addRow(
+                    OperatorVectorSupport.longValue(values[0], position),
+                    OperatorVectorSupport.longValue(values[1], position),
+                    OperatorVectorSupport.longValue(values[2], position),
+                    rowReference);
+        }
+
+        @Override
+        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        {
+            if (FlatJoinIndex.hasNull(nulls, position)) {
+                return LongLists.emptyList();
+            }
+            return matchesNoNulls(values, position);
+        }
+
+        @Override
+        public LongList matchesNoNulls(Vector[] values, int position)
+        {
+            long first = OperatorVectorSupport.longValue(values[0], position);
+            long second = OperatorVectorSupport.longValue(values[1], position);
+            long third = OperatorVectorSupport.longValue(values[2], position);
+            int slot = findSlot(first, second, third);
+            if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second || thirdKeys[slot] != third) {
+                return LongLists.emptyList();
+            }
+            LongArrayList rows = rowsBySlot[slot];
+            if (rows != null) {
+                return rows;
+            }
+            return singleMatch.withValue(singleRows[slot]);
+        }
+
+        private int findSlot(long first, long second, long third)
+        {
+            int slot = mix(first, second, third) & mask;
+            while (!isEmptySlot(slot) && (firstKeys[slot] != first || secondKeys[slot] != second || thirdKeys[slot] != third)) {
+                slot = (slot + 1) & mask;
+            }
+            return slot;
+        }
+
+        private void rehash()
+        {
+            long[] previousFirstKeys = firstKeys;
+            long[] previousSecondKeys = secondKeys;
+            long[] previousThirdKeys = thirdKeys;
+            long[] previousSingleRows = singleRows;
+            LongArrayList[] previousRowsBySlot = rowsBySlot;
+            int capacity = previousRowsBySlot.length * 2;
+
+            firstKeys = new long[capacity];
+            secondKeys = new long[capacity];
+            thirdKeys = new long[capacity];
+            singleRows = emptyRows(capacity);
+            rowsBySlot = new LongArrayList[capacity];
+            mask = capacity - 1;
+            maxFill = (int) (capacity * LOAD_FACTOR);
+            size = 0;
+
+            for (int index = 0; index < previousFirstKeys.length; index++) {
+                if (previousSingleRows[index] == NO_MATCH_ROW_REFERENCE) {
+                    continue;
+                }
+                int slot = findSlot(previousFirstKeys[index], previousSecondKeys[index], previousThirdKeys[index]);
+                firstKeys[slot] = previousFirstKeys[index];
+                secondKeys[slot] = previousSecondKeys[index];
+                thirdKeys[slot] = previousThirdKeys[index];
+                singleRows[slot] = previousSingleRows[index];
+                rowsBySlot[slot] = previousRowsBySlot[index];
+                size++;
+            }
+        }
+
+        private void addRow(long first, long second, long third, long rowReference)
+        {
+            int slot = findSlot(first, second, third);
+            if (isEmptySlot(slot)) {
+                firstKeys[slot] = first;
+                secondKeys[slot] = second;
+                thirdKeys[slot] = third;
+                singleRows[slot] = rowReference;
+                size++;
+                if (size >= maxFill) {
+                    rehash();
+                }
+                return;
+            }
+            if (rowsBySlot[slot] == null) {
+                LongArrayList rows = new LongArrayList(2);
+                rows.add(singleRows[slot]);
+                rows.add(rowReference);
+                rowsBySlot[slot] = rows;
+                return;
+            }
+            rowsBySlot[slot].add(rowReference);
+        }
+
+        private boolean isEmptySlot(int slot)
+        {
+            return singleRows[slot] == NO_MATCH_ROW_REFERENCE;
+        }
+
+        private static int mix(long first, long second, long third)
+        {
+            long hash = 31 * Long.hashCode(first) + Long.hashCode(second);
+            hash = 31 * hash + Long.hashCode(third);
             hash ^= (hash >>> 16);
             return (int) hash;
         }
