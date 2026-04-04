@@ -23,6 +23,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -36,13 +37,13 @@ final class TopNState
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
     private final boolean[] orderingColumnFlags;
-    private final Streams[][] slotColumns;
+    private Streams[][] slotColumns;
     private final Streams[] comparisonColumns;
     private final Streams[] schema;
     private final Set<Stream>[] exposedStreams;
     private final JoinBufferSupport buffers;
-    private final Batch[] pendingBatches;
-    private final int[] pendingPositions;
+    private Batch[] pendingBatches;
+    private int[] pendingPositions;
     private List<Integer> orderedSlots = List.of();
     private Mask outputMask;
     private Streams[] materialized;
@@ -66,6 +67,20 @@ final class TopNState
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
         this.pendingBatches = new Batch[capacity];
         this.pendingPositions = new int[capacity];
+    }
+
+    public void ensureCapacity(int requiredCapacity)
+    {
+        if (pendingBatches.length >= requiredCapacity) {
+            return;
+        }
+
+        int newCapacity = Math.max(requiredCapacity, Math.max(8, pendingBatches.length * 2));
+        for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
+            slotColumns[outputIndex] = Arrays.copyOf(slotColumns[outputIndex], newCapacity);
+        }
+        pendingBatches = Arrays.copyOf(pendingBatches, newCapacity);
+        pendingPositions = Arrays.copyOf(pendingPositions, newCapacity);
     }
 
     public void captureSchema(Batch batch)

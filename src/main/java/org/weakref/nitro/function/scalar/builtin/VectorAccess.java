@@ -16,6 +16,7 @@ package org.weakref.nitro.function.scalar.builtin;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
@@ -63,6 +64,23 @@ final class VectorAccess
         };
     }
 
+    public static DoubleValues doubleValues(Vector vector)
+    {
+        return switch (vector) {
+            case F64Vector values -> position -> values.values()[position];
+            case DictionaryVector values -> {
+                DoubleValues dictionaryValues = doubleValues(values.values());
+                int[] ids = values.ids();
+                yield position -> dictionaryValues.value(ids[position]);
+            }
+            case RleVector values -> {
+                DoubleValues runValues = doubleValues(values.values());
+                yield position -> runValues.value(values.runIndex(position));
+            }
+            default -> throw new IllegalArgumentException("Expected double vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
     public static BinaryValues binaryValues(Vector vector)
     {
         return switch (vector) {
@@ -90,6 +108,12 @@ final class VectorAccess
     interface BooleanValues
     {
         boolean value(int position);
+    }
+
+    @FunctionalInterface
+    interface DoubleValues
+    {
+        double value(int position);
     }
 
     @FunctionalInterface

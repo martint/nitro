@@ -87,6 +87,22 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testEvaluatesNullI64Function()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable nullValue = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(nullValue, new Call("null_i64", List.of()), AllMask.ALL)),
+                List.of(new Reference(nullValue, Stream.VALUES)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(nullValue, Stream.VALUES), Mask.all(3));
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(true, true, true);
+        assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(0L, 0L, 0L);
+    }
+
+    @Test
     void testEvaluatesNormalizedMerge()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();

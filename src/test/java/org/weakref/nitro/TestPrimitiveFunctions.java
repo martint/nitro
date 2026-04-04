@@ -27,6 +27,7 @@ import org.weakref.nitro.function.scalar.builtin.CastUtf8ToI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
+import org.weakref.nitro.function.scalar.builtin.DivideF64;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.DivideI64ToF64;
 import org.weakref.nitro.function.scalar.builtin.DivideRoundI64;
@@ -37,6 +38,7 @@ import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
+import org.weakref.nitro.function.scalar.builtin.GreaterThanF64;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
 import org.weakref.nitro.function.scalar.builtin.IfI32;
 import org.weakref.nitro.function.scalar.builtin.IfI64;
@@ -52,6 +54,7 @@ import org.weakref.nitro.function.scalar.builtin.MapKeys;
 import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
+import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
@@ -84,11 +87,13 @@ public final class TestPrimitiveFunctions
                 CoalesceI64.class,
                 ConcatUtf8.class,
                 ContainsUtf8.class,
+                DivideF64.class,
                 ExtractHostUtf8.class,
                 ElementAtI64Utf8.class,
                 ElementAtUtf8Utf8.class,
                 EqualI64.class,
                 EqualUtf8.class,
+                GreaterThanF64.class,
                 HashUtf8.class,
                 IfI32.class,
                 IfI64.class,
@@ -102,6 +107,7 @@ public final class TestPrimitiveFunctions
                 MapContainsKeyUtf8.class,
                 MapKeys.class,
                 MapValues.class,
+                NullI64.class,
                 ScaledRelativeDifferenceGtI64.class,
                 AddExactI64.class,
                 SubtractI64.class,

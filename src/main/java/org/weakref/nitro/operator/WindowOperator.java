@@ -214,7 +214,19 @@ public final class WindowOperator
     private boolean samePartition(RowReference left, RowReference right)
     {
         for (int partitionColumn : partitionColumns) {
-            if (!equalColumn(partitionColumn, left, right)) {
+            Streams leftStreams = left.page().columns()[partitionColumn];
+            Streams rightStreams = right.page().columns()[partitionColumn];
+            if (OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position()) ||
+                    OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position())) {
+                return false;
+            }
+            if (!OperatorEqualitySemantics.equal(
+                    leftStreams.values(),
+                    (BooleanVector) leftStreams.getOrNull(Stream.NULLS),
+                    left.position(),
+                    rightStreams.values(),
+                    (BooleanVector) rightStreams.getOrNull(Stream.NULLS),
+                    right.position())) {
                 return false;
             }
         }

@@ -474,6 +474,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorTreatsNullPartitionKeysAsDistinct()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 3L),
+                        row((Object) null, 5L),
+                        row(1L, 4L),
+                        row((Object) null, 7L))),
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new WindowOperator.PartitionSumI64WindowFunction(1)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 3L, 7L),
+                            row(1L, 4L, 7L),
+                            row(null, 5L, 5L),
+                            row(null, 7L, 7L));
+        }
+    }
+
+    @Test
     void testWindowOperatorProducesRankWithTies()
     {
         Allocator allocator = new Allocator();
