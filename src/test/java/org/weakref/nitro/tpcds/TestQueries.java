@@ -24,6 +24,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -41,6 +42,7 @@ import java.util.Objects;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.weakref.nitro.data.Row.row;
 
 public class TestQueries
 {
@@ -955,6 +957,166 @@ public class TestQueries
     }
 
     @Test
+    void profileQuery64OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query64(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery64JoinMaterialization()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        JoinMaterializationProfile profile = new JoinMaterializationProfile();
+        try (Operator query = TpcdsParquetSupport.query64(new Allocator(), primitiveRegistry, tables)) {
+            HashJoinOperator.withMaterializationProfile(profile, () -> {
+                consumeOperator(query);
+                return null;
+            });
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery64TrinoOperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query64(tables));
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery82OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query82(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery82TrinoOperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query82(tables));
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery80OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query80(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery80JoinMaterialization()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        JoinMaterializationProfile profile = new JoinMaterializationProfile();
+        try (Operator query = TpcdsParquetSupport.query80(new Allocator(), primitiveRegistry, tables)) {
+            HashJoinOperator.withMaterializationProfile(profile, () -> {
+                consumeOperator(query);
+                return null;
+            });
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery80TrinoOperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query80(tables));
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery97OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query97(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery97TrinoOperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query97(tables));
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
     void testQuery96()
     {
         assertOperatorMatches("96", tables -> TpcdsParquetSupport.query96(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query96(TpcdsParquetTables.requiredActual("sf10")));
@@ -1150,6 +1312,50 @@ public class TestQueries
     void testQuery75TrinoSql()
     {
         assertTrinoOperatorMatchesSql("75", support -> support.query75(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery75TrinoRepeatedExecution()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            for (int iteration = 0; iteration < 20; iteration++) {
+                MaterializedResult result = support.query75(tables);
+                assertThat(result.getMaterializedRows()).isNotNull();
+            }
+        }
+    }
+
+    @Test
+    void testQuery39NitroRepeatedExecution()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        for (int iteration = 0; iteration < 2; iteration++) {
+            try (Operator query = TpcdsParquetSupport.query39(allocator, primitiveRegistry, tables)) {
+                consumeOperator(query);
+            }
+        }
+    }
+
+    @Test
+    void testQuery72NitroRepeatedExecution()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        for (int iteration = 0; iteration < 2; iteration++) {
+            try (Operator query = TpcdsParquetSupport.query72(allocator, primitiveRegistry, tables)) {
+                consumeOperator(query);
+            }
+        }
     }
 
     @Test

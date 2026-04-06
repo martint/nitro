@@ -21,7 +21,9 @@ import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
+import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
@@ -36,11 +38,12 @@ import java.util.concurrent.TimeUnit;
 @Fork(1)
 @Warmup(iterations = 3, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
 @Measurement(iterations = 5, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
+@Timeout(time = 30, timeUnit = TimeUnit.MINUTES)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkQueries
 {
-    private final Allocator allocator = new Allocator();
+    private Allocator allocator;
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
     private TpcdsParquetTables tables;
 
@@ -48,6 +51,12 @@ public class BenchmarkQueries
     public void setup()
     {
         tables = TpcdsParquetTables.requiredActual("sf10");
+    }
+
+    @Setup(Level.Invocation)
+    public void setupInvocation()
+    {
+        allocator = new Allocator();
     }
 
     @Benchmark
@@ -90,6 +99,12 @@ public class BenchmarkQueries
     public void query16()
     {
         consume(TpcdsParquetSupport.query16(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query17()
+    {
+        consume(TpcdsParquetSupport.query17(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
@@ -252,6 +267,12 @@ public class BenchmarkQueries
     public void query63()
     {
         consume(TpcdsParquetSupport.query63(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query64()
+    {
+        consume(TpcdsParquetSupport.query64(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark
@@ -555,6 +576,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public void query39()
+    {
+        consume(TpcdsParquetSupport.query39(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
     public void query62()
     {
         consume(TpcdsParquetSupport.query62(allocator, primitiveRegistry, tables));
@@ -564,6 +591,12 @@ public class BenchmarkQueries
     public void query73()
     {
         consume(TpcdsParquetSupport.query73(allocator, primitiveRegistry, tables));
+    }
+
+    @Benchmark
+    public void query72()
+    {
+        consume(TpcdsParquetSupport.query72(allocator, primitiveRegistry, tables));
     }
 
     @Benchmark

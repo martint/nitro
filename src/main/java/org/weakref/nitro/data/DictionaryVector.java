@@ -31,6 +31,22 @@ public final class DictionaryVector
 
     public static DictionaryVector wrap(int[] ids, Vector values)
     {
+        if (values instanceof DictionaryVector dictionary) {
+            int[] composedIds = Arrays.copyOf(ids, ids.length);
+            Vector baseValues = dictionary.values();
+            int[] baseIds = dictionary.ids();
+            for (int index = 0; index < composedIds.length; index++) {
+                composedIds[index] = baseIds[composedIds[index]];
+            }
+            while (baseValues instanceof DictionaryVector nestedDictionary) {
+                baseIds = nestedDictionary.ids();
+                for (int index = 0; index < composedIds.length; index++) {
+                    composedIds[index] = baseIds[composedIds[index]];
+                }
+                baseValues = nestedDictionary.values();
+            }
+            return new DictionaryVector(composedIds, baseValues, false);
+        }
         return new DictionaryVector(ids, values, false);
     }
 

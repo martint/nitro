@@ -22,6 +22,7 @@ import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.tpcds.TpcdsParquetTables;
@@ -33,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 @Fork(1)
 @Warmup(iterations = 3, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
 @Measurement(iterations = 5, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
+@Timeout(time = 30, timeUnit = TimeUnit.MINUTES)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkQueries
@@ -93,6 +95,12 @@ public class BenchmarkQueries
     public Object query16()
     {
         return support.query16(tables);
+    }
+
+    @Benchmark
+    public Object query17()
+    {
+        return support.query17(tables);
     }
 
     @Benchmark
@@ -255,6 +263,12 @@ public class BenchmarkQueries
     public Object query63()
     {
         return support.query63(tables);
+    }
+
+    @Benchmark
+    public Object query64()
+    {
+        return support.query64(tables);
     }
 
     @Benchmark
@@ -558,6 +572,12 @@ public class BenchmarkQueries
     }
 
     @Benchmark
+    public Object query39()
+    {
+        return support.query39(tables);
+    }
+
+    @Benchmark
     public Object query62()
     {
         return support.query62(tables);
@@ -567,6 +587,12 @@ public class BenchmarkQueries
     public Object query73()
     {
         return support.query73(tables);
+    }
+
+    @Benchmark
+    public Object query72()
+    {
+        return support.query72(tables);
     }
 
     @Benchmark

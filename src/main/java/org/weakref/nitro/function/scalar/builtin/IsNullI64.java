@@ -55,7 +55,7 @@ public final class IsNullI64
         }
         Allocator.Context allocationContext = context.allocationContext("IsNullI64");
 
-        BooleanVector inputNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector inputValues = (Vector) inputs.get(0).getOrNull(Stream.VALUES);
         int requiredLength = mask.maxPosition() + 1;
         if (inputNulls != null) {
@@ -77,9 +77,9 @@ public final class IsNullI64
             }
         }
         else {
-            boolean[] inputNullValues = inputNulls.values();
+            VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
             for (int position : mask) {
-                outputValues[position] = inputNullValues[position];
+                outputValues[position] = inputNullValues.value(position);
             }
         }
         return Streams.ofValues(values);

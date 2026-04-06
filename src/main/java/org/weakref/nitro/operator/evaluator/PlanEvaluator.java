@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -199,6 +200,7 @@ public final class PlanEvaluator
             int length = mask.maxPosition() + 1;
             result = switch (literal.value()) {
                 case Long value -> Streams.ofValues(fillLongRle(value, length));
+                case Double value -> Streams.ofValues(fillDoubleRle(value, length));
                 case Boolean value -> Streams.of(Stream.VALUES, fillBoolean(value, length));
                 case String value -> Streams.of(Stream.VALUES, fillUtf8(value, length));
                 default -> throw new IllegalArgumentException("Unsupported literal value: " + literal.value());
@@ -583,6 +585,13 @@ public final class PlanEvaluator
     private Vector fillLongRle(long value, int length)
     {
         I64Vector values = allocator.allocate(allocationContext, I64Vector.class, 1, I64Vector::new);
+        values.values()[0] = value;
+        return allocator.allocateRle(allocationContext, new int[] {length}, values);
+    }
+
+    private Vector fillDoubleRle(double value, int length)
+    {
+        F64Vector values = allocator.allocate(allocationContext, F64Vector.class, 1, F64Vector::new);
         values.values()[0] = value;
         return allocator.allocateRle(allocationContext, new int[] {length}, values);
     }

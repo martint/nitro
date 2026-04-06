@@ -21,6 +21,8 @@ import java.util.List;
 
 final class BufferedJoinInput
 {
+    private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 500_000);
+
     private final JoinBufferSupport buffers;
     private final int columnCount;
     private final Streams[] schema;
@@ -54,6 +56,7 @@ final class BufferedJoinInput
 
         if (retainBatches) {
             loadRetained(source);
+            coalesceSmallBatches();
             return;
         }
 
@@ -86,6 +89,8 @@ final class BufferedJoinInput
         if (outputPosition > 0) {
             batches.add(new InnerBatch(columns, outputPosition));
         }
+
+        coalesceSmallBatches();
     }
 
     private void loadRetained(Operator source)
@@ -114,6 +119,28 @@ final class BufferedJoinInput
             rowCount += positions.length;
             batches.add(InnerBatch.retained(batch, positions));
         }
+    }
+
+    private void coalesceSmallBatches()
+    {
+        if (batches.size() <= 1 || rowCount == 0 || rowCount > MAX_COALESCED_ROWS) {
+            return;
+        }
+
+        int size = Math.toIntExact(rowCount);
+        Streams[] columns = new Streams[columnCount];
+        int outputStart = 0;
+        for (InnerBatch batch : batches) {
+            int[] sourcePositions = densePositions(batch.length());
+            for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+                columns[columnIndex] = batch.retained()
+                        ? buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], batch.positions(), batch.length(), outputStart, size)
+                        : buffers.copyPositions(columns[columnIndex], batch.columns()[columnIndex], sourcePositions, batch.length(), outputStart, size);
+            }
+            outputStart += batch.length();
+        }
+        batches.clear();
+        batches.add(new InnerBatch(columns, size));
     }
 
     public List<InnerBatch> batches()
@@ -218,6 +245,15 @@ final class BufferedJoinInput
         return positions;
     }
 
+    private static int[] densePositions(int length)
+    {
+        int[] positions = new int[length];
+        for (int index = 0; index < length; index++) {
+            positions[index] = index;
+        }
+        return positions;
+    }
+
     static final class InnerBatch
     {
         private final Streams[] columns;
@@ -267,5 +303,11 @@ final class BufferedJoinInput
         {
             return positions == null ? position : positions[position];
         }
+
+        public int[] positions()
+        {
+            return positions;
+        }
+
     }
 }

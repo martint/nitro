@@ -29,13 +29,20 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 public class HashJoinOperator
         implements Operator
 {
+    public interface MaterializationProfile
+    {
+        void record(String operatorName, int outputIndex, Streams streams, int rowCount, long nanos);
+    }
+
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
-    private static final BooleanVector[] NO_NULL_STREAMS = new BooleanVector[0];
+    private static final Vector[] NO_NULL_STREAMS = new Vector[0];
+    private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
 
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("HashJoinOperator");
@@ -48,9 +55,18 @@ public class HashJoinOperator
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
     private final Vector[] currentOuterJoinValues;
-    private final BooleanVector[] currentOuterJoinNulls;
+    private final Vector[] currentOuterJoinNulls;
     private final int[] outputOuterPositions = new int[BATCH_SIZE];
     private final long[] outputInnerRows = new long[BATCH_SIZE];
+    private final int[] outputInnerBatchIndexes = new int[BATCH_SIZE];
+    private final int[] outputInnerLogicalPositions = new int[BATCH_SIZE];
+    private final int[] outputInnerSourcePositions = new int[BATCH_SIZE];
+    private final int[] outputInnerRunStarts = new int[BATCH_SIZE];
+    private final int[] outputInnerRunLengths = new int[BATCH_SIZE];
+    private final int[] outputInnerRunBatchIndexes = new int[BATCH_SIZE];
+    private final int[] outputInnerRunUniqueStarts = new int[BATCH_SIZE];
+    private final int[] outputInnerRunUniqueCounts = new int[BATCH_SIZE];
+    private final int[] outputInnerUniqueSourcePositions = new int[BATCH_SIZE];
     private final int[] innerPositionsScratch = new int[BATCH_SIZE];
     private final int[] retainedInnerPositionsScratch = new int[BATCH_SIZE];
     private final int[] retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
@@ -58,6 +74,8 @@ public class HashJoinOperator
     private final LongList[] preparedOuterMatches = new LongList[BATCH_SIZE];
     private final SingleLongList[] preparedSingleMatches = createSingleLongLists(BATCH_SIZE);
     private final Streams[] currentOutputs;
+    private int[] retainedConstraintCountsByBatch = new int[16];
+    private int[][] retainedConstraintPositionsByBatch = new int[16][];
     private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
@@ -73,8 +91,25 @@ public class HashJoinOperator
     private Mask currentOutputMask;
     private int preparedOuterCount;
     private int preparedOuterIndex;
-
     private boolean done;
+    private int preparedInnerRunCount = -1;
+    private String profileName;
+    public static <T> T withMaterializationProfile(MaterializationProfile profile, Supplier<T> supplier)
+    {
+        MaterializationProfile previous = CURRENT_MATERIALIZATION_PROFILE.get();
+        CURRENT_MATERIALIZATION_PROFILE.set(profile);
+        try {
+            return supplier.get();
+        }
+        finally {
+            if (previous == null) {
+                CURRENT_MATERIALIZATION_PROFILE.remove();
+            }
+            else {
+                CURRENT_MATERIALIZATION_PROFILE.set(previous);
+            }
+        }
+    }
 
     public HashJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
@@ -110,8 +145,9 @@ public class HashJoinOperator
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
-        this.currentOuterJoinNulls = new BooleanVector[outerJoinColumns.length];
+        this.currentOuterJoinNulls = new Vector[outerJoinColumns.length];
         this.currentOutputs = new Streams[outputCount()];
+        Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
 
     @Override
@@ -130,6 +166,7 @@ public class HashJoinOperator
     public Batch next()
     {
         Mask batchMask = produceBatch();
+        preparedInnerRunCount = -1;
         currentOutputMask = batchMask;
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
@@ -281,6 +318,7 @@ public class HashJoinOperator
     {
         int batchCountBefore = bufferedInner.batches().size();
         bufferedInner.loadAll(inner, BATCH_SIZE, innerJoinColumns, inner.supportsRetainedBatches());
+        ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
         for (int batchIndex = batchCountBefore; batchIndex < bufferedInner.batches().size(); batchIndex++) {
             BufferedJoinInput.InnerBatch batch = bufferedInner.batches().get(batchIndex);
@@ -291,18 +329,18 @@ public class HashJoinOperator
     private void indexInnerRows(BufferedJoinInput.InnerBatch batch, int startPosition, int length, int batchIndex)
     {
         Vector[] joinValues = new Vector[innerJoinColumns.length];
-        BooleanVector[] joinNulls = new BooleanVector[innerJoinColumns.length];
+        Vector[] joinNulls = new Vector[innerJoinColumns.length];
         boolean hasNulls = false;
         for (int keyIndex = 0; keyIndex < innerJoinColumns.length; keyIndex++) {
             if (batch.retained()) {
                 Output output = batch.retainedBatch().output(innerJoinColumns[keyIndex]);
                 joinValues[keyIndex] = output.borrow(Stream.VALUES);
-                joinNulls[keyIndex] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+                joinNulls[keyIndex] = output.borrowOrNull(Stream.NULLS);
             }
             else {
                 Streams streams = batch.columns()[innerJoinColumns[keyIndex]];
                 joinValues[keyIndex] = streams.values();
-                joinNulls[keyIndex] = (BooleanVector) streams.getOrNull(Stream.NULLS);
+                joinNulls[keyIndex] = streams.getOrNull(Stream.NULLS);
             }
             hasNulls = hasNulls || joinNulls[keyIndex] != null;
         }
@@ -327,7 +365,7 @@ public class HashJoinOperator
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
             currentOuterJoinValues[keyIndex] = output.borrow(Stream.VALUES);
-            currentOuterJoinNulls[keyIndex] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+            currentOuterJoinNulls[keyIndex] = output.borrowOrNull(Stream.NULLS);
             currentOuterJoinHasNulls = currentOuterJoinHasNulls || currentOuterJoinNulls[keyIndex] != null;
         }
     }
@@ -370,6 +408,12 @@ public class HashJoinOperator
         outer.close();
         inner.close();
         allocator.release(allocationContext);
+    }
+
+    public HashJoinOperator withProfileName(String profileName)
+    {
+        this.profileName = profileName;
+        return this;
     }
 
     private Output resultOutput(int outputIndex)
@@ -431,10 +475,14 @@ public class HashJoinOperator
         if (existing != null) {
             return existing;
         }
-
+        long start = System.nanoTime();
         Streams materialized = outputIndex < outer.outputCount()
                 ? materializeOuterOutput(outputIndex)
                 : materializeInnerOutput(outputIndex - outer.outputCount());
+        MaterializationProfile profile = CURRENT_MATERIALIZATION_PROFILE.get();
+        if (profile != null) {
+            profile.record(profileName != null ? profileName : "hash_join", outputIndex, materialized, currentOutputCount, System.nanoTime() - start);
+        }
         currentOutputs[outputIndex] = materialized;
         return materialized;
     }
@@ -444,24 +492,27 @@ public class HashJoinOperator
         Output sourceOutput = currentOuterBatch.output(outputIndex);
         int[] dictionaryIds = Arrays.copyOf(outputOuterPositions, currentOutputCount);
         if (sourceOutput.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
+            return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
         }
 
         Streams.Builder streams = Streams.builder();
         if (sourceOutput.hasValues()) {
-            streams.put(Stream.VALUES, allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
+            streams.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
         }
-        Streams copiedSideStreams;
-        if (currentOutputMask.all()) {
-            copiedSideStreams = buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
-        }
-        else {
-            Streams result = null;
-            for (int index = 0; index < currentOutputMask.count(); index++) {
-                int outputPosition = currentOutputMask.position(index);
-                result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+        Output sideOutput = new Output(sideStreams(sourceOutput), sourceOutput::borrow);
+        Streams copiedSideStreams = null;
+        if (!sideOutput.streams().isEmpty()) {
+            if (currentOutputMask.all()) {
+                copiedSideStreams = buffers.copyPositions(sideOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
             }
-            copiedSideStreams = result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+            else {
+                Streams result = null;
+                for (int index = 0; index < currentOutputMask.count(); index++) {
+                    int outputPosition = currentOutputMask.position(index);
+                    result = buffers.copySinglePosition(sideOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+                }
+                copiedSideStreams = result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+            }
         }
         if (sourceOutput.hasNulls()) {
             streams.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
@@ -472,27 +523,32 @@ public class HashJoinOperator
         return streams.build();
     }
 
+    private static Set<Stream> sideStreams(Output output)
+    {
+        EnumSet<Stream> streams = EnumSet.noneOf(Stream.class);
+        if (output.hasNulls()) {
+            streams.add(Stream.NULLS);
+        }
+        if (output.hasErrors()) {
+            streams.add(Stream.ERRORS);
+        }
+        return streams;
+    }
+
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
         if (currentOutputMask.all() && !hasNoMatchRows()) {
-            Streams retainedWrapped = tryWrapRetainedInnerOutput(innerOutputIndex);
-            if (retainedWrapped != null) {
-                return retainedWrapped;
+            prepareInnerOutputRuns();
+            Streams wrapped = tryWrapSingleBatchInnerOutput(innerOutputIndex);
+            if (wrapped != null) {
+                return wrapped;
             }
             Streams result = null;
-            int outputStart = 0;
-            int next = 0;
-            while (next < currentOutputCount) {
-                int batchIndex = batchIndex(outputInnerRows[next]);
-                int runLength = 0;
-                while (next + runLength < currentOutputCount && batchIndex(outputInnerRows[next + runLength]) == batchIndex) {
-                    innerPositionsScratch[runLength] = rowPosition(outputInnerRows[next + runLength]);
-                    runLength++;
-                }
-                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
-                result = copyInnerPositions(result, innerBatch, innerOutputIndex, innerPositionsScratch, runLength, outputStart, currentOutputCount);
-                outputStart += runLength;
-                next += runLength;
+            for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                int outputStart = outputInnerRunStarts[runIndex];
+                int runLength = outputInnerRunLengths[runIndex];
+                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
+                result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount);
             }
             return result;
         }
@@ -506,53 +562,75 @@ public class HashJoinOperator
                 result = copyNullInnerPosition(result, innerOutputIndex, currentOutputCount, outputPosition);
                 continue;
             }
-            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex(rowReference));
-            result = copyInnerSinglePosition(result, innerBatch, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference), exposeNulls);
+            int innerBatchIndex = batchIndex(rowReference);
+            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+            result = copyInnerSinglePosition(result, innerBatch, innerBatchIndex, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference), exposeNulls);
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
     }
 
-    private Streams tryWrapRetainedInnerOutput(int innerOutputIndex)
+
+    private Streams tryWrapSingleBatchInnerOutput(int innerOutputIndex)
     {
         if (currentOutputCount == 0) {
             return null;
         }
 
-        int innerBatchIndex = batchIndex(outputInnerRows[0]);
-        for (int index = 1; index < currentOutputCount; index++) {
-            if (batchIndex(outputInnerRows[index]) != innerBatchIndex) {
-                return null;
-            }
+        if (preparedInnerRunCount != 1) {
+            return null;
         }
 
+        int innerBatchIndex = outputInnerRunBatchIndexes[0];
         BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+        if (!innerBatch.retained()) {
+            Streams output = innerBatch.columns()[innerOutputIndex];
+            if (output == null || !output.hasValues()) {
+                return null;
+            }
+
+            if (output.isValuesOnly()) {
+                return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), output.values())));
+            }
+
+            Streams.Builder wrapped = Streams.builder();
+            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), output.values())));
+            Streams copiedSideStreams = null;
+            Streams sideStreams = sideStreamValues(output);
+            if (!sideStreams.streams().isEmpty()) {
+                copiedSideStreams = buffers.copyPositions((Streams) null, sideStreams, outputInnerLogicalPositions, currentOutputCount, 0, currentOutputCount);
+            }
+            if (output.hasNulls()) {
+                wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
+            }
+            if (output.hasErrors()) {
+                wrapped.put(Stream.ERRORS, copiedSideStreams.get(Stream.ERRORS));
+            }
+            return wrapped.build();
+        }
+
+        return tryWrapRetainedInnerOutput(innerOutputIndex, innerBatch);
+    }
+
+    private Streams tryWrapRetainedInnerOutput(int innerOutputIndex, BufferedJoinInput.InnerBatch innerBatch)
+    {
         if (!innerBatch.retained()) {
             return null;
         }
 
         Output output = innerBatch.retainedBatch().output(innerOutputIndex);
-        int[] dictionaryIds = new int[currentOutputCount];
-        for (int index = 0; index < currentOutputCount; index++) {
-            dictionaryIds[index] = innerBatch.sourcePosition(rowPosition(outputInnerRows[index]));
-        }
-
         if (output.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, output.borrow(Stream.VALUES))));
+            return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerSourcePositions, currentOutputCount), output.borrow(Stream.VALUES))));
         }
 
         Streams.Builder wrapped = Streams.builder();
         if (output.hasValues()) {
-            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, DictionaryVector.wrap(dictionaryIds, output.borrow(Stream.VALUES))));
+            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerSourcePositions, currentOutputCount), output.borrow(Stream.VALUES))));
         }
-        Streams.Builder sideInput = Streams.builder();
-        if (output.hasNulls()) {
-            sideInput.put(Stream.NULLS, output.borrow(Stream.NULLS));
+        Streams copiedSideStreams = null;
+        Streams sideStreams = sideStreamValues(output);
+        if (!sideStreams.streams().isEmpty()) {
+            copiedSideStreams = buffers.copyPositions((Streams) null, sideStreams, outputInnerSourcePositions, currentOutputCount, 0, currentOutputCount);
         }
-        if (output.hasErrors()) {
-            sideInput.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
-        }
-        Streams sideStreams = sideInput.build();
-        Streams copiedSideStreams = sideStreams.streams().isEmpty() ? null : buffers.copyPositions((Streams) null, sideStreams, dictionaryIds, currentOutputCount, 0, currentOutputCount);
         if (output.hasNulls()) {
             wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
         }
@@ -562,30 +640,68 @@ public class HashJoinOperator
         return wrapped.build();
     }
 
-    private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int[] positions, int positionCount, int outputStart, int size)
+    private static Streams sideStreamValues(Streams streams)
     {
-        if (!innerBatch.retained()) {
-            return buffers.copyPositions(existing, innerBatch.columns()[innerOutputIndex], positions, positionCount, outputStart, size);
+        Streams.Builder sideInput = Streams.builder();
+        if (streams.hasNulls()) {
+            sideInput.put(Stream.NULLS, streams.get(Stream.NULLS));
         }
-
-        constrainRetainedInnerBatch(innerBatch, positions, positionCount);
-        Output output = innerBatch.retainedBatch().output(innerOutputIndex);
-        for (int index = 0; index < positionCount; index++) {
-            retainedInnerPositionsScratch[index] = innerBatch.sourcePosition(positions[index]);
+        if (streams.hasErrors()) {
+            sideInput.put(Stream.ERRORS, streams.get(Stream.ERRORS));
         }
-        return buffers.copyPositions(output, existing, retainedInnerPositionsScratch, positionCount, outputStart, size);
+        return sideInput.build();
     }
 
-    private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerOutputIndex, int size, int outputPosition, int logicalPosition, boolean exposeNulls)
+    private static DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values)
+    {
+        Vector baseValues = values;
+        while (baseValues instanceof DictionaryVector dictionary) {
+            int[] baseIds = dictionary.ids();
+            for (int index = 0; index < dictionaryIds.length; index++) {
+                dictionaryIds[index] = baseIds[dictionaryIds[index]];
+            }
+            baseValues = dictionary.values();
+        }
+        return DictionaryVector.wrap(dictionaryIds, baseValues);
+    }
+
+    private static Streams sideStreamValues(Output output)
+    {
+        Streams.Builder sideInput = Streams.builder();
+        if (output.hasNulls()) {
+            sideInput.put(Stream.NULLS, output.borrow(Stream.NULLS));
+        }
+        if (output.hasErrors()) {
+            sideInput.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
+        }
+        return sideInput.build();
+    }
+
+
+
+    private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int runIndex, int innerBatchIndex, int innerOutputIndex, int positionStart, int positionCount, int size)
+    {
+        if (!innerBatch.retained()) {
+            return buffers.copyPositions(existing, innerBatch.columns()[innerOutputIndex], outputInnerLogicalPositions, positionStart, positionCount, positionStart, size);
+        }
+
+        constrainRetainedInnerBatch(innerBatchIndex, innerBatch, outputInnerRunUniqueStarts[runIndex], outputInnerRunUniqueCounts[runIndex]);
+        Output output = innerBatch.retainedBatch().output(innerOutputIndex);
+        return buffers.copyPositions(output, existing, outputInnerSourcePositions, positionStart, positionCount, positionStart, size);
+    }
+
+
+    private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerBatchIndex, int innerOutputIndex, int size, int outputPosition, int logicalPosition, boolean exposeNulls)
     {
         if (!innerBatch.retained()) {
             return withSyntheticNulls(existing, buffers.copySinglePosition(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition), size, outputPosition, exposeNulls);
         }
 
         int sourcePosition = innerBatch.sourcePosition(logicalPosition);
-        constrainRetainedInnerBatch(innerBatch, logicalPosition);
+        constrainRetainedInnerBatch(innerBatchIndex, innerBatch, logicalPosition);
         return withSyntheticNulls(existing, buffers.copySinglePosition(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
     }
+
 
     private Streams copyNullInnerPosition(Streams existing, int innerOutputIndex, int size, int outputPosition)
     {
@@ -603,7 +719,12 @@ public class HashJoinOperator
         return builder.build();
     }
 
-    private void constrainRetainedInnerBatch(BufferedJoinInput.InnerBatch innerBatch, int[] logicalPositions, int positionCount)
+    private void constrainRetainedInnerBatch(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, int[] logicalPositions, int positionCount)
+    {
+        constrainRetainedInnerBatch(innerBatchIndex, innerBatch, logicalPositions, 0, positionCount);
+    }
+
+    private void constrainRetainedInnerBatch(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, int[] logicalPositions, int positionStart, int positionCount)
     {
         if (!innerBatch.retained()) {
             return;
@@ -611,7 +732,7 @@ public class HashJoinOperator
         boolean sorted = true;
         int previousSourcePosition = -1;
         for (int index = 0; index < positionCount; index++) {
-            int sourcePosition = innerBatch.sourcePosition(logicalPositions[index]);
+            int sourcePosition = innerBatch.sourcePosition(logicalPositions[positionStart + index]);
             retainedInnerMaskPositionsScratch[index] = sourcePosition;
             sorted &= sourcePosition >= previousSourcePosition;
             previousSourcePosition = sourcePosition;
@@ -628,24 +749,148 @@ public class HashJoinOperator
                 previous = position;
             }
         }
+        int cachedCount = retainedConstraintCountsByBatch[innerBatchIndex];
+        int[] cachedPositions = retainedConstraintPositionsByBatch[innerBatchIndex];
+        if (uniqueCount == cachedCount &&
+                cachedPositions != null &&
+                Arrays.equals(retainedInnerMaskPositionsScratch, 0, uniqueCount, cachedPositions, 0, uniqueCount)) {
+            return;
+        }
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
                 allocationContext,
                 retainedInnerMaskPositionsScratch,
                 uniqueCount,
                 innerBatch.retainedBatch().borrowMask().size()));
+        if (cachedPositions == null || cachedPositions.length < uniqueCount) {
+            cachedPositions = new int[Math.max(uniqueCount, 4)];
+            retainedConstraintPositionsByBatch[innerBatchIndex] = cachedPositions;
+        }
+        System.arraycopy(retainedInnerMaskPositionsScratch, 0, cachedPositions, 0, uniqueCount);
+        retainedConstraintCountsByBatch[innerBatchIndex] = uniqueCount;
     }
 
-    private void constrainRetainedInnerBatch(BufferedJoinInput.InnerBatch innerBatch, int logicalPosition)
+    private void constrainRetainedInnerBatch(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, int uniquePositionStart, int uniqueCount)
     {
         if (!innerBatch.retained()) {
             return;
         }
-        retainedInnerMaskPositionsScratch[0] = innerBatch.sourcePosition(logicalPosition);
+        int cachedCount = retainedConstraintCountsByBatch[innerBatchIndex];
+        int[] cachedPositions = retainedConstraintPositionsByBatch[innerBatchIndex];
+        if (uniqueCount == cachedCount &&
+                cachedPositions != null &&
+                Arrays.equals(outputInnerUniqueSourcePositions, uniquePositionStart, uniquePositionStart + uniqueCount, cachedPositions, 0, uniqueCount)) {
+            return;
+        }
+        System.arraycopy(outputInnerUniqueSourcePositions, uniquePositionStart, retainedInnerMaskPositionsScratch, 0, uniqueCount);
+        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+                allocationContext,
+                retainedInnerMaskPositionsScratch,
+                uniqueCount,
+                innerBatch.retainedBatch().borrowMask().size()));
+        if (cachedPositions == null || cachedPositions.length < uniqueCount) {
+            cachedPositions = new int[Math.max(uniqueCount, 4)];
+            retainedConstraintPositionsByBatch[innerBatchIndex] = cachedPositions;
+        }
+        System.arraycopy(outputInnerUniqueSourcePositions, uniquePositionStart, cachedPositions, 0, uniqueCount);
+        retainedConstraintCountsByBatch[innerBatchIndex] = uniqueCount;
+    }
+
+    private int copySortedUniquePositions(int[] sourcePositions, int positionStart, int positionCount, int[] targetPositions, int targetStart)
+    {
+        System.arraycopy(sourcePositions, positionStart, retainedInnerMaskPositionsScratch, 0, positionCount);
+        Arrays.sort(retainedInnerMaskPositionsScratch, 0, positionCount);
+        int uniqueCount = 0;
+        int previous = -1;
+        for (int index = 0; index < positionCount; index++) {
+            int position = retainedInnerMaskPositionsScratch[index];
+            if (uniqueCount == 0 || position != previous) {
+                targetPositions[targetStart + uniqueCount] = position;
+                previous = position;
+                uniqueCount++;
+            }
+        }
+        return uniqueCount;
+    }
+
+    private void prepareInnerOutputRuns()
+    {
+        if (preparedInnerRunCount >= 0) {
+            return;
+        }
+
+        int runCount = 0;
+        int runStart = 0;
+        int uniquePositionStart = 0;
+        while (runStart < currentOutputCount) {
+            long rowReference = outputInnerRows[runStart];
+            int batchIndex = batchIndex(rowReference);
+            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
+            boolean retained = innerBatch.retained();
+
+            int runEnd = runStart;
+            while (runEnd < currentOutputCount && batchIndex(outputInnerRows[runEnd]) == batchIndex) {
+                int logicalPosition = rowPosition(outputInnerRows[runEnd]);
+                outputInnerBatchIndexes[runEnd] = batchIndex;
+                outputInnerLogicalPositions[runEnd] = logicalPosition;
+                outputInnerSourcePositions[runEnd] = retained ? innerBatch.sourcePosition(logicalPosition) : logicalPosition;
+                runEnd++;
+            }
+
+            outputInnerRunStarts[runCount] = runStart;
+            outputInnerRunLengths[runCount] = runEnd - runStart;
+            outputInnerRunBatchIndexes[runCount] = batchIndex;
+            if (retained) {
+                int uniqueCount = copySortedUniquePositions(outputInnerSourcePositions, runStart, runEnd - runStart, outputInnerUniqueSourcePositions, uniquePositionStart);
+                outputInnerRunUniqueStarts[runCount] = uniquePositionStart;
+                outputInnerRunUniqueCounts[runCount] = uniqueCount;
+                uniquePositionStart += uniqueCount;
+            }
+            else {
+                outputInnerRunUniqueStarts[runCount] = uniquePositionStart;
+                outputInnerRunUniqueCounts[runCount] = 0;
+            }
+            runCount++;
+            runStart = runEnd;
+        }
+        preparedInnerRunCount = runCount;
+    }
+
+    private void constrainRetainedInnerBatch(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, int logicalPosition)
+    {
+        if (!innerBatch.retained()) {
+            return;
+        }
+        int sourcePosition = innerBatch.sourcePosition(logicalPosition);
+        int cachedCount = retainedConstraintCountsByBatch[innerBatchIndex];
+        int[] cachedPositions = retainedConstraintPositionsByBatch[innerBatchIndex];
+        if (cachedCount == 1 &&
+                cachedPositions != null &&
+                cachedPositions[0] == sourcePosition) {
+            return;
+        }
+        retainedInnerMaskPositionsScratch[0] = sourcePosition;
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
                 allocationContext,
                 retainedInnerMaskPositionsScratch,
                 1,
                 innerBatch.retainedBatch().borrowMask().size()));
+        if (cachedPositions == null || cachedPositions.length == 0) {
+            cachedPositions = new int[4];
+            retainedConstraintPositionsByBatch[innerBatchIndex] = cachedPositions;
+        }
+        cachedPositions[0] = sourcePosition;
+        retainedConstraintCountsByBatch[innerBatchIndex] = 1;
+    }
+
+    private void ensureRetainedConstraintCacheCapacity(int batchCount)
+    {
+        if (retainedConstraintCountsByBatch.length >= batchCount) {
+            return;
+        }
+        int previousLength = retainedConstraintCountsByBatch.length;
+        retainedConstraintCountsByBatch = Arrays.copyOf(retainedConstraintCountsByBatch, batchCount);
+        Arrays.fill(retainedConstraintCountsByBatch, previousLength, batchCount, -1);
+        retainedConstraintPositionsByBatch = Arrays.copyOf(retainedConstraintPositionsByBatch, batchCount);
     }
 
     private static long packRowReference(int batchIndex, int position)
@@ -761,9 +1006,9 @@ public class HashJoinOperator
     {
         boolean isEmpty();
 
-        void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference);
+        void add(Vector[] values, Vector[] nulls, int position, long rowReference);
 
-        LongList matches(Vector[] values, BooleanVector[] nulls, int position);
+        LongList matches(Vector[] values, Vector[] nulls, int position);
 
         default void addNoNulls(Vector[] values, int position, long rowReference)
         {
@@ -809,7 +1054,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
         {
             if (FlatJoinIndex.hasNull(nulls, position)) {
                 return;
@@ -824,7 +1069,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        public LongList matches(Vector[] values, Vector[] nulls, int position)
         {
             if (FlatJoinIndex.hasNull(nulls, position)) {
                 return LongLists.emptyList();
@@ -838,7 +1083,7 @@ public class HashJoinOperator
             return rowsForSlot(findSlot(OperatorVectorSupport.longValue(values[0], position)));
         }
 
-        public void matchRows(Vector values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        public void matchRows(Vector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             switch (values) {
                 case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nulls, positions, positionCount, matches, singleMatches);
@@ -945,12 +1190,11 @@ public class HashJoinOperator
             return (int) hash;
         }
 
-        private void matchLongRows(long[] values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchLongRows(long[] values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
-            boolean[] nullValues = nulls == null ? null : nulls.values();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (nullValues != null && nullValues[position]) {
+                if (OperatorVectorSupport.isNull(nulls, position)) {
                     matches[index] = LongLists.emptyList();
                 }
                 else {
@@ -959,12 +1203,11 @@ public class HashJoinOperator
             }
         }
 
-        private void matchIntRows(int[] values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchIntRows(int[] values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
-            boolean[] nullValues = nulls == null ? null : nulls.values();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (nullValues != null && nullValues[position]) {
+                if (OperatorVectorSupport.isNull(nulls, position)) {
                     matches[index] = LongLists.emptyList();
                 }
                 else {
@@ -973,7 +1216,7 @@ public class HashJoinOperator
             }
         }
 
-        private void matchDictionaryRows(DictionaryVector values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchDictionaryRows(DictionaryVector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             int[] ids = values.ids();
             switch (values.values()) {
@@ -1015,7 +1258,7 @@ public class HashJoinOperator
             }
         }
 
-        private void matchRleRows(org.weakref.nitro.data.RleVector values, BooleanVector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchRleRows(org.weakref.nitro.data.RleVector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
@@ -1060,7 +1303,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
         {
             if (hasNull(nulls, position)) {
                 return;
@@ -1075,7 +1318,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        public LongList matches(Vector[] values, Vector[] nulls, int position)
         {
             if (hasNull(nulls, position)) {
                 return LongLists.emptyList();
@@ -1098,9 +1341,9 @@ public class HashJoinOperator
             }
         }
 
-        private static boolean hasNull(BooleanVector[] nulls, int position)
+        private static boolean hasNull(Vector[] nulls, int position)
         {
-            for (BooleanVector nullsVector : nulls) {
+            for (Vector nullsVector : nulls) {
                 if (OperatorVectorSupport.isNull(nullsVector, position)) {
                     return true;
                 }
@@ -1144,7 +1387,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
         {
             if (FlatJoinIndex.hasNull(nulls, position)) {
                 return;
@@ -1162,7 +1405,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        public LongList matches(Vector[] values, Vector[] nulls, int position)
         {
             if (FlatJoinIndex.hasNull(nulls, position)) {
                 return LongLists.emptyList();
@@ -1297,7 +1540,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
         {
             if (FlatJoinIndex.hasNull(nulls, position)) {
                 return;
@@ -1316,7 +1559,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        public LongList matches(Vector[] values, Vector[] nulls, int position)
         {
             if (FlatJoinIndex.hasNull(nulls, position)) {
                 return LongLists.emptyList();
@@ -1487,7 +1730,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public void add(Vector[] values, BooleanVector[] nulls, int position, long rowReference)
+        public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
         {
             OperatorKeySemantics.Key key = keyForPosition(values, nulls, position, innerProbeKeys, innerCompositeProbeKey);
             if (key == null) {
@@ -1502,7 +1745,7 @@ public class HashJoinOperator
         }
 
         @Override
-        public LongList matches(Vector[] values, BooleanVector[] nulls, int position)
+        public LongList matches(Vector[] values, Vector[] nulls, int position)
         {
             OperatorKeySemantics.Key key = keyForPosition(values, nulls, position, outerProbeKeys, outerCompositeProbeKey);
             if (key == null) {
@@ -1512,7 +1755,7 @@ public class HashJoinOperator
             return rows == null ? LongLists.emptyList() : rows;
         }
 
-        private static OperatorKeySemantics.Key keyForPosition(Vector[] values, BooleanVector[] nulls, int position, OperatorKeySemantics.Key[] reusableProbeKeys, OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey)
+        private static OperatorKeySemantics.Key keyForPosition(Vector[] values, Vector[] nulls, int position, OperatorKeySemantics.Key[] reusableProbeKeys, OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey)
         {
             for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
                 if (reusableProbeKeys[keyIndex] == null) {

@@ -62,7 +62,12 @@ public class MarkDistinctOperator
     public Batch next()
     {
         Batch sourceBatch = source.next();
-        Mask batchMask = computeDistinctMask(sourceBatch);
+        Mask sourceMask = sourceBatch.borrowMask();
+        Mask batchMask = computeDistinctMask(sourceBatch, sourceMask);
+        if (batchMask == sourceMask) {
+            currentBatchState = null;
+            return sourceBatch;
+        }
         source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
 
@@ -119,11 +124,10 @@ public class MarkDistinctOperator
         allocator.release(ALLOCATION_CONTEXT);
     }
 
-    private Mask computeDistinctMask(Batch sourceBatch)
+    private Mask computeDistinctMask(Batch sourceBatch, Mask sourceMask)
     {
-        Mask sourceMask = sourceBatch.borrowMask();
         if (sourceMask.none()) {
-            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], sourceMask.size());
+            return sourceMask;
         }
 
         Vector[] values = new Vector[distinctColumns.length];
@@ -143,10 +147,23 @@ public class MarkDistinctOperator
         }
 
         int selectedCount = 0;
-        for (int position : sourceMask) {
-            if (distinctKeySet.add(values, nulls, position)) {
-                distinctPositions[selectedCount++] = position;
+        if (sourceMask.all()) {
+            int size = sourceMask.size();
+            for (int position = 0; position < size; position++) {
+                if (distinctKeySet.add(values, nulls, position)) {
+                    distinctPositions[selectedCount++] = position;
+                }
             }
+        }
+        else {
+            for (int position : sourceMask) {
+                if (distinctKeySet.add(values, nulls, position)) {
+                    distinctPositions[selectedCount++] = position;
+                }
+            }
+        }
+        if (selectedCount == sourceMask.selectedCount()) {
+            return sourceMask;
         }
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, distinctPositions, selectedCount, sourceMask.size());
     }

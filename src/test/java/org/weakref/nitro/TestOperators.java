@@ -25,6 +25,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -351,6 +352,21 @@ public class TestOperators
     }
 
     @Test
+    void testDictionaryWrapComposesNestedIds()
+    {
+        DictionaryVector nested = DictionaryVector.wrap(
+                new int[] {3, 0, 2, 1},
+                DictionaryVector.wrap(new int[] {2, 1, 0, 1}, new I64Vector(new long[] {10, 20, 30})));
+
+        assertThat(nested.values()).isInstanceOf(I64Vector.class);
+        assertThat(nested.ids()).containsExactly(1, 2, 0, 1);
+        assertThat(((I64Vector) nested.values()).values()[nested.ids()[0]]).isEqualTo(20L);
+        assertThat(((I64Vector) nested.values()).values()[nested.ids()[1]]).isEqualTo(30L);
+        assertThat(((I64Vector) nested.values()).values()[nested.ids()[2]]).isEqualTo(10L);
+        assertThat(((I64Vector) nested.values()).values()[nested.ids()[3]]).isEqualTo(20L);
+    }
+
+    @Test
     void testIfI64TreatsNullConditionAsFalseBranch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
@@ -378,6 +394,52 @@ public class TestOperators
                                 row(false, 13L, 23L))))) {
             try (Batch batch = operator.next()) {
                 assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(11L, 22L, 23L);
+            }
+        }
+    }
+
+    @Test
+    void testIfI64KeepsConstantBranchesEncoded()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable selected = new Variable(2);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(
+                                selected,
+                                new Call("if_i64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(one, Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                evaluationPlan,
+                primitiveRegistry,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row(true),
+                                row((Object) null),
+                                row(false),
+                                row(true))))) {
+            try (Batch batch = operator.next()) {
+                Vector values = batch.output(0).borrow(Stream.VALUES);
+                assertThat(values).isInstanceOf(DictionaryVector.class);
+                DictionaryVector dictionary = (DictionaryVector) values;
+                assertThat(dictionary.values()).isInstanceOf(I64Vector.class);
+                long[] dictionaryValues = ((I64Vector) dictionary.values()).values();
+                assertThat(dictionaryValues[dictionary.ids()[0]]).isEqualTo(1L);
+                assertThat(dictionaryValues[dictionary.ids()[1]]).isEqualTo(0L);
+                assertThat(dictionaryValues[dictionary.ids()[2]]).isEqualTo(0L);
+                assertThat(dictionaryValues[dictionary.ids()[3]]).isEqualTo(1L);
             }
         }
     }
@@ -1697,6 +1759,50 @@ public class TestOperators
                         row(1L, "alpha"),
                         row(1L, "beta"),
                         row(2L, "alpha")));
+    }
+
+    @Test
+    void testMarkDistinctOperatorPreservesSourceBatchWhenAllRowsAreDistinct()
+    {
+        DictionaryVector dictionary = DictionaryVector.wrap(
+                new int[] {2, 0, 1, 3},
+                new I64Vector(new long[] {10, 20, 30, 40}));
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(4), Output.of(Streams.ofValues(dictionary)));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (MarkDistinctOperator operator = new MarkDistinctOperator(allocator, 0, source);
+                Batch batch = operator.next()) {
+            assertThat(batch.borrowMask().all()).isTrue();
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(dictionary);
+        }
     }
 
     @Test

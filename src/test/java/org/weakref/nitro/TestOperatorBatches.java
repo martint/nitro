@@ -22,6 +22,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -228,6 +229,100 @@ public class TestOperatorBatches
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
         assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+    }
+
+    @Test
+    void testAggregationOperatorSumsDictionaryEncodedIndicatorsWithCompactNulls()
+    {
+        Allocator allocator = new Allocator();
+        DictionaryVector values = new DictionaryVector(
+                new int[] {1, 0, 1, 1, 0, 1},
+                new I64Vector(new long[] {0, 1}));
+        RleVector nulls = new RleVector(new int[] {6}, new BooleanVector(new boolean[] {false}));
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(6), Output.of(Streams.of(values, nulls, null)));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator operator = new AggregationOperator(allocator, List.of(new Sum(0)), source);
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(4L);
+        }
+    }
+
+    @Test
+    void testGroupedAggregationOperatorSumsRleEncodedIndicators()
+    {
+        Allocator allocator = new Allocator();
+        I64Vector groups = new I64Vector(new long[] {0, 1, 0, 1, 1, 2});
+        RleVector values = new RleVector(new int[] {6}, new I64Vector(new long[] {1}));
+        RleVector nulls = new RleVector(new int[] {6}, new BooleanVector(new boolean[] {false}));
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(
+                        Mask.all(6),
+                        Output.of(Streams.ofValues(groups)),
+                        Output.of(Streams.of(values, nulls, null)));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator operator = new GroupedAggregationOperator(allocator, List.of(0), List.of(new Sum(1)), source);
+                Batch batch = operator.next()) {
+            int resultSize = batch.borrowMask().size();
+            assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), resultSize)).containsExactly(0L, 1L, 2L);
+            assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), resultSize)).containsExactly(2L, 3L, 1L);
+        }
     }
 
     @Test
@@ -2332,6 +2427,33 @@ public class TestOperatorBatches
         assertThat(longValues(leftPayload, rowCount)).containsExactly(10L, 20L);
         assertThat(utf8(rightPayload, 0)).isEqualTo("alpha");
         assertThat(utf8(rightPayload, 1)).isEqualTo("beta");
+    }
+
+    @Test
+    void testHashJoinOperatorPreservesSparseBinaryInnerPayloadsAfterConstrain()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(1L),
+                        row(2L),
+                        row(3L),
+                        row(4L))),
+                new int[] {0},
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, "alpha"),
+                        row(2L, "beta"),
+                        row(3L, "gamma"),
+                        row(4L, "delta"))),
+                new int[] {0});
+
+        Batch batch = operator.next();
+        batch.constrain(Mask.sparse(new int[] {0, 2}, 4));
+
+        Vector rightPayload = batch.output(2).borrow(Stream.VALUES);
+        assertThat(utf8(rightPayload, 0)).isEqualTo("alpha");
+        assertThat(utf8(rightPayload, 2)).isEqualTo("gamma");
     }
 
     @Test
