@@ -243,10 +243,10 @@ public class TopNRankingOperator
         Streams rightStreams = right.page().columns()[column];
         return OperatorOrderingSemantics.compare(
                 leftStreams.values(),
-                (BooleanVector) leftStreams.getOrNull(Stream.NULLS),
+                leftStreams.getOrNull(Stream.NULLS),
                 left.position(),
                 rightStreams.values(),
-                (BooleanVector) rightStreams.getOrNull(Stream.NULLS),
+                rightStreams.getOrNull(Stream.NULLS),
                 right.position());
     }
 
@@ -256,10 +256,10 @@ public class TopNRankingOperator
         Streams rightStreams = right.page().columns()[column];
         return OperatorEqualitySemantics.equal(
                 leftStreams.values(),
-                (BooleanVector) leftStreams.getOrNull(Stream.NULLS),
+                leftStreams.getOrNull(Stream.NULLS),
                 left.position(),
                 rightStreams.values(),
-                (BooleanVector) rightStreams.getOrNull(Stream.NULLS),
+                rightStreams.getOrNull(Stream.NULLS),
                 right.position());
     }
 

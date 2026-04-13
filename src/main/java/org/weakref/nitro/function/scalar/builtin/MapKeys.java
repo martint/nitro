@@ -58,7 +58,7 @@ public final class MapKeys
         }
 
         Vector input = inputs.getFirst().values();
-        BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
         Streams result = Streams.empty();
         int requiredLength = input.length();
         boolean reuseOutput = mask.all();
@@ -173,20 +173,22 @@ public final class MapKeys
         return entryPositions;
     }
 
-    private static BooleanVector copyNulls(BooleanVector inputNulls, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
+    private static BooleanVector copyNulls(Vector inputNulls, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
-        BooleanVector outputNulls = context.allocator().allocateOrGrow(
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
+        BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 ALLOCATION_CONTEXT,
-                output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                requiredLength,
-                BooleanVector::new);
+                output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                requiredLength);
         if (mask.all()) {
-            System.arraycopy(inputNulls.values(), 0, outputNulls.values(), 0, inputNulls.length());
+            for (int position = 0; position < requiredLength; position++) {
+                outputNulls.values()[position] = inputNullValues.value(position);
+            }
         }
         else {
             for (int position : mask) {
-                outputNulls.values()[position] = inputNulls.values()[position];
+                outputNulls.values()[position] = inputNullValues.value(position);
             }
         }
         return outputNulls;

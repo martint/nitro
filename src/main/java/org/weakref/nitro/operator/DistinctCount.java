@@ -19,6 +19,7 @@ import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -72,11 +73,11 @@ public class DistinctCount
 
         DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
         Vector values = streams.values(inputColumn);
-        BooleanVector nulls = streams.nulls(inputColumn);
+        Vector nulls = streams.nulls(inputColumn);
         DistinctIndex distinctIndex = distinctIndex(stateVector, new Vector[] {values});
 
         for (int position : mask) {
-            if (distinctIndex.add(new Vector[] {values}, new BooleanVector[] {nulls}, position, group)) {
+            if (distinctIndex.add(new Vector[] {values}, new Vector[] {nulls}, position, group)) {
                 stateVector.incrementDistinctCount(group);
             }
         }
@@ -99,13 +100,13 @@ public class DistinctCount
     {
         DistinctCountStateVector stateVector = (DistinctCountStateVector) state.values();
         Vector values = streams.values(inputColumn);
-        BooleanVector nulls = streams.nulls(inputColumn);
+        Vector nulls = streams.nulls(inputColumn);
         I64Vector groupVector = (I64Vector) groups;
         DistinctIndex distinctIndex = distinctIndex(stateVector, new Vector[] {groups, values});
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
-            if (distinctIndex.add(new Vector[] {groups, values}, new BooleanVector[] {null, nulls}, position, group)) {
+            if (distinctIndex.add(new Vector[] {groups, values}, new Vector[] {null, nulls}, position, group)) {
                 stateVector.incrementDistinctCount(group);
             }
         }
@@ -143,12 +144,11 @@ public class DistinctCount
             values.values()[group] = stateVector.distinctCount(group);
         }
 
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                maxGroup + 1,
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                maxGroup + 1);
         Arrays.fill(nulls.values(), 0, maxGroup + 1, false);
         return Streams.ofValuesAndNulls(values, nulls);
     }
@@ -166,7 +166,7 @@ public class DistinctCount
 
     private interface DistinctIndex
     {
-        boolean add(Vector[] values, BooleanVector[] nulls, int position, int group);
+        boolean add(Vector[] values, Vector[] nulls, int position, int group);
     }
 
     private static final class DelegatingDistinctIndex
@@ -180,7 +180,7 @@ public class DistinctCount
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position, int group)
+        public boolean add(Vector[] values, Vector[] nulls, int position, int group)
         {
             return keys.add(values, nulls, position);
         }

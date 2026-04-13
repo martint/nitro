@@ -63,12 +63,11 @@ public final class GreaterThanF64
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
             boolean[] nulls = outputNulls.values();
             Arrays.fill(nulls, 0, outputNulls.length(), false);
             for (int position : mask) {
@@ -80,12 +79,11 @@ public final class GreaterThanF64
             return result;
         }
 
-        BooleanVector values = context.allocator().allocateOrGrow(
+        BooleanVector values = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 ALLOCATION_CONTEXT,
-                output != null && output.getOrNull(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                requiredLength,
-                BooleanVector::new);
+                output != null ? output.getOrNull(Stream.VALUES) : null,
+                requiredLength);
         boolean[] outputValues = values.values();
         for (int position : mask) {
             outputValues[position] = leftValues.value(position) > rightValues.value(position);

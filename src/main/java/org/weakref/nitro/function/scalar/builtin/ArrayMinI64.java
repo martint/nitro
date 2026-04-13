@@ -55,17 +55,16 @@ public final class ArrayMinI64
         checkArgument(inputs.size() == 1, "Unexpected argument count for array_min_i64");
 
         Vector values = inputs.getFirst().values();
-        BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
         int requiredLength = Math.max(mask.maxPosition() + 1, values.length());
         Streams result = Streams.empty();
 
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             applyNulls(values, inputNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -82,31 +81,33 @@ public final class ArrayMinI64
         return result;
     }
 
-    private static void applyValues(Vector values, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyValues(Vector values, Vector inputNulls, Mask mask, I64Vector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : min(values, position).value();
+                outputValues[position] = inputNullValues.value(position) ? 0 : min(values, position).value();
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : min(values, position).value();
+            outputValues[position] = inputNullValues.value(position) ? 0 : min(values, position).value();
         }
     }
 
-    private static void applyNulls(Vector values, BooleanVector inputNulls, Mask mask, BooleanVector output)
+    private static void applyNulls(Vector values, Vector inputNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) || min(values, position).nullValue();
+                outputValues[position] = inputNullValues.value(position) || min(values, position).nullValue();
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) || min(values, position).nullValue();
+            outputValues[position] = inputNullValues.value(position) || min(values, position).nullValue();
         }
     }
 
@@ -125,12 +126,12 @@ public final class ArrayMinI64
     private static MinResult min(ArrayVector values, int position)
     {
         I64Vector elementValues = (I64Vector) values.elementValues();
-        BooleanVector elementNulls = values.elementNulls();
+        VectorAccess.BooleanValues elementNulls = VectorAccess.booleanValues(values.elementNulls());
 
         long min = 0;
         boolean found = false;
         for (int elementIndex = values.startOffset(position); elementIndex < values.endOffset(position); elementIndex++) {
-            if (elementNulls != null && elementNulls.values()[elementIndex]) {
+            if (elementNulls.value(elementIndex)) {
                 continue;
             }
             long value = elementValues.values()[elementIndex];
@@ -140,11 +141,6 @@ public final class ArrayMinI64
             }
         }
         return new MinResult(min, !found);
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 
     private record MinResult(long value, boolean nullValue) {}

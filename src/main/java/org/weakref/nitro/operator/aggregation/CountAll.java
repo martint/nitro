@@ -19,6 +19,7 @@ import org.weakref.nitro.data.CountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -97,12 +98,11 @@ public class CountAll
                 stateVector.length(),
                 I64Vector::new);
         stateVector.copyTo(values);
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                values.length(),
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                values.length());
         Arrays.fill(nulls.values(), 0, values.length(), false);
         return Streams.ofValuesAndNulls(values, nulls);
     }
@@ -117,12 +117,11 @@ public class CountAll
                 I64Vector.class,
                 size,
                 I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                size,
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
         values.values()[outputPosition] = stateVector.value(group);
         nulls.values()[outputPosition] = false;
         return Streams.ofValuesAndNulls(values, nulls);

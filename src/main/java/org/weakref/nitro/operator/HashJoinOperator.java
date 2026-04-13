@@ -19,14 +19,20 @@ import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectedPositions;
+import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -89,6 +95,8 @@ public class HashJoinOperator
     private int currentMatchIndex;
     private int currentOutputCount;
     private Mask currentOutputMask;
+    private SelectedPositions currentOuterSelectedPositions;
+    private final Map<SelectedPositions, SelectedPositions> currentOuterSelectionCompositions = new IdentityHashMap<>();
     private int preparedOuterCount;
     private int preparedOuterIndex;
     private boolean done;
@@ -168,6 +176,8 @@ public class HashJoinOperator
         Mask batchMask = produceBatch();
         preparedInnerRunCount = -1;
         currentOutputMask = batchMask;
+        currentOuterSelectedPositions = null;
+        currentOuterSelectionCompositions.clear();
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
@@ -432,10 +442,17 @@ public class HashJoinOperator
         Set<Stream> streams = outputIndex < outer.outputCount()
                 ? currentOuterBatch.output(outputIndex).streams()
                 : innerOutputStreams(outputIndex - outer.outputCount());
+        Output.PositionProjector positionProjector = outputIndex < outer.outputCount() ?
+                (requestedStreams, sourcePositions) -> projectOuterOutput(outputIndex, requestedStreams, sourcePositions) :
+                null;
         return new Output(
                 streams,
                 stream -> materializeOutput(outputIndex).get(stream),
-                (stream, vector) -> allocator.transfer(allocationContext, vector));
+                (stream, vector) -> allocator.transfer(allocationContext, vector),
+                (_, _) -> {},
+                positionProjector,
+                null,
+                null);
     }
 
     private Streams outputSchema(int outputIndex)
@@ -452,10 +469,10 @@ public class HashJoinOperator
                     streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
                 }
                 if (output.hasNulls()) {
-                    streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+                    streams.put(Stream.NULLS, new BooleanVector(0));
                 }
                 if (output.hasErrors()) {
-                    streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
+                    streams.put(Stream.ERRORS, new BooleanVector(0));
                 }
                 return streams.build();
             }
@@ -490,36 +507,42 @@ public class HashJoinOperator
     private Streams materializeOuterOutput(int outputIndex)
     {
         Output sourceOutput = currentOuterBatch.output(outputIndex);
-        int[] dictionaryIds = Arrays.copyOf(outputOuterPositions, currentOutputCount);
+        SelectedPositions selectedOuterPositions = currentOuterSelectedPositions();
         if (sourceOutput.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
+            return Streams.ofValues(allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, sourceOutput.borrow(Stream.VALUES))));
         }
         Streams.Builder streams = Streams.builder();
         if (sourceOutput.hasValues()) {
-            streams.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
-        }
-        Output sideOutput = new Output(sideStreams(sourceOutput), sourceOutput::borrow);
-        Streams copiedSideStreams = null;
-        if (!sideOutput.streams().isEmpty()) {
-            if (currentOutputMask.all()) {
-                copiedSideStreams = buffers.copyPositionsFresh(sideOutput, null, outputOuterPositions, 0, currentOutputCount, 0, currentOutputCount);
-            }
-            else {
-                Streams result = null;
-                for (int index = 0; index < currentOutputMask.count(); index++) {
-                    int outputPosition = currentOutputMask.position(index);
-                    result = buffers.copySinglePositionFresh(sideOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
-                }
-                copiedSideStreams = result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
-            }
+            streams.put(Stream.VALUES, allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, sourceOutput.borrow(Stream.VALUES))));
         }
         if (sourceOutput.hasNulls()) {
-            streams.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
+            Vector nulls = sourceOutput.borrow(Stream.NULLS);
+            streams.put(Stream.NULLS, allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, nulls)));
         }
         if (sourceOutput.hasErrors()) {
-            streams.put(Stream.ERRORS, copiedSideStreams.get(Stream.ERRORS));
+            Vector errors = sourceOutput.borrow(Stream.ERRORS);
+            streams.put(Stream.ERRORS, allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, errors)));
         }
         return streams.build();
+    }
+
+    private Vector wrapSelectedOuterStream(SelectedPositions selectedOuterPositions, Vector stream)
+    {
+        if (stream instanceof SelectionVector selection) {
+            SelectedPositions composedPositions = currentOuterSelectionCompositions.computeIfAbsent(
+                    selection.positions(),
+                    sourcePositions -> composeSelectedPositions(selectedOuterPositions, sourcePositions));
+            return SelectionVector.wrap(composedPositions, selection.values());
+        }
+        return SelectionVector.wrap(selectedOuterPositions, stream);
+    }
+
+    private SelectedPositions currentOuterSelectedPositions()
+    {
+        if (currentOuterSelectedPositions == null) {
+            currentOuterSelectedPositions = SelectedPositions.positions(Arrays.copyOf(outputOuterPositions, currentOutputCount));
+        }
+        return currentOuterSelectedPositions;
     }
 
     private static Set<Stream> sideStreams(Output output)
@@ -534,6 +557,51 @@ public class HashJoinOperator
         return streams;
     }
 
+    private Output.ProjectedOutput projectOuterOutput(int outputIndex, Set<Stream> requestedStreams, SelectedPositions sourcePositions)
+    {
+        Output sourceOutput = currentOuterBatch.output(outputIndex).select(requestedStreams);
+        int[] projectedPositionIds = SelectedPositions.map(outputOuterPositions, sourcePositions).materialize(null);
+        SelectedPositions projectedPositions = SelectedPositions.positions(projectedPositionIds);
+        Output.ProjectedOutput projected = sourceOutput.projectPositions(projectedPositions);
+        if (projected != null) {
+            return projected;
+        }
+        return new Output.ProjectedOutput(sourceOutput, projectedPositions);
+    }
+
+    private static SelectedPositions composeSelectedPositions(SelectedPositions positions, SelectedPositions mapping)
+    {
+        int[] mappingArray = mapping.backingArrayOrNull();
+        if (mappingArray != null) {
+            int[] positionsArray = positions.backingArrayOrNull();
+            if (positionsArray != null) {
+                int[] composed = new int[positions.count()];
+                int positionsOffset = positions.backingArrayOffset();
+                int mappingOffset = mapping.backingArrayOffset();
+                for (int index = 0; index < composed.length; index++) {
+                    composed[index] = mappingArray[mappingOffset + positionsArray[positionsOffset + index]];
+                }
+                return SelectedPositions.positions(composed);
+            }
+            return SelectedPositions.map(mappingArray, positions);
+        }
+
+        int[] composed = new int[positions.count()];
+        int[] positionsArray = positions.backingArrayOrNull();
+        int positionsOffset = positions.backingArrayOffset();
+        if (positionsArray != null) {
+            for (int index = 0; index < composed.length; index++) {
+                composed[index] = mapping.position(positionsArray[positionsOffset + index]);
+            }
+        }
+        else {
+            for (int index = 0; index < composed.length; index++) {
+                composed[index] = mapping.position(positions.position(index));
+            }
+        }
+        return SelectedPositions.positions(composed);
+    }
+
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
         if (currentOutputMask.all() && !hasNoMatchRows()) {
@@ -542,14 +610,17 @@ public class HashJoinOperator
             if (wrapped != null) {
                 return wrapped;
             }
-            Streams result = null;
+            Streams wrappedSideStreams = tryWrapMultiRunInnerBooleanSideStreams(innerOutputIndex);
+            Streams result = wrappedSideStreams;
+            boolean copyNulls = wrappedSideStreams == null || !wrappedSideStreams.hasNulls();
+            boolean copyErrors = wrappedSideStreams == null || !wrappedSideStreams.hasErrors();
             for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
                 int outputStart = outputInnerRunStarts[runIndex];
                 int runLength = outputInnerRunLengths[runIndex];
                 BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
-                result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount);
+                result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, true, copyNulls, copyErrors);
             }
-            return result;
+            return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
         }
 
         Streams result = null;
@@ -568,6 +639,71 @@ public class HashJoinOperator
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outer.outputCount())) : result;
     }
 
+
+    private Streams tryWrapMultiRunInnerBooleanSideStreams(int innerOutputIndex)
+    {
+        if (currentOutputCount == 0 || preparedInnerRunCount <= 1) {
+            return null;
+        }
+
+        Streams.Builder wrapped = Streams.builder();
+        Vector nulls = tryWrapMultiRunInnerBooleanStream(innerOutputIndex, Stream.NULLS);
+        if (nulls != null) {
+            wrapped.put(Stream.NULLS, allocator.adopt(allocationContext, nulls));
+        }
+        Vector errors = tryWrapMultiRunInnerBooleanStream(innerOutputIndex, Stream.ERRORS);
+        if (errors != null) {
+            wrapped.put(Stream.ERRORS, allocator.adopt(allocationContext, errors));
+        }
+
+        Streams wrappedStreams = wrapped.build();
+        return wrappedStreams.streams().isEmpty() ? null : wrappedStreams;
+    }
+
+    private Vector tryWrapMultiRunInnerBooleanStream(int innerOutputIndex, Stream stream)
+    {
+        if (preparedInnerRunCount <= 1) {
+            return null;
+        }
+
+        Vector[] segments = new Vector[preparedInnerRunCount];
+        int[] dictionaryIds = new int[currentOutputCount];
+        int segmentOffset = 0;
+        for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+            int innerBatchIndex = outputInnerRunBatchIndexes[runIndex];
+            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+            int positionStart = outputInnerRunStarts[runIndex];
+            int positionCount = outputInnerRunLengths[runIndex];
+
+            Vector source;
+            if (!innerBatch.retained()) {
+                Streams output = innerBatch.columns()[innerOutputIndex];
+                if (output == null || !output.has(stream)) {
+                    return null;
+                }
+                source = output.get(stream);
+                for (int index = 0; index < positionCount; index++) {
+                    dictionaryIds[positionStart + index] = segmentOffset + outputInnerLogicalPositions[positionStart + index];
+                }
+            }
+            else {
+                constrainRetainedInnerBatch(innerBatchIndex, innerBatch, outputInnerRunUniqueStarts[runIndex], outputInnerRunUniqueCounts[runIndex]);
+                Output output = innerBatch.retainedBatch().output(innerOutputIndex);
+                if (!output.has(stream)) {
+                    return null;
+                }
+                source = output.borrow(stream);
+                for (int index = 0; index < positionCount; index++) {
+                    dictionaryIds[positionStart + index] = segmentOffset + outputInnerSourcePositions[positionStart + index];
+                }
+            }
+
+            segments[runIndex] = source;
+            segmentOffset += source.length();
+        }
+
+        return SelectionVector.wrap(SelectedPositions.positions(dictionaryIds), new ConcatenatedBooleanVector(segments));
+    }
 
     private Streams tryWrapSingleBatchInnerOutput(int innerOutputIndex)
     {
@@ -592,17 +728,14 @@ public class HashJoinOperator
             }
 
             Streams.Builder wrapped = Streams.builder();
-            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), output.values())));
-            Streams copiedSideStreams = null;
-            Streams sideStreams = sideStreamValues(output);
-            if (!sideStreams.streams().isEmpty()) {
-                copiedSideStreams = buffers.copyPositionsFresh((Streams) null, sideStreams, outputInnerLogicalPositions, 0, currentOutputCount, 0, currentOutputCount);
-            }
+            int[] wrappedPositions = Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount);
+            SelectedPositions selectedWrappedPositions = SelectedPositions.positions(wrappedPositions);
+            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.values())));
             if (output.hasNulls()) {
-                wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
+                wrapped.put(Stream.NULLS, allocator.adopt(allocationContext, SelectionVector.wrap(selectedWrappedPositions, output.get(Stream.NULLS))));
             }
             if (output.hasErrors()) {
-                wrapped.put(Stream.ERRORS, copiedSideStreams.get(Stream.ERRORS));
+                wrapped.put(Stream.ERRORS, allocator.adopt(allocationContext, SelectionVector.wrap(selectedWrappedPositions, output.get(Stream.ERRORS))));
             }
             return wrapped.build();
         }
@@ -622,19 +755,16 @@ public class HashJoinOperator
         }
 
         Streams.Builder wrapped = Streams.builder();
+        int[] wrappedPositions = Arrays.copyOf(outputInnerSourcePositions, currentOutputCount);
+        SelectedPositions selectedWrappedPositions = SelectedPositions.positions(wrappedPositions);
         if (output.hasValues()) {
-            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerSourcePositions, currentOutputCount), output.borrow(Stream.VALUES))));
-        }
-        Streams copiedSideStreams = null;
-        Streams sideStreams = sideStreamValues(output);
-        if (!sideStreams.streams().isEmpty()) {
-            copiedSideStreams = buffers.copyPositionsFresh((Streams) null, sideStreams, outputInnerSourcePositions, 0, currentOutputCount, 0, currentOutputCount);
+            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.borrow(Stream.VALUES))));
         }
         if (output.hasNulls()) {
-            wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
+            wrapped.put(Stream.NULLS, allocator.adopt(allocationContext, SelectionVector.wrap(selectedWrappedPositions, output.borrow(Stream.NULLS))));
         }
         if (output.hasErrors()) {
-            wrapped.put(Stream.ERRORS, copiedSideStreams.get(Stream.ERRORS));
+            wrapped.put(Stream.ERRORS, allocator.adopt(allocationContext, SelectionVector.wrap(selectedWrappedPositions, output.borrow(Stream.ERRORS))));
         }
         return wrapped.build();
     }
@@ -654,12 +784,25 @@ public class HashJoinOperator
     private static DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values)
     {
         Vector baseValues = values;
-        while (baseValues instanceof DictionaryVector dictionary) {
-            int[] baseIds = dictionary.ids();
-            for (int index = 0; index < dictionaryIds.length; index++) {
-                dictionaryIds[index] = baseIds[dictionaryIds[index]];
+        while (true) {
+            if (baseValues instanceof DictionaryVector dictionary) {
+                int[] baseIds = dictionary.ids();
+                for (int index = 0; index < dictionaryIds.length; index++) {
+                    dictionaryIds[index] = baseIds[dictionaryIds[index]];
+                }
+                baseValues = dictionary.values();
+                continue;
             }
-            baseValues = dictionary.values();
+
+            if (baseValues instanceof org.weakref.nitro.data.RleVector rle) {
+                for (int index = 0; index < dictionaryIds.length; index++) {
+                    dictionaryIds[index] = rle.runIndex(dictionaryIds[index]);
+                }
+                baseValues = rle.values();
+                continue;
+            }
+
+            break;
         }
         return DictionaryVector.wrap(dictionaryIds, baseValues);
     }
@@ -678,13 +821,62 @@ public class HashJoinOperator
 
     private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int runIndex, int innerBatchIndex, int innerOutputIndex, int positionStart, int positionCount, int size)
     {
+        return copyInnerPositions(existing, innerBatch, runIndex, innerBatchIndex, innerOutputIndex, positionStart, positionCount, size, true, true, true);
+    }
+
+    private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int runIndex, int innerBatchIndex, int innerOutputIndex, int positionStart, int positionCount, int size, boolean includeValues, boolean includeNulls, boolean includeErrors)
+    {
+        if (!includeValues && !includeNulls && !includeErrors) {
+            return existing;
+        }
         if (!innerBatch.retained()) {
-            return buffers.copyPositionsFresh(existing, innerBatch.columns()[innerOutputIndex], outputInnerLogicalPositions, positionStart, positionCount, positionStart, size);
+            Streams input = selectedStreams(innerBatch.columns()[innerOutputIndex], includeValues, includeNulls, includeErrors);
+            if (input.streams().isEmpty()) {
+                return existing;
+            }
+            return buffers.copyPositionsFresh(existing, input, outputInnerLogicalPositions, positionStart, positionCount, positionStart, size);
         }
 
         constrainRetainedInnerBatch(innerBatchIndex, innerBatch, outputInnerRunUniqueStarts[runIndex], outputInnerRunUniqueCounts[runIndex]);
         Output output = innerBatch.retainedBatch().output(innerOutputIndex);
-        return buffers.copyPositionsFresh(output, existing, outputInnerSourcePositions, positionStart, positionCount, positionStart, size);
+        Output selected = selectedStreams(output, includeValues, includeNulls, includeErrors);
+        if (selected == null) {
+            return existing;
+        }
+        return buffers.copyPositionsFresh(selected, existing, outputInnerSourcePositions, positionStart, positionCount, positionStart, size);
+    }
+
+    private static Streams selectedStreams(Streams input, boolean includeValues, boolean includeNulls, boolean includeErrors)
+    {
+        Streams.Builder selected = Streams.builder();
+        if (includeValues && input.hasValues()) {
+            selected.put(Stream.VALUES, input.values());
+        }
+        if (includeNulls && input.hasNulls()) {
+            selected.put(Stream.NULLS, input.get(Stream.NULLS));
+        }
+        if (includeErrors && input.hasErrors()) {
+            selected.put(Stream.ERRORS, input.get(Stream.ERRORS));
+        }
+        return selected.build();
+    }
+
+    private static Output selectedStreams(Output input, boolean includeValues, boolean includeNulls, boolean includeErrors)
+    {
+        Set<Stream> selected = EnumSet.noneOf(Stream.class);
+        if (includeValues && input.hasValues()) {
+            selected.add(Stream.VALUES);
+        }
+        if (includeNulls && input.hasNulls()) {
+            selected.add(Stream.NULLS);
+        }
+        if (includeErrors && input.hasErrors()) {
+            selected.add(Stream.ERRORS);
+        }
+        if (selected.isEmpty()) {
+            return null;
+        }
+        return input.select(selected);
     }
 
     private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerBatchIndex, int innerOutputIndex, int size, int outputPosition, int logicalPosition, boolean exposeNulls)
@@ -708,9 +900,9 @@ public class HashJoinOperator
 
         Streams.Builder builder = Streams.builder();
         builder.put(Stream.VALUES, existing == null ? nullValuesLike(schema.values(), size) : existing.values());
-        builder.put(Stream.NULLS, setBooleanPosition(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.NULLS), size, outputPosition, true));
+        builder.put(Stream.NULLS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.NULLS), size, outputPosition, true));
         if (schema.has(Stream.ERRORS)) {
-            builder.put(Stream.ERRORS, setBooleanPosition(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.ERRORS), size, outputPosition, false));
+            builder.put(Stream.ERRORS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.ERRORS), size, outputPosition, false));
         }
         return builder.build();
     }
@@ -939,12 +1131,26 @@ public class HashJoinOperator
         if (!exposeNulls || streams.has(Stream.NULLS)) {
             return streams;
         }
-        return streams.with(Stream.NULLS, setBooleanPosition(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.NULLS), size, outputPosition, false));
+        return streams.with(Stream.NULLS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.NULLS), size, outputPosition, false));
     }
 
-    private BooleanVector setBooleanPosition(BooleanVector existing, int size, int outputPosition, boolean value)
+
+    private BooleanVector setBooleanPosition(Vector existing, int size, int outputPosition, boolean value)
     {
-        BooleanVector vector = allocator.allocateOrGrow(allocationContext, existing, BooleanVector.class, size, BooleanVector::new);
+        BooleanVector vector;
+        if (existing instanceof BooleanVector booleanVector) {
+            vector = allocator.allocateOrGrow(allocationContext, booleanVector, BooleanVector.class, size, BooleanVector::new);
+        }
+        else {
+            vector = allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
+            if (existing != null) {
+                VectorAccess.BooleanValues existingValues = VectorAccess.booleanValues(existing);
+                int existingLength = Math.min(existing.length(), size);
+                for (int position = 0; position < existingLength; position++) {
+                    vector.values()[position] = existingValues.value(position);
+                }
+            }
+        }
         vector.values()[outputPosition] = value;
         return vector;
     }
@@ -1081,19 +1287,21 @@ public class HashJoinOperator
 
         public void matchRows(Vector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
+            VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
             switch (values) {
-                case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nulls, positions, positionCount, matches, singleMatches);
-                case org.weakref.nitro.data.I32Vector intValues -> matchIntRows(intValues.values(), nulls, positions, positionCount, matches, singleMatches);
-                case DictionaryVector dictionary -> matchDictionaryRows(dictionary, nulls, positions, positionCount, matches, singleMatches);
-                case org.weakref.nitro.data.RleVector rle -> matchRleRows(rle, nulls, positions, positionCount, matches, singleMatches);
+                case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nullValues, positions, positionCount, matches, singleMatches);
+                case org.weakref.nitro.data.I32Vector intValues -> matchIntRows(intValues.values(), nullValues, positions, positionCount, matches, singleMatches);
+                case DictionaryVector dictionary -> matchDictionaryRows(dictionary, nullValues, positions, positionCount, matches, singleMatches);
+                case org.weakref.nitro.data.RleVector rle -> matchRleRows(rle, nullValues, positions, positionCount, matches, singleMatches);
                 default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                        if (nullValues.value(position)) {
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = batchedRowsForSlot(findSlot(OperatorVectorSupport.longValue(values, position)), singleMatches[index]);
+                            matches[index] = batchedRowsForSlot(findSlot(rowValues.value(position)), singleMatches[index]);
                         }
                     }
                 }
@@ -1186,11 +1394,11 @@ public class HashJoinOperator
             return (int) hash;
         }
 
-        private void matchLongRows(long[] values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchLongRows(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (OperatorVectorSupport.isNull(nulls, position)) {
+                if (nullValues.value(position)) {
                     matches[index] = LongLists.emptyList();
                 }
                 else {
@@ -1199,11 +1407,11 @@ public class HashJoinOperator
             }
         }
 
-        private void matchIntRows(int[] values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchIntRows(int[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (OperatorVectorSupport.isNull(nulls, position)) {
+                if (nullValues.value(position)) {
                     matches[index] = LongLists.emptyList();
                 }
                 else {
@@ -1212,7 +1420,7 @@ public class HashJoinOperator
             }
         }
 
-        private void matchDictionaryRows(DictionaryVector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchDictionaryRows(DictionaryVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             int[] ids = values.ids();
             switch (values.values()) {
@@ -1220,7 +1428,7 @@ public class HashJoinOperator
                     long[] dictionaryValues = longValues.values();
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                        if (nullValues.value(position)) {
                             matches[index] = LongLists.emptyList();
                         }
                         else {
@@ -1232,7 +1440,7 @@ public class HashJoinOperator
                     int[] dictionaryValues = intValues.values();
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                        if (nullValues.value(position)) {
                             matches[index] = LongLists.emptyList();
                         }
                         else {
@@ -1241,28 +1449,30 @@ public class HashJoinOperator
                     }
                 }
                 default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        if (OperatorVectorSupport.isNull(nulls, position)) {
+                        if (nullValues.value(position)) {
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = batchedRowsForSlot(findSlot(OperatorVectorSupport.longValue(values, position)), singleMatches[index]);
+                            matches[index] = batchedRowsForSlot(findSlot(dictionaryValues.value(ids[position])), singleMatches[index]);
                         }
                     }
                 }
             }
         }
 
-        private void matchRleRows(org.weakref.nitro.data.RleVector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        private void matchRleRows(org.weakref.nitro.data.RleVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
+            VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (OperatorVectorSupport.isNull(nulls, position)) {
+                if (nullValues.value(position)) {
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = batchedRowsForSlot(findSlot(OperatorVectorSupport.longValue(values, position)), singleMatches[index]);
+                    matches[index] = batchedRowsForSlot(findSlot(rowValues.value(position)), singleMatches[index]);
                 }
             }
         }

@@ -78,19 +78,20 @@ public final class ScaledRelativeDifferenceGtI64
         Vector valueNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector baselineNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
-        BooleanVector existingValues = output != null && output.has(Stream.VALUES) ? (BooleanVector) output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
+        VectorAccess.LongValues valueAccessor = VectorAccess.longValues(value);
+        VectorAccess.LongValues baselineAccessor = VectorAccess.longValues(baseline);
+        VectorAccess.LongValues scaleAccessor = VectorAccess.longValues(scale);
+        Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(value.length(), Math.max(baseline.length(), scale.length())));
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    existingNulls,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             applyNulls(valueNulls, baselineNulls, scaleNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -98,13 +99,12 @@ public final class ScaledRelativeDifferenceGtI64
             return result;
         }
 
-        BooleanVector outputValues = context.allocator().allocateOrGrow(
+        BooleanVector outputValues = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 ALLOCATION_CONTEXT,
                 existingValues,
-                BooleanVector.class,
-                requiredLength,
-                BooleanVector::new);
-        applyValues(value, baseline, scale, valueNulls, baselineNulls, scaleNulls, mask, outputValues);
+                requiredLength);
+        applyValues(valueAccessor, baselineAccessor, scaleAccessor, valueNulls, baselineNulls, scaleNulls, mask, outputValues);
         return result.with(Stream.VALUES, outputValues);
     }
 
@@ -115,16 +115,23 @@ public final class ScaledRelativeDifferenceGtI64
             return null;
         }
 
+        VectorAccess.LongValues valueValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues baselineValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.LongValues scaleValues = VectorAccess.longValues(inputs.get(2).values());
+        Vector valueNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector baselineNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
+
         int trueCount = 0;
         int nullCount = 0;
         for (int position : mask) {
-            if (isNull(inputs.get(0).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(1).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(2).getOrNull(Stream.NULLS), position)) {
+            if (VectorAccess.isNull(valueNulls, position) ||
+                    VectorAccess.isNull(baselineNulls, position) ||
+                    VectorAccess.isNull(scaleNulls, position)) {
                 nullCount++;
                 continue;
             }
-            if (apply(integerValue(inputs.get(0).values(), position), integerValue(inputs.get(1).values(), position), integerValue(inputs.get(2).values(), position))) {
+            if (apply(valueValues.value(position), baselineValues.value(position), scaleValues.value(position))) {
                 trueCount++;
             }
         }
@@ -134,13 +141,13 @@ public final class ScaledRelativeDifferenceGtI64
         int trueIndex = 0;
         int nullIndex = 0;
         for (int position : mask) {
-            if (isNull(inputs.get(0).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(1).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(2).getOrNull(Stream.NULLS), position)) {
+            if (VectorAccess.isNull(valueNulls, position) ||
+                    VectorAccess.isNull(baselineNulls, position) ||
+                    VectorAccess.isNull(scaleNulls, position)) {
                 nullPositions[nullIndex++] = position;
                 continue;
             }
-            if (apply(integerValue(inputs.get(0).values(), position), integerValue(inputs.get(1).values(), position), integerValue(inputs.get(2).values(), position))) {
+            if (apply(valueValues.value(position), baselineValues.value(position), scaleValues.value(position))) {
                 truePositions[trueIndex++] = position;
             }
         }
@@ -158,15 +165,22 @@ public final class ScaledRelativeDifferenceGtI64
             return null;
         }
 
+        VectorAccess.LongValues valueValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues baselineValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.LongValues scaleValues = VectorAccess.longValues(inputs.get(2).values());
+        Vector valueNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector baselineNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
+
         int[] truePositions = new int[mask.selectedCount()];
         int trueIndex = 0;
         for (int position : mask) {
-            if (isNull(inputs.get(0).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(1).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(2).getOrNull(Stream.NULLS), position)) {
+            if (VectorAccess.isNull(valueNulls, position) ||
+                    VectorAccess.isNull(baselineNulls, position) ||
+                    VectorAccess.isNull(scaleNulls, position)) {
                 continue;
             }
-            if (apply(integerValue(inputs.get(0).values(), position), integerValue(inputs.get(1).values(), position), integerValue(inputs.get(2).values(), position))) {
+            if (apply(valueValues.value(position), baselineValues.value(position), scaleValues.value(position))) {
                 truePositions[trueIndex++] = position;
             }
         }
@@ -180,15 +194,22 @@ public final class ScaledRelativeDifferenceGtI64
             return null;
         }
 
+        VectorAccess.LongValues valueValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues baselineValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.LongValues scaleValues = VectorAccess.longValues(inputs.get(2).values());
+        Vector valueNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector baselineNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
+
         int[] falsePositions = new int[mask.selectedCount()];
         int falseIndex = 0;
         for (int position : mask) {
-            if (isNull(inputs.get(0).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(1).getOrNull(Stream.NULLS), position) ||
-                    isNull(inputs.get(2).getOrNull(Stream.NULLS), position)) {
+            if (VectorAccess.isNull(valueNulls, position) ||
+                    VectorAccess.isNull(baselineNulls, position) ||
+                    VectorAccess.isNull(scaleNulls, position)) {
                 continue;
             }
-            if (!apply(integerValue(inputs.get(0).values(), position), integerValue(inputs.get(1).values(), position), integerValue(inputs.get(2).values(), position))) {
+            if (!apply(valueValues.value(position), baselineValues.value(position), scaleValues.value(position))) {
                 falsePositions[falseIndex++] = position;
             }
         }
@@ -202,11 +223,18 @@ public final class ScaledRelativeDifferenceGtI64
             return false;
         }
 
+        VectorAccess.LongValues valueValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues baselineValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.LongValues scaleValues = VectorAccess.longValues(inputs.get(2).values());
+        Vector valueNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector baselineNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
+
         mask.retainIf(position ->
-                !isNull(inputs.get(0).getOrNull(Stream.NULLS), position) &&
-                        !isNull(inputs.get(1).getOrNull(Stream.NULLS), position) &&
-                        !isNull(inputs.get(2).getOrNull(Stream.NULLS), position) &&
-                        apply(integerValue(inputs.get(0).values(), position), integerValue(inputs.get(1).values(), position), integerValue(inputs.get(2).values(), position)));
+                !VectorAccess.isNull(valueNulls, position) &&
+                        !VectorAccess.isNull(baselineNulls, position) &&
+                        !VectorAccess.isNull(scaleNulls, position) &&
+                        apply(valueValues.value(position), baselineValues.value(position), scaleValues.value(position)));
         return true;
     }
 
@@ -217,11 +245,18 @@ public final class ScaledRelativeDifferenceGtI64
             return false;
         }
 
+        VectorAccess.LongValues valueValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues baselineValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.LongValues scaleValues = VectorAccess.longValues(inputs.get(2).values());
+        Vector valueNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector baselineNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
+
         mask.retainIf(position ->
-                !isNull(inputs.get(0).getOrNull(Stream.NULLS), position) &&
-                        !isNull(inputs.get(1).getOrNull(Stream.NULLS), position) &&
-                        !isNull(inputs.get(2).getOrNull(Stream.NULLS), position) &&
-                        !apply(integerValue(inputs.get(0).values(), position), integerValue(inputs.get(1).values(), position), integerValue(inputs.get(2).values(), position)));
+                !VectorAccess.isNull(valueNulls, position) &&
+                        !VectorAccess.isNull(baselineNulls, position) &&
+                        !VectorAccess.isNull(scaleNulls, position) &&
+                        !apply(valueValues.value(position), baselineValues.value(position), scaleValues.value(position)));
         return true;
     }
 
@@ -230,18 +265,18 @@ public final class ScaledRelativeDifferenceGtI64
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = isNull(valueNulls, position) || isNull(baselineNulls, position) || isNull(scaleNulls, position);
+            nulls[position] = VectorAccess.isNull(valueNulls, position) || VectorAccess.isNull(baselineNulls, position) || VectorAccess.isNull(scaleNulls, position);
         }
     }
 
-    private static void applyValues(Vector value, Vector baseline, Vector scale, Vector valueNulls, Vector baselineNulls, Vector scaleNulls, Mask mask, BooleanVector outputValues)
+    private static void applyValues(VectorAccess.LongValues value, VectorAccess.LongValues baseline, VectorAccess.LongValues scale, Vector valueNulls, Vector baselineNulls, Vector scaleNulls, Mask mask, BooleanVector outputValues)
     {
         boolean[] values = outputValues.values();
         for (int position : mask) {
-            if (isNull(valueNulls, position) || isNull(baselineNulls, position) || isNull(scaleNulls, position)) {
+            if (VectorAccess.isNull(valueNulls, position) || VectorAccess.isNull(baselineNulls, position) || VectorAccess.isNull(scaleNulls, position)) {
                 continue;
             }
-            values[position] = apply(integerValue(value, position), integerValue(baseline, position), integerValue(scale, position));
+            values[position] = apply(value.value(position), baseline.value(position), scale.value(position));
         }
     }
 
@@ -274,27 +309,4 @@ public final class ScaledRelativeDifferenceGtI64
         };
     }
 
-    private static long integerValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I32Vector values -> values.values()[position];
-            case I64Vector values -> values.values()[position];
-            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
-            case RleVector values -> integerValue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but got " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        if (nulls == null) {
-            return false;
-        }
-        return switch (nulls) {
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
-            case RleVector values -> isNull(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean vector but got " + nulls.getClass().getSimpleName());
-        };
-    }
 }

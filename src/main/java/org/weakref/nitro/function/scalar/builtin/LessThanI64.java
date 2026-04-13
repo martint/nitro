@@ -15,7 +15,6 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -65,22 +64,20 @@ public final class LessThanI64
         }
         Allocator.Context allocationContext = context.allocationContext("LessThanI64");
 
-        Vector left = inputs.get(0).values();
-        Vector right = inputs.get(1).values();
-        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
-        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        var left = inputs.get(0).values();
+        var right = inputs.get(1).values();
+        var leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        var rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    existingNulls,
-                    BooleanVector.class,
-                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())));
             applyNulls(leftNulls, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -93,12 +90,11 @@ public final class LessThanI64
             return result.with(Stream.VALUES, I64BinaryDispatch.rleRleBoolean(leftRle, rightRle, values, LessThanI64::apply));
         }
 
-        BooleanVector values = context.allocator().allocateOrGrow(
+        BooleanVector values = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 allocationContext,
-                existing instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
-                BooleanVector::new);
+                existing,
+                I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())));
         I64BinaryDispatch.applyBoolean(left, right, mask, values, LessThanI64::apply);
         return result.with(Stream.VALUES, values);
     }
@@ -108,7 +104,7 @@ public final class LessThanI64
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = isTrue(leftNulls, position) || isTrue(rightNulls, position);
+            nulls[position] = VectorAccess.isNull(leftNulls, position) || VectorAccess.isNull(rightNulls, position);
         }
     }
 
@@ -145,18 +141,5 @@ public final class LessThanI64
     private static boolean apply(long leftValue, long rightValue)
     {
         return leftValue < rightValue;
-    }
-
-    private static boolean isTrue(Vector vector, int position)
-    {
-        if (vector == null) {
-            return false;
-        }
-        return switch (vector) {
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isTrue(values.values(), values.ids()[position]);
-            case RleVector values -> isTrue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean vector but got " + vector.getClass().getSimpleName());
-        };
     }
 }

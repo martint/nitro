@@ -15,9 +15,6 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
@@ -72,16 +69,14 @@ public final class EqualI64
         Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    existingNulls,
-                    BooleanVector.class,
-                    BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())),
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())));
             applyNulls(leftNulls, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -89,13 +84,17 @@ public final class EqualI64
             return result;
         }
 
-        BooleanVector values = context.allocator().allocateOrGrow(
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
+            BooleanVector values = context.allocator().allocate(allocationContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
+            return result.with(Stream.VALUES, I64BinaryDispatch.rleRleBoolean(leftRle, rightRle, values, EqualI64::compareEqual));
+        }
+
+        BooleanVector values = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 allocationContext,
-                existing instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())),
-                BooleanVector::new);
-        applyIntegerEquality(left, right, mask, values);
+                existing,
+                BinaryDispatchSupport.requiredLength(mask, Math.max(left.length(), right.length())));
+        I64BinaryDispatch.applyBoolean(left, right, mask, values, EqualI64::compareEqual);
         return result.with(Stream.VALUES, values);
     }
 
@@ -129,60 +128,17 @@ public final class EqualI64
         return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, EqualI64::compareEqual);
     }
 
-    private static void applyIntegerEquality(Vector left, Vector right, Mask mask, BooleanVector output)
-    {
-        BinaryDispatchSupport.validateLength(left, mask);
-        BinaryDispatchSupport.validateLength(right, mask);
-
-        boolean[] values = output.values();
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                values[position] = integerValue(left, position) == integerValue(right, position);
-            }
-            return;
-        }
-
-        for (int position : mask) {
-            values[position] = integerValue(left, position) == integerValue(right, position);
-        }
-    }
-
     private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = isTrue(leftNulls, position) || isTrue(rightNulls, position);
+            nulls[position] = VectorAccess.isNull(leftNulls, position) || VectorAccess.isNull(rightNulls, position);
         }
-    }
-
-    private static long integerValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I32Vector values -> values.values()[position];
-            case I64Vector values -> values.values()[position];
-            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
-            case RleVector values -> integerValue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but got " + vector.getClass().getSimpleName());
-        };
     }
 
     private static boolean compareEqual(long leftValue, long rightValue)
     {
         return leftValue == rightValue;
-    }
-
-    private static boolean isTrue(Vector vector, int position)
-    {
-        if (vector == null) {
-            return false;
-        }
-        return switch (vector) {
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isTrue(values.values(), values.ids()[position]);
-            case RleVector values -> isTrue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean vector but got " + vector.getClass().getSimpleName());
-        };
     }
 }

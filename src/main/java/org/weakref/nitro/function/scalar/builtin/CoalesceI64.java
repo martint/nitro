@@ -60,12 +60,11 @@ public final class CoalesceI64
 
         Streams result = Streams.empty();
         if (requestNulls) {
-            BooleanVector nulls = context.allocator().allocateOrGrow(
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
             boolean[] nullValues = nulls.values();
             for (int position : mask) {
                 nullValues[position] = primaryNulls.value(position) && fallbackNulls.value(position);

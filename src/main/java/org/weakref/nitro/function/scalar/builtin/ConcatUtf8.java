@@ -62,12 +62,14 @@ public final class ConcatUtf8
         Vector rightValues = inputs.get(1).values();
         Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         int requiredLength = mask.none() ? 0 : Math.max(mask.maxPosition() + 1, Math.max(leftValues.length(), rightValues.length()));
 
         int totalBytes = 0;
         if (requestedStreams.contains(Stream.VALUES)) {
             for (int position : mask) {
-                if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
+                if (leftNullValues.value(position) || rightNullValues.value(position)) {
                     continue;
                 }
                 totalBytes += byteLength(leftValues, position) + byteLength(rightValues, position);
@@ -77,13 +79,12 @@ public final class ConcatUtf8
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyNulls(leftNulls, rightNulls, mask, outputNulls);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
+            applyNulls(leftNullValues, rightNullValues, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
@@ -98,28 +99,28 @@ public final class ConcatUtf8
             if (isAsciiOnly(leftValues) && isAsciiOnly(rightValues)) {
                 outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
             }
-            applyValues(leftValues, rightValues, leftNulls, rightNulls, mask, outputValues, outputNulls);
+            applyValues(leftValues, rightValues, leftNullValues, rightNullValues, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
         }
         return result;
     }
 
-    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector outputNulls)
     {
         Arrays.fill(outputNulls.values(), false);
         for (int position : mask) {
-            outputNulls.values()[position] = isNull(leftNulls, position) || isNull(rightNulls, position);
+            outputNulls.values()[position] = leftNulls.value(position) || rightNulls.value(position);
         }
     }
 
-    private static void applyValues(Vector leftValues, Vector rightValues, Vector leftNulls, Vector rightNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
+    private static void applyValues(Vector leftValues, Vector rightValues, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
         int currentOffset = 0;
         int lastPosition = -1;
         for (int position : mask) {
             fillOffsets(outputValues, lastPosition + 1, position, currentOffset);
             outputValues.offsets()[position] = currentOffset;
-            if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
+            if (leftNulls.value(position) || rightNulls.value(position)) {
                 outputValues.setNull(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
@@ -179,14 +180,4 @@ public final class ConcatUtf8
         };
     }
 
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
-            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported concat_utf8 null vector type: " + nulls.getClass().getSimpleName());
-        };
-    }
 }

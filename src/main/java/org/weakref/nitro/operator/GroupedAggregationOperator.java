@@ -18,6 +18,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -406,12 +407,11 @@ public class GroupedAggregationOperator
                 I64Vector.class,
                 0,
                 I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                0,
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                0);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
@@ -530,7 +530,7 @@ public class GroupedAggregationOperator
             }
 
             Vector[] values = new Vector[inputColumns.length + 1];
-            BooleanVector[] nulls = new BooleanVector[inputColumns.length + 1];
+            Vector[] nulls = new Vector[inputColumns.length + 1];
             values[0] = groups;
             for (int index = 0; index < inputColumns.length; index++) {
                 values[index + 1] = streamAccessor.values(inputColumns[index]);

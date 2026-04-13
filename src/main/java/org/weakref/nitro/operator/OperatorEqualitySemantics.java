@@ -24,7 +24,7 @@ final class OperatorEqualitySemantics
 {
     private OperatorEqualitySemantics() {}
 
-    public static boolean equal(Vector leftValues, BooleanVector leftNulls, int leftPosition, Vector rightValues, BooleanVector rightNulls, int rightPosition)
+    public static boolean equal(Vector leftValues, Vector leftNulls, int leftPosition, Vector rightValues, Vector rightNulls, int rightPosition)
     {
         if (OperatorVectorSupport.isNull(leftNulls, leftPosition) || OperatorVectorSupport.isNull(rightNulls, rightPosition)) {
             return false;

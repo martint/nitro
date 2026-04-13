@@ -19,6 +19,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 
 final class I64BinaryDispatch
@@ -44,7 +45,7 @@ final class I64BinaryDispatch
     }
 
     @FunctionalInterface
-    private interface LongPairConsumer
+    interface LongPairConsumer
     {
         void accept(long left, long right, int position);
     }
@@ -83,10 +84,12 @@ final class I64BinaryDispatch
     {
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
         long[] values = output.values();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
-            values[outputIndex] = kernel.apply(integerValue(left.values(), leftIndex), integerValue(right.values(), rightIndex));
+            values[outputIndex] = kernel.apply(leftValues.value(leftIndex), rightValues.value(rightIndex));
         });
         return new RleVector(counts, output);
     }
@@ -95,10 +98,12 @@ final class I64BinaryDispatch
     {
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
         boolean[] values = output.values();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
-            values[outputIndex] = kernel.apply(integerValue(left.values(), leftIndex), integerValue(right.values(), rightIndex));
+            values[outputIndex] = kernel.apply(leftValues.value(leftIndex), rightValues.value(rightIndex));
         });
         return new RleVector(counts, output);
     }
@@ -108,10 +113,12 @@ final class I64BinaryDispatch
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
         long[] values = valuesOutput.values();
         boolean[] errors = errorsOutput.values();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
-            kernel.apply(integerValue(left.values(), leftIndex), integerValue(right.values(), rightIndex), values, errors, outputIndex);
+            kernel.apply(leftValues.value(leftIndex), rightValues.value(rightIndex), values, errors, outputIndex);
         });
         return new RleWithErrors(new RleVector(counts, valuesOutput), new RleVector(counts, errorsOutput));
     }
@@ -120,18 +127,31 @@ final class I64BinaryDispatch
     {
         int[] counts = new int[RleVector.computeTargetRleLength(left, right)];
         boolean[] errors = errorsOutput.values();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
 
         BinaryDispatchSupport.mergeRuns(left.counts(), right.counts(), (outputIndex, leftIndex, rightIndex, count) -> {
             counts[outputIndex] = count;
-            kernel.apply(integerValue(left.values(), leftIndex), integerValue(right.values(), rightIndex), null, errors, outputIndex);
+            kernel.apply(leftValues.value(leftIndex), rightValues.value(rightIndex), null, errors, outputIndex);
         });
         return new RleVector(counts, errorsOutput);
     }
 
-    private static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)
+    static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)
     {
         BinaryDispatchSupport.validateLength(left, mask);
         BinaryDispatchSupport.validateLength(right, mask);
+
+        if (left instanceof SelectionVector leftSelection && tryForEachSelectionLeft(leftSelection, right, mask, consumer)) {
+            return;
+        }
+        if (right instanceof SelectionVector rightSelection && tryForEachSelectionRight(left, rightSelection, mask, consumer)) {
+            return;
+        }
+        if (left instanceof SelectionVector || right instanceof SelectionVector) {
+            forEachGeneric(left, right, mask, consumer);
+            return;
+        }
 
         switch (left) {
             case I32Vector leftFlat -> {
@@ -174,6 +194,96 @@ final class I64BinaryDispatch
         }
     }
 
+    private static boolean tryForEachSelectionLeft(SelectionVector left, Vector right, Mask mask, LongPairConsumer consumer)
+    {
+        return switch (left.values()) {
+            case I32Vector leftValues -> switch (right) {
+                case I32Vector rightValues -> {
+                    forEachSelectionFlat(left.positions(), leftValues.values(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case I64Vector rightValues -> {
+                    forEachSelectionFlat(left.positions(), leftValues.values(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case SelectionVector rightSelection when rightSelection.values() instanceof I32Vector rightValues -> {
+                    forEachSelectionSelection(left.positions(), leftValues.values(), rightSelection.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case SelectionVector rightSelection when rightSelection.values() instanceof I64Vector rightValues -> {
+                    forEachSelectionSelection(left.positions(), leftValues.values(), rightSelection.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                default -> false;
+            };
+            case I64Vector leftValues -> switch (right) {
+                case I32Vector rightValues -> {
+                    forEachSelectionFlat(left.positions(), leftValues.values(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case I64Vector rightValues -> {
+                    forEachSelectionFlat(left.positions(), leftValues.values(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case SelectionVector rightSelection when rightSelection.values() instanceof I32Vector rightValues -> {
+                    forEachSelectionSelection(left.positions(), leftValues.values(), rightSelection.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case SelectionVector rightSelection when rightSelection.values() instanceof I64Vector rightValues -> {
+                    forEachSelectionSelection(left.positions(), leftValues.values(), rightSelection.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                default -> false;
+            };
+            default -> false;
+        };
+    }
+
+    private static boolean tryForEachSelectionRight(Vector left, SelectionVector right, Mask mask, LongPairConsumer consumer)
+    {
+        return switch (right.values()) {
+            case I32Vector rightValues -> switch (left) {
+                case I32Vector leftValues -> {
+                    forEachFlatSelection(leftValues.values(), right.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case I64Vector leftValues -> {
+                    forEachFlatSelection(leftValues.values(), right.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                default -> false;
+            };
+            case I64Vector rightValues -> switch (left) {
+                case I32Vector leftValues -> {
+                    forEachFlatSelection(leftValues.values(), right.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                case I64Vector leftValues -> {
+                    forEachFlatSelection(leftValues.values(), right.positions(), rightValues.values(), mask, consumer);
+                    yield true;
+                }
+                default -> false;
+            };
+            default -> false;
+        };
+    }
+
+    private static void forEachGeneric(Vector left, Vector right, Mask mask, LongPairConsumer consumer)
+    {
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left);
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right);
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(leftValues.value(position), rightValues.value(position), position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(leftValues.value(position), rightValues.value(position), position);
+        }
+    }
+
     private static void forEachFlatFlat(int[] left, int[] right, Mask mask, LongPairConsumer consumer)
     {
         if (mask.all()) {
@@ -187,6 +297,326 @@ final class I64BinaryDispatch
         for (int position : mask) {
             consumer.accept(left[position], right[position], position);
         }
+    }
+
+    private static void forEachSelectionFlat(org.weakref.nitro.data.SelectedPositions leftPositions, int[] left, int[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = leftPositions.backingArrayOrNull();
+        int offset = leftPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[positions[offset + position]], right[position], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[positions[offset + position]], right[position], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[leftPositions.position(position)], right[position], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[leftPositions.position(position)], right[position], position);
+        }
+    }
+
+    private static void forEachSelectionFlat(org.weakref.nitro.data.SelectedPositions leftPositions, int[] left, long[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = leftPositions.backingArrayOrNull();
+        int offset = leftPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[positions[offset + position]], right[position], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[positions[offset + position]], right[position], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[leftPositions.position(position)], right[position], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[leftPositions.position(position)], right[position], position);
+        }
+    }
+
+    private static void forEachSelectionFlat(org.weakref.nitro.data.SelectedPositions leftPositions, long[] left, int[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = leftPositions.backingArrayOrNull();
+        int offset = leftPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[positions[offset + position]], right[position], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[positions[offset + position]], right[position], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[leftPositions.position(position)], right[position], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[leftPositions.position(position)], right[position], position);
+        }
+    }
+
+    private static void forEachSelectionFlat(org.weakref.nitro.data.SelectedPositions leftPositions, long[] left, long[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = leftPositions.backingArrayOrNull();
+        int offset = leftPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[positions[offset + position]], right[position], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[positions[offset + position]], right[position], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[leftPositions.position(position)], right[position], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[leftPositions.position(position)], right[position], position);
+        }
+    }
+
+    private static void forEachFlatSelection(int[] left, org.weakref.nitro.data.SelectedPositions rightPositions, int[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = rightPositions.backingArrayOrNull();
+        int offset = rightPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[position], right[positions[offset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[position], right[positions[offset + position]], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[position], right[rightPositions.position(position)], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[position], right[rightPositions.position(position)], position);
+        }
+    }
+
+    private static void forEachFlatSelection(int[] left, org.weakref.nitro.data.SelectedPositions rightPositions, long[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = rightPositions.backingArrayOrNull();
+        int offset = rightPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[position], right[positions[offset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[position], right[positions[offset + position]], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[position], right[rightPositions.position(position)], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[position], right[rightPositions.position(position)], position);
+        }
+    }
+
+    private static void forEachFlatSelection(long[] left, org.weakref.nitro.data.SelectedPositions rightPositions, int[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = rightPositions.backingArrayOrNull();
+        int offset = rightPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[position], right[positions[offset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[position], right[positions[offset + position]], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[position], right[rightPositions.position(position)], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[position], right[rightPositions.position(position)], position);
+        }
+    }
+
+    private static void forEachFlatSelection(long[] left, org.weakref.nitro.data.SelectedPositions rightPositions, long[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] positions = rightPositions.backingArrayOrNull();
+        int offset = rightPositions.backingArrayOffset();
+        if (positions != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[position], right[positions[offset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[position], right[positions[offset + position]], position);
+            }
+            return;
+        }
+        if (mask.all()) {
+            int max = mask.maxPosition();
+            for (int position = 0; position <= max; position++) {
+                consumer.accept(left[position], right[rightPositions.position(position)], position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            consumer.accept(left[position], right[rightPositions.position(position)], position);
+        }
+    }
+
+    private static void forEachSelectionSelection(org.weakref.nitro.data.SelectedPositions leftPositions, int[] left, org.weakref.nitro.data.SelectedPositions rightPositions, int[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] leftArray = leftPositions.backingArrayOrNull();
+        int leftOffset = leftPositions.backingArrayOffset();
+        int[] rightArray = rightPositions.backingArrayOrNull();
+        int rightOffset = rightPositions.backingArrayOffset();
+        if (leftArray != null && rightArray != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+            }
+            return;
+        }
+        forEachGeneric(new SelectionVector(leftPositions, new I32Vector(left)), new SelectionVector(rightPositions, new I32Vector(right)), mask, consumer);
+    }
+
+    private static void forEachSelectionSelection(org.weakref.nitro.data.SelectedPositions leftPositions, int[] left, org.weakref.nitro.data.SelectedPositions rightPositions, long[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] leftArray = leftPositions.backingArrayOrNull();
+        int leftOffset = leftPositions.backingArrayOffset();
+        int[] rightArray = rightPositions.backingArrayOrNull();
+        int rightOffset = rightPositions.backingArrayOffset();
+        if (leftArray != null && rightArray != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+            }
+            return;
+        }
+        forEachGeneric(new SelectionVector(leftPositions, new I32Vector(left)), new SelectionVector(rightPositions, new I64Vector(right)), mask, consumer);
+    }
+
+    private static void forEachSelectionSelection(org.weakref.nitro.data.SelectedPositions leftPositions, long[] left, org.weakref.nitro.data.SelectedPositions rightPositions, int[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] leftArray = leftPositions.backingArrayOrNull();
+        int leftOffset = leftPositions.backingArrayOffset();
+        int[] rightArray = rightPositions.backingArrayOrNull();
+        int rightOffset = rightPositions.backingArrayOffset();
+        if (leftArray != null && rightArray != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+            }
+            return;
+        }
+        forEachGeneric(new SelectionVector(leftPositions, new I64Vector(left)), new SelectionVector(rightPositions, new I32Vector(right)), mask, consumer);
+    }
+
+    private static void forEachSelectionSelection(org.weakref.nitro.data.SelectedPositions leftPositions, long[] left, org.weakref.nitro.data.SelectedPositions rightPositions, long[] right, Mask mask, LongPairConsumer consumer)
+    {
+        int[] leftArray = leftPositions.backingArrayOrNull();
+        int leftOffset = leftPositions.backingArrayOffset();
+        int[] rightArray = rightPositions.backingArrayOrNull();
+        int rightOffset = rightPositions.backingArrayOffset();
+        if (leftArray != null && rightArray != null) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                consumer.accept(left[leftArray[leftOffset + position]], right[rightArray[rightOffset + position]], position);
+            }
+            return;
+        }
+        forEachGeneric(new SelectionVector(leftPositions, new I64Vector(left)), new SelectionVector(rightPositions, new I64Vector(right)), mask, consumer);
     }
 
     private static void forEachFlatFlat(int[] left, long[] right, Mask mask, LongPairConsumer consumer)
@@ -237,96 +667,102 @@ final class I64BinaryDispatch
     private static void forEachRleFlat(RleVector left, int[] right, Mask mask, LongPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), cursor.runIndexAt(position)), right[position], position);
+                consumer.accept(leftValues.value(cursor.runIndexAt(position)), right[position], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), cursor.runIndexAt(position)), right[position], position);
+            consumer.accept(leftValues.value(cursor.runIndexAt(position)), right[position], position);
         }
     }
 
     private static void forEachRleFlat(RleVector left, long[] right, Mask mask, LongPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), cursor.runIndexAt(position)), right[position], position);
+                consumer.accept(leftValues.value(cursor.runIndexAt(position)), right[position], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), cursor.runIndexAt(position)), right[position], position);
+            consumer.accept(leftValues.value(cursor.runIndexAt(position)), right[position], position);
         }
     }
 
     private static void forEachFlatRle(int[] left, RleVector right, Mask mask, LongPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(left[position], integerValue(right.values(), cursor.runIndexAt(position)), position);
+                consumer.accept(left[position], rightValues.value(cursor.runIndexAt(position)), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(left[position], integerValue(right.values(), cursor.runIndexAt(position)), position);
+            consumer.accept(left[position], rightValues.value(cursor.runIndexAt(position)), position);
         }
     }
 
     private static void forEachFlatRle(long[] left, RleVector right, Mask mask, LongPairConsumer consumer)
     {
         BinaryDispatchSupport.RlePositionCursor cursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(left[position], integerValue(right.values(), cursor.runIndexAt(position)), position);
+                consumer.accept(left[position], rightValues.value(cursor.runIndexAt(position)), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(left[position], integerValue(right.values(), cursor.runIndexAt(position)), position);
+            consumer.accept(left[position], rightValues.value(cursor.runIndexAt(position)), position);
         }
     }
 
     private static void forEachFlatDictionary(int[] left, DictionaryVector right, Mask mask, LongPairConsumer consumer)
     {
         int[] rightIds = right.ids();
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(left[position], integerValue(right.values(), rightIds[position]), position);
+                consumer.accept(left[position], rightValues.value(rightIds[position]), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(left[position], integerValue(right.values(), rightIds[position]), position);
+            consumer.accept(left[position], rightValues.value(rightIds[position]), position);
         }
     }
 
     private static void forEachFlatDictionary(long[] left, DictionaryVector right, Mask mask, LongPairConsumer consumer)
     {
         int[] rightIds = right.ids();
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(left[position], integerValue(right.values(), rightIds[position]), position);
+                consumer.accept(left[position], rightValues.value(rightIds[position]), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(left[position], integerValue(right.values(), rightIds[position]), position);
+            consumer.accept(left[position], rightValues.value(rightIds[position]), position);
         }
     }
 
@@ -334,16 +770,18 @@ final class I64BinaryDispatch
     {
         BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
         BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), leftCursor.runIndexAt(position)), integerValue(right.values(), rightCursor.runIndexAt(position)), position);
+                consumer.accept(leftValues.value(leftCursor.runIndexAt(position)), rightValues.value(rightCursor.runIndexAt(position)), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), leftCursor.runIndexAt(position)), integerValue(right.values(), rightCursor.runIndexAt(position)), position);
+            consumer.accept(leftValues.value(leftCursor.runIndexAt(position)), rightValues.value(rightCursor.runIndexAt(position)), position);
         }
     }
 
@@ -351,48 +789,52 @@ final class I64BinaryDispatch
     {
         BinaryDispatchSupport.RlePositionCursor leftCursor = new BinaryDispatchSupport.RlePositionCursor(left.counts());
         int[] rightIds = right.ids();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), leftCursor.runIndexAt(position)), integerValue(right.values(), rightIds[position]), position);
+                consumer.accept(leftValues.value(leftCursor.runIndexAt(position)), rightValues.value(rightIds[position]), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), leftCursor.runIndexAt(position)), integerValue(right.values(), rightIds[position]), position);
+            consumer.accept(leftValues.value(leftCursor.runIndexAt(position)), rightValues.value(rightIds[position]), position);
         }
     }
 
     private static void forEachDictionaryFlat(DictionaryVector left, int[] right, Mask mask, LongPairConsumer consumer)
     {
         int[] leftIds = left.ids();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), leftIds[position]), right[position], position);
+                consumer.accept(leftValues.value(leftIds[position]), right[position], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), leftIds[position]), right[position], position);
+            consumer.accept(leftValues.value(leftIds[position]), right[position], position);
         }
     }
 
     private static void forEachDictionaryFlat(DictionaryVector left, long[] right, Mask mask, LongPairConsumer consumer)
     {
         int[] leftIds = left.ids();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), leftIds[position]), right[position], position);
+                consumer.accept(leftValues.value(leftIds[position]), right[position], position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), leftIds[position]), right[position], position);
+            consumer.accept(leftValues.value(leftIds[position]), right[position], position);
         }
     }
 
@@ -400,16 +842,18 @@ final class I64BinaryDispatch
     {
         int[] leftIds = left.ids();
         BinaryDispatchSupport.RlePositionCursor rightCursor = new BinaryDispatchSupport.RlePositionCursor(right.counts());
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), leftIds[position]), integerValue(right.values(), rightCursor.runIndexAt(position)), position);
+                consumer.accept(leftValues.value(leftIds[position]), rightValues.value(rightCursor.runIndexAt(position)), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), leftIds[position]), integerValue(right.values(), rightCursor.runIndexAt(position)), position);
+            consumer.accept(leftValues.value(leftIds[position]), rightValues.value(rightCursor.runIndexAt(position)), position);
         }
     }
 
@@ -417,28 +861,19 @@ final class I64BinaryDispatch
     {
         int[] leftIds = left.ids();
         int[] rightIds = right.ids();
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(left.values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(right.values());
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                consumer.accept(integerValue(left.values(), leftIds[position]), integerValue(right.values(), rightIds[position]), position);
+                consumer.accept(leftValues.value(leftIds[position]), rightValues.value(rightIds[position]), position);
             }
             return;
         }
 
         for (int position : mask) {
-            consumer.accept(integerValue(left.values(), leftIds[position]), integerValue(right.values(), rightIds[position]), position);
+            consumer.accept(leftValues.value(leftIds[position]), rightValues.value(rightIds[position]), position);
         }
-    }
-
-    private static long integerValue(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I32Vector values -> values.values()[position];
-            case I64Vector values -> values.values()[position];
-            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
-            case RleVector values -> integerValue(values.values(), values.runIndex(position));
-            default -> throw unsupported(vector);
-        };
     }
 
     private static IllegalArgumentException unsupported(Vector vector)

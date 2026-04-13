@@ -131,11 +131,11 @@ public class GroupOperator
             }
             else {
                 Vector[] values = new Vector[groupByColumns.length];
-                org.weakref.nitro.data.BooleanVector[] nulls = new org.weakref.nitro.data.BooleanVector[groupByColumns.length];
+                Vector[] nulls = new Vector[groupByColumns.length];
                 for (int index = 0; index < groupByColumns.length; index++) {
                     Output output = batchState.sourceBatch.output(groupByColumns[index]);
                     values[index] = output.borrow(Stream.VALUES);
-                    nulls[index] = (org.weakref.nitro.data.BooleanVector) output.borrowOrNull(Stream.NULLS);
+                    nulls[index] = output.borrowOrNull(Stream.NULLS);
                 }
                 groupingState.assignGroups(values, nulls, batchState.mask, batchState.result);
             }

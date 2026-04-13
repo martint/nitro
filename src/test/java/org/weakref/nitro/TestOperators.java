@@ -25,6 +25,9 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectedPositions;
+import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -440,6 +443,77 @@ public class TestOperators
                 assertThat(dictionaryValues[dictionary.ids()[1]]).isEqualTo(0L);
                 assertThat(dictionaryValues[dictionary.ids()[2]]).isEqualTo(0L);
                 assertThat(dictionaryValues[dictionary.ids()[3]]).isEqualTo(1L);
+            }
+        }
+    }
+
+    @Test
+    void testIfI64KeepsConstantBranchesEncodedWithSelectionNulls()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable selected = new Variable(0);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        selected,
+                        new Call("if_i64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES)));
+
+        Vector noNulls = SelectionVector.wrap(
+                SelectedPositions.positions(new int[] {0, 1, 2, 3}),
+                new BooleanVector(new boolean[] {false, false, false, false}));
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 3;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(
+                        Mask.all(4),
+                        Output.of(Streams.ofValues(new BooleanVector(new boolean[] {true, false, true, false}))),
+                        Output.of(Streams.builder()
+                                .put(Stream.VALUES, new RleVector(new int[] {4}, new I64Vector(new long[] {1})))
+                                .put(Stream.NULLS, noNulls)
+                                .build()),
+                        Output.of(Streams.builder()
+                                .put(Stream.VALUES, new RleVector(new int[] {4}, new I64Vector(new long[] {0})))
+                                .put(Stream.NULLS, noNulls)
+                                .build()));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (ProjectOperator operator = new ProjectOperator(allocator, evaluationPlan, primitiveRegistry, source)) {
+            try (Batch batch = operator.next()) {
+                Vector values = batch.output(0).borrow(Stream.VALUES);
+                assertThat(values).isInstanceOf(DictionaryVector.class);
+                DictionaryVector dictionary = (DictionaryVector) values;
+                assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[0]]).isEqualTo(1L);
+                assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[1]]).isEqualTo(0L);
+                assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[2]]).isEqualTo(1L);
+                assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[3]]).isEqualTo(0L);
             }
         }
     }

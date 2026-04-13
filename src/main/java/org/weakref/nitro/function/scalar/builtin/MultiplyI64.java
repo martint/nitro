@@ -59,20 +59,18 @@ public final class MultiplyI64
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    existingNulls,
-                    BooleanVector.class,
-                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())));
             applyNulls(leftNulls, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -100,13 +98,14 @@ public final class MultiplyI64
         return leftValue * rightValue;
     }
 
-    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
-                    (rightNulls != null && rightNulls.values()[position]);
+            nulls[position] = leftNullValues.value(position) || rightNullValues.value(position);
         }
     }
 

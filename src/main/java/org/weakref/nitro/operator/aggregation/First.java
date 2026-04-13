@@ -15,12 +15,10 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -50,7 +48,7 @@ public class First
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
         I64Vector values = allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(allocator, allocationContext, state.get(Stream.NULLS), size);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
@@ -65,13 +63,13 @@ public class First
     {
         I64Vector stateValues = (I64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
-        Vector inputValues = streams.values(inputColumn);
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             if (stateNulls.values()[group]) {
-                stateValues.values()[group] = value(inputValues, position);
-                stateNulls.values()[group] = isNull(inputNulls, position);
+                stateValues.values()[group] = inputValues.value(position);
+                stateNulls.values()[group] = inputNulls.value(position);
             }
         }
     }
@@ -82,14 +80,14 @@ public class First
         I64Vector stateValues = (I64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
-        Vector inputValues = streams.values(inputColumn);
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
             if (stateNulls.values()[group]) {
-                stateValues.values()[group] = value(inputValues, position);
-                stateNulls.values()[group] = isNull(inputNulls, position);
+                stateValues.values()[group] = inputValues.value(position);
+                stateNulls.values()[group] = inputNulls.value(position);
             }
         }
     }
@@ -98,26 +96,5 @@ public class First
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
-    }
-
-    private static long value(Vector v, int position)
-    {
-        return switch (v) {
-            case I64Vector values -> values.values()[position];
-            case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> value(values.values(), values.ids()[position]);
-            case RleVector values -> value(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + v.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean[] nulls(Vector v)
-    {
-        return v == null ? null : ((BooleanVector) v).values();
-    }
-
-    private static boolean isNull(boolean[] nulls, int position)
-    {
-        return nulls != null && nulls[position];
     }
 }

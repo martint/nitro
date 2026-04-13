@@ -14,12 +14,12 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskOutcome;
@@ -43,50 +43,44 @@ final class LongComparisonMaskSupport
             return null;
         }
 
-        Vector leftValues = inputs.get(0).values();
-        Vector rightValues = inputs.get(1).values();
-        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
-        int trueCount = 0;
-        int nullCount = 0;
-        int errorCount = 0;
-        for (int position : mask) {
+        int[] counts = new int[3];
+        I64BinaryDispatch.forEachPair(inputs.get(0).values(), inputs.get(1).values(), mask, (leftValue, rightValue, position) -> {
             if (isError(leftErrors, position) || isError(rightErrors, position)) {
-                errorCount++;
+                counts[2]++;
             }
             else if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                nullCount++;
+                counts[1]++;
             }
-            else if (kernel.test(integerValue(leftValues, position), integerValue(rightValues, position))) {
-                trueCount++;
+            else if (kernel.test(leftValue, rightValue)) {
+                counts[0]++;
             }
-        }
+        });
 
-        int[] truePositions = new int[trueCount];
-        int[] nullPositions = new int[nullCount];
-        int[] errorPositions = new int[errorCount];
-        int trueIndex = 0;
-        int nullIndex = 0;
-        int errorIndex = 0;
-        for (int position : mask) {
+        int[] truePositions = new int[counts[0]];
+        int[] nullPositions = new int[counts[1]];
+        int[] errorPositions = new int[counts[2]];
+        int[] indexes = new int[3];
+        I64BinaryDispatch.forEachPair(inputs.get(0).values(), inputs.get(1).values(), mask, (leftValue, rightValue, position) -> {
             if (isError(leftErrors, position) || isError(rightErrors, position)) {
-                errorPositions[errorIndex++] = position;
+                errorPositions[indexes[2]++] = position;
             }
             else if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                nullPositions[nullIndex++] = position;
+                nullPositions[indexes[1]++] = position;
             }
-            else if (kernel.test(integerValue(leftValues, position), integerValue(rightValues, position))) {
-                truePositions[trueIndex++] = position;
+            else if (kernel.test(leftValue, rightValue)) {
+                truePositions[indexes[0]++] = position;
             }
-        }
+        });
 
         return new MaskOutcome(
-                context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex, mask.size()),
-                context.allocator().allocateSparseMask(allocationContext, nullPositions, nullIndex, mask.size()),
-                context.allocator().allocateSparseMask(allocationContext, errorPositions, errorIndex, mask.size()));
+                context.allocator().allocateSparseMask(allocationContext, truePositions, truePositions.length, mask.size()),
+                context.allocator().allocateSparseMask(allocationContext, nullPositions, nullPositions.length, mask.size()),
+                context.allocator().allocateSparseMask(allocationContext, errorPositions, errorPositions.length, mask.size()));
     }
 
     public static Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel)
@@ -95,24 +89,22 @@ final class LongComparisonMaskSupport
             return null;
         }
 
-        Vector leftValues = inputs.get(0).values();
-        Vector rightValues = inputs.get(1).values();
-        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
         int[] truePositions = new int[mask.count()];
-        int trueIndex = 0;
-        for (int position : mask) {
+        int[] trueIndex = new int[1];
+        I64BinaryDispatch.forEachPair(inputs.get(0).values(), inputs.get(1).values(), mask, (leftValue, rightValue, position) -> {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                continue;
+                return;
             }
-            if (kernel.test(integerValue(leftValues, position), integerValue(rightValues, position))) {
-                truePositions[trueIndex++] = position;
+            if (kernel.test(leftValue, rightValue)) {
+                truePositions[trueIndex[0]++] = position;
             }
-        }
-        return context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex, mask.size());
+        });
+        return context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex[0], mask.size());
     }
 
     public static Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel)
@@ -121,24 +113,22 @@ final class LongComparisonMaskSupport
             return null;
         }
 
-        Vector leftValues = inputs.get(0).values();
-        Vector rightValues = inputs.get(1).values();
-        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
         int[] falsePositions = new int[mask.count()];
-        int falseIndex = 0;
-        for (int position : mask) {
+        int[] falseIndex = new int[1];
+        I64BinaryDispatch.forEachPair(inputs.get(0).values(), inputs.get(1).values(), mask, (leftValue, rightValue, position) -> {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                continue;
+                return;
             }
-            if (!kernel.test(integerValue(leftValues, position), integerValue(rightValues, position))) {
-                falsePositions[falseIndex++] = position;
+            if (!kernel.test(leftValue, rightValue)) {
+                falsePositions[falseIndex[0]++] = position;
             }
-        }
-        return context.allocator().allocateSparseMask(allocationContext, falsePositions, falseIndex, mask.size());
+        });
+        return context.allocator().allocateSparseMask(allocationContext, falsePositions, falseIndex[0], mask.size());
     }
 
     public static boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel)
@@ -147,18 +137,18 @@ final class LongComparisonMaskSupport
             return false;
         }
 
-        Vector leftValues = inputs.get(0).values();
-        Vector rightValues = inputs.get(1).values();
-        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
         mask.retainIf(position -> {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
                 return false;
             }
-            return kernel.test(integerValue(leftValues, position), integerValue(rightValues, position));
+            return kernel.test(leftValues.value(position), rightValues.value(position));
         });
         return true;
     }
@@ -169,18 +159,18 @@ final class LongComparisonMaskSupport
             return false;
         }
 
-        Vector leftValues = inputs.get(0).values();
-        Vector rightValues = inputs.get(1).values();
-        Vector leftNulls = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector rightNulls = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
-        Vector leftErrors = inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
-        Vector rightErrors = inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS);
+        VectorAccess.LongValues leftValues = VectorAccess.longValues(inputs.get(0).values());
+        VectorAccess.LongValues rightValues = VectorAccess.longValues(inputs.get(1).values());
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
         mask.retainIf(position -> {
             if (isError(leftErrors, position) || isError(rightErrors, position) || isNull(leftNulls, position) || isNull(rightNulls, position)) {
                 return false;
             }
-            return !kernel.test(integerValue(leftValues, position), integerValue(rightValues, position));
+            return !kernel.test(leftValues.value(position), rightValues.value(position));
         });
         return true;
     }
@@ -194,43 +184,20 @@ final class LongComparisonMaskSupport
     {
         return switch (vector) {
             case I32Vector _, I64Vector _ -> true;
+            case SelectionVector selection -> supportsLongValues(selection.values());
             case DictionaryVector dictionary -> supportsLongValues(dictionary.values());
             case RleVector rle -> supportsLongValues(rle.values());
             default -> false;
         };
     }
 
-    private static long integerValue(Vector vector, int position)
+    private static boolean isNull(VectorAccess.BooleanValues nulls, int position)
     {
-        return switch (vector) {
-            case I32Vector values -> values.values()[position];
-            case I64Vector values -> values.values()[position];
-            case DictionaryVector values -> integerValue(values.values(), values.ids()[position]);
-            case RleVector values -> integerValue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but got " + vector.getClass().getSimpleName());
-        };
+        return nulls.value(position);
     }
 
-    private static boolean isNull(Vector nulls, int position)
+    private static boolean isError(VectorAccess.BooleanValues errors, int position)
     {
-        return isTrue(nulls, position);
-    }
-
-    private static boolean isError(Vector errors, int position)
-    {
-        return isTrue(errors, position);
-    }
-
-    private static boolean isTrue(Vector vector, int position)
-    {
-        if (vector == null) {
-            return false;
-        }
-        return switch (vector) {
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isTrue(values.values(), values.ids()[position]);
-            case RleVector values -> isTrue(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean vector but got " + vector.getClass().getSimpleName());
-        };
+        return errors.value(position);
     }
 }

@@ -16,7 +16,6 @@ package org.weakref.nitro.function.scalar.builtin;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
@@ -58,78 +57,62 @@ public final class AndBoolean
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
-        BooleanVector existingValues = output != null && output.has(Stream.VALUES) ? (BooleanVector) output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
+        VectorAccess.BooleanValues leftValues = VectorAccess.booleanValues(left);
+        VectorAccess.BooleanValues rightValues = VectorAccess.booleanValues(right);
 
         int length = BooleanBinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length()));
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    existingNulls,
-                    BooleanVector.class,
-                    length,
-                    BooleanVector::new);
-            applyNulls(left, leftNulls, right, rightNulls, mask, outputNulls);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    length);
+            applyNulls(leftValues, leftNulls, rightValues, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (!requestedStreams.contains(Stream.VALUES)) {
             return result;
         }
 
-        BooleanVector outputValues = context.allocator().allocateOrGrow(
+        BooleanVector outputValues = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 allocationContext,
                 existingValues,
-                BooleanVector.class,
-                length,
-                BooleanVector::new);
-        applyValues(left, leftNulls, right, rightNulls, mask, outputValues);
+                length);
+        applyValues(leftValues, leftNulls, rightValues, rightNulls, mask, outputValues);
         return result.with(Stream.VALUES, outputValues);
     }
 
-    private static void applyValues(Vector left, BooleanVector leftNulls, Vector right, BooleanVector rightNulls, Mask mask, BooleanVector output)
+    private static void applyValues(VectorAccess.BooleanValues leftValues, Vector leftNulls, VectorAccess.BooleanValues rightValues, Vector rightNulls, Mask mask, BooleanVector output)
     {
         boolean[] values = output.values();
         for (int position : mask) {
-            boolean leftValue = booleanValue(left, position);
-            boolean rightValue = booleanValue(right, position);
-            boolean leftIsNull = isNull(leftNulls, position);
-            boolean rightIsNull = isNull(rightNulls, position);
+            boolean leftValue = leftValues.value(position);
+            boolean rightValue = rightValues.value(position);
+            boolean leftIsNull = VectorAccess.isNull(leftNulls, position);
+            boolean rightIsNull = VectorAccess.isNull(rightNulls, position);
             values[position] = !leftIsNull && !rightIsNull
                     ? leftValue && rightValue
                     : (!leftValue && !leftIsNull) || (!rightValue && !rightIsNull) ? false : leftValue && rightValue;
         }
     }
 
-    private static void applyNulls(Vector left, BooleanVector leftNulls, Vector right, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(VectorAccess.BooleanValues leftValues, Vector leftNulls, VectorAccess.BooleanValues rightValues, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            boolean leftValue = booleanValue(left, position);
-            boolean rightValue = booleanValue(right, position);
-            boolean leftIsNull = isNull(leftNulls, position);
-            boolean rightIsNull = isNull(rightNulls, position);
+            boolean leftValue = leftValues.value(position);
+            boolean rightValue = rightValues.value(position);
+            boolean leftIsNull = VectorAccess.isNull(leftNulls, position);
+            boolean rightIsNull = VectorAccess.isNull(rightNulls, position);
             nulls[position] = (leftIsNull || rightIsNull) &&
                     !((!leftValue && !leftIsNull) || (!rightValue && !rightIsNull));
         }
-    }
-
-    private static boolean booleanValue(Vector values, int position)
-    {
-        return switch (values) {
-            case BooleanVector vector -> vector.values()[position];
-            case org.weakref.nitro.data.DictionaryVector vector -> booleanValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> booleanValue(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported and vector type: " + values.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 }

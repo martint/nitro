@@ -61,15 +61,16 @@ public final class DivideRoundI64
 
         Streams result = Streams.empty();
         if (requestNulls) {
-            BooleanVector nulls = context.allocator().allocateOrGrow(
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
             boolean[] nullValues = nulls.values();
+            VectorAccess.BooleanValues numeratorNullValues = VectorAccess.booleanValues(numeratorNulls);
+            VectorAccess.BooleanValues denominatorNullValues = VectorAccess.booleanValues(denominatorNulls);
             for (int position : mask) {
-                nullValues[position] = isNull(numeratorNulls, position) || isNull(denominatorNulls, position) || value(denominatorValues, position) == 0;
+                nullValues[position] = numeratorNullValues.value(position) || denominatorNullValues.value(position) || value(denominatorValues, position) == 0;
             }
             result = result.with(Stream.NULLS, nulls);
         }
@@ -110,14 +111,4 @@ public final class DivideRoundI64
         };
     }
 
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
-            case RleVector values -> isNull(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
-    }
 }

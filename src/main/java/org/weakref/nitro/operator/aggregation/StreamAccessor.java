@@ -13,8 +13,8 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 /**
@@ -42,8 +42,28 @@ public interface StreamAccessor
      * Returns the NULLS stream for {@code column}, or {@code null} if the input has no null side
      * stream.
      */
-    default BooleanVector nulls(int column)
+    default Vector nulls(int column)
     {
-        return (BooleanVector) stream(column, Stream.NULLS);
+        return stream(column, Stream.NULLS);
+    }
+
+    default VectorAccess.BooleanValues nullValues(int column)
+    {
+        return VectorAccess.booleanValues(nulls(column));
+    }
+
+    default VectorAccess.LongValues longValues(int column)
+    {
+        return VectorAccess.longValues(values(column));
+    }
+
+    default VectorAccess.DoubleValues doubleValues(int column)
+    {
+        return VectorAccess.doubleValues(values(column));
+    }
+
+    default VectorAccess.BinaryValues binaryValues(int column)
+    {
+        return VectorAccess.binaryValues(values(column));
     }
 }

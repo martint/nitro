@@ -60,7 +60,8 @@ public final class ExtractHostUtf8
         checkArgument(inputs.size() == 1, "Unexpected argument count for extract_host_utf8");
 
         Vector values = inputs.getFirst().values();
-        BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         int requiredLength = Math.max(mask.maxPosition() + 1, values.length());
 
         int totalBytes = 0;
@@ -69,7 +70,7 @@ public final class ExtractHostUtf8
         }
         else if (requestedStreams.contains(Stream.VALUES)) {
             for (int position : mask) {
-                if (!isNull(inputNulls, position)) {
+                if (!inputNullValues.value(position)) {
                     totalBytes += extractLength(values, position);
                 }
             }
@@ -77,22 +78,21 @@ public final class ExtractHostUtf8
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            copyNulls(inputNulls, mask, outputNulls);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
+            copyNulls(inputNullValues, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            result = result.with(Stream.VALUES, applyValues(values, inputNulls, mask, totalBytes, requiredLength, output, context));
+            result = result.with(Stream.VALUES, applyValues(values, inputNullValues, mask, totalBytes, requiredLength, output, context));
         }
         return result;
     }
 
-    private static Vector applyValues(Vector values, BooleanVector inputNulls, Mask mask, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
+    private static Vector applyValues(Vector values, VectorAccess.BooleanValues inputNulls, Mask mask, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
     {
         if (values instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector dictionaryValues) {
             return applyDictionary(dictionary, dictionaryValues, totalBytes, requiredLength, output, context);
@@ -113,10 +113,10 @@ public final class ExtractHostUtf8
         return outputValues;
     }
 
-    private static void applyFlatValues(Vector values, BooleanVector inputNulls, Mask mask, BinaryVector output)
+    private static void applyFlatValues(Vector values, VectorAccess.BooleanValues inputNulls, Mask mask, BinaryVector output)
     {
         for (int position : mask) {
-            if (isNull(inputNulls, position)) {
+            if (inputNulls.value(position)) {
                 output.setNull(position);
                 continue;
             }
@@ -225,22 +225,17 @@ public final class ExtractHostUtf8
         return (int) range;
     }
 
-    private static void copyNulls(BooleanVector inputNulls, Mask mask, BooleanVector output)
+    private static void copyNulls(VectorAccess.BooleanValues inputNulls, Mask mask, BooleanVector output)
     {
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position);
+                outputValues[position] = inputNulls.value(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position);
+            outputValues[position] = inputNulls.value(position);
         }
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 }

@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -67,9 +68,9 @@ public class MinUtf8
     {
         MinUtf8StateVector values = (MinUtf8StateVector) state.values();
         Vector inputValues = streams.values(inputColumn);
-        BooleanVector inputNulls = streams.nulls(inputColumn);
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
         for (int position : mask) {
-            if (!isNull(inputNulls, position)) {
+            if (!inputNulls.value(position)) {
                 update(values, group, inputValues, position);
             }
         }
@@ -81,9 +82,9 @@ public class MinUtf8
         MinUtf8StateVector values = (MinUtf8StateVector) state.values();
         org.weakref.nitro.data.I64Vector groupVector = (org.weakref.nitro.data.I64Vector) groups;
         Vector inputValues = streams.values(inputColumn);
-        BooleanVector inputNulls = streams.nulls(inputColumn);
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
         for (int position : mask) {
-            if (!isNull(inputNulls, position)) {
+            if (!inputNulls.value(position)) {
                 update(values, toIntExact(groupVector.values()[position]), inputValues, position);
             }
         }
@@ -114,12 +115,11 @@ public class MinUtf8
                 output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                 size,
                 byteCapacity);
-        BooleanVector outputNulls = allocator.allocateOrGrow(
+        BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                size,
-                BooleanVector::new);
+                output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                size);
 
         if (value == null) {
             outputValues.setNull(outputPosition);
@@ -161,12 +161,11 @@ public class MinUtf8
         outputValues.clearTraits();
         outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
 
-        BooleanVector outputNulls = allocator.allocateOrGrow(
+        BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                size,
-                BooleanVector::new);
+                output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                size);
         Arrays.fill(outputNulls.values(), 0, size, false);
 
         if (mask.all()) {
@@ -231,12 +230,6 @@ public class MinUtf8
             default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
         };
     }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
-    }
-
     private static int compare(byte[] left, int leftOffset, int leftLength, byte[] right, int rightOffset, int rightLength)
     {
         int minLength = Math.min(leftLength, rightLength);

@@ -62,17 +62,15 @@ public final class SubtractI64
         Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    existingNulls,
-                    BooleanVector.class,
-                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())));
             applyNulls(leftNulls, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -97,22 +95,13 @@ public final class SubtractI64
 
     private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = isNull(leftNulls, position) || isNull(rightNulls, position);
+            nulls[position] = leftNullValues.value(position) || rightNullValues.value(position);
         }
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
-            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported subtract null vector type: " + nulls.getClass().getSimpleName());
-        };
     }
 
     private static long apply(long leftValue, long rightValue)

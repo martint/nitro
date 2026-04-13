@@ -65,11 +65,14 @@ public final class IfI64
         Vector falseValues = inputs.get(2).values();
         Vector trueNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector falseNulls = inputs.get(2).getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues conditionValues = VectorAccess.booleanValues(condition);
+        VectorAccess.LongValues trueBranchValues = VectorAccess.longValues(trueValues);
+        VectorAccess.LongValues falseBranchValues = VectorAccess.longValues(falseValues);
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(trueValues.length(), falseValues.length()));
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.VALUES)) {
-            Streams constantBranchOutput = tryApplyConstantBranchValues(condition, conditionNulls, trueValues, falseValues, trueNulls, falseNulls, mask, requiredLength, requestedStreams, context);
+            Streams constantBranchOutput = tryApplyConstantBranchValues(conditionValues, conditionNulls, trueValues, falseValues, trueNulls, falseNulls, mask, requiredLength, requestedStreams, context);
             if (constantBranchOutput != null) {
                 return constantBranchOutput;
             }
@@ -77,12 +80,11 @@ public final class IfI64
 
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
@@ -92,15 +94,15 @@ public final class IfI64
                     I64Vector.class,
                     requiredLength,
                     I64Vector::new);
-            applyValues(condition, conditionNulls, trueValues, falseValues, trueNulls, falseNulls, mask, outputValues, outputNulls);
+            applyValues(conditionValues, conditionNulls, trueBranchValues, falseBranchValues, trueNulls, falseNulls, mask, outputValues, outputNulls);
             return result.with(Stream.VALUES, outputValues);
         }
 
-        applyNulls(condition, conditionNulls, trueNulls, falseNulls, mask, outputNulls);
+        applyNulls(conditionValues, conditionNulls, trueNulls, falseNulls, mask, outputNulls);
         return result;
     }
 
-    private static Streams tryApplyConstantBranchValues(Vector condition, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, int requiredLength, Set<Stream> requestedStreams, PrimitiveExecutionContext context)
+    private static Streams tryApplyConstantBranchValues(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, int requiredLength, Set<Stream> requestedStreams, PrimitiveExecutionContext context)
     {
         if (constantNullValue(trueNulls) != Boolean.FALSE || constantNullValue(falseNulls) != Boolean.FALSE) {
             return null;
@@ -127,12 +129,12 @@ public final class IfI64
         int[] ids = new int[requiredLength];
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                ids[position] = conditionValue(condition, conditionNulls, position) ? 1 : 0;
+                ids[position] = conditionValue(conditionValues, conditionNulls, position) ? 1 : 0;
             }
         }
         else {
             for (int position : mask) {
-                ids[position] = conditionValue(condition, conditionNulls, position) ? 1 : 0;
+                ids[position] = conditionValue(conditionValues, conditionNulls, position) ? 1 : 0;
             }
         }
 
@@ -142,59 +144,43 @@ public final class IfI64
         return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues)) : result;
     }
 
-    private static void applyValues(Vector condition, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, I64Vector outputValues, BooleanVector outputNulls)
+    private static void applyValues(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, VectorAccess.LongValues trueValues, VectorAccess.LongValues falseValues, Vector trueNulls, Vector falseNulls, Mask mask, I64Vector outputValues, BooleanVector outputNulls)
     {
         for (int position : mask) {
-            boolean takeTrue = conditionValue(condition, conditionNulls, position);
-            Vector selectedValues = takeTrue ? trueValues : falseValues;
+            boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
+            VectorAccess.LongValues selectedValues = takeTrue ? trueValues : falseValues;
             Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            if (isNull(selectedNulls, position)) {
+            if (VectorAccess.isNull(selectedNulls, position)) {
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
                 }
                 continue;
             }
 
-            outputValues.values()[position] = integerValue(selectedValues, position);
+            outputValues.values()[position] = selectedValues.value(position);
             if (outputNulls != null) {
                 outputNulls.values()[position] = false;
             }
         }
     }
 
-    private static void applyNulls(Vector condition, Vector conditionNulls, Vector trueNulls, Vector falseNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueNulls, Vector falseNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            boolean takeTrue = conditionValue(condition, conditionNulls, position);
+            boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
             Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            nulls[position] = isNull(selectedNulls, position);
+            nulls[position] = VectorAccess.isNull(selectedNulls, position);
         }
     }
 
-    private static boolean conditionValue(Vector values, Vector nulls, int position)
+    private static boolean conditionValue(VectorAccess.BooleanValues values, Vector nulls, int position)
     {
-        if (isNull(nulls, position)) {
+        if (VectorAccess.isNull(nulls, position)) {
             return false;
         }
-        return switch (values) {
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> conditionValue(vector.values(), null, vector.ids()[position]);
-            case RleVector vector -> conditionValue(vector.values(), null, vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported if_i64 condition vector type: " + values.getClass().getSimpleName());
-        };
-    }
-
-    private static long integerValue(Vector values, int position)
-    {
-        return switch (values) {
-            case I32Vector vector -> vector.values()[position];
-            case I64Vector vector -> vector.values()[position];
-            case DictionaryVector vector -> integerValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> integerValue(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported if_i64 branch vector type: " + values.getClass().getSimpleName());
-        };
+        return values.value(position);
     }
 
     private static Long constantIntegerValue(Vector values)
@@ -221,43 +207,29 @@ public final class IfI64
 
     private static Boolean constantNullValue(Vector nulls)
     {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector when vector.length() == 1 -> vector.values()[0];
-            case BooleanVector vector -> {
-                for (boolean value : vector.values()) {
-                    if (value) {
-                        yield null;
-                    }
-                }
-                yield false;
+        if (nulls == null) {
+            return false;
+        }
+
+        VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+        if (nulls.length() == 1) {
+            return nullValues.value(0);
+        }
+
+        for (int position = 0; position < nulls.length(); position++) {
+            if (nullValues.value(position)) {
+                return null;
             }
-            case DictionaryVector vector when vector.length() == 1 -> constantNullValue(vector.values(), vector.ids()[0]);
-            case RleVector vector when vector.counts().length == 1 -> constantNullValue(vector.values(), vector.runIndex(0));
-            case DictionaryVector _, RleVector _ -> null;
-            default -> throw new IllegalArgumentException("Unsupported if_i64 null vector type: " + nulls.getClass().getSimpleName());
-        };
+        }
+        return false;
     }
 
     private static Boolean constantNullValue(Vector nulls, int position)
     {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> constantNullValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> constantNullValue(vector.values(), vector.runIndex(position));
-            default -> null;
-        };
+        if (nulls == null) {
+            return false;
+        }
+        return VectorAccess.booleanValues(nulls).value(position);
     }
 
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
-            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported if_i64 null vector type: " + nulls.getClass().getSimpleName());
-        };
-    }
 }

@@ -18,6 +18,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
@@ -116,7 +117,11 @@ public class SemiJoinOperator
                     (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector),
                     (existing, sourcePosition, outputPosition, size) -> {
                         BooleanVector matchValues = batchState.borrowMatchValues(this);
-                        BooleanVector outputValues = allocator.allocateOrGrow(ALLOCATION_CONTEXT, existing == null ? null : (BooleanVector) existing.getOrNull(Stream.VALUES), BooleanVector.class, size, BooleanVector::new);
+                        BooleanVector outputValues = VectorAccess.writableBooleanVector(
+                                allocator,
+                                ALLOCATION_CONTEXT,
+                                existing == null ? null : existing.getOrNull(Stream.VALUES),
+                                size);
                         outputValues.values()[outputPosition] = matchValues.values()[sourcePosition];
                         return Streams.ofValues(outputValues);
                     });
@@ -179,7 +184,7 @@ public class SemiJoinOperator
                 }
                 Output output = batch.output(innerJoinColumn);
                 Vector values = output.borrow(Stream.VALUES);
-                BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+                Vector nulls = output.borrowOrNull(Stream.NULLS);
                 membershipScratch = allocator.allocateOrGrow(
                         ALLOCATION_CONTEXT,
                         membershipScratch,
@@ -204,7 +209,7 @@ public class SemiJoinOperator
 
         Output output = sourceBatch.output(outerJoinColumn);
         Vector values = output.borrow(Stream.VALUES);
-        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        Vector nulls = output.borrowOrNull(Stream.NULLS);
 
         int[] positions = new int[sourceMask.count()];
         int selectedCount = 0;
@@ -232,7 +237,7 @@ public class SemiJoinOperator
 
         Output output = batchState.sourceBatch().output(outerJoinColumn);
         Vector values = output.borrow(Stream.VALUES);
-        BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        Vector nulls = output.borrowOrNull(Stream.NULLS);
         for (int position : mask) {
             matchValues.values()[position] = membership.contains(values, nulls, position);
         }

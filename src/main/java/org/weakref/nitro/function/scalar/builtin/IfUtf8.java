@@ -64,25 +64,27 @@ public final class IfUtf8
         Vector falseValues = inputs.get(2).values();
         Vector trueNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector falseNulls = inputs.get(2).getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues conditionValues = VectorAccess.booleanValues(condition);
+        VectorAccess.BinaryValues trueBranchValues = VectorAccess.binaryValues(trueValues);
+        VectorAccess.BinaryValues falseBranchValues = VectorAccess.binaryValues(falseValues);
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(trueValues.length(), falseValues.length()));
 
         int totalBytes = 0;
         if (requestedStreams.contains(Stream.VALUES)) {
             for (int position : mask) {
-                Vector selected = conditionValue(condition, conditionNulls, position) ? trueValues : falseValues;
-                totalBytes += byteLength(selected, position);
+                VectorAccess.BinaryValues selected = conditionValue(conditionValues, conditionNulls, position) ? trueBranchValues : falseBranchValues;
+                totalBytes += selected.value(position).length();
             }
         }
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
@@ -93,24 +95,24 @@ public final class IfUtf8
                     requiredLength,
                     totalBytes);
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
-            applyValues(condition, conditionNulls, trueValues, falseValues, trueNulls, falseNulls, mask, outputValues, outputNulls);
+            applyValues(conditionValues, conditionNulls, trueBranchValues, falseBranchValues, trueNulls, falseNulls, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
             return result;
         }
 
         if (outputNulls != null) {
-            applyNulls(condition, conditionNulls, trueNulls, falseNulls, mask, outputNulls);
+            applyNulls(conditionValues, conditionNulls, trueNulls, falseNulls, mask, outputNulls);
         }
         return result;
     }
 
-    private static void applyValues(Vector condition, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
+    private static void applyValues(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, VectorAccess.BinaryValues trueValues, VectorAccess.BinaryValues falseValues, Vector trueNulls, Vector falseNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
         for (int position : mask) {
-            boolean takeTrue = conditionValue(condition, conditionNulls, position);
-            Vector selectedValues = takeTrue ? trueValues : falseValues;
+            boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
+            VectorAccess.BinaryValues selectedValues = takeTrue ? trueValues : falseValues;
             Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            if (isNull(selectedNulls, position)) {
+            if (VectorAccess.isNull(selectedNulls, position)) {
                 outputValues.setNull(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
@@ -125,58 +127,28 @@ public final class IfUtf8
         }
     }
 
-    private static void applyNulls(Vector condition, Vector conditionNulls, Vector trueNulls, Vector falseNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueNulls, Vector falseNulls, Mask mask, BooleanVector outputNulls)
     {
         boolean[] nulls = outputNulls.values();
         Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            boolean takeTrue = conditionValue(condition, conditionNulls, position);
+            boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
             Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            nulls[position] = isNull(selectedNulls, position);
+            nulls[position] = VectorAccess.isNull(selectedNulls, position);
         }
     }
 
-    private static boolean conditionValue(Vector values, Vector nulls, int position)
+    private static boolean conditionValue(VectorAccess.BooleanValues values, Vector nulls, int position)
     {
-        if (isNull(nulls, position)) {
+        if (VectorAccess.isNull(nulls, position)) {
             return false;
         }
-        return switch (values) {
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> conditionValue(vector.values(), null, vector.ids()[position]);
-            case RleVector vector -> conditionValue(vector.values(), null, vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported if_utf8 condition vector type: " + values.getClass().getSimpleName());
-        };
+        return values.value(position);
     }
 
-    private static int byteLength(Vector values, int position)
+    private static void copyBytes(VectorAccess.BinaryValues values, int inputPosition, BinaryVector output, int outputPosition)
     {
-        return switch (values) {
-            case BinaryVector vector -> vector.length(position);
-            case DictionaryVector vector -> byteLength(vector.values(), vector.ids()[position]);
-            case RleVector vector -> byteLength(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported if_utf8 vector type: " + values.getClass().getSimpleName());
-        };
-    }
-
-    private static void copyBytes(Vector values, int inputPosition, BinaryVector output, int outputPosition)
-    {
-        switch (values) {
-            case BinaryVector vector -> output.setBytes(outputPosition, vector.data(), vector.startOffset(inputPosition), vector.length(inputPosition));
-            case DictionaryVector vector -> copyBytes(vector.values(), vector.ids()[inputPosition], output, outputPosition);
-            case RleVector vector -> copyBytes(vector.values(), vector.runIndex(inputPosition), output, outputPosition);
-            default -> throw new IllegalArgumentException("Unsupported if_utf8 vector type: " + values.getClass().getSimpleName());
-        }
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
-            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported if_utf8 null vector type: " + nulls.getClass().getSimpleName());
-        };
+        VectorAccess.BinarySlice value = values.value(inputPosition);
+        output.setBytes(outputPosition, value.data(), value.offset(), value.length());
     }
 }

@@ -59,13 +59,14 @@ public final class UpperUtf8
         }
 
         Vector values = inputs.getFirst().values();
-        BooleanVector valueNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector valueNulls = inputs.getFirst().getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues valueNullValues = VectorAccess.booleanValues(valueNulls);
         int requiredLength = mask.none() ? 0 : Math.max(mask.maxPosition() + 1, values.length());
 
         int totalBytes = 0;
         if (requestedStreams.contains(Stream.VALUES)) {
             for (int position : mask) {
-                if (isNull(valueNulls, position)) {
+                if (valueNullValues.value(position)) {
                     continue;
                 }
                 totalBytes += upperValue(values, position).length;
@@ -75,13 +76,12 @@ public final class UpperUtf8
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
-            applyNulls(valueNulls, mask, outputNulls);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
+            applyNulls(valueNullValues, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
@@ -93,21 +93,21 @@ public final class UpperUtf8
                     totalBytes);
             outputValues.clearTraits();
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
-            applyValues(values, valueNulls, mask, outputValues, outputNulls);
+            applyValues(values, valueNullValues, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
         }
         return result;
     }
 
-    private static void applyNulls(BooleanVector valueNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(VectorAccess.BooleanValues valueNulls, Mask mask, BooleanVector outputNulls)
     {
         Arrays.fill(outputNulls.values(), false);
         for (int position : mask) {
-            outputNulls.values()[position] = isNull(valueNulls, position);
+            outputNulls.values()[position] = valueNulls.value(position);
         }
     }
 
-    private static void applyValues(Vector values, BooleanVector valueNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
+    private static void applyValues(Vector values, VectorAccess.BooleanValues valueNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
         int currentOffset = 0;
         int lastPosition = -1;
@@ -115,7 +115,7 @@ public final class UpperUtf8
         for (int position : mask) {
             fillOffsets(outputValues, lastPosition + 1, position, currentOffset);
             outputValues.offsets()[position] = currentOffset;
-            if (isNull(valueNulls, position)) {
+            if (valueNulls.value(position)) {
                 outputValues.setNull(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
@@ -155,11 +155,6 @@ public final class UpperUtf8
         for (int index = startInclusive; index <= endExclusive; index++) {
             outputValues.offsets()[index] = offset;
         }
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 
     private static boolean isAsciiOnly(byte[] value)

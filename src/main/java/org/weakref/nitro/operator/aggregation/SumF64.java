@@ -19,6 +19,7 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -48,7 +49,7 @@ public class SumF64
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
         F64Vector values = allocator.allocateOrGrow(allocationContext, (F64Vector) state.values(), F64Vector.class, size, F64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(allocator, allocationContext, state.get(Stream.NULLS), size);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
@@ -63,19 +64,19 @@ public class SumF64
     {
         F64Vector stateVector = (F64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
-        double[] inputValues = values(streams.values(inputColumn));
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         double sum = 0;
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                sum += isNull(inputNulls, position) ? 0 : inputValues[position];
+                sum += inputNulls.value(position) ? 0 : inputValues.value(position);
             }
         }
         else {
             for (int position : mask) {
-                sum += isNull(inputNulls, position) ? 0 : inputValues[position];
+                sum += inputNulls.value(position) ? 0 : inputValues.value(position);
             }
         }
 
@@ -89,8 +90,8 @@ public class SumF64
         F64Vector stateVector = (F64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
-        double[] inputValues = values(streams.values(inputColumn));
-        boolean[] inputNulls = nulls(streams.stream(inputColumn, Stream.NULLS));
+        VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -106,30 +107,15 @@ public class SumF64
         }
     }
 
-    private static void accumulate(F64Vector state, BooleanVector stateNulls, int group, double[] inputValues, boolean[] inputNulls, int position)
+    private static void accumulate(F64Vector state, BooleanVector stateNulls, int group, VectorAccess.DoubleValues inputValues, VectorAccess.BooleanValues inputNulls, int position)
     {
         stateNulls.values()[group] = false;
-        state.values()[group] += isNull(inputNulls, position) ? 0 : inputValues[position];
+        state.values()[group] += inputNulls.value(position) ? 0 : inputValues.value(position);
     }
 
     @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
-    }
-
-    private static double[] values(Vector vector)
-    {
-        return ((F64Vector) vector).values();
-    }
-
-    private static boolean[] nulls(Vector vector)
-    {
-        return vector == null ? null : ((BooleanVector) vector).values();
-    }
-
-    private static boolean isNull(boolean[] nulls, int position)
-    {
-        return nulls != null && nulls[position];
     }
 }

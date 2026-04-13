@@ -63,21 +63,20 @@ public final class RegexpReplaceUtf8
         Vector values = inputs.get(0).values();
         Vector patternValues = inputs.get(1).values();
         Vector replacementValues = inputs.get(2).values();
-        BooleanVector valuesNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector patternNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
-        BooleanVector replacementNulls = (BooleanVector) inputs.get(2).getOrNull(Stream.NULLS);
+        Vector valuesNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector patternNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector replacementNulls = inputs.get(2).getOrNull(Stream.NULLS);
 
         int requiredLength = maxLength(mask, values, patternValues, replacementValues);
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             fillNulls(valuesNulls, patternNulls, replacementNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -92,24 +91,27 @@ public final class RegexpReplaceUtf8
 
     private static Vector applyGeneric(
             Vector values,
-            BooleanVector valuesNulls,
+            Vector valuesNulls,
             Vector patternValues,
-            BooleanVector patternNulls,
+            Vector patternNulls,
             Vector replacementValues,
-            BooleanVector replacementNulls,
+            Vector replacementNulls,
             Mask mask,
             int requiredLength,
             Streams output,
             PrimitiveExecutionContext context,
             BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues valueNullValues = VectorAccess.booleanValues(valuesNulls);
+        VectorAccess.BooleanValues patternNullValues = VectorAccess.booleanValues(patternNulls);
+        VectorAccess.BooleanValues replacementNullValues = VectorAccess.booleanValues(replacementNulls);
         byte[][] rewritten = new byte[mask.selectedCount()][];
         Map<Slice, Pattern> patterns = new HashMap<>();
         int totalBytes = 0;
         boolean asciiOnly = true;
         int index = 0;
         for (int position : mask) {
-            if (isNull(valuesNulls, position) || isNull(patternNulls, position) || isNull(replacementNulls, position)) {
+            if (valueNullValues.value(position) || patternNullValues.value(position) || replacementNullValues.value(position)) {
                 rewritten[index++] = null;
                 continue;
             }
@@ -154,12 +156,15 @@ public final class RegexpReplaceUtf8
         return outputValues;
     }
 
-    private static void fillNulls(BooleanVector valuesNulls, BooleanVector patternNulls, BooleanVector replacementNulls, Mask mask, BooleanVector outputNulls)
+    private static void fillNulls(Vector valuesNulls, Vector patternNulls, Vector replacementNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues valueNullValues = VectorAccess.booleanValues(valuesNulls);
+        VectorAccess.BooleanValues patternNullValues = VectorAccess.booleanValues(patternNulls);
+        VectorAccess.BooleanValues replacementNullValues = VectorAccess.booleanValues(replacementNulls);
         boolean[] nulls = outputNulls.values();
         Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = isNull(valuesNulls, position) || isNull(patternNulls, position) || isNull(replacementNulls, position);
+            nulls[position] = valueNullValues.value(position) || patternNullValues.value(position) || replacementNullValues.value(position);
         }
     }
 
@@ -180,11 +185,6 @@ public final class RegexpReplaceUtf8
             case org.weakref.nitro.data.DictionaryVector dictionary -> utf8Slice(dictionary.values(), dictionary.ids()[position]);
             default -> throw new IllegalArgumentException("Unsupported regexp_replace_utf8 vector type: " + values.getClass().getSimpleName());
         };
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 
     private static Slice translateReplacement(Slice replacement)

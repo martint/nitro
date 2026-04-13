@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -38,6 +39,22 @@ public final class Output
         Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size);
     }
 
+    @FunctionalInterface
+    public interface PositionsResolver
+    {
+        Streams copyPositions(Set<Stream> streams, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange);
+    }
+
+    @FunctionalInterface
+    public interface PositionProjector
+    {
+        ProjectedOutput projectPositions(Set<Stream> streams, SelectedPositions sourcePositions);
+    }
+
+    public record ProjectedOutput(Output output, SelectedPositions sourcePositions)
+    {
+    }
+
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
@@ -55,6 +72,8 @@ public final class Output
     private final Function<Stream, Vector> resolver;
     private final BiFunction<Stream, Vector, Vector> takeResolver;
     private final BiConsumer<Stream, Vector> releaseResolver;
+    private final PositionProjector positionProjector;
+    private final PositionsResolver positionsResolver;
     private final SinglePositionResolver singlePositionResolver;
     private final Vector[] resolvedStreams = new Vector[Stream.values().length];
     private int resolvedFlags;
@@ -68,26 +87,33 @@ public final class Output
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
-        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null);
+        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null, null, null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
     {
-        this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null);
+        this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null, null, null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
-        this(exposedStreams, resolver, takeResolver, releaseResolver, null);
+        this(exposedStreams, resolver, takeResolver, releaseResolver, null, null, null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, SinglePositionResolver singlePositionResolver)
+    {
+        this(exposedStreams, resolver, takeResolver, releaseResolver, null, null, singlePositionResolver);
+    }
+
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionProjector positionProjector, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedFlags = streamFlags(exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
         this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
         this.releaseResolver = requireNonNull(releaseResolver, "releaseResolver is null");
+        this.positionProjector = positionProjector;
+        this.positionsResolver = positionsResolver;
         this.singlePositionResolver = singlePositionResolver;
     }
 
@@ -170,7 +196,46 @@ public final class Output
     public Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size)
     {
         checkOpen();
-        return singlePositionResolver == null ? null : singlePositionResolver.copySinglePosition(existing, sourcePosition, outputPosition, size);
+        if (singlePositionResolver != null) {
+            return singlePositionResolver.copySinglePosition(existing, sourcePosition, outputPosition, size);
+        }
+        if (positionsResolver == null) {
+            return null;
+        }
+        return positionsResolver.copyPositions(streams(), existing, new int[] {sourcePosition}, 0, 1, outputPosition, size, false);
+    }
+
+    public ProjectedOutput projectPositions(int[] sourcePositions, int sourceStart, int sourceCount)
+    {
+        return projectPositions(SelectedPositions.positions(sourcePositions, sourceStart, sourceCount));
+    }
+
+    public ProjectedOutput projectPositions(SelectedPositions sourcePositions)
+    {
+        checkOpen();
+        return positionProjector == null ? null : positionProjector.projectPositions(streams(), sourcePositions);
+    }
+
+    public Streams copyPositions(Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
+    {
+        checkOpen();
+        if (sourceCount == 1 && singlePositionResolver != null) {
+            return singlePositionResolver.copySinglePosition(existing, sourcePositions[sourceStart], outputStart, size);
+        }
+        return positionsResolver == null ? null : positionsResolver.copyPositions(streams(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+    }
+
+    public Output select(Set<Stream> selectedStreams)
+    {
+        requireNonNull(selectedStreams, "selectedStreams is null");
+        int selectedFlags = streamFlags(selectedStreams);
+        if ((selectedFlags & ~exposedFlags) != 0) {
+            throw new IllegalArgumentException("Selected streams are not exposed by output");
+        }
+        if (selectedFlags == exposedFlags) {
+            return this;
+        }
+        return new Output(selectedStreams, this::borrow, (stream, vector) -> take(stream), (_, _) -> {}, positionProjector, positionsResolver, null);
     }
 
     @Override

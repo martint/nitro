@@ -56,17 +56,16 @@ public final class CastUtf8ToI64
         checkArgument(inputs.size() == 1, "Unexpected argument count for cast_utf8_to_i64");
 
         Vector values = inputs.getFirst().values();
-        BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
         int requiredLength = Math.max(mask.maxPosition() + 1, values.length());
         Streams result = Streams.empty();
 
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             copyNulls(inputNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -83,17 +82,18 @@ public final class CastUtf8ToI64
         return result;
     }
 
-    private static void apply(Vector values, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void apply(Vector values, Vector inputNulls, Mask mask, I64Vector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : parse(values, position);
+                outputValues[position] = inputNullValues.value(position) ? 0 : parse(values, position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : parse(values, position);
+            outputValues[position] = inputNullValues.value(position) ? 0 : parse(values, position);
         }
     }
 
@@ -138,22 +138,18 @@ public final class CastUtf8ToI64
         return negative ? Math.negateExact(value) : value;
     }
 
-    private static void copyNulls(BooleanVector inputNulls, Mask mask, BooleanVector output)
+    private static void copyNulls(Vector inputNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position);
+                outputValues[position] = inputNullValues.value(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position);
+            outputValues[position] = inputNullValues.value(position);
         }
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 }

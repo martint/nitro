@@ -1313,6 +1313,42 @@ pay avoidable control-flow and dispatch overhead in join-heavy paths. Join
 implementations should therefore prefer batch-oriented probe APIs where the key
 representation allows it, especially for primitive-key hash tables.
 
+Recent `Q64` / `Q80` join work sharpened several more practical rules:
+
+- General selection-aware vector APIs are a worthwhile foundation. Adding
+  `SelectedPositions`, `SelectionVector`, and selected-row copy hooks to the
+  shared vector layer made it possible to preserve row indirection longer
+  without pushing join-specific wrapper logic into every downstream consumer.
+- That said, "selection-native" only helps when composed selections collapse
+  back onto primitive copy paths. Generic mapped-selection recursion and
+  structural projected-output wrappers repeatedly looked attractive in design
+  review but regressed the real chained-join hot path once they sat between the
+  join and primitive array copies.
+- Wrapper preservation by itself is not a sufficient optimization goal. Several
+  experiments that preserved outer-side `NULLS` / `ERRORS` wrappers, provenance
+  markers, or false-only boolean encodings were semantically valid but still
+  slower than the better checkpoint. The architecture should therefore treat
+  "keep wrappers longer" as conditional on a cheaper copy/decode path, not as a
+  good in itself.
+- Shape-based heuristics are not enough to decide that a carried stream is safe
+  or profitable to preserve across later joins. Knowing that a stream happens
+  to be dictionary-, RLE-, or selection-backed does not prove that preserving
+  that wrapper at the next join boundary is cheap. Row-alignment semantics and
+  the downstream copy path matter more than wrapper shape alone.
+- Stream demand also matters, but stream-specific laziness is not free. In the
+  current benchmark harness, final consumers often borrow only `VALUES`, which
+  means eagerly materializing join `NULLS` / `ERRORS` is architecturally
+  suspicious. However, a naive "materialize only the requested stream" change at
+  the `Output` boundary regressed because it left the expensive carried-row copy
+  path unchanged underneath. The lesson is that stream-selective materialization
+  needs a correspondingly cheap stream-selective copy path to pay off.
+- The remaining late-join hotspot is not generic wrapper recursion anymore. The
+  dominant cost in the kept selection-aware checkpoint is repeated copying of
+  carried outer columns shaped like `SelectionVector<I64Vector>` together with
+  `SelectionVector<BooleanVector>` side streams. That means the next design work
+  should focus on reusing carried outer row selections across many columns, not
+  on inventing more boolean wrapper variants.
+
 This same principle should apply outside joins too. Filters, projections,
 source scans, and future operators should all treat masks as the common
 currency for "only do the work still needed" whenever their execution model can
@@ -1934,12 +1970,20 @@ The following execution choices should guide the runtime design:
   honor it. In particular, joins should prefer passing probe/build outputs
   forward as dictionary/RLE/retained-position views when that avoids rebuilding
   fresh vectors, especially for variable-width payloads.
+- Preserving indirection is only the first half of the contract. The runtime
+  must also compose carried selections into the cheapest available copy path;
+  otherwise a structurally "more lazy" representation can still be slower than
+  one eager materialization into primitive arrays.
 - That in turn requires wrapper transparency at consumer boundaries. Scalar
   dispatch, ordering, null/error inspection, and other post-join consumers must
   treat dictionary- and RLE-backed streams as ordinary physical encodings
   rather than assuming flat `BooleanVector`, `I64Vector`, `BinaryVector`, and
   so on. Flat-only assumptions after a join reintroduce eager flattening as a
   hidden architectural requirement.
+- The same transparency now needs to extend to shared selected-row views. If
+  joins preserve carried rows as `SelectionVector`-style encodings, the rest of
+  the runtime should be able to either read them directly or collapse them back
+  onto primitive loops without forcing an intermediate row-by-row decode step.
 - The Trino-vs-Nitro join comparison made this concrete: Trino largely keeps
   row identity and appends through page/block builders, while Nitro historically
   paid extra cost by turning matched rows back into freshly materialized output

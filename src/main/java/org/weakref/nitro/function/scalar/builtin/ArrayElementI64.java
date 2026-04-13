@@ -47,7 +47,10 @@ public final class ArrayElementI64
     @Override
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return PrimitiveFunction.valuesAndNullsWhenRequested(requestedOutputStreams);
+        return PrimitiveFunction.inputStreams(
+                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS) || requestedOutputStreams.contains(Stream.ERRORS),
+                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS),
+                requestedOutputStreams.contains(Stream.ERRORS));
     }
 
     @Override
@@ -64,23 +67,22 @@ public final class ArrayElementI64
 
         ArrayVector arrays = requireArrayVector(arrayInput);
         I64Vector elementValues = requireI64Vector("array_element_i64", arrays.elementValues());
-        BooleanVector elementNulls = arrays.elementNulls();
-        BooleanVector elementErrors = (BooleanVector) arrays.elementStreamOrNull(Stream.ERRORS);
+        Vector elementNulls = arrays.elementNulls();
+        Vector elementErrors = arrays.elementStreamOrNull(Stream.ERRORS);
         IndexAccess indexes = indexAccess("array_element_i64", indexInput);
-        BooleanVector arrayNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector indexNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
-        BooleanVector arrayErrors = (BooleanVector) inputs.get(0).getOrNull(Stream.ERRORS);
-        BooleanVector indexErrors = (BooleanVector) inputs.get(1).getOrNull(Stream.ERRORS);
+        Vector arrayNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector indexNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector arrayErrors = inputs.get(0).getOrNull(Stream.ERRORS);
+        Vector indexErrors = inputs.get(1).getOrNull(Stream.ERRORS);
 
         Streams result = Streams.empty();
         int requiredLength = Math.max(mask.maxPosition() + 1, arrayInput.length());
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             applyNulls(arrays, arrayInput, elementNulls, indexes, arrayNulls, indexNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -95,72 +97,80 @@ public final class ArrayElementI64
             result = result.with(Stream.VALUES, outputValues);
         }
         if (requestedStreams.contains(Stream.ERRORS) && (arrayErrors != null || indexErrors != null || elementErrors != null)) {
-            BooleanVector outputErrors = context.allocator().allocateOrGrow(
+            BooleanVector outputErrors = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.ERRORS) && output.get(Stream.ERRORS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null,
+                    requiredLength);
             applyErrors(arrays, arrayInput, elementErrors, indexes, arrayErrors, indexErrors, arrayNulls, indexNulls, mask, outputErrors);
             result = result.with(Stream.ERRORS, outputErrors);
         }
         return result;
     }
 
-    private static void applyValues(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, BooleanVector elementNulls, IndexAccess indexes, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, I64Vector output)
+    private static void applyValues(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, Vector elementNulls, IndexAccess indexes, Vector arrayNulls, Vector indexNulls, Mask mask, I64Vector output)
     {
+        VectorAccess.BooleanValues arrayNullValues = VectorAccess.booleanValues(arrayNulls);
+        VectorAccess.BooleanValues indexNullValues = VectorAccess.booleanValues(indexNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+                outputValues[position] = arrayNullValues.value(position) || indexNullValues.value(position)
                         ? 0
                         : lookupArrayElement(arrays, arrayInput, elementValues, elementNulls, indexes, position).value();
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+            outputValues[position] = arrayNullValues.value(position) || indexNullValues.value(position)
                     ? 0
                     : lookupArrayElement(arrays, arrayInput, elementValues, elementNulls, indexes, position).value();
         }
     }
 
-    private static void applyNulls(ArrayVector arrays, Vector arrayInput, BooleanVector elementNulls, IndexAccess indexes, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, BooleanVector output)
+    private static void applyNulls(ArrayVector arrays, Vector arrayInput, Vector elementNulls, IndexAccess indexes, Vector arrayNulls, Vector indexNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues arrayNullValues = VectorAccess.booleanValues(arrayNulls);
+        VectorAccess.BooleanValues indexNullValues = VectorAccess.booleanValues(indexNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+                outputValues[position] = arrayNullValues.value(position) || indexNullValues.value(position)
                         || lookupArrayElement(arrays, arrayInput, null, elementNulls, indexes, position).nullValue();
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(arrayNulls, position) || isNull(indexNulls, position)
+            outputValues[position] = arrayNullValues.value(position) || indexNullValues.value(position)
                     || lookupArrayElement(arrays, arrayInput, null, elementNulls, indexes, position).nullValue();
         }
     }
 
-    private static void applyErrors(ArrayVector arrays, Vector arrayInput, BooleanVector elementErrors, IndexAccess indexes, BooleanVector arrayErrors, BooleanVector indexErrors, BooleanVector arrayNulls, BooleanVector indexNulls, Mask mask, BooleanVector output)
+    private static void applyErrors(ArrayVector arrays, Vector arrayInput, Vector elementErrors, IndexAccess indexes, Vector arrayErrors, Vector indexErrors, Vector arrayNulls, Vector indexNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues arrayErrorValues = VectorAccess.booleanValues(arrayErrors);
+        VectorAccess.BooleanValues indexErrorValues = VectorAccess.booleanValues(indexErrors);
+        VectorAccess.BooleanValues arrayNullValues = VectorAccess.booleanValues(arrayNulls);
+        VectorAccess.BooleanValues indexNullValues = VectorAccess.booleanValues(indexNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isError(arrayErrors, position)
-                        || isError(indexErrors, position)
-                        || (!isNull(arrayNulls, position) && !isNull(indexNulls, position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
+                outputValues[position] = arrayErrorValues.value(position)
+                        || indexErrorValues.value(position)
+                        || (!arrayNullValues.value(position) && !indexNullValues.value(position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isError(arrayErrors, position)
-                    || isError(indexErrors, position)
-                    || (!isNull(arrayNulls, position) && !isNull(indexNulls, position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
+            outputValues[position] = arrayErrorValues.value(position)
+                    || indexErrorValues.value(position)
+                    || (!arrayNullValues.value(position) && !indexNullValues.value(position) && lookupArrayElementError(arrays, arrayInput, elementErrors, indexes, position));
         }
     }
 
-    private static ArrayElementResult lookupArrayElement(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, BooleanVector elementNulls, IndexAccess indexes, int position)
+    private static ArrayElementResult lookupArrayElement(ArrayVector arrays, Vector arrayInput, I64Vector elementValues, Vector elementNulls, IndexAccess indexes, int position)
     {
+        VectorAccess.BooleanValues elementNullValues = VectorAccess.booleanValues(elementNulls);
         int arrayPosition = switch (arrayInput) {
             case DictionaryVector vector -> vector.ids()[position];
             default -> position;
@@ -170,16 +180,14 @@ public final class ArrayElementI64
             return new ArrayElementResult(0, true);
         }
         int elementPosition = arrays.startOffset(arrayPosition) + toIntExact(index);
-        boolean nullValue = elementNulls != null && elementNulls.values()[elementPosition];
+        boolean nullValue = elementNullValues.value(elementPosition);
         long value = elementValues == null || nullValue ? 0 : elementValues.values()[elementPosition];
         return new ArrayElementResult(value, nullValue);
     }
 
-    private static boolean lookupArrayElementError(ArrayVector arrays, Vector arrayInput, BooleanVector elementErrors, IndexAccess indexes, int position)
+    private static boolean lookupArrayElementError(ArrayVector arrays, Vector arrayInput, Vector elementErrors, IndexAccess indexes, int position)
     {
-        if (elementErrors == null) {
-            return false;
-        }
+        VectorAccess.BooleanValues elementErrorValues = VectorAccess.booleanValues(elementErrors);
         int arrayPosition = switch (arrayInput) {
             case DictionaryVector vector -> vector.ids()[position];
             default -> position;
@@ -189,7 +197,7 @@ public final class ArrayElementI64
             return false;
         }
         int elementPosition = arrays.startOffset(arrayPosition) + toIntExact(index);
-        return elementErrors.values()[elementPosition];
+        return elementErrorValues.value(elementPosition);
     }
 
     private static ArrayVector requireArrayVector(Vector vector)
@@ -214,16 +222,6 @@ public final class ArrayElementI64
             case DictionaryVector dictionary when dictionary.values() instanceof I64Vector values -> new IndexAccess(values, true, dictionary.ids());
             default -> throw new IllegalArgumentException(functionName + " requires I64Vector index input");
         };
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
-    }
-
-    private static boolean isError(BooleanVector errors, int position)
-    {
-        return errors != null && errors.values()[position];
     }
 
     private record IndexAccess(I64Vector values, boolean dictionary, int[] ids)

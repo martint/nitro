@@ -131,11 +131,11 @@ public class MarkDistinctOperator
         }
 
         Vector[] values = new Vector[distinctColumns.length];
-        BooleanVector[] nulls = new BooleanVector[distinctColumns.length];
+        Vector[] nulls = new Vector[distinctColumns.length];
         for (int index = 0; index < distinctColumns.length; index++) {
             Output output = sourceBatch.output(distinctColumns[index]);
             values[index] = output.borrow(Stream.VALUES);
-            nulls[index] = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+            nulls[index] = output.borrowOrNull(Stream.NULLS);
         }
         if (distinctKeySet == null) {
             distinctKeySet = DistinctKeySet.create(values);

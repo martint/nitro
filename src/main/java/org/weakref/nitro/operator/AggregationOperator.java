@@ -157,7 +157,7 @@ public class AggregationOperator
 
         Output output = batch.output(min.inputColumn());
         Vector inputValues = output.borrow(Stream.VALUES);
-        BooleanVector inputNulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+        Vector inputNulls = output.borrowOrNull(Stream.NULLS);
 
         I64Vector minValues = (I64Vector) state[minIndex].values();
         BooleanVector minNulls = (BooleanVector) state[minIndex].get(Stream.NULLS);

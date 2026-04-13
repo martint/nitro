@@ -53,7 +53,7 @@ final class EquiJoinMatcher
             VectorAndNulls innerStreams = innerStreams(innerBatch, innerJoinColumns[keyIndex]);
             if (!OperatorEqualitySemantics.equal(
                     outerOutput.borrow(Stream.VALUES),
-                    (org.weakref.nitro.data.BooleanVector) outerOutput.borrowOrNull(Stream.NULLS),
+                    outerOutput.borrowOrNull(Stream.NULLS),
                     outerPosition,
                     innerStreams.values(),
                     innerStreams.nulls(),
@@ -70,14 +70,14 @@ final class EquiJoinMatcher
             Output output = innerBatch.retainedBatch().output(outputIndex);
             return new VectorAndNulls(
                     output.borrow(Stream.VALUES),
-                    (org.weakref.nitro.data.BooleanVector) output.borrowOrNull(Stream.NULLS));
+                    output.borrowOrNull(Stream.NULLS));
         }
 
         Streams innerStreams = innerBatch.columns()[outputIndex];
         return new VectorAndNulls(
                 innerStreams.values(),
-                (org.weakref.nitro.data.BooleanVector) innerStreams.getOrNull(Stream.NULLS));
+                innerStreams.getOrNull(Stream.NULLS));
     }
 
-    private record VectorAndNulls(org.weakref.nitro.data.Vector values, org.weakref.nitro.data.BooleanVector nulls) {}
+    private record VectorAndNulls(org.weakref.nitro.data.Vector values, org.weakref.nitro.data.Vector nulls) {}
 }

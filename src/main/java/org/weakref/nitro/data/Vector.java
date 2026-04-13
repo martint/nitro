@@ -31,7 +31,7 @@ import java.util.function.Consumer;
  * Generic operators should prefer these hooks over branching on concrete vector classes.
  */
 public sealed interface Vector
-        permits DictionaryVector, FlatVector, RleVector
+        permits ConcatenatedBooleanVector, DictionaryVector, FlatVector, RleVector, SelectionVector
 {
     /**
      * Returns the logical row count represented by this vector.
@@ -78,6 +78,20 @@ public sealed interface Vector
     default Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         throw new UnsupportedOperationException("Vector does not support copyPositionsInto: " + getClass().getSimpleName());
+    }
+
+    /**
+     * Copies the supplied logical positions into {@code existing} without first materializing the
+     * selected row set into an intermediate array.
+     * <p>
+     * Encoded vectors may override this to compose row selections lazily. The default
+     * implementation materializes the positions and delegates to
+     * {@link #copyPositionsInto(Allocator, Allocator.Context, Vector, int[], int, int, int)}.
+     */
+    default Vector copySelectedPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, SelectedPositions sourcePositions, int outputStart, int size)
+    {
+        int[] positions = sourcePositions.materialize(null);
+        return copyPositionsInto(allocator, allocationContext, existing, positions, positions.length, outputStart, size);
     }
 
     /**

@@ -55,17 +55,16 @@ public final class ArraySumI64
         checkArgument(inputs.size() == 1, "Unexpected argument count for array_sum_i64");
 
         Vector values = inputs.getFirst().values();
-        BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
         int requiredLength = Math.max(mask.maxPosition() + 1, values.length());
         Streams result = Streams.empty();
 
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             copyNulls(inputNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -82,7 +81,7 @@ public final class ArraySumI64
         return result;
     }
 
-    private static void apply(Vector values, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void apply(Vector values, Vector inputNulls, Mask mask, I64Vector output)
     {
         if (values instanceof ArrayVector arrayValues) {
             applyFlat(arrayValues, inputNulls, mask, output);
@@ -96,63 +95,61 @@ public final class ArraySumI64
         throw new IllegalArgumentException("Unsupported array_sum_i64 vector type: " + values.getClass().getSimpleName());
     }
 
-    private static void applyFlat(ArrayVector values, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyFlat(ArrayVector values, Vector inputNulls, Mask mask, I64Vector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : sum(values, position);
+                outputValues[position] = inputNullValues.value(position) ? 0 : sum(values, position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : sum(values, position);
+            outputValues[position] = inputNullValues.value(position) ? 0 : sum(values, position);
         }
     }
 
-    private static void applyDictionary(ArrayVector values, int[] ids, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyDictionary(ArrayVector values, int[] ids, Vector inputNulls, Mask mask, I64Vector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : sum(values, ids[position]);
+                outputValues[position] = inputNullValues.value(position) ? 0 : sum(values, ids[position]);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : sum(values, ids[position]);
+            outputValues[position] = inputNullValues.value(position) ? 0 : sum(values, ids[position]);
         }
     }
 
     private static long sum(ArrayVector values, int position)
     {
         I64Vector elementValues = (I64Vector) values.elementValues();
-        BooleanVector elementNulls = values.elementNulls();
+        VectorAccess.BooleanValues elementNulls = VectorAccess.booleanValues(values.elementNulls());
         long sum = 0;
         for (int elementIndex = values.startOffset(position); elementIndex < values.endOffset(position); elementIndex++) {
-            if (elementNulls == null || !elementNulls.values()[elementIndex]) {
+            if (!elementNulls.value(elementIndex)) {
                 sum += elementValues.values()[elementIndex];
             }
         }
         return sum;
     }
 
-    private static void copyNulls(BooleanVector inputNulls, Mask mask, BooleanVector output)
+    private static void copyNulls(Vector inputNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position);
+                outputValues[position] = inputNullValues.value(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position);
+            outputValues[position] = inputNullValues.value(position);
         }
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 }

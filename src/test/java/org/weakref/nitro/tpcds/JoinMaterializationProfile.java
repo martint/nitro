@@ -16,6 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Streams;
@@ -93,7 +94,17 @@ final class JoinMaterializationProfile
 
     private static String streamType(Streams streams, Stream stream)
     {
-        return streams.has(stream) ? streams.get(stream).getClass().getSimpleName() : "-";
+        return streams.has(stream) ? describeVector(streams.get(stream)) : "-";
+    }
+
+    private static String describeVector(Vector vector)
+    {
+        return switch (vector) {
+            case SelectionVector selection -> "SelectionVector<" + describeVector(selection.values()) + ">";
+            case DictionaryVector dictionary -> "DictionaryVector<" + describeVector(dictionary.values()) + ">";
+            case RleVector rle -> "RleVector<" + describeVector(rle.values()) + ">";
+            default -> vector.getClass().getSimpleName();
+        };
     }
 
     private static long countTrue(Vector vector, int rowCount)

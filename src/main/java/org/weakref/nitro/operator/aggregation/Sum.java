@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -75,23 +76,25 @@ public class Sum
 
         long sum = 0;
         boolean sawNonNull = false;
+        VectorAccess.LongValues values = VectorAccess.longValues(inputValues);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
-                if (isNull(inputNulls, position)) {
+                if (nulls.value(position)) {
                     continue;
                 }
                 sawNonNull = true;
-                sum += value(inputValues, position);
+                sum += values.value(position);
             }
         }
         else {
             for (int position : mask) {
-                if (isNull(inputNulls, position)) {
+                if (nulls.value(position)) {
                     continue;
                 }
                 sawNonNull = true;
-                sum += value(inputValues, position);
+                sum += values.value(position);
             }
         }
 
@@ -112,22 +115,24 @@ public class Sum
             return;
         }
 
+        VectorAccess.LongValues values = VectorAccess.longValues(inputValues);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
-                if (isNull(inputNulls, position)) {
+                if (nulls.value(position)) {
                     continue;
                 }
                 int group = toIntExact(groupVector.values()[position]);
-                stateVector.increment(group, value(inputValues, position));
+                stateVector.increment(group, values.value(position));
             }
         }
         else {
             for (int position : mask) {
-                if (isNull(inputNulls, position)) {
+                if (nulls.value(position)) {
                     continue;
                 }
                 int group = toIntExact(groupVector.values()[position]);
-                stateVector.increment(group, value(inputValues, position));
+                stateVector.increment(group, values.value(position));
             }
         }
     }
@@ -391,12 +396,11 @@ public class Sum
                 stateVector.length(),
                 I64Vector::new);
         stateVector.copySumsTo(values);
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                stateVector.length(),
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                stateVector.length());
         stateVector.copyNullsTo(nulls);
         return Streams.ofValuesAndNulls(values, nulls);
     }
@@ -411,36 +415,13 @@ public class Sum
                 I64Vector.class,
                 size,
                 I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                size,
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
         values.values()[outputPosition] = stateVector.sum(group);
         nulls.values()[outputPosition] = stateVector.isNull(group);
         return Streams.ofValuesAndNulls(values, nulls);
-    }
-
-    private static long value(Vector v, int position)
-    {
-        return switch (v) {
-            case I64Vector values -> values.values()[position];
-            case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> value(values.values(), values.ids()[position]);
-            case RleVector values -> value(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + v.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case org.weakref.nitro.data.BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
-            case RleVector values -> isNull(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
     }
 }

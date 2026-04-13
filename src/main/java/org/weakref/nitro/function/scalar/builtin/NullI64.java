@@ -48,12 +48,11 @@ public final class NullI64
         Streams result = Streams.empty();
 
         if (requestNulls) {
-            BooleanVector nulls = context.allocator().allocateOrGrow(
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
             Arrays.fill(nulls.values(), 0, requiredLength, true);
             result = result.with(Stream.NULLS, nulls);
         }

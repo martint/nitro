@@ -79,12 +79,11 @@ public final class SubstringUtf8
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
-            outputNulls = context.allocator().allocateOrGrow(
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
             applyNulls(valueNulls, startNulls, lengthNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }

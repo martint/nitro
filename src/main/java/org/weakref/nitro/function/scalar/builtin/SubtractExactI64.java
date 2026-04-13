@@ -59,13 +59,12 @@ public final class SubtractExactI64
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        BooleanVector leftNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector rightNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
         boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         boolean requestErrors = requestedStreams.contains(Stream.ERRORS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
-        BooleanVector existingNulls = output != null && output.has(Stream.NULLS) ? (BooleanVector) output.get(Stream.NULLS) : null;
         Vector existingErrors = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null && !requestNulls && leftNulls == null && rightNulls == null) {
@@ -90,12 +89,11 @@ public final class SubtractExactI64
         int length = I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length()));
         Streams resultStreams = Streams.empty();
         if (requestNulls) {
-            BooleanVector nulls = context.allocator().allocateOrGrow(
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    existingNulls,
-                    BooleanVector.class,
-                    length,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    length);
             applyNulls(leftNulls, rightNulls, mask, nulls);
             resultStreams = resultStreams.with(Stream.NULLS, nulls);
         }
@@ -106,22 +104,20 @@ public final class SubtractExactI64
                     I64Vector.class,
                     length,
                     I64Vector::new);
-            BooleanVector errors = context.allocator().allocateOrGrow(
+            BooleanVector errors = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ERRORS_CONTEXT,
-                    existingErrors instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    length,
-                    BooleanVector::new);
+                    existingErrors,
+                    length);
             I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, SubtractExactI64::apply);
             resultStreams = Streams.ofValues(result).with(Stream.ERRORS, errors);
         }
         else if (requestErrors) {
-            BooleanVector errors = context.allocator().allocateOrGrow(
+            BooleanVector errors = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ERRORS_CONTEXT,
-                    existingErrors instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    length,
-                    BooleanVector::new);
+                    existingErrors,
+                    length);
             I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, SubtractExactI64::apply);
             resultStreams = Streams.of(Stream.ERRORS, errors);
         }
@@ -138,13 +134,14 @@ public final class SubtractExactI64
         return resultStreams;
     }
 
-    private static void applyNulls(BooleanVector leftNulls, BooleanVector rightNulls, Mask mask, BooleanVector outputNulls)
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = (leftNulls != null && leftNulls.values()[position]) ||
-                    (rightNulls != null && rightNulls.values()[position]);
+            nulls[position] = leftNullValues.value(position) || rightNullValues.value(position);
         }
     }
 

@@ -55,17 +55,16 @@ public final class HashUtf8
         checkArgument(inputs.size() == 1, "Unexpected argument count for hash_utf8");
 
         Vector values = inputs.getFirst().values();
-        BooleanVector inputNulls = (BooleanVector) inputs.getFirst().getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
         int requiredLength = Math.max(mask.maxPosition() + 1, values.length());
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             copyNulls(inputNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -82,7 +81,7 @@ public final class HashUtf8
         return result;
     }
 
-    private static void applyValues(Vector values, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyValues(Vector values, Vector inputNulls, Mask mask, I64Vector output)
     {
         if (values instanceof BinaryVector binaryValues) {
             applyFlat(binaryValues, inputNulls, mask, output);
@@ -95,50 +94,53 @@ public final class HashUtf8
         throw new IllegalArgumentException("Unsupported hash_utf8 vector type: " + values.getClass().getSimpleName());
     }
 
-    private static void applyFlat(BinaryVector values, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyFlat(BinaryVector values, Vector inputNulls, Mask mask, I64Vector output)
     {
         boolean ascii = requireUtf8AndCheckAscii(values);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : hash(values, position, ascii);
+                outputValues[position] = nulls.value(position) ? 0 : hash(values, position, ascii);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : hash(values, position, ascii);
+            outputValues[position] = nulls.value(position) ? 0 : hash(values, position, ascii);
         }
     }
 
-    private static void applyDictionary(DictionaryVector dictionaryValues, BooleanVector inputNulls, Mask mask, I64Vector output)
+    private static void applyDictionary(DictionaryVector dictionaryValues, Vector inputNulls, Mask mask, I64Vector output)
     {
         checkArgument(dictionaryValues.values() instanceof BinaryVector, "hash_utf8 requires BinaryVector dictionary values");
         BinaryVector values = (BinaryVector) dictionaryValues.values();
         boolean ascii = requireUtf8AndCheckAscii(values);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         int[] ids = dictionaryValues.ids();
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position) ? 0 : hash(values, ids[position], ascii);
+                outputValues[position] = nulls.value(position) ? 0 : hash(values, ids[position], ascii);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position) ? 0 : hash(values, ids[position], ascii);
+            outputValues[position] = nulls.value(position) ? 0 : hash(values, ids[position], ascii);
         }
     }
 
-    private static void copyNulls(BooleanVector inputNulls, Mask mask, BooleanVector output)
+    private static void copyNulls(Vector inputNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(inputNulls, position);
+                outputValues[position] = nulls.value(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(inputNulls, position);
+            outputValues[position] = nulls.value(position);
         }
     }
 
@@ -166,10 +168,5 @@ public final class HashUtf8
             hash = 31 * hash + Byte.toUnsignedInt(data[index]);
         }
         return hash;
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 }

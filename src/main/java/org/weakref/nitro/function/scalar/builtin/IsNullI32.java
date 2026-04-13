@@ -64,12 +64,11 @@ public final class IsNullI32
         if (inputValues != null) {
             requiredLength = Math.max(requiredLength, inputValues.length());
         }
-        BooleanVector values = context.allocator().allocateOrGrow(
+        BooleanVector values = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 allocationContext,
-                output != null && output.getOrNull(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                requiredLength,
-                BooleanVector::new);
+                output != null ? output.getOrNull(Stream.VALUES) : null,
+                requiredLength);
         boolean[] outputValues = values.values();
         if (inputNulls == null) {
             for (int position : mask) {

@@ -22,6 +22,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -66,8 +67,8 @@ public class Avg
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
-        Vector inputValues = streams.values(inputColumn);
-        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             int max = mask.maxPosition();
@@ -87,8 +88,8 @@ public class Avg
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
         I64Vector groupVector = (I64Vector) groups;
-        Vector inputValues = streams.values(inputColumn);
-        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -110,8 +111,11 @@ public class Avg
         AvgStateVector stateVector = (AvgStateVector) state.values();
         F64Vector values = output == null ? null : (F64Vector) output.getOrNull(Stream.VALUES);
         values = allocator.allocateOrGrow(allocationContext, values, F64Vector.class, stateVector.length(), F64Vector::new);
-        org.weakref.nitro.data.BooleanVector nulls = output == null ? null : (org.weakref.nitro.data.BooleanVector) output.getOrNull(Stream.NULLS);
-        nulls = allocator.allocateOrGrow(allocationContext, nulls, org.weakref.nitro.data.BooleanVector.class, stateVector.length(), org.weakref.nitro.data.BooleanVector::new);
+        org.weakref.nitro.data.BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
+                allocationContext,
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                stateVector.length());
 
         for (int index = 0; index < stateVector.length(); index++) {
             boolean isNull = stateVector.count(index) == 0;
@@ -132,12 +136,11 @@ public class Avg
                 F64Vector.class,
                 size,
                 F64Vector::new);
-        org.weakref.nitro.data.BooleanVector nulls = allocator.allocateOrGrow(
+        org.weakref.nitro.data.BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (org.weakref.nitro.data.BooleanVector) output.getOrNull(Stream.NULLS),
-                org.weakref.nitro.data.BooleanVector.class,
-                size,
-                org.weakref.nitro.data.BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
 
         boolean isNull = stateVector.count(group) == 0;
         nulls.values()[outputPosition] = isNull;
@@ -145,33 +148,11 @@ public class Avg
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static void accumulate(AvgStateVector stateVector, int group, Vector inputValues, Vector inputNulls, int position)
+    private static void accumulate(AvgStateVector stateVector, int group, VectorAccess.LongValues inputValues, VectorAccess.BooleanValues inputNulls, int position)
     {
-        if (isNull(inputNulls, position)) {
+        if (inputNulls.value(position)) {
             return;
         }
-        stateVector.increment(group, value(inputValues, position), 1);
-    }
-
-    private static long value(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I64Vector values -> values.values()[position];
-            case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> value(values.values(), values.ids()[position]);
-            case RleVector values -> value(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case org.weakref.nitro.data.BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
-            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
+        stateVector.increment(group, inputValues.value(position), 1);
     }
 }

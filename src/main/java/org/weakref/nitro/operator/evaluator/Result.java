@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -23,18 +22,18 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
  * <p>
  * {@code nulls} is non-null only when the function has tracked which positions produced a null result.
  * {@code errors} is non-null only when the function has detected per-position errors (e.g., overflow,
- * divide-by-zero). Both are {@link BooleanVector}s parallel to {@code values}.
+ * divide-by-zero). Both are boolean-backed {@link Vector}s parallel to {@code values}.
  * <p>
  * Passed as the {@code output} parameter on additive calls so that functions can reuse existing buffers.
  */
-public record Result(Vector values, BooleanVector nulls, BooleanVector errors)
+public record Result(Vector values, Vector nulls, Vector errors)
 {
     public static Result of(Vector values)
     {
         return new Result(values, null, null);
     }
 
-    public static Result of(Vector values, BooleanVector nulls)
+    public static Result of(Vector values, Vector nulls)
     {
         return new Result(values, nulls, null);
     }
@@ -53,16 +52,8 @@ public record Result(Vector values, BooleanVector nulls, BooleanVector errors)
 
     public static Result fromStreams(Streams streams)
     {
-        BooleanVector nulls = streams.has(Stream.NULLS) ? asBooleanVector(streams.get(Stream.NULLS), Stream.NULLS) : null;
-        BooleanVector errors = streams.has(Stream.ERRORS) ? asBooleanVector(streams.get(Stream.ERRORS), Stream.ERRORS) : null;
+        Vector nulls = streams.has(Stream.NULLS) ? streams.get(Stream.NULLS) : null;
+        Vector errors = streams.has(Stream.ERRORS) ? streams.get(Stream.ERRORS) : null;
         return new Result(streams.get(Stream.VALUES), nulls, errors);
-    }
-
-    private static BooleanVector asBooleanVector(Vector vector, Stream stream)
-    {
-        if (vector instanceof BooleanVector booleanVector) {
-            return booleanVector;
-        }
-        throw new IllegalArgumentException("Expected BooleanVector for stream " + stream + ": " + vector.getClass().getSimpleName());
     }
 }

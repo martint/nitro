@@ -205,10 +205,10 @@ public final class FullJoinOperator
             Streams source = page.columns()[outputIndex];
             values = source.values().copySinglePositionInto(allocator, allocationContext, values, sourcePosition, outputPosition, rowCount);
             if (source.has(Stream.NULLS)) {
-                nulls.values()[outputPosition] = ((BooleanVector) source.get(Stream.NULLS)).values()[sourcePosition];
+                nulls.values()[outputPosition] = OperatorVectorSupport.isNull(source.get(Stream.NULLS), sourcePosition);
             }
             if (errors != null && source.has(Stream.ERRORS)) {
-                errors.values()[outputPosition] = ((BooleanVector) source.get(Stream.ERRORS)).values()[sourcePosition];
+                errors.values()[outputPosition] = OperatorVectorSupport.isNull(source.get(Stream.ERRORS), sourcePosition);
             }
         }
 
@@ -235,7 +235,7 @@ public final class FullJoinOperator
             Streams column = columns[joinColumns[keyIndex]];
             Vector values = column.values();
             reusableKeys[keyIndex] = reusableKeys[keyIndex] == null ? OperatorKeySemantics.reusableProbeKey(values) : reusableKeys[keyIndex];
-            reusableKeys[keyIndex] = OperatorKeySemantics.probeKey(values, (BooleanVector) column.getOrNull(Stream.NULLS), position, reusableKeys[keyIndex]);
+            reusableKeys[keyIndex] = OperatorKeySemantics.probeKey(values, column.getOrNull(Stream.NULLS), position, reusableKeys[keyIndex]);
             if (reusableKeys[keyIndex] == null) {
                 return null;
             }

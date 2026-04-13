@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.lang.invoke.MethodHandles;
@@ -227,7 +228,7 @@ final class FlatGroupingTable
 
     private BooleanVector materializeNulls(int fieldIndex, int size, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
-        BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
+        BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
         Arrays.fill(result.values(), true);
         for (int index : mask) {
             int recordIndex = recordIndex(index);

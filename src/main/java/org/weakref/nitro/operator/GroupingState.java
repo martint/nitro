@@ -24,6 +24,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -435,7 +436,7 @@ final class GroupingState
     private BooleanVector materializeLongNulls(Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
-        BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
+        BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
         Arrays.fill(result.values(), true);
         for (int index : mask) {
             result.values()[index] = index == nullGroup;
@@ -446,7 +447,7 @@ final class GroupingState
     private BooleanVector materializeCompositeLongNulls(byte[] nullMasksByGroup, int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
-        BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
+        BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
         Arrays.fill(result.values(), true);
         for (int index : mask) {
             result.values()[index] = index < nullMasksByGroup.length && isNull(nullMasksByGroup, index, groupedColumnIndex);
@@ -624,7 +625,7 @@ final class GroupingState
 
     private BooleanVector materializeNulls(int size, Mask mask, List<OperatorKeySemantics.Key> keysByGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
-        BooleanVector result = allocator.allocateOrGrow(allocationContext, (BooleanVector) output, BooleanVector.class, size, BooleanVector::new);
+        BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
         Arrays.fill(result.values(), true);
         for (int index : mask) {
             result.values()[index] = keysByGroup.get(index) == null;

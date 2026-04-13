@@ -19,6 +19,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -87,12 +88,11 @@ public final class Utf8BinaryDispatch
         if (requestedStreams.contains(Stream.VALUES)) {
             Vector outputValues = tryApplyInSetSpecializedValues(functionName, allocationContext, inputs, mask, output == null ? null : output.getOrNull(Stream.VALUES), outputLength, context);
             if (outputValues == null) {
-                BooleanVector booleanOutputValues = context.allocator().allocateOrGrow(
+                BooleanVector booleanOutputValues = VectorAccess.writableBooleanVector(
+                        context.allocator(),
                         allocationContext,
-                        output != null && output.has(Stream.VALUES) && output.values() instanceof BooleanVector vector ? vector : null,
-                        BooleanVector.class,
-                        outputLength,
-                        BooleanVector::new);
+                        output != null && output.has(Stream.VALUES) ? output.values() : null,
+                        outputLength);
                 applyInSetValues(functionName, inputs, leftNulls, mask, booleanOutputValues);
                 outputValues = booleanOutputValues;
             }
@@ -139,12 +139,11 @@ public final class Utf8BinaryDispatch
         Streams result = Streams.empty();
         int outputLength = Math.max(requiredLength, Math.max(left.length(), right.length()));
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     allocationContext,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    outputLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    outputLength);
             applyNulls(leftNulls, rightNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -162,12 +161,11 @@ public final class Utf8BinaryDispatch
                     outputLength,
                     context);
             if (outputValues == null) {
-                BooleanVector booleanOutputValues = context.allocator().allocateOrGrow(
+                BooleanVector booleanOutputValues = VectorAccess.writableBooleanVector(
+                        context.allocator(),
                         allocationContext,
-                        output != null && output.has(Stream.VALUES) && output.values() instanceof BooleanVector vector ? vector : null,
-                        BooleanVector.class,
-                        outputLength,
-                        BooleanVector::new);
+                        output != null && output.has(Stream.VALUES) ? output.values() : null,
+                        outputLength);
                 applyValues(functionName, operation, left, right, leftNulls, rightNulls, mask, booleanOutputValues);
                 outputValues = booleanOutputValues;
             }
@@ -297,7 +295,39 @@ public final class Utf8BinaryDispatch
             applyRleRle(functionName, operation, leftRle, rightRle, leftNulls, rightNulls, mask, output);
             return;
         }
-        throw new IllegalArgumentException("Unsupported " + functionName + " vector types: " + left.getClass().getSimpleName() + ", " + right.getClass().getSimpleName());
+        applyGeneric(functionName, operation, left, right, leftNulls, rightNulls, mask, output);
+    }
+
+    private static void applyGeneric(String functionName, Operation operation, Vector left, Vector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    {
+        requireUtf8Traits(functionName, left, right);
+        VectorAccess.BinaryValues leftValues = VectorAccess.binaryValues(left);
+        VectorAccess.BinaryValues rightValues = VectorAccess.binaryValues(right);
+        boolean[] outputValues = output.values();
+        if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                outputValues[position] = evaluateGeneric(operation, leftValues, rightValues, leftNulls, rightNulls, position);
+            }
+            return;
+        }
+        for (int position : mask) {
+            outputValues[position] = evaluateGeneric(operation, leftValues, rightValues, leftNulls, rightNulls, position);
+        }
+    }
+
+    private static boolean evaluateGeneric(Operation operation, VectorAccess.BinaryValues leftValues, VectorAccess.BinaryValues rightValues, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int position)
+    {
+        if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
+            return false;
+        }
+        VectorAccess.BinarySlice left = leftValues.value(position);
+        VectorAccess.BinarySlice right = rightValues.value(position);
+        return switch (operation) {
+            case EQUALS -> binarySliceEquals(left, right);
+            case LESS_THAN -> binarySliceCompare(left, right) < 0;
+            case STARTS_WITH -> binarySliceStartsWith(left, right);
+            case CONTAINS -> binarySliceContains(left, right);
+        };
     }
 
     private static void applyContainsFlatSingleNeedle(String functionName, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
@@ -906,6 +936,7 @@ public final class Utf8BinaryDispatch
         return switch (vector) {
             case BinaryVector values -> values.length(position);
             case DictionaryVector values -> binaryLength(functionName, values.values(), values.ids()[position]);
+            case SelectionVector values -> binaryLength(functionName, values.values(), values.positions().position(position));
             case RleVector values -> binaryLength(functionName, values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException(functionName + " requires BinaryVector-compatible UTF-8 inputs");
         };
@@ -916,6 +947,7 @@ public final class Utf8BinaryDispatch
         switch (source) {
             case BinaryVector values -> target.setBytes(targetPosition, values.data(), values.startOffset(sourcePosition), values.length(sourcePosition));
             case DictionaryVector values -> copyBinaryBytes(functionName, values.values(), values.ids()[sourcePosition], target, targetPosition);
+            case SelectionVector values -> copyBinaryBytes(functionName, values.values(), values.positions().position(sourcePosition), target, targetPosition);
             case RleVector values -> copyBinaryBytes(functionName, values.values(), values.runIndex(sourcePosition), target, targetPosition);
             default -> throw new IllegalArgumentException(functionName + " requires BinaryVector-compatible UTF-8 inputs");
         }
@@ -933,14 +965,31 @@ public final class Utf8BinaryDispatch
                 }
             }
             case DictionaryVector values -> copyBinaryTraits(values.values(), target);
+            case SelectionVector values -> copyBinaryTraits(values.values(), target);
             case RleVector values -> copyBinaryTraits(values.values(), target);
             default -> throw new IllegalArgumentException("Expected binary-backed vector but found " + source.getClass().getSimpleName());
         }
     }
 
+    private static void requireUtf8Traits(String functionName, Vector left, Vector right)
+    {
+        checkArgument(hasUtf8Traits(left) && hasUtf8Traits(right), "%s requires UTF8_STRING inputs", functionName);
+    }
+
     private static void requireUtf8Traits(String functionName, BinaryVector left, BinaryVector right)
     {
         checkArgument(hasUtf8Traits(left) && hasUtf8Traits(right), "%s requires UTF8_STRING inputs", functionName);
+    }
+
+    private static boolean hasUtf8Traits(Vector vector)
+    {
+        return switch (vector) {
+            case BinaryVector values -> hasUtf8Traits(values);
+            case DictionaryVector values -> hasUtf8Traits(values.values());
+            case SelectionVector values -> hasUtf8Traits(values.values());
+            case RleVector values -> hasUtf8Traits(values.values());
+            default -> false;
+        };
     }
 
     private static boolean useAsciiFastPath(BinaryVector left, BinaryVector right)
@@ -962,15 +1011,7 @@ public final class Utf8BinaryDispatch
 
     private static BooleanVector writableBooleanOutput(Allocator.Context allocationContext, PrimitiveExecutionContext context, Vector existing, int outputLength)
     {
-        if (existing instanceof BooleanVector vector) {
-            return context.allocator().allocateOrGrow(allocationContext, vector, BooleanVector.class, outputLength, BooleanVector::new);
-        }
-
-        BooleanVector target = context.allocator().allocateOrGrow(allocationContext, null, BooleanVector.class, outputLength, BooleanVector::new);
-        if (existing instanceof RleVector existingRle && existingRle.values() instanceof BooleanVector values && existingRle.counts().length == 1) {
-            Arrays.fill(target.values(), 0, outputLength, values.values()[0]);
-        }
-        return target;
+        return VectorAccess.writableBooleanVector(context.allocator(), allocationContext, existing, outputLength);
     }
 
     private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
@@ -1058,6 +1099,68 @@ public final class Utf8BinaryDispatch
                 needle.secondProbeOffset(),
                 needle.firstProbeByte(),
                 needle.secondProbeByte());
+    }
+
+    private static boolean binarySliceEquals(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
+    {
+        if (left.length() != right.length()) {
+            return false;
+        }
+        for (int index = 0; index < left.length(); index++) {
+            if (left.data()[left.offset() + index] != right.data()[right.offset() + index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int binarySliceCompare(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
+    {
+        int compareLength = Math.min(left.length(), right.length());
+        for (int index = 0; index < compareLength; index++) {
+            int comparison = Byte.compare(left.data()[left.offset() + index], right.data()[right.offset() + index]);
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return Integer.compare(left.length(), right.length());
+    }
+
+    private static boolean binarySliceStartsWith(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
+    {
+        if (left.length() < right.length()) {
+            return false;
+        }
+        for (int index = 0; index < right.length(); index++) {
+            if (left.data()[left.offset() + index] != right.data()[right.offset() + index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean binarySliceContains(VectorAccess.BinarySlice haystack, VectorAccess.BinarySlice needle)
+    {
+        if (needle.length() == 0) {
+            return true;
+        }
+        if (haystack.length() < needle.length()) {
+            return false;
+        }
+        int lastStart = haystack.length() - needle.length();
+        for (int start = 0; start <= lastStart; start++) {
+            boolean matches = true;
+            for (int index = 0; index < needle.length(); index++) {
+                if (haystack.data()[haystack.offset() + start + index] != needle.data()[needle.offset() + index]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static ContainsNeedle compileContainsNeedle(BinaryVector needleVector, int needlePosition)

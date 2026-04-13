@@ -47,7 +47,10 @@ public final class ElementAtI64Utf8
     @Override
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return PrimitiveFunction.valuesAndNullsWhenRequested(requestedOutputStreams);
+        return PrimitiveFunction.inputStreams(
+                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS) || requestedOutputStreams.contains(Stream.ERRORS),
+                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS),
+                requestedOutputStreams.contains(Stream.ERRORS));
     }
 
     @Override
@@ -65,22 +68,21 @@ public final class ElementAtI64Utf8
         MapVector maps = requireMapVector(mapInput);
         BinaryVector mapKeys = requireUtf8Binary("element_at_i64_utf8", maps.keyValues());
         I64Vector mapValues = (I64Vector) maps.valueValues();
-        BooleanVector mapValueNulls = (BooleanVector) maps.valueStreamOrNull(Stream.NULLS);
+        Vector mapValueNulls = maps.valueStreamOrNull(Stream.NULLS);
         KeyAccess keys = keyAccess("element_at_i64_utf8", keyInput);
-        BooleanVector mapNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector keyNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
-        BooleanVector mapErrors = (BooleanVector) inputs.get(0).getOrNull(Stream.ERRORS);
-        BooleanVector keyErrors = (BooleanVector) inputs.get(1).getOrNull(Stream.ERRORS);
+        Vector mapNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector keyNulls = inputs.get(1).getOrNull(Stream.NULLS);
+        Vector mapErrors = inputs.get(0).getOrNull(Stream.ERRORS);
+        Vector keyErrors = inputs.get(1).getOrNull(Stream.ERRORS);
 
         Streams result = Streams.empty();
         int requiredLength = Math.max(mask.maxPosition() + 1, mapInput.length());
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             applyNulls(maps, mapInput, mapKeys, mapValues, mapValueNulls, keys, mapNulls, keyNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -95,67 +97,71 @@ public final class ElementAtI64Utf8
             result = result.with(Stream.VALUES, outputValues);
         }
         if (requestedStreams.contains(Stream.ERRORS) && (mapErrors != null || keyErrors != null)) {
-            BooleanVector outputErrors = context.allocator().allocateOrGrow(
+            BooleanVector outputErrors = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.ERRORS) && output.get(Stream.ERRORS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null,
+                    requiredLength);
             applyErrors(mapErrors, keyErrors, mask, outputErrors);
             result = result.with(Stream.ERRORS, outputErrors);
         }
         return result;
     }
 
-    private static void applyValues(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, I64Vector output)
+    private static void applyValues(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, Vector mapValueNulls, KeyAccess keys, Vector mapNulls, Vector keyNulls, Mask mask, I64Vector output)
     {
         boolean ascii = mapKeys.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) && keys.values().hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        VectorAccess.BooleanValues mapNullValues = VectorAccess.booleanValues(mapNulls);
+        VectorAccess.BooleanValues keyNullValues = VectorAccess.booleanValues(keyNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position) ? 0 : lookupValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
+                outputValues[position] = mapNullValues.value(position) || keyNullValues.value(position) ? 0 : lookupValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position) ? 0 : lookupValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
+            outputValues[position] = mapNullValues.value(position) || keyNullValues.value(position) ? 0 : lookupValue(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
         }
     }
 
-    private static void applyNulls(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, KeyAccess keys, BooleanVector mapNulls, BooleanVector keyNulls, Mask mask, BooleanVector output)
+    private static void applyNulls(MapVector maps, Vector mapInput, BinaryVector mapKeys, I64Vector mapValues, Vector mapValueNulls, KeyAccess keys, Vector mapNulls, Vector keyNulls, Mask mask, BooleanVector output)
     {
         boolean ascii = mapKeys.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) && keys.values().hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        VectorAccess.BooleanValues mapNullValues = VectorAccess.booleanValues(mapNulls);
+        VectorAccess.BooleanValues keyNullValues = VectorAccess.booleanValues(keyNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position) || isLookupNull(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
+                outputValues[position] = mapNullValues.value(position) || keyNullValues.value(position) || isLookupNull(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(mapNulls, position) || isNull(keyNulls, position) || isLookupNull(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
+            outputValues[position] = mapNullValues.value(position) || keyNullValues.value(position) || isLookupNull(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, keys.values(), keys.position(position), ascii);
         }
     }
 
-    private static boolean isLookupNull(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
+    private static boolean isLookupNull(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, Vector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
     {
         return findEntry(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, lookupKeys, lookupPosition, ascii).nullValue();
     }
 
-    private static long lookupValue(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
+    private static long lookupValue(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, Vector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
     {
         return findEntry(maps, mapInput, position, mapKeys, mapValues, mapValueNulls, lookupKeys, lookupPosition, ascii).value();
     }
 
-    private static LookupResult findEntry(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, BooleanVector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
+    private static LookupResult findEntry(MapVector maps, Vector mapInput, int position, BinaryVector mapKeys, I64Vector mapValues, Vector mapValueNulls, BinaryVector lookupKeys, int lookupPosition, boolean ascii)
     {
+        VectorAccess.BooleanValues mapValueNullValues = VectorAccess.booleanValues(mapValueNulls);
         int mapPosition = switch (mapInput) {
             case DictionaryVector vector -> vector.ids()[position];
             default -> position;
         };
         for (int entryIndex = maps.startOffset(mapPosition); entryIndex < maps.endOffset(mapPosition); entryIndex++) {
             if (binaryEquals(mapKeys, entryIndex, lookupKeys, lookupPosition)) {
-                boolean nullValue = mapValueNulls != null && mapValueNulls.values()[entryIndex];
+                boolean nullValue = mapValueNullValues.value(entryIndex);
                 return new LookupResult(nullValue ? 0 : mapValues.values()[entryIndex], nullValue);
             }
         }
@@ -188,28 +194,20 @@ public final class ElementAtI64Utf8
         return values;
     }
 
-    private static boolean isNull(BooleanVector nulls, int position)
+    private static void applyErrors(Vector mapErrors, Vector keyErrors, Mask mask, BooleanVector output)
     {
-        return nulls != null && nulls.values()[position];
-    }
-
-    private static void applyErrors(BooleanVector mapErrors, BooleanVector keyErrors, Mask mask, BooleanVector output)
-    {
+        VectorAccess.BooleanValues mapErrorValues = VectorAccess.booleanValues(mapErrors);
+        VectorAccess.BooleanValues keyErrorValues = VectorAccess.booleanValues(keyErrors);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isError(mapErrors, position) || isError(keyErrors, position);
+                outputValues[position] = mapErrorValues.value(position) || keyErrorValues.value(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isError(mapErrors, position) || isError(keyErrors, position);
+            outputValues[position] = mapErrorValues.value(position) || keyErrorValues.value(position);
         }
-    }
-
-    private static boolean isError(BooleanVector errors, int position)
-    {
-        return errors != null && errors.values()[position];
     }
 
     private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)

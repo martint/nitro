@@ -144,6 +144,12 @@ public final class RleVector
     }
 
     @Override
+    public Vector copySelectedPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, SelectedPositions sourcePositions, int outputStart, int size)
+    {
+        return values.copySelectedPositionsInto(allocator, allocationContext, existing, SelectedPositions.map(sourcePositions, this::runIndex), outputStart, size);
+    }
+
+    @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         return values.copySinglePositionInto(allocator, allocationContext, existing, runIndex(sourcePosition), outputPosition, size);

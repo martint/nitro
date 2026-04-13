@@ -63,47 +63,47 @@ public final class ArrayContainsI64
 
         ArrayVector arrays = requireArrayVector(arrayInput);
         NeedleAccess needles = needleAccess("array_contains_i64", needleInput);
-        BooleanVector arrayNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
-        BooleanVector needleNulls = (BooleanVector) inputs.get(1).getOrNull(Stream.NULLS);
+        Vector arrayNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector needleNulls = inputs.get(1).getOrNull(Stream.NULLS);
 
         Streams result = Streams.empty();
         int requiredLength = Math.max(mask.maxPosition() + 1, arrayInput.length());
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.NULLS) && output.get(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    requiredLength);
             applyNulls(arrayNulls, needleNulls, mask, outputNulls);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            BooleanVector outputValues = context.allocator().allocateOrGrow(
+            BooleanVector outputValues = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.has(Stream.VALUES) && output.get(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null && output.has(Stream.VALUES) ? output.get(Stream.VALUES) : null,
+                    requiredLength);
             applyValues(arrays, arrayInput, needles, arrayNulls, needleNulls, mask, outputValues);
             result = result.with(Stream.VALUES, outputValues);
         }
         return result;
     }
 
-    private static void applyValues(ArrayVector arrays, Vector arrayInput, NeedleAccess needles, BooleanVector arrayNulls, BooleanVector needleNulls, Mask mask, BooleanVector output)
+    private static void applyValues(ArrayVector arrays, Vector arrayInput, NeedleAccess needles, Vector arrayNulls, Vector needleNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues arrayNullValues = VectorAccess.booleanValues(arrayNulls);
+        VectorAccess.BooleanValues needleNullValues = VectorAccess.booleanValues(needleNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(arrayNulls, position) || isNull(needleNulls, position)
+                outputValues[position] = arrayNullValues.value(position) || needleNullValues.value(position)
                         ? false
                         : contains(arrays, arrayInput, position, needles.value(position));
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(arrayNulls, position) || isNull(needleNulls, position)
+            outputValues[position] = arrayNullValues.value(position) || needleNullValues.value(position)
                     ? false
                     : contains(arrays, arrayInput, position, needles.value(position));
         }
@@ -128,17 +128,19 @@ public final class ArrayContainsI64
         return false;
     }
 
-    private static void applyNulls(BooleanVector arrayNulls, BooleanVector needleNulls, Mask mask, BooleanVector output)
+    private static void applyNulls(Vector arrayNulls, Vector needleNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues arrayNullValues = VectorAccess.booleanValues(arrayNulls);
+        VectorAccess.BooleanValues needleNullValues = VectorAccess.booleanValues(needleNulls);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = isNull(arrayNulls, position) || isNull(needleNulls, position);
+                outputValues[position] = arrayNullValues.value(position) || needleNullValues.value(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = isNull(arrayNulls, position) || isNull(needleNulls, position);
+            outputValues[position] = arrayNullValues.value(position) || needleNullValues.value(position);
         }
     }
 
@@ -158,11 +160,6 @@ public final class ArrayContainsI64
             case DictionaryVector dictionary when dictionary.values() instanceof I64Vector values -> new NeedleAccess(values, true, dictionary.ids());
             default -> throw new IllegalArgumentException(functionName + " requires I64Vector needle input");
         };
-    }
-
-    private static boolean isNull(BooleanVector nulls, int position)
-    {
-        return nulls != null && nulls.values()[position];
     }
 
     private record NeedleAccess(I64Vector values, boolean dictionary, int[] ids)

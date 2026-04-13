@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -118,10 +117,10 @@ final class TopNState
                 Streams currentOrdering = comparisonColumns[orderingColumn];
                 comparison = OperatorOrderingSemantics.compare(
                         currentOrdering.values(),
-                        (BooleanVector) currentOrdering.getOrNull(Stream.NULLS),
+                        currentOrdering.getOrNull(Stream.NULLS),
                         0,
                         slotOrdering.values(),
-                        (BooleanVector) slotOrdering.getOrNull(Stream.NULLS),
+                        slotOrdering.getOrNull(Stream.NULLS),
                         0);
             }
             comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;

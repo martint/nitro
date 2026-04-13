@@ -83,22 +83,20 @@ public final class ModuloI64
                     I64Vector.class,
                     length,
                     I64Vector::new);
-            BooleanVector errors = context.allocator().allocateOrGrow(
+            BooleanVector errors = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ERRORS_CONTEXT,
-                    existingErrors instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    length,
-                    BooleanVector::new);
+                    existingErrors,
+                    length);
             I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, ModuloI64::apply);
             resultStreams = Streams.ofValues(result).with(Stream.ERRORS, errors);
         }
         else if (requestErrors) {
-            BooleanVector errors = context.allocator().allocateOrGrow(
+            BooleanVector errors = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ERRORS_CONTEXT,
-                    existingErrors instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    length,
-                    BooleanVector::new);
+                    existingErrors,
+                    length);
             I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, ModuloI64::apply);
             resultStreams = Streams.of(Stream.ERRORS, errors);
         }

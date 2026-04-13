@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
@@ -52,7 +51,7 @@ final class DistinctKeySet
         return new DistinctKeySet(new ObjectDistinctIndex(samples.length));
     }
 
-    public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+    public boolean add(Vector[] values, Vector[] nulls, int position)
     {
         return index.add(values, nulls, position);
     }
@@ -64,7 +63,7 @@ final class DistinctKeySet
 
     private interface DistinctIndex
     {
-        boolean add(Vector[] values, BooleanVector[] nulls, int position);
+        boolean add(Vector[] values, Vector[] nulls, int position);
 
         default void reserveAdditional(int additionalEntries) {}
     }
@@ -86,7 +85,7 @@ final class DistinctKeySet
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        public boolean add(Vector[] values, Vector[] nulls, int position)
         {
             if (OperatorVectorSupport.isNull(nulls[0], position)) {
                 return false;
@@ -107,7 +106,7 @@ final class DistinctKeySet
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        public boolean add(Vector[] values, Vector[] nulls, int position)
         {
             if (hasNull(nulls, position)) {
                 return false;
@@ -121,9 +120,9 @@ final class DistinctKeySet
             return false;
         }
 
-        private static boolean hasNull(BooleanVector[] nulls, int position)
+        private static boolean hasNull(Vector[] nulls, int position)
         {
-            for (BooleanVector nullsVector : nulls) {
+            for (Vector nullsVector : nulls) {
                 if (OperatorVectorSupport.isNull(nullsVector, position)) {
                     return true;
                 }
@@ -161,7 +160,7 @@ final class DistinctKeySet
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        public boolean add(Vector[] values, Vector[] nulls, int position)
         {
             if (hasNull(nulls, position)) {
                 return false;
@@ -270,7 +269,7 @@ final class DistinctKeySet
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        public boolean add(Vector[] values, Vector[] nulls, int position)
         {
             if (hasNull(nulls, position)) {
                 return false;
@@ -386,7 +385,7 @@ final class DistinctKeySet
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        public boolean add(Vector[] values, Vector[] nulls, int position)
         {
             if (hasNull(nulls, position)) {
                 return false;
@@ -494,7 +493,7 @@ final class DistinctKeySet
         }
 
         @Override
-        public boolean add(Vector[] values, BooleanVector[] nulls, int position)
+        public boolean add(Vector[] values, Vector[] nulls, int position)
         {
             OperatorKeySemantics.Key key = keyForPosition(values, nulls, position);
             if (key == null) {
@@ -507,7 +506,7 @@ final class DistinctKeySet
             return true;
         }
 
-        private OperatorKeySemantics.Key keyForPosition(Vector[] values, BooleanVector[] nulls, int position)
+        private OperatorKeySemantics.Key keyForPosition(Vector[] values, Vector[] nulls, int position)
         {
             for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
                 if (probeKeys[keyIndex] == null) {
@@ -535,9 +534,9 @@ final class DistinctKeySet
         };
     }
 
-    private static boolean hasNull(BooleanVector[] nulls, int position)
+    private static boolean hasNull(Vector[] nulls, int position)
     {
-        for (BooleanVector nullsVector : nulls) {
+        for (Vector nullsVector : nulls) {
             if (OperatorVectorSupport.isNull(nullsVector, position)) {
                 return true;
             }

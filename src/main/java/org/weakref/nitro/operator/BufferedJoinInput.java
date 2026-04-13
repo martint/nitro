@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -184,10 +185,10 @@ final class BufferedJoinInput
             streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
         }
         if (output.hasNulls()) {
-            streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+            streams.put(Stream.NULLS, new BooleanVector(0));
         }
         if (output.hasErrors()) {
-            streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
+            streams.put(Stream.ERRORS, new BooleanVector(0));
         }
         schema[outputIndex] = streams.build();
         return schema[outputIndex];
@@ -206,10 +207,10 @@ final class BufferedJoinInput
                     streams.put(Stream.VALUES, output.borrow(Stream.VALUES));
                 }
                 if (output.hasNulls()) {
-                    streams.put(Stream.NULLS, output.borrow(Stream.NULLS));
+                    streams.put(Stream.NULLS, new BooleanVector(0));
                 }
                 if (output.hasErrors()) {
-                    streams.put(Stream.ERRORS, output.borrow(Stream.ERRORS));
+                    streams.put(Stream.ERRORS, new BooleanVector(0));
                 }
                 schema[outputIndex] = streams.build();
             }

@@ -15,13 +15,12 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
 import java.util.Arrays;
 
@@ -49,7 +48,7 @@ public class CountColumn
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
         I64Vector values = allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(allocationContext, (BooleanVector) state.get(Stream.NULLS), BooleanVector.class, size, BooleanVector::new);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(allocator, allocationContext, state.get(Stream.NULLS), size);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
@@ -66,10 +65,10 @@ public class CountColumn
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
         I64Vector stateVector = (I64Vector) state.values();
-        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
-            if (!isNull(inputNulls, position)) {
+            if (!inputNulls.value(position)) {
                 stateVector.values()[group]++;
             }
         }
@@ -80,11 +79,11 @@ public class CountColumn
     {
         I64Vector stateVector = (I64Vector) state.values();
         I64Vector groupVector = (I64Vector) groups;
-        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         for (int position : mask) {
             int group = toIntExact(groupVector.values()[position]);
-            if (!isNull(inputNulls, position)) {
+            if (!inputNulls.value(position)) {
                 stateVector.values()[group]++;
             }
         }
@@ -94,16 +93,5 @@ public class CountColumn
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return state;
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector values -> values.values()[position];
-            case DictionaryVector values -> isNull(values.values(), values.ids()[position]);
-            case RleVector values -> isNull(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
     }
 }

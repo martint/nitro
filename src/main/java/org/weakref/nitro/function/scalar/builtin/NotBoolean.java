@@ -57,24 +57,21 @@ public final class NotBoolean
         }
 
         Vector inputValues = inputs.get(0).values();
-        BooleanVector inputNulls = (BooleanVector) inputs.get(0).getOrNull(Stream.NULLS);
+        Vector inputNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         int requiredLength = Math.max(mask.maxPosition() + 1, inputValues.length());
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector outputNulls = context.allocator().allocateOrGrow(
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
                     ALLOCATION_CONTEXT,
-                    output != null && output.getOrNull(Stream.NULLS) instanceof BooleanVector vector ? vector : null,
-                    BooleanVector.class,
-                    requiredLength,
-                    BooleanVector::new);
+                    output != null ? output.getOrNull(Stream.NULLS) : null,
+                    requiredLength);
             boolean[] nulls = outputNulls.values();
             java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
-            if (inputNulls != null) {
-                boolean[] inputNullValues = inputNulls.values();
-                for (int position : mask) {
-                    nulls[position] = inputNullValues[position];
-                }
+            for (int position : mask) {
+                nulls[position] = inputNullValues.value(position);
             }
             result = result.with(Stream.NULLS, outputNulls);
         }
@@ -82,26 +79,15 @@ public final class NotBoolean
             return result;
         }
 
-        BooleanVector outputValues = context.allocator().allocateOrGrow(
+        BooleanVector outputValues = VectorAccess.writableBooleanVector(
+                context.allocator(),
                 ALLOCATION_CONTEXT,
-                output != null && output.getOrNull(Stream.VALUES) instanceof BooleanVector vector ? vector : null,
-                BooleanVector.class,
-                requiredLength,
-                BooleanVector::new);
+                output != null ? output.getOrNull(Stream.VALUES) : null,
+                requiredLength);
         boolean[] values = outputValues.values();
         for (int position : mask) {
-            values[position] = !booleanValue(inputValues, position);
+            values[position] = !VectorAccess.booleanValues(inputValues).value(position);
         }
         return result.with(Stream.VALUES, outputValues);
-    }
-
-    private static boolean booleanValue(Vector values, int position)
-    {
-        return switch (values) {
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> booleanValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> booleanValue(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported not vector type: " + values.getClass().getSimpleName());
-        };
     }
 }

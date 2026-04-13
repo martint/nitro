@@ -18,6 +18,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -222,10 +223,10 @@ public final class WindowOperator
             }
             if (!OperatorEqualitySemantics.equal(
                     leftStreams.values(),
-                    (BooleanVector) leftStreams.getOrNull(Stream.NULLS),
+                    leftStreams.getOrNull(Stream.NULLS),
                     left.position(),
                     rightStreams.values(),
-                    (BooleanVector) rightStreams.getOrNull(Stream.NULLS),
+                    rightStreams.getOrNull(Stream.NULLS),
                     right.position())) {
                 return false;
             }
@@ -239,10 +240,10 @@ public final class WindowOperator
         Streams rightStreams = right.page().columns()[column];
         return OperatorOrderingSemantics.compare(
                 leftStreams.values(),
-                (BooleanVector) leftStreams.getOrNull(Stream.NULLS),
+                leftStreams.getOrNull(Stream.NULLS),
                 left.position(),
                 rightStreams.values(),
-                (BooleanVector) rightStreams.getOrNull(Stream.NULLS),
+                rightStreams.getOrNull(Stream.NULLS),
                 right.position());
     }
 
@@ -252,10 +253,10 @@ public final class WindowOperator
         Streams rightStreams = right.page().columns()[column];
         return OperatorEqualitySemantics.equal(
                 leftStreams.values(),
-                (BooleanVector) leftStreams.getOrNull(Stream.NULLS),
+                leftStreams.getOrNull(Stream.NULLS),
                 left.position(),
                 rightStreams.values(),
-                (BooleanVector) rightStreams.getOrNull(Stream.NULLS),
+                rightStreams.getOrNull(Stream.NULLS),
                 right.position());
     }
 
@@ -411,14 +412,16 @@ public final class WindowOperator
         {
             Streams input = sourceColumns[inputColumn];
             Vector values = input.values();
-            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            Vector nulls = input.getOrNull(Stream.NULLS);
             if (!OperatorVectorSupport.isNull(nulls, inputPosition)) {
                 runningSum += OperatorVectorSupport.longValue(values, inputPosition);
                 hasValue = true;
             }
 
             I64Vector outputValues = (I64Vector) output.values();
-            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            WritableNulls writableNulls = writableOutputNulls(allocator, allocationContext, output);
+            output = writableNulls.output();
+            BooleanVector outputNulls = writableNulls.nulls();
             outputNulls.values()[outputPosition] = !hasValue;
             if (hasValue) {
                 outputValues.values()[outputPosition] = runningSum;
@@ -459,7 +462,7 @@ public final class WindowOperator
         {
             Streams input = sourceColumns[inputColumn];
             Vector values = input.values();
-            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            Vector nulls = input.getOrNull(Stream.NULLS);
             if (!OperatorVectorSupport.isNull(nulls, inputPosition)) {
                 long value = OperatorVectorSupport.longValue(values, inputPosition);
                 if (!hasValue || value > runningMax) {
@@ -469,7 +472,9 @@ public final class WindowOperator
             }
 
             I64Vector outputValues = (I64Vector) output.values();
-            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            WritableNulls writableNulls = writableOutputNulls(allocator, allocationContext, output);
+            output = writableNulls.output();
+            BooleanVector outputNulls = writableNulls.nulls();
             outputNulls.values()[outputPosition] = !hasValue;
             if (hasValue) {
                 outputValues.values()[outputPosition] = runningMax;
@@ -510,7 +515,7 @@ public final class WindowOperator
         {
             Streams input = sourceColumns[inputColumn];
             Vector values = input.values();
-            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            Vector nulls = input.getOrNull(Stream.NULLS);
             if (!OperatorVectorSupport.isNull(nulls, inputPosition)) {
                 runningSum += OperatorVectorSupport.longValue(values, inputPosition);
                 runningCount++;
@@ -522,7 +527,9 @@ public final class WindowOperator
         public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
         {
             I64Vector outputValues = (I64Vector) output.values();
-            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            WritableNulls writableNulls = writableOutputNulls(allocator, allocationContext, output);
+            output = writableNulls.output();
+            BooleanVector outputNulls = writableNulls.nulls();
             boolean hasValue = runningCount > 0;
             long average = hasValue ? roundDivide(runningSum, runningCount) : 0;
             for (int outputPosition = partitionStart; outputPosition < partitionEnd; outputPosition++) {
@@ -575,7 +582,7 @@ public final class WindowOperator
         {
             Streams input = sourceColumns[inputColumn];
             Vector values = input.values();
-            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            Vector nulls = input.getOrNull(Stream.NULLS);
             if (!OperatorVectorSupport.isNull(nulls, inputPosition)) {
                 runningSum += OperatorVectorSupport.longValue(values, inputPosition);
                 hasValue = true;
@@ -587,7 +594,9 @@ public final class WindowOperator
         public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
         {
             I64Vector outputValues = (I64Vector) output.values();
-            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            WritableNulls writableNulls = writableOutputNulls(allocator, allocationContext, output);
+            output = writableNulls.output();
+            BooleanVector outputNulls = writableNulls.nulls();
             for (int outputPosition = partitionStart; outputPosition < partitionEnd; outputPosition++) {
                 outputNulls.values()[outputPosition] = !hasValue;
                 if (hasValue) {
@@ -634,7 +643,7 @@ public final class WindowOperator
             ensureCapacity(partitionCount + 1);
             Streams input = sourceColumns[inputColumn];
             Vector values = input.values();
-            BooleanVector nulls = (BooleanVector) input.getOrNull(Stream.NULLS);
+            Vector nulls = input.getOrNull(Stream.NULLS);
             boolean isNull = OperatorVectorSupport.isNull(nulls, inputPosition);
             partitionNulls[partitionCount] = isNull;
             if (!isNull) {
@@ -648,7 +657,9 @@ public final class WindowOperator
         public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
         {
             I64Vector outputValues = (I64Vector) output.values();
-            BooleanVector outputNulls = (BooleanVector) output.get(Stream.NULLS);
+            WritableNulls writableNulls = writableOutputNulls(allocator, allocationContext, output);
+            output = writableNulls.output();
+            BooleanVector outputNulls = writableNulls.nulls();
             for (int partitionPosition = 0; partitionPosition < partitionCount; partitionPosition++) {
                 int sourcePosition = partitionPosition + offset;
                 int outputPosition = partitionStart + partitionPosition;
@@ -728,10 +739,10 @@ public final class WindowOperator
                 Streams right = rightColumns[orderingColumns[orderingIndex]];
                 int comparison = OperatorOrderingSemantics.compare(
                         left.values(),
-                        (BooleanVector) left.getOrNull(Stream.NULLS),
+                        left.getOrNull(Stream.NULLS),
                         leftPosition,
                         right.values(),
-                        (BooleanVector) right.getOrNull(Stream.NULLS),
+                        right.getOrNull(Stream.NULLS),
                         rightPosition);
                 if (descendingByColumn[orderingIndex]) {
                     comparison = -comparison;
@@ -743,6 +754,18 @@ public final class WindowOperator
             return false;
         }
     }
+
+    private static WritableNulls writableOutputNulls(Allocator allocator, Allocator.Context allocationContext, Streams output)
+    {
+        Vector nulls = output.get(Stream.NULLS);
+        if (nulls instanceof BooleanVector vector) {
+            return new WritableNulls(output, vector);
+        }
+        BooleanVector writable = VectorAccess.writableBooleanVector(allocator, allocationContext, nulls, output.values().length());
+        return new WritableNulls(output.with(Stream.NULLS, writable), writable);
+    }
+
+    private record WritableNulls(Streams output, BooleanVector nulls) {}
 
     private record RowReference(int pageIndex, TableOperator.Page page, int position) {}
 }

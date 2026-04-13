@@ -23,6 +23,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.StddevSampStateVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -67,8 +68,8 @@ public class StddevSamp
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
         StddevSampStateVector stateVector = (StddevSampStateVector) state.values();
-        Vector inputValues = streams.values(inputColumn);
-        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -87,8 +88,8 @@ public class StddevSamp
     {
         StddevSampStateVector stateVector = (StddevSampStateVector) state.values();
         I64Vector groupVector = (I64Vector) groups;
-        Vector inputValues = streams.values(inputColumn);
-        Vector inputNulls = streams.stream(inputColumn, Stream.NULLS);
+        VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
@@ -110,8 +111,11 @@ public class StddevSamp
         StddevSampStateVector stateVector = (StddevSampStateVector) state.values();
         F64Vector values = output == null ? null : (F64Vector) output.getOrNull(Stream.VALUES);
         values = allocator.allocateOrGrow(allocationContext, values, F64Vector.class, stateVector.length(), F64Vector::new);
-        BooleanVector nulls = output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS);
-        nulls = allocator.allocateOrGrow(allocationContext, nulls, BooleanVector.class, stateVector.length(), BooleanVector::new);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
+                allocationContext,
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                stateVector.length());
 
         for (int index = 0; index < stateVector.length(); index++) {
             long count = stateVector.count(index);
@@ -133,12 +137,11 @@ public class StddevSamp
                 F64Vector.class,
                 size,
                 F64Vector::new);
-        BooleanVector nulls = allocator.allocateOrGrow(
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
                 allocationContext,
-                output == null ? null : (BooleanVector) output.getOrNull(Stream.NULLS),
-                BooleanVector.class,
-                size,
-                BooleanVector::new);
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
 
         long count = stateVector.count(group);
         boolean isNull = count < 2;
@@ -147,33 +150,11 @@ public class StddevSamp
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static void accumulate(StddevSampStateVector stateVector, int group, Vector inputValues, Vector inputNulls, int position)
+    private static void accumulate(StddevSampStateVector stateVector, int group, VectorAccess.LongValues inputValues, VectorAccess.BooleanValues inputNulls, int position)
     {
-        if (isNull(inputNulls, position)) {
+        if (inputNulls.value(position)) {
             return;
         }
-        stateVector.addSample(group, value(inputValues, position));
-    }
-
-    private static long value(Vector vector, int position)
-    {
-        return switch (vector) {
-            case I64Vector values -> values.values()[position];
-            case I32Vector values -> values.values()[position];
-            case DictionaryVector values -> value(values.values(), values.ids()[position]);
-            case RleVector values -> value(values.values(), values.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static boolean isNull(Vector nulls, int position)
-    {
-        return switch (nulls) {
-            case null -> false;
-            case BooleanVector vector -> vector.values()[position];
-            case DictionaryVector vector -> isNull(vector.values(), vector.ids()[position]);
-            case RleVector vector -> isNull(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + nulls.getClass().getSimpleName());
-        };
+        stateVector.addSample(group, inputValues.value(position));
     }
 }

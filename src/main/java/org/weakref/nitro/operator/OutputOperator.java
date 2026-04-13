@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -99,9 +98,9 @@ public class OutputOperator
         for (int column = 0; column < columns.size(); column++) {
             Output block = columns.get(column);
             Vector values = block.borrow(Stream.VALUES);
-            BooleanVector nulls = (BooleanVector) block.borrowOrNull(Stream.NULLS);
+            Vector nulls = block.borrowOrNull(Stream.NULLS);
 
-            if (nulls != null && nulls.values()[position]) {
+            if (OperatorVectorSupport.isNull(nulls, position)) {
                 System.out.print("null");
             }
             else {
