@@ -494,7 +494,6 @@ public class HashJoinOperator
         if (sourceOutput.isValuesOnly()) {
             return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
         }
-
         Streams.Builder streams = Streams.builder();
         if (sourceOutput.hasValues()) {
             streams.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(dictionaryIds, sourceOutput.borrow(Stream.VALUES))));
@@ -503,13 +502,13 @@ public class HashJoinOperator
         Streams copiedSideStreams = null;
         if (!sideOutput.streams().isEmpty()) {
             if (currentOutputMask.all()) {
-                copiedSideStreams = buffers.copyPositions(sideOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+                copiedSideStreams = buffers.copyPositionsFresh(sideOutput, null, outputOuterPositions, 0, currentOutputCount, 0, currentOutputCount);
             }
             else {
                 Streams result = null;
                 for (int index = 0; index < currentOutputMask.count(); index++) {
                     int outputPosition = currentOutputMask.position(index);
-                    result = buffers.copySinglePosition(sideOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+                    result = buffers.copySinglePositionFresh(sideOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
                 }
                 copiedSideStreams = result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
             }
@@ -597,7 +596,7 @@ public class HashJoinOperator
             Streams copiedSideStreams = null;
             Streams sideStreams = sideStreamValues(output);
             if (!sideStreams.streams().isEmpty()) {
-                copiedSideStreams = buffers.copyPositions((Streams) null, sideStreams, outputInnerLogicalPositions, currentOutputCount, 0, currentOutputCount);
+                copiedSideStreams = buffers.copyPositionsFresh((Streams) null, sideStreams, outputInnerLogicalPositions, 0, currentOutputCount, 0, currentOutputCount);
             }
             if (output.hasNulls()) {
                 wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
@@ -629,7 +628,7 @@ public class HashJoinOperator
         Streams copiedSideStreams = null;
         Streams sideStreams = sideStreamValues(output);
         if (!sideStreams.streams().isEmpty()) {
-            copiedSideStreams = buffers.copyPositions((Streams) null, sideStreams, outputInnerSourcePositions, currentOutputCount, 0, currentOutputCount);
+            copiedSideStreams = buffers.copyPositionsFresh((Streams) null, sideStreams, outputInnerSourcePositions, 0, currentOutputCount, 0, currentOutputCount);
         }
         if (output.hasNulls()) {
             wrapped.put(Stream.NULLS, copiedSideStreams.get(Stream.NULLS));
@@ -677,29 +676,26 @@ public class HashJoinOperator
         return sideInput.build();
     }
 
-
-
     private Streams copyInnerPositions(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int runIndex, int innerBatchIndex, int innerOutputIndex, int positionStart, int positionCount, int size)
     {
         if (!innerBatch.retained()) {
-            return buffers.copyPositions(existing, innerBatch.columns()[innerOutputIndex], outputInnerLogicalPositions, positionStart, positionCount, positionStart, size);
+            return buffers.copyPositionsFresh(existing, innerBatch.columns()[innerOutputIndex], outputInnerLogicalPositions, positionStart, positionCount, positionStart, size);
         }
 
         constrainRetainedInnerBatch(innerBatchIndex, innerBatch, outputInnerRunUniqueStarts[runIndex], outputInnerRunUniqueCounts[runIndex]);
         Output output = innerBatch.retainedBatch().output(innerOutputIndex);
-        return buffers.copyPositions(output, existing, outputInnerSourcePositions, positionStart, positionCount, positionStart, size);
+        return buffers.copyPositionsFresh(output, existing, outputInnerSourcePositions, positionStart, positionCount, positionStart, size);
     }
-
 
     private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerBatchIndex, int innerOutputIndex, int size, int outputPosition, int logicalPosition, boolean exposeNulls)
     {
         if (!innerBatch.retained()) {
-            return withSyntheticNulls(existing, buffers.copySinglePosition(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition), size, outputPosition, exposeNulls);
+            return withSyntheticNulls(existing, buffers.copySinglePositionFresh(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition), size, outputPosition, exposeNulls);
         }
 
         int sourcePosition = innerBatch.sourcePosition(logicalPosition);
         constrainRetainedInnerBatch(innerBatchIndex, innerBatch, logicalPosition);
-        return withSyntheticNulls(existing, buffers.copySinglePosition(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
+        return withSyntheticNulls(existing, buffers.copySinglePositionFresh(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
     }
 
 
