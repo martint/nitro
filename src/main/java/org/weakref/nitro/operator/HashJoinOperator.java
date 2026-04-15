@@ -18,10 +18,15 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.ProjectedRows;
+import org.weakref.nitro.data.ProjectedRowsDebug;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.SelectionVector;
@@ -29,6 +34,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -49,7 +55,9 @@ public class HashJoinOperator
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
-
+    private static final boolean FLATTEN_OUTER_JOIN_KEYS = Boolean.getBoolean("nitro.hash.join.flattenOuterJoinKeys");
+    private static final boolean FLATTEN_OUTER_JOIN_VALUES = FLATTEN_OUTER_JOIN_KEYS || Boolean.getBoolean("nitro.hash.join.flattenOuterJoinValues");
+    private static final boolean FLATTEN_OUTER_JOIN_NULLS = FLATTEN_OUTER_JOIN_KEYS || Boolean.getBoolean("nitro.hash.join.flattenOuterJoinNulls");
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("HashJoinOperator");
     private final Operator outer;
@@ -96,7 +104,8 @@ public class HashJoinOperator
     private int currentOutputCount;
     private Mask currentOutputMask;
     private SelectedPositions currentOuterSelectedPositions;
-    private final Map<SelectedPositions, SelectedPositions> currentOuterSelectionCompositions = new IdentityHashMap<>();
+    private ProjectedRows currentOuterProjectedRows;
+    private Map<Long, OuterSelectionComposeCacheEntry> currentOuterSelectionComposeCache;
     private int preparedOuterCount;
     private int preparedOuterIndex;
     private boolean done;
@@ -173,16 +182,21 @@ public class HashJoinOperator
     @Override
     public Batch next()
     {
+        long start = System.nanoTime();
         Mask batchMask = produceBatch();
+        long afterProduceBatch = System.nanoTime();
         preparedInnerRunCount = -1;
         currentOutputMask = batchMask;
         currentOuterSelectedPositions = null;
-        currentOuterSelectionCompositions.clear();
+        currentOuterProjectedRows = null;
+        currentOuterSelectionComposeCache = null;
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = resultOutput(outputIndex);
         }
+        long afterBuildOutputs = System.nanoTime();
+        ProjectedRowsDebug.recordHashJoinNext(batchMask.count(), outputs.length, afterProduceBatch - start, afterBuildOutputs - afterProduceBatch);
         return new Batch(
                 batchMask,
                 takenMask -> allocator.transfer(allocationContext, takenMask),
@@ -267,6 +281,7 @@ public class HashJoinOperator
 
     private void prepareOuterProbeChunk()
     {
+        long start = System.nanoTime();
         preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, BATCH_SIZE);
         preparedOuterIndex = 0;
         for (int index = 0; index < preparedOuterCount; index++) {
@@ -274,10 +289,13 @@ public class HashJoinOperator
         }
 
         if (joinIndex instanceof LongJoinIndex longJoinIndex && outerJoinColumns.length == 1) {
+            long longProbeStart = System.nanoTime();
             longJoinIndex.matchRows(currentOuterJoinValues[0], currentOuterJoinNulls[0], preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
+            ProjectedRowsDebug.recordHashJoinLongProbe(preparedOuterCount, System.nanoTime() - longProbeStart, currentOuterJoinValues[0] instanceof SelectionVector);
+            ProjectedRowsDebug.recordHashJoinPrepareChunk(preparedOuterCount, System.nanoTime() - start);
             return;
         }
-
+        long genericProbeStart = System.nanoTime();
         for (int index = 0; index < preparedOuterCount; index++) {
             LongList matches = matchesForOuterPosition(preparedOuterPositions[index]);
             if (matches instanceof SingleLongList singleMatch) {
@@ -287,6 +305,35 @@ public class HashJoinOperator
                 preparedOuterMatches[index] = matches;
             }
         }
+        ProjectedRowsDebug.recordHashJoinGenericProbe(
+                preparedOuterCount,
+                System.nanoTime() - genericProbeStart,
+                genericProbeKind(),
+                selectionVectorCount(currentOuterJoinValues),
+                currentOuterJoinValues.length);
+        ProjectedRowsDebug.recordHashJoinPrepareChunk(preparedOuterCount, System.nanoTime() - start);
+    }
+
+    private String genericProbeKind()
+    {
+        return switch (joinIndex) {
+            case FlatJoinIndex _ -> "flat";
+            case LongPairJoinIndex _ -> "pair";
+            case LongTripleJoinIndex _ -> "triple";
+            case ObjectJoinIndex _ -> "object";
+            case null, default -> "object";
+        };
+    }
+
+    private static int selectionVectorCount(Vector[] vectors)
+    {
+        int count = 0;
+        for (Vector vector : vectors) {
+            if (vector instanceof SelectionVector) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private boolean loadNextOuterBatch()
@@ -318,10 +365,19 @@ public class HashJoinOperator
         if (joinIndex == null) {
             return LongLists.emptyList();
         }
+        String operatorName = profileName != null ? profileName : "hash_join";
+        String probeKind = genericProbeKind();
         if (!currentOuterJoinHasNulls) {
+            ProjectedRowsDebug.recordHashJoinDirectNoNullProbe(operatorName, probeKind);
             return joinIndex.matchesNoNulls(currentOuterJoinValues, outerPosition);
         }
-        return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, outerPosition);
+        ProjectedRowsDebug.enterHashJoinNullableProbe(operatorName, probeKind);
+        try {
+            return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, outerPosition);
+        }
+        finally {
+            ProjectedRowsDebug.exitHashJoinNullableProbe();
+        }
     }
 
     private void loadInnerIfNecessary()
@@ -374,10 +430,24 @@ public class HashJoinOperator
         currentOuterJoinHasNulls = false;
         for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
-            currentOuterJoinValues[keyIndex] = output.borrow(Stream.VALUES);
-            currentOuterJoinNulls[keyIndex] = output.borrowOrNull(Stream.NULLS);
+            long start = System.nanoTime();
+            currentOuterJoinValues[keyIndex] = flattenOuterJoinKeyIfRequested(output.borrow(Stream.VALUES), FLATTEN_OUTER_JOIN_VALUES);
+            currentOuterJoinNulls[keyIndex] = output.isKnownAllFalse(Stream.NULLS) ? null : flattenOuterJoinKeyIfRequested(output.borrowOrNull(Stream.NULLS), FLATTEN_OUTER_JOIN_NULLS);
+            ProjectedRowsDebug.recordHashJoinCacheOuter(
+                    System.nanoTime() - start,
+                    currentOuterJoinValues[keyIndex] instanceof SelectionVector,
+                    currentOuterJoinNulls[keyIndex] instanceof SelectionVector,
+                    currentOuterJoinNulls[keyIndex] != null);
             currentOuterJoinHasNulls = currentOuterJoinHasNulls || currentOuterJoinNulls[keyIndex] != null;
         }
+    }
+
+    private Vector flattenOuterJoinKeyIfRequested(Vector vector, boolean flatten)
+    {
+        if (!flatten || !(vector instanceof SelectionVector)) {
+            return vector;
+        }
+        return vector.copyMasked(allocator, allocationContext, null, currentOuterMask);
     }
 
     private void captureOuterSchemaIfAvailable()
@@ -442,17 +512,29 @@ public class HashJoinOperator
         Set<Stream> streams = outputIndex < outer.outputCount()
                 ? currentOuterBatch.output(outputIndex).streams()
                 : innerOutputStreams(outputIndex - outer.outputCount());
+        Set<Stream> knownAllFalseStreams = resultKnownAllFalseStreams(outputIndex, streams);
         Output.PositionProjector positionProjector = outputIndex < outer.outputCount() ?
                 (requestedStreams, sourcePositions) -> projectOuterOutput(outputIndex, requestedStreams, sourcePositions) :
                 null;
         return new Output(
                 streams,
-                stream -> materializeOutput(outputIndex).get(stream),
+                stream -> {
+                    ProjectedRowsDebug.recordOuterBorrow(stream, currentOutputs[outputIndex] != null);
+                    Streams materialized = materializeOutput(outputIndex);
+                    if (materialized.has(stream)) {
+                        return materialized.get(stream);
+                    }
+                    if (knownAllFalseStreams.contains(stream)) {
+                        return allFalseBooleanStream(currentOutputCount);
+                    }
+                    throw new IllegalArgumentException("Output does not expose stream: " + stream);
+                },
                 (stream, vector) -> allocator.transfer(allocationContext, vector),
                 (_, _) -> {},
                 positionProjector,
                 null,
-                null);
+                null)
+                .withKnownAllFalse(knownAllFalseStreams);
     }
 
     private Streams outputSchema(int outputIndex)
@@ -509,32 +591,72 @@ public class HashJoinOperator
         Output sourceOutput = currentOuterBatch.output(outputIndex);
         SelectedPositions selectedOuterPositions = currentOuterSelectedPositions();
         if (sourceOutput.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, sourceOutput.borrow(Stream.VALUES))));
+            ProjectedRowsDebug.recordOuterMaterializeWrapped(true, false, false);
+            return Streams.ofValues(materializeSelectedOuterStream(Stream.VALUES, selectedOuterPositions, sourceOutput.borrow(Stream.VALUES)));
         }
         Streams.Builder streams = Streams.builder();
         if (sourceOutput.hasValues()) {
-            streams.put(Stream.VALUES, allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, sourceOutput.borrow(Stream.VALUES))));
+            streams.put(Stream.VALUES, materializeSelectedOuterStream(Stream.VALUES, selectedOuterPositions, sourceOutput.borrow(Stream.VALUES)));
         }
-        if (sourceOutput.hasNulls()) {
+        if (sourceOutput.hasNulls() && !sourceOutput.isKnownAllFalse(Stream.NULLS)) {
             Vector nulls = sourceOutput.borrow(Stream.NULLS);
-            streams.put(Stream.NULLS, allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, nulls)));
+            streams.put(Stream.NULLS, materializeSelectedOuterStream(Stream.NULLS, selectedOuterPositions, nulls));
         }
-        if (sourceOutput.hasErrors()) {
+        if (sourceOutput.hasErrors() && !sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
             Vector errors = sourceOutput.borrow(Stream.ERRORS);
-            streams.put(Stream.ERRORS, allocator.adopt(allocationContext, wrapSelectedOuterStream(selectedOuterPositions, errors)));
+            streams.put(Stream.ERRORS, materializeSelectedOuterStream(Stream.ERRORS, selectedOuterPositions, errors));
         }
+        ProjectedRowsDebug.recordOuterMaterializeWrapped(sourceOutput.hasValues(), sourceOutput.hasNulls(), sourceOutput.hasErrors());
         return streams.build();
+    }
+
+    private Vector materializeSelectedOuterStream(Stream stream, SelectedPositions selectedOuterPositions, Vector source)
+    {
+        Vector wrapped = wrapSelectedOuterStream(selectedOuterPositions, source);
+        return allocator.adopt(allocationContext, wrapped);
     }
 
     private Vector wrapSelectedOuterStream(SelectedPositions selectedOuterPositions, Vector stream)
     {
+        ProjectedRowsDebug.recordOuterWrapSelectedStream(selectedOuterPositions.count());
         if (stream instanceof SelectionVector selection) {
-            SelectedPositions composedPositions = currentOuterSelectionCompositions.computeIfAbsent(
-                    selection.positions(),
-                    sourcePositions -> composeSelectedPositions(selectedOuterPositions, sourcePositions));
-            return SelectionVector.wrap(composedPositions, selection.values());
+            return new SelectionVector(currentOuterComposedProjectedRows(selection.projectedRows()), selection.values());
         }
-        return SelectionVector.wrap(selectedOuterPositions, stream);
+        return SelectionVector.wrap(currentOuterProjectedRows(), stream);
+    }
+
+    private ProjectedRows currentOuterComposedProjectedRows(ProjectedRows sourceProjectedRows)
+    {
+        ProjectedRows currentProjectedRows = currentOuterProjectedRows();
+        SelectedPositions currentPositions = currentProjectedRows.positions();
+        SelectedPositions sourcePositions = sourceProjectedRows.positions();
+        ProjectedRowsDebug.recordOuterSelectionComposePair(sourcePositions, currentPositions);
+        if (sourcePositions == currentPositions) {
+            ProjectedRowsDebug.recordOuterSelectionComposeCache(true);
+            ProjectedRowsDebug.recordOuterSelectionComposeOperator(profileName, true, sourcePositions.count(), currentPositions.count());
+            return sourceProjectedRows;
+        }
+
+        long fingerprint = fingerprint(sourcePositions);
+        if (currentOuterSelectionComposeCache != null) {
+            OuterSelectionComposeCacheEntry cached = currentOuterSelectionComposeCache.get(fingerprint);
+            if (cached != null && positionsEqual(cached.sourcePositions(), sourcePositions)) {
+                ProjectedRowsDebug.recordOuterSelectionComposeCache(true);
+                ProjectedRowsDebug.recordOuterSelectionComposeOperator(profileName, true, sourcePositions.count(), currentPositions.count());
+                return cached.projectedRows();
+            }
+        }
+
+        ProjectedRowsDebug.recordOuterSelectionComposeMissPair(sourcePositions, currentPositions);
+        ProjectedRowsDebug.recordOuterSelectionComposeCache(false);
+        ProjectedRowsDebug.recordOuterSelectionComposeOperator(profileName, false, sourcePositions.count(), currentPositions.count());
+        ProjectedRows composed = ProjectedRows.rows(sourceProjectedRows.compose(currentPositions));
+        ProjectedRowsDebug.recordOuterSelectionComposeMissResult(positionsEqual(composed.positions(), currentPositions));
+        if (currentOuterSelectionComposeCache == null) {
+            currentOuterSelectionComposeCache = new HashMap<>();
+        }
+        currentOuterSelectionComposeCache.put(fingerprint, new OuterSelectionComposeCacheEntry(sourcePositions, composed));
+        return composed;
     }
 
     private SelectedPositions currentOuterSelectedPositions()
@@ -544,6 +666,66 @@ public class HashJoinOperator
         }
         return currentOuterSelectedPositions;
     }
+
+    private ProjectedRows currentOuterProjectedRows()
+    {
+        if (currentOuterProjectedRows == null) {
+            currentOuterProjectedRows = ProjectedRows.rows(currentOuterSelectedPositions());
+        }
+        return currentOuterProjectedRows;
+    }
+
+    private static long fingerprint(SelectedPositions positions)
+    {
+        int count = positions.count();
+        if (count == 0) {
+            return 0x9E3779B97F4A7C15L;
+        }
+        long hash = 0x9E3779B97F4A7C15L ^ count;
+        hash = mix(hash, positions.position(0));
+        hash = mix(hash, positions.position(count >>> 1));
+        hash = mix(hash, positions.position(count - 1));
+        hash = mix(hash, positions.position(count >>> 2));
+        hash = mix(hash, positions.position((count * 3) >>> 2));
+        return hash;
+    }
+
+    private static long mix(long hash, long value)
+    {
+        hash ^= value + 0x9E3779B97F4A7C15L + (hash << 6) + (hash >>> 2);
+        return hash;
+    }
+
+    private static boolean positionsEqual(SelectedPositions left, SelectedPositions right)
+    {
+        if (left == right) {
+            return true;
+        }
+        if (left.count() != right.count()) {
+            return false;
+        }
+        int count = left.count();
+        int[] leftArray = left.backingArrayOrNull();
+        int[] rightArray = right.backingArrayOrNull();
+        if (leftArray != null && rightArray != null) {
+            int leftOffset = left.backingArrayOffset();
+            int rightOffset = right.backingArrayOffset();
+            for (int index = 0; index < count; index++) {
+                if (leftArray[leftOffset + index] != rightArray[rightOffset + index]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        for (int index = 0; index < count; index++) {
+            if (left.position(index) != right.position(index)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private record OuterSelectionComposeCacheEntry(SelectedPositions sourcePositions, ProjectedRows projectedRows) {}
 
     private static Set<Stream> sideStreams(Output output)
     {
@@ -560,46 +742,35 @@ public class HashJoinOperator
     private Output.ProjectedOutput projectOuterOutput(int outputIndex, Set<Stream> requestedStreams, SelectedPositions sourcePositions)
     {
         Output sourceOutput = currentOuterBatch.output(outputIndex).select(requestedStreams);
-        int[] projectedPositionIds = SelectedPositions.map(outputOuterPositions, sourcePositions).materialize(null);
-        SelectedPositions projectedPositions = SelectedPositions.positions(projectedPositionIds);
-        Output.ProjectedOutput projected = sourceOutput.projectPositions(projectedPositions);
+        ProjectedRows projectedRows = currentOuterProjectedRows().project(sourcePositions);
+        Output.ProjectedOutput projected = sourceOutput.projectPositions(projectedRows.positions());
+        ProjectedRowsDebug.recordOuterProjectOutput(sourcePositions.count(), projected != null);
         if (projected != null) {
             return projected;
         }
-        return new Output.ProjectedOutput(sourceOutput, projectedPositions);
+        return new Output.ProjectedOutput(sourceOutput, projectedRows);
     }
 
-    private static SelectedPositions composeSelectedPositions(SelectedPositions positions, SelectedPositions mapping)
+    private static Output projectedOutput(Output sourceOutput, ProjectedRows projectedRows)
     {
-        int[] mappingArray = mapping.backingArrayOrNull();
-        if (mappingArray != null) {
-            int[] positionsArray = positions.backingArrayOrNull();
-            if (positionsArray != null) {
-                int[] composed = new int[positions.count()];
-                int positionsOffset = positions.backingArrayOffset();
-                int mappingOffset = mapping.backingArrayOffset();
-                for (int index = 0; index < composed.length; index++) {
-                    composed[index] = mappingArray[mappingOffset + positionsArray[positionsOffset + index]];
-                }
-                return SelectedPositions.positions(composed);
+        Output.PositionProjector positionProjector = (requestedStreams, sourcePositions) -> {
+            Output selected = sourceOutput.select(requestedStreams);
+            ProjectedRows nestedProjectedRows = projectedRows.project(sourcePositions);
+            Output.ProjectedOutput projected = selected.projectPositions(nestedProjectedRows.positions());
+            if (projected != null) {
+                return projected;
             }
-            return SelectedPositions.map(mappingArray, positions);
-        }
-
-        int[] composed = new int[positions.count()];
-        int[] positionsArray = positions.backingArrayOrNull();
-        int positionsOffset = positions.backingArrayOffset();
-        if (positionsArray != null) {
-            for (int index = 0; index < composed.length; index++) {
-                composed[index] = mapping.position(positionsArray[positionsOffset + index]);
-            }
-        }
-        else {
-            for (int index = 0; index < composed.length; index++) {
-                composed[index] = mapping.position(positions.position(index));
-            }
-        }
-        return SelectedPositions.positions(composed);
+            return new Output.ProjectedOutput(selected, nestedProjectedRows);
+        };
+        return new Output(
+                sourceOutput.streams(),
+                stream -> SelectionVector.wrap(projectedRows, sourceOutput.borrow(stream)),
+                (stream, vector) -> vector,
+                (stream, vector) -> {},
+                positionProjector,
+                null,
+                null)
+                .withKnownAllFalse(sourceOutput.knownAllFalseStreams());
     }
 
     private Streams materializeInnerOutput(int innerOutputIndex)
@@ -1131,7 +1302,58 @@ public class HashJoinOperator
         if (!exposeNulls || streams.has(Stream.NULLS)) {
             return streams;
         }
-        return streams.with(Stream.NULLS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.NULLS), size, outputPosition, false));
+        return streams;
+    }
+
+    private Set<Stream> resultKnownAllFalseStreams(int outputIndex, Set<Stream> streams)
+    {
+        if (streams.isEmpty()) {
+            return Set.of();
+        }
+
+        if (outputIndex < outer.outputCount()) {
+            Output sourceOutput = currentOuterBatch.output(outputIndex);
+            EnumSet<Stream> known = EnumSet.noneOf(Stream.class);
+            for (Stream stream : streams) {
+                if (sourceOutput.isKnownAllFalse(stream)) {
+                    known.add(stream);
+                }
+            }
+            return known.isEmpty() ? Set.of() : Set.copyOf(known);
+        }
+
+        int innerOutputIndex = outputIndex - outer.outputCount();
+        EnumSet<Stream> known = EnumSet.noneOf(Stream.class);
+        if (streams.contains(Stream.NULLS) && innerOutputKnownAllFalseNulls(innerOutputIndex)) {
+            known.add(Stream.NULLS);
+        }
+        if (streams.contains(Stream.ERRORS) && bufferedInner.outputKnownAllFalse(innerOutputIndex, Stream.ERRORS)) {
+            known.add(Stream.ERRORS);
+        }
+        return known.isEmpty() ? Set.of() : Set.copyOf(known);
+    }
+
+    private boolean innerOutputKnownAllFalseNulls(int innerOutputIndex)
+    {
+        Set<Stream> streams = innerOutputStreams(innerOutputIndex);
+        if (streams == null || !streams.contains(Stream.NULLS)) {
+            return false;
+        }
+        if (hasNoMatchRows()) {
+            return false;
+        }
+
+        Set<Stream> sourceStreams = bufferedInner.outputStreams(innerOutputIndex);
+        boolean sourceExposesNulls = sourceStreams != null && sourceStreams.contains(Stream.NULLS);
+        if (!sourceExposesNulls) {
+            return probeOuterJoin;
+        }
+        return bufferedInner.outputKnownAllFalse(innerOutputIndex, Stream.NULLS);
+    }
+
+    private BooleanVector allFalseBooleanStream(int size)
+    {
+        return allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
     }
 
 
@@ -1292,6 +1514,7 @@ public class HashJoinOperator
                 case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nullValues, positions, positionCount, matches, singleMatches);
                 case org.weakref.nitro.data.I32Vector intValues -> matchIntRows(intValues.values(), nullValues, positions, positionCount, matches, singleMatches);
                 case DictionaryVector dictionary -> matchDictionaryRows(dictionary, nullValues, positions, positionCount, matches, singleMatches);
+                case SelectionVector selection -> matchSelectionRows(selection, nullValues, positions, positionCount, matches, singleMatches);
                 case org.weakref.nitro.data.RleVector rle -> matchRleRows(rle, nullValues, positions, positionCount, matches, singleMatches);
                 default -> {
                     VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
@@ -1302,6 +1525,55 @@ public class HashJoinOperator
                         }
                         else {
                             matches[index] = batchedRowsForSlot(findSlot(rowValues.value(position)), singleMatches[index]);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void matchSelectionRows(SelectionVector selection, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            SelectedPositions selectedPositions = selection.positions();
+            int[] selectedArray = selectedPositions.backingArrayOrNull();
+            int selectedOffset = selectedPositions.backingArrayOffset();
+            switch (selection.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] baseValues = longValues.values();
+                    if (selectedArray != null) {
+                        matchSelectedLongRows(baseValues, selectedArray, selectedOffset, nullValues, positions, positionCount, matches, singleMatches);
+                        return;
+                    }
+                    matchSelectedLongRows(baseValues, selectedPositions, nullValues, positions, positionCount, matches, singleMatches);
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] baseValues = intValues.values();
+                    if (selectedArray != null) {
+                        matchSelectedIntRows(baseValues, selectedArray, selectedOffset, nullValues, positions, positionCount, matches, singleMatches);
+                        return;
+                    }
+                    matchSelectedIntRows(baseValues, selectedPositions, nullValues, positions, positionCount, matches, singleMatches);
+                }
+                default -> {
+                    VectorAccess.LongValues selectedValues = VectorAccess.longValues(selection.values());
+                    if (selectedArray != null) {
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = positions[index];
+                            if (nullValues.value(position)) {
+                                matches[index] = LongLists.emptyList();
+                            }
+                            else {
+                                matches[index] = batchedRowsForSlot(findSlot(selectedValues.value(selectedArray[selectedOffset + position])), singleMatches[index]);
+                            }
+                        }
+                        return;
+                    }
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            matches[index] = LongLists.emptyList();
+                        }
+                        else {
+                            matches[index] = batchedRowsForSlot(findSlot(selectedValues.value(selectedPositions.position(position))), singleMatches[index]);
                         }
                     }
                 }
@@ -1463,6 +1735,58 @@ public class HashJoinOperator
             }
         }
 
+        private void matchSelectedLongRows(long[] values, int[] selectedPositions, int selectedOffset, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(values[selectedPositions[selectedOffset + position]]), singleMatches[index]);
+                }
+            }
+        }
+
+        private void matchSelectedLongRows(long[] values, SelectedPositions selectedPositions, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(values[selectedPositions.position(position)]), singleMatches[index]);
+                }
+            }
+        }
+
+        private void matchSelectedIntRows(int[] values, int[] selectedPositions, int selectedOffset, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(values[selectedPositions[selectedOffset + position]]), singleMatches[index]);
+                }
+            }
+        }
+
+        private void matchSelectedIntRows(int[] values, SelectedPositions selectedPositions, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    matches[index] = LongLists.emptyList();
+                }
+                else {
+                    matches[index] = batchedRowsForSlot(findSlot(values[selectedPositions.position(position)]), singleMatches[index]);
+                }
+            }
+        }
+
         private void matchRleRows(org.weakref.nitro.data.RleVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
@@ -1549,12 +1873,15 @@ public class HashJoinOperator
 
         private static boolean hasNull(Vector[] nulls, int position)
         {
+            boolean hasNull = false;
             for (Vector nullsVector : nulls) {
                 if (OperatorVectorSupport.isNull(nullsVector, position)) {
-                    return true;
+                    hasNull = true;
+                    break;
                 }
             }
-            return false;
+            ProjectedRowsDebug.recordHashJoinNullableProbeNullCheck(hasNull);
+            return hasNull;
         }
     }
 

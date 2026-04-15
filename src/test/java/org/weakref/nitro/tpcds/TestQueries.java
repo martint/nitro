@@ -20,12 +20,14 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ProjectedRowsDebug;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.OutputDebug;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -981,6 +983,8 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
+        ProjectedRowsDebug.reset();
+        OutputDebug.reset();
         try (Operator query = TpcdsParquetSupport.query64(new Allocator(), primitiveRegistry, tables)) {
             HashJoinOperator.withMaterializationProfile(profile, () -> {
                 consumeOperator(query);
@@ -989,6 +993,12 @@ public class TestQueries
         }
 
         System.out.println(profile.formatReport());
+        if (ProjectedRowsDebug.enabled()) {
+            System.out.println(ProjectedRowsDebug.snapshot());
+        }
+        if (OutputDebug.enabled()) {
+            System.out.println(OutputDebug.snapshot());
+        }
     }
 
     @Test
@@ -1061,6 +1071,7 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
+        OutputDebug.reset();
         try (Operator query = TpcdsParquetSupport.query80(new Allocator(), primitiveRegistry, tables)) {
             HashJoinOperator.withMaterializationProfile(profile, () -> {
                 consumeOperator(query);
@@ -1069,6 +1080,9 @@ public class TestQueries
         }
 
         System.out.println(profile.formatReport());
+        if (OutputDebug.enabled()) {
+            System.out.println(OutputDebug.snapshot());
+        }
     }
 
     @Test

@@ -169,4 +169,5 @@ public sealed interface SelectedPositions
             return materialized;
         }
     }
+
 }

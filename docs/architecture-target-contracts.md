@@ -1348,6 +1348,241 @@ Recent `Q64` / `Q80` join work sharpened several more practical rules:
   `SelectionVector<BooleanVector>` side streams. That means the next design work
   should focus on reusing carried outer row selections across many columns, not
   on inventing more boolean wrapper variants.
+- A deeper `Q64` root-cause pass showed that the current `ProjectedRows`
+  abstraction regressed mostly by shifting work from `borrow()` into
+  `HashJoinOperator.next()`. Join-materialization attribution stayed in the same
+  general range, but total operator CPU rose because later joins were now
+  probing with carried outer join keys wrapped in `SelectionVector` /
+  `ProjectedRows` indirection. In practice, the hottest delta was in
+  `produceBatch()` rather than in final output materialization.
+- The same root-cause pass also showed that `ProjectedRows` cache reuse was far
+  worse than expected in `Q64`: the hot path created on the order of millions
+  of projected-row objects and saw essentially all `compose(...)` calls miss the
+  cache. That means the current abstraction is not buying meaningful reuse for
+  late chained joins; it is mostly adding projection bookkeeping to the probe
+  path.
+- Probe-side join-key access is the primary regression source. A controlled
+  experiment that flattened only carried outer join-key `VALUES` at batch load
+  materially reduced total `Q64` operator CPU, while flattening only the
+  boolean `NULLS` streams helped little. The architecture should therefore
+  treat selection-wrapped key access in later join probe loops as a first-order
+  cost center, and treat carried boolean side streams as secondary.
+- At the same time, flattening those carried outer join keys eagerly made the
+  short end-to-end `Q64` / `Q80` JMH runs slower, even while operator CPU went
+  down. That means "flatten the join keys up front" is useful as diagnosis but
+  not as the target design. The lost time is being paid as extra batch-local
+  copy cost. The real target is a join probe path that can read carried outer
+  keys cheaply without first flattening them, not a policy of eager key copies.
+- JFR allocation samples on the post-fast-probe branch showed that a meaningful
+  slice of the remaining cost was still self-inflicted duplicate projection
+  wrapping: `HashJoinOperator.materializeOuterOutput(...)` repeatedly called
+  `SelectionVector.wrap(...)` on streams that were already backed by the same
+  `ProjectedRows` instance. Adding an identity short-circuit there reduced
+  `Q64` operator CPU again and, in short GC-profiled JMH runs, improved
+  `query64` from about `35.6s/op` to about `28.9s/op` while roughly halving GC
+  time. The lesson is that projected-stream abstractions must avoid rebuilding
+  equivalent wrapper state just as aggressively as they avoid rebuilding row
+  position arrays.
+- A follow-up debug pass narrowed the remaining output-side cost further. On
+  the hot `Q64` path, the selection-aware copy helper in `JoinBufferSupport`
+  was effectively absent; the query spent almost all of its remaining join
+  materialization time in nested `SelectionVector.wrap(...)` /
+  `ProjectedRows.project(...)` composition rather than in
+  `copySelectedPositionsInto(...)`. In other words, the dominant work was still
+  "build another projected wrapper", not "copy rows through the selected-row
+  copy helper".
+- That same debug pass showed that the residual `ProjectedRows` reuse is very
+  narrow. `project(...)` saw a large number of immediate "last" hits, but
+  `compose(...)` still missed on every call, and `project(...)` never saw a
+  meaningful map hit. The practical interpretation is that the current design
+  only reuses a projection pair across adjacent stream borrows for the same
+  logical column; it does not achieve broader reuse across later columns or
+  later chained joins.
+- A direct experiment with lazy nested selections confirmed the other side of
+  the trade-off. Replacing eager composition in `SelectionVector.wrap(...)`
+  with a nested `SelectionVector` chain preserved semantics but pushed a short
+  `query64` warmup above `51s/op`, much worse than the eager-composition
+  branch. That means the eager projection is still buying critical read/probe
+  locality today. The next design step is therefore not "stop composing
+  projected rows", but "either reduce the number of unique projection pairs we
+  create or make eager composition itself materially cheaper".
+- A later fingerprinted debug pass showed that the remaining misses were not
+  truly unique by content. Identity-based reuse looked poor, but sampled
+  position fingerprints showed a large majority of projection pairs repeating
+  structurally across carried outer columns and later chained joins. The real
+  missing cache scope was therefore not inside one `ProjectedRows` instance; it
+  was at the join-batch boundary where multiple carried outer columns reuse the
+  same logical row mapping under different wrapper identities.
+- Moving that reuse to a batch-scoped cache in `HashJoinOperator` paid off.
+  Composing carried outer `ProjectedRows` once per batch/source-selection pair
+  and reusing the result across later stream wraps produced real cache hits
+  and lowered `Q64` join-materialization attribution from roughly `66.6s` to
+  roughly `62.0s`, while improving focused short JMH runs to about
+  `27.9s/op` for `Q64` and `9.36s/op` for `Q80`.
+- The same work also exposed an important negative result: a per-instance
+  fingerprint cache inside `ProjectedRows` itself was the wrong abstraction
+  level. It saw no meaningful map hits in debug counters, and leaving that
+  bookkeeping in place was slower than relying on the batch-scoped
+  composition cache plus the simpler `ProjectedRows` local state. The lesson
+  is that structural reuse must be cached where repeated structure is actually
+  shared, not at every layer that happens to manipulate row selections.
+- A deeper miss-path analysis showed that the remaining repeated carried-outer
+  projection pairs are split into two populations: a short-distance cluster
+  and a very long-distance cluster. That ruled out "make composition lazier"
+  as the next step and sharpened the question to cache scope and cache key
+  quality.
+- A debug-only exact-key FIFO simulation then showed that the operator-local
+  global compose cache was missing most of the real reusable pairs not because
+  reuse was absent, but because the reuse was largely outside one
+  `HashJoinOperator` instance. With a `131072`-entry simulated exact-key cache,
+  `query64` saw about `64818` potential hits where the real operator-local
+  cache saw only about `32`.
+- That same result matters architecturally: most of the remaining structural
+  reuse is cross-operator, especially across repeated late join shapes, not
+  just across columns inside one join. A cache scoped to one operator cannot
+  capture that reuse no matter how clever its local fingerprinting is.
+- A direct experiment with a shared thread-local cache of live `ProjectedRows`
+  objects confirmed the boundary but also exposed the danger. Real cache hits
+  rose to match the exact-key simulation, yet end-to-end `Q64/Q80` benchmark
+  times regressed. The lesson is that cross-operator reuse is real, but the
+  reusable artifact cannot simply be a long-lived shared `ProjectedRows`
+  wrapper. The next viable design would need a cheaper, more ownership-safe
+  shared artifact, such as composed row-position arrays or another compact
+  immutable projection form, rather than shared mutable wrapper objects.
+- A follow-up experiment with a shared cache of immutable composed
+  row-position arrays also regressed badly. That rules out a too-simple
+  reading of the previous result: the problem is not just the weight of the
+  `ProjectedRows` wrapper object. In the current engine shape, even reusing the
+  lighter composed arrays across operators costs more than it saves. The
+  remaining opportunity therefore is not generic cross-operator memoization of
+  projection artifacts; it likely needs a more domain-specific reuse point
+  that preserves locality without retaining broad shared state across later
+  joins.
+- Later probe-path instrumentation on `Q64` exposed a narrower but actionable
+  pattern in the hottest late pair joins (`store_returns` and
+  `catalog_returns`): those joins were taking the nullable pair-probe path on
+  every row, but the active rows never actually contained nulls. So the engine
+  was paying the full null-check tax without ever using the result.
+- A first attempt to exploit that finding used a per-batch scan to prune
+  all-false outer join `NULLS` streams. It did move those hot joins onto the
+  direct null-free probe path in debug output, but clean timing loops regressed.
+  The scan itself cost more than the saved nullable-branch work.
+- A second attempt preserved synthetic false-only `NULLS` structurally by
+  emitting RLE false streams and recognizing them later without scanning. That
+  version looked promising in a short `Q64` loop and reduced `Q64` operator CPU
+  from about `789.2s` to about `762.9s`, but it still regressed the focused JMH
+  benchmarks badly (`Q64` about `33.96s/op`, `Q80` about `11.67s/op`). It also
+  raised `Q80` operator CPU materially (about `176.0s` to `195.1s`). The
+  practical lesson is that a "known no nulls" signal is only worthwhile if the
+  carrier is extremely cheap. If preserving that signal adds enough wrapper or
+  allocation pressure, the saved probe CPU can still lose end-to-end.
+- A follow-up that carried the same "all false" fact as cheap `Output`
+  metadata instead of as structural boolean vectors was much healthier. After
+  fixing the aggregation semantics to intersect that metadata across buffered
+  batches, the focused benchmark came in around `Q64 = 27.53s/op` and
+  `Q80 = 9.81s/op`, with clean focused query validation. That makes the
+  high-level lesson more precise: the useful part is the metadata fact itself,
+  not a richer false-stream representation.
+- But two further refinements to that metadata path both failed. Rewriting the
+  hot metadata plumbing from tiny `Set<Stream>` objects to raw bit flags
+  regressed immediately (`Q64` measured about `29.95s/op`), so the residual
+  runtime cost is not explained simply by set allocation or membership checks.
+- Likewise, refining the inner-side metadata from a coarse "all buffered
+  batches agree" fact to a batch-local "all currently referenced batches agree"
+  fact regressed even more sharply (`Q64` warmups around `35.27s/op` and
+  `32.78s/op`). So the current global intersection is not obviously the main
+  remaining bottleneck; in the current implementation, the extra per-batch
+  bookkeeping costs more than the additional precision is worth.
+- Pure reference projections turned out to be sensitive to more than just
+  their surface semantics. A dedicated `ReferenceProjectOperator` that only
+  forwarded input `VALUES` references and deliberately avoided the rest of
+  `ProjectOperator`'s machinery regressed badly compared with the broader
+  pass-through checkpoint. The practical lesson is that the kept win is not
+  merely "skip `ProjectOperator` overhead"; it depends on preserving the
+  existing `Output` object graph and its transfer/lifetime behavior closely
+  enough that later consumers see the same effective source output identity.
+- `Output`-level instrumentation narrowed that story further. On the kept
+  broader pass-through shape, forwarded `ProjectOperator` input outputs in
+  both `Q64` and `Q80` did not hit `projectPositions(...)` or bulk
+  `copyPositions(...)` at all in the hot profiles. The preserved downstream
+  value of the pass-through path showed up almost entirely as
+  `copySinglePosition(...)`, while `select(...)` was effectively always an
+  identity return.
+- That made the next failed experiment meaningful: narrowing the pass-through
+  so it kept only `copySinglePosition(...)` support still regressed `Q64`
+  badly. So the value of the broader `Output.forward(...)` path is not
+  explained solely by the explicit hook methods exercised later. It appears to
+  preserve some combination of output graph, transfer behavior, and
+  lifecycle/cache behavior that the narrower reconstruction loses even when
+  the visible hook usage looks equivalent.
+- A follow-up narrowed that further: preserving the original
+  `singlePositionResolver` object itself recovered a large part of the
+  regression compared with rebuilding a fresh lambda around
+  `copySinglePosition(...)`, but it still remained slower than the broader
+  `forward(...)` path on `Q64`. That means hook-object identity does matter,
+  but it is still not the whole story. The broader pass-through preserves some
+  additional property beyond just "the same single-row hook object is
+  reachable later".
+- A deeper probe-path analysis ruled out one more attractive explanation.
+  Adding per-operator counters around `HashJoinOperator.matches(...)`,
+  `matchesNoNulls(...)`, and the pair/flat join null-check path showed that
+  the broader `Output.forward(...)` pass-through does not change the number of
+  nullable-vs-null-free probe rows in late `Q64` joins. The dominant pair
+  joins (`store_returns` and `catalog_returns`) stayed 100% on the nullable
+  path in both variants, with identical null-hit and null-fallthrough counts.
+  So the kept win is not explained by the broader path preserving a different
+  join nullability branch shape; the remaining difference must be in some
+  subtler output/consumer interaction inside the same downstream join path.
+- That same probe-path work exposed another tempting but misleading
+  optimization: per-batch pruning of all-false outer join `NULLS` streams.
+  In `Q64`, it flipped the hottest pair joins (`store_returns` and
+  `catalog_returns`) entirely from the nullable probe path onto the direct
+  null-free path, and the debug-attributed probe CPU dropped sharply. But a
+  controlled non-debug `query64` loop A/B still regressed overall wall time.
+  So "make the branch counters look better" is not enough here; the extra
+  batch-local scan needed to prove that the null stream is all-false costs
+  more than the saved nullable probe checks in the real workload.
+- A more targeted operator-attribution pass then showed where the remaining
+  carried-selection misses actually come from. In `Q64`, the dominant miss
+  producers are the late `q64.cross_sales.first/second` joins on
+  `date_dim.first_sales`, `promotion`, `date_dim.sold`, `date_dim.first_ship`,
+  `customer_address.current`, and `income_band.bought`. This is important
+  because it means the remaining pressure is concentrated in one repeated late
+  join pattern, not spread evenly across the whole engine.
+- That same pass also ruled out another tempting shortcut. Only about
+  `186 / 434270` carried-selection compose misses in `Q64` collapsed back to
+  the current batch rows. In other words, almost all remaining misses are real
+  lineage compositions, not redundant "different wrapper, same rows" cases.
+  The next design therefore should not expect much value from more aggressive
+  canonicalization to the current batch projection.
+- A validation experiment with a real `MaterializeOperator` inserted mid-pipe
+  in the `q64.cross_sales` branch failed even more decisively: it exhausted the
+  test JVM heap before reaching a benchmark. That rules out a blunt
+  "materialize the carried columns once in the middle of the join chain"
+  strategy. Any future lineage-collapsing step must be substantially more
+  selective and memory-aware than a full materialization barrier.
+- A follow-up experiment with a bounded batch-local compaction barrier failed
+  too. Even after first projecting the `q64.cross_sales` branch down to only
+  the late join keys plus the columns needed by the final grouping, a
+  batch-at-a-time "copy active rows into dense outputs" operator still drove
+  the focused `Q64` test into `OutOfMemoryError`. That rules out not only
+  whole-pipeline materialization barriers, but also generic batch-local
+  compaction barriers inserted into the middle of the late join chain. The next
+  lineage-collapsing attempt therefore has to be even narrower: inside the join
+  boundary itself, and only for specifically identified carried columns or
+  streams.
+- A later selective-flattening experiment made the trade-off even clearer. The
+  remaining hot carried value streams on the improved branch were not deep
+  nested `SelectionVector` chains; they were mostly single-layer
+  `SelectionVector<I64Vector>` / `SelectionVector<BinaryVector>` values. A
+  heuristic that eagerly copied those value streams into flat vectors when the
+  output batch crossed a row-count threshold could be made to trigger heavily,
+  but it pushed `Q64` join-materialization attribution from roughly `62 ms`
+  into the `82 ms` range and turned many hot outputs from
+  `SelectionVector<...>` into flat `I64Vector` / `BinaryVector` values without
+  improving overall cost. The lesson is that "flatten hot carried values early"
+  is the wrong abstraction here: once selective flattening actually engages, it
+  overpays in output-side copy work faster than it saves downstream reads.
 
 This same principle should apply outside joins too. Filters, projections,
 source scans, and future operators should all treat masks as the common

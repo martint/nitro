@@ -23,11 +23,16 @@ import java.util.List;
 final class BufferedJoinInput
 {
     private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 500_000);
+    private static final int VALUES_FLAG = 1;
+    private static final int NULLS_FLAG = 1 << 1;
+    private static final int ERRORS_FLAG = 1 << 2;
 
     private final JoinBufferSupport buffers;
     private final int columnCount;
     private final Streams[] schema;
     private final java.util.Set<Stream>[] outputStreams;
+    private final int[] outputKnownAllFalseFlags;
+    private final boolean[] outputKnownAllFalseInitialized;
     private final List<InnerBatch> batches = new ArrayList<>();
     private Batch firstRetainedBatch;
 
@@ -41,6 +46,8 @@ final class BufferedJoinInput
         this.columnCount = columnCount;
         this.schema = new Streams[columnCount];
         this.outputStreams = (java.util.Set<Stream>[]) new java.util.Set<?>[columnCount];
+        this.outputKnownAllFalseFlags = new int[columnCount];
+        this.outputKnownAllFalseInitialized = new boolean[columnCount];
     }
 
     public void loadAll(Operator source, int batchSize)
@@ -68,6 +75,7 @@ final class BufferedJoinInput
             Batch batch = source.next();
             captureSchema(batch, schema);
             captureStreams(batch, outputStreams);
+            captureKnownAllFalse(batch, outputKnownAllFalseFlags, outputKnownAllFalseInitialized);
             Mask mask = batch.borrowMask();
             int maskOffset = 0;
             while (maskOffset < mask.count()) {
@@ -103,6 +111,7 @@ final class BufferedJoinInput
             }
             captureSchema(batch, schema);
             captureStreams(batch, outputStreams);
+            captureKnownAllFalse(batch, outputKnownAllFalseFlags, outputKnownAllFalseInitialized);
             Mask mask = batch.borrowMask();
             if (mask.none()) {
                 continue;
@@ -162,6 +171,11 @@ final class BufferedJoinInput
     public java.util.Set<Stream> outputStreams(int outputIndex)
     {
         return outputStreams[outputIndex];
+    }
+
+    public boolean outputKnownAllFalse(int outputIndex, Stream stream)
+    {
+        return (outputKnownAllFalseFlags[outputIndex] & streamFlag(stream)) != 0;
     }
 
     public Streams outputSchema(int outputIndex)
@@ -231,6 +245,21 @@ final class BufferedJoinInput
         }
     }
 
+    private static void captureKnownAllFalse(Batch batch, int[] outputKnownAllFalseFlags, boolean[] outputKnownAllFalseInitialized)
+    {
+        for (int outputIndex = 0; outputIndex < outputKnownAllFalseFlags.length; outputIndex++) {
+            Output output = batch.output(outputIndex);
+            int flags = streamFlags(output.knownAllFalseStreams());
+            if (!outputKnownAllFalseInitialized[outputIndex]) {
+                outputKnownAllFalseFlags[outputIndex] = flags;
+                outputKnownAllFalseInitialized[outputIndex] = true;
+            }
+            else {
+                outputKnownAllFalseFlags[outputIndex] &= flags;
+            }
+        }
+    }
+
     private static int[] positions(Mask mask)
     {
         int[] positions = new int[mask.count()];
@@ -253,6 +282,24 @@ final class BufferedJoinInput
             positions[index] = index;
         }
         return positions;
+    }
+
+    private static int streamFlags(java.util.Set<Stream> streams)
+    {
+        int flags = 0;
+        for (Stream stream : streams) {
+            flags |= streamFlag(stream);
+        }
+        return flags;
+    }
+
+    private static int streamFlag(Stream stream)
+    {
+        return switch (stream) {
+            case VALUES -> VALUES_FLAG;
+            case NULLS -> NULLS_FLAG;
+            case ERRORS -> ERRORS_FLAG;
+        };
     }
 
     static final class InnerBatch

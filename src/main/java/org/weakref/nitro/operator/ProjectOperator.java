@@ -34,6 +34,8 @@ import java.util.Set;
 public class ProjectOperator
         implements Operator
 {
+    private static final boolean FORWARD_SINGLE_POSITION_ONLY = Boolean.getBoolean("nitro.project.forwardSinglePositionOnly");
+
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
 
@@ -75,10 +77,19 @@ public class ProjectOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Reference outputReference = outputReferences.get(outputIndex);
-            outputs[outputIndex] = new Output(
-                    exposedStreams(sourceBatch, outputReference),
-                    stream -> evaluateOutput(batchState, outputReference, stream),
-                    (stream, vector) -> allocator.transfer(allocationContext, vector));
+            if (outputReference.producer() instanceof Input input) {
+                Output selected = sourceBatch.output(input.index())
+                        .select(exposedStreams(sourceBatch, outputReference));
+                outputs[outputIndex] = FORWARD_SINGLE_POSITION_ONLY
+                        ? selected.forwardSinglePositionOnly((stream, vector) -> allocator.transfer(allocationContext, vector), (_, _) -> {})
+                        : selected.forward((stream, vector) -> allocator.transfer(allocationContext, vector), (_, _) -> {});
+            }
+            else {
+                outputs[outputIndex] = new Output(
+                        exposedStreams(sourceBatch, outputReference),
+                        stream -> evaluateOutput(batchState, outputReference, stream),
+                        (stream, vector) -> allocator.transfer(allocationContext, vector));
+            }
         }
         return new Batch(
                 batchState.mask(),

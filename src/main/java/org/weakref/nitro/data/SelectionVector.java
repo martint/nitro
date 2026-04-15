@@ -20,35 +20,62 @@ import static java.util.Objects.requireNonNull;
 public final class SelectionVector
         implements Vector
 {
-    private final SelectedPositions positions;
+    private final ProjectedRows projectedRows;
     private final Vector values;
 
     public static Vector wrap(SelectedPositions positions, Vector values)
     {
         requireNonNull(positions, "positions is null");
+        return wrap(ProjectedRows.rows(positions), values);
+    }
+
+    public static Vector wrap(ProjectedRows projectedRows, Vector values)
+    {
+        requireNonNull(projectedRows, "projectedRows is null");
         requireNonNull(values, "values is null");
 
         if (values instanceof SelectionVector selection) {
-            return new SelectionVector(SelectedPositions.positions(composePositions(positions, selection.positions())), selection.values());
+            if (selection.projectedRows() == projectedRows || selection.projectedRows().positions() == projectedRows.positions()) {
+                ProjectedRowsDebug.recordWrap(projectedRows.count(), "selection.identity");
+                return selection;
+            }
+            ProjectedRowsDebug.recordWrapSelectionProjectPair(selection.projectedRows(), projectedRows.positions());
+            ProjectedRowsDebug.recordWrapSelectionPositionsPair(selection.projectedRows().positions(), projectedRows.positions());
+            ProjectedRowsDebug.recordWrapSelectionFingerprintPair(selection.projectedRows().positions(), projectedRows.positions());
+            ProjectedRowsDebug.recordWrap(projectedRows.count(), "selection");
+            return new SelectionVector(selection.projectedRows().project(projectedRows.positions()), selection.values());
         }
         if (values instanceof DictionaryVector dictionary) {
-            return new SelectionVector(SelectedPositions.positions(mapPositions(positions, dictionary.ids())), dictionary.values());
+            ProjectedRowsDebug.recordWrap(projectedRows.count(), "dictionary");
+            return new SelectionVector(ProjectedRows.rows(SelectedPositions.map(dictionary.ids(), projectedRows.positions())), dictionary.values());
         }
         if (values instanceof RleVector rle) {
-            return new SelectionVector(SelectedPositions.positions(mapPositions(positions, rle::runIndex)), rle.values());
+            ProjectedRowsDebug.recordWrap(projectedRows.count(), "rle");
+            return new SelectionVector(ProjectedRows.rows(SelectedPositions.map(projectedRows.positions(), rle::runIndex)), rle.values());
         }
-        return new SelectionVector(positions, values);
+        ProjectedRowsDebug.recordWrap(projectedRows.count(), "base");
+        return new SelectionVector(projectedRows, values);
     }
 
     public SelectionVector(SelectedPositions positions, Vector values)
     {
-        this.positions = requireNonNull(positions, "positions is null");
+        this(ProjectedRows.rows(positions), values);
+    }
+
+    public SelectionVector(ProjectedRows projectedRows, Vector values)
+    {
+        this.projectedRows = requireNonNull(projectedRows, "projectedRows is null");
         this.values = requireNonNull(values, "values is null");
     }
 
     public SelectedPositions positions()
     {
-        return positions;
+        return projectedRows.positions();
+    }
+
+    public ProjectedRows projectedRows()
+    {
+        return projectedRows;
     }
 
     public Vector values()
@@ -59,7 +86,7 @@ public final class SelectionVector
     @Override
     public int length()
     {
-        return positions.count();
+        return projectedRows.count();
     }
 
     @Override
@@ -71,13 +98,13 @@ public final class SelectionVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        return values.copy(allocator, allocationContext, positions.materialize(null));
+        return values.copy(allocator, allocationContext, projectedRows.materialize(null));
     }
 
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
     {
-        int[] selectedPositions = composePositions(SelectedPositions.positions(positions), this.positions);
+        int[] selectedPositions = projectedRows.compose(SelectedPositions.positions(positions)).materialize(null);
         return values.copy(allocator, allocationContext, selectedPositions);
     }
 
@@ -85,7 +112,7 @@ public final class SelectionVector
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
         for (int position : mask) {
-            existing = values.copySinglePositionInto(allocator, allocationContext, existing, positions.position(position), position, length());
+            existing = values.copySinglePositionInto(allocator, allocationContext, existing, projectedRows.position(position), position, length());
         }
         return existing;
     }
@@ -93,21 +120,21 @@ public final class SelectionVector
     @Override
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
-        int[] selectedPositions = composePositions(SelectedPositions.positions(sourcePositions, 0, sourceCount), positions);
+        int[] selectedPositions = projectedRows.compose(SelectedPositions.positions(sourcePositions, 0, sourceCount)).materialize(null);
         return values.copyPositionsInto(allocator, allocationContext, existing, selectedPositions, selectedPositions.length, outputStart, size);
     }
 
     @Override
     public Vector copySelectedPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, SelectedPositions sourcePositions, int outputStart, int size)
     {
-        int[] selectedPositions = composePositions(sourcePositions, positions);
+        int[] selectedPositions = projectedRows.compose(sourcePositions).materialize(null);
         return values.copyPositionsInto(allocator, allocationContext, existing, selectedPositions, selectedPositions.length, outputStart, size);
     }
 
     @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
-        return values.copySinglePositionInto(allocator, allocationContext, existing, positions.position(sourcePosition), outputPosition, size);
+        return values.copySinglePositionInto(allocator, allocationContext, existing, projectedRows.position(sourcePosition), outputPosition, size);
     }
 
     @Override
@@ -126,72 +153,5 @@ public final class SelectionVector
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         consumer.accept(values);
-    }
-
-    private static int[] composePositions(SelectedPositions positions, SelectedPositions mapping)
-    {
-        int[] composed = new int[positions.count()];
-        int[] positionsArray = positions.backingArrayOrNull();
-        int[] mappingArray = mapping.backingArrayOrNull();
-        if (positionsArray != null && mappingArray != null) {
-            int positionsOffset = positions.backingArrayOffset();
-            int mappingOffset = mapping.backingArrayOffset();
-            for (int index = 0; index < composed.length; index++) {
-                composed[index] = mappingArray[mappingOffset + positionsArray[positionsOffset + index]];
-            }
-            return composed;
-        }
-        if (positionsArray != null) {
-            int positionsOffset = positions.backingArrayOffset();
-            for (int index = 0; index < composed.length; index++) {
-                composed[index] = mapping.position(positionsArray[positionsOffset + index]);
-            }
-            return composed;
-        }
-        if (mappingArray != null) {
-            int mappingOffset = mapping.backingArrayOffset();
-            for (int index = 0; index < composed.length; index++) {
-                composed[index] = mappingArray[mappingOffset + positions.position(index)];
-            }
-            return composed;
-        }
-        for (int index = 0; index < composed.length; index++) {
-            composed[index] = mapping.position(positions.position(index));
-        }
-        return composed;
-    }
-
-    private static int[] mapPositions(SelectedPositions positions, int[] mapping)
-    {
-        int[] mapped = new int[positions.count()];
-        int[] positionsArray = positions.backingArrayOrNull();
-        if (positionsArray != null) {
-            int positionsOffset = positions.backingArrayOffset();
-            for (int index = 0; index < mapped.length; index++) {
-                mapped[index] = mapping[positionsArray[positionsOffset + index]];
-            }
-            return mapped;
-        }
-        for (int index = 0; index < mapped.length; index++) {
-            mapped[index] = mapping[positions.position(index)];
-        }
-        return mapped;
-    }
-
-    private static int[] mapPositions(SelectedPositions positions, java.util.function.IntUnaryOperator mapping)
-    {
-        int[] mapped = new int[positions.count()];
-        int[] positionsArray = positions.backingArrayOrNull();
-        if (positionsArray != null) {
-            int positionsOffset = positions.backingArrayOffset();
-            for (int index = 0; index < mapped.length; index++) {
-                mapped[index] = mapping.applyAsInt(positionsArray[positionsOffset + index]);
-            }
-            return mapped;
-        }
-        for (int index = 0; index < mapped.length; index++) {
-            mapped[index] = mapping.applyAsInt(positions.position(index));
-        }
-        return mapped;
     }
 }

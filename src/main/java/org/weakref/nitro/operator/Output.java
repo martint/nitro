@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.ProjectedRows;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -51,8 +52,18 @@ public final class Output
         ProjectedOutput projectPositions(Set<Stream> streams, SelectedPositions sourcePositions);
     }
 
-    public record ProjectedOutput(Output output, SelectedPositions sourcePositions)
+    public record ProjectedOutput(Output output, ProjectedRows projectedRows)
     {
+        public ProjectedOutput
+        {
+            requireNonNull(output, "output is null");
+            requireNonNull(projectedRows, "projectedRows is null");
+        }
+
+        public SelectedPositions sourcePositions()
+        {
+            return projectedRows.positions();
+        }
     }
 
     private static final int VALUES_FLAG = 1;
@@ -75,6 +86,8 @@ public final class Output
     private final PositionProjector positionProjector;
     private final PositionsResolver positionsResolver;
     private final SinglePositionResolver singlePositionResolver;
+    private final int knownAllFalseFlags;
+    private final int debugDepth;
     private final Vector[] resolvedStreams = new Vector[Stream.values().length];
     private int resolvedFlags;
     private int takenFlags;
@@ -88,24 +101,34 @@ public final class Output
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
         this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null, null, null);
+        OutputDebug.recordBaseOutput(false, false, false);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
     {
         this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null, null, null);
+        OutputDebug.recordBaseOutput(false, false, false);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
         this(exposedStreams, resolver, takeResolver, releaseResolver, null, null, null);
+        OutputDebug.recordBaseOutput(false, false, false);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, SinglePositionResolver singlePositionResolver)
     {
         this(exposedStreams, resolver, takeResolver, releaseResolver, null, null, singlePositionResolver);
+        OutputDebug.recordBaseOutput(false, false, singlePositionResolver != null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionProjector positionProjector, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
+    {
+        this(exposedStreams, resolver, takeResolver, releaseResolver, positionProjector, positionsResolver, singlePositionResolver, 0, 0);
+        OutputDebug.recordBaseOutput(positionProjector != null, positionsResolver != null, singlePositionResolver != null);
+    }
+
+    private Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionProjector positionProjector, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver, int debugDepth, int knownAllFalseFlags)
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedFlags = streamFlags(exposedStreams);
@@ -115,6 +138,27 @@ public final class Output
         this.positionProjector = positionProjector;
         this.positionsResolver = positionsResolver;
         this.singlePositionResolver = singlePositionResolver;
+        this.knownAllFalseFlags = knownAllFalseFlags & this.exposedFlags;
+        this.debugDepth = debugDepth;
+    }
+
+    public Output withKnownAllFalse(Set<Stream> knownAllFalseStreams)
+    {
+        requireNonNull(knownAllFalseStreams, "knownAllFalseStreams is null");
+        int additionalFlags = streamFlags(knownAllFalseStreams) & exposedFlags;
+        if (additionalFlags == 0 || (knownAllFalseFlags | additionalFlags) == knownAllFalseFlags) {
+            return this;
+        }
+        return new Output(
+                streams(),
+                resolver,
+                takeResolver,
+                releaseResolver,
+                positionProjector,
+                positionsResolver,
+                singlePositionResolver,
+                debugDepth,
+                knownAllFalseFlags | additionalFlags);
     }
 
     public Vector borrow(Stream stream)
@@ -131,11 +175,13 @@ public final class Output
         }
         Vector resolved = resolvedStreams[index];
         if (resolved != null) {
+            OutputDebug.recordBorrow(debugDepth, index, true);
             return resolved;
         }
         resolved = requireNonNull(resolver.apply(stream), "resolver returned null");
         resolvedStreams[index] = resolved;
         resolvedFlags |= flag;
+        OutputDebug.recordBorrow(debugDepth, index, false);
         return resolved;
     }
 
@@ -170,6 +216,17 @@ public final class Output
         return (exposedFlags & ERRORS_FLAG) != 0;
     }
 
+    public boolean isKnownAllFalse(Stream stream)
+    {
+        requireNonNull(stream, "stream is null");
+        return (knownAllFalseFlags & streamFlag(stream)) != 0;
+    }
+
+    public Set<Stream> knownAllFalseStreams()
+    {
+        return STREAM_SETS[knownAllFalseFlags];
+    }
+
     public boolean isValuesOnly()
     {
         return exposedFlags == VALUES_FLAG;
@@ -178,6 +235,7 @@ public final class Output
     public Vector take(Stream stream)
     {
         checkOpen();
+        OutputDebug.recordTake(debugDepth, streamIndex(stream));
         Vector vector = requireNonNull(takeResolver.apply(stream, borrow(stream)), "takeResolver returned null");
         takenFlags |= streamFlag(stream);
         return vector;
@@ -197,11 +255,14 @@ public final class Output
     {
         checkOpen();
         if (singlePositionResolver != null) {
+            OutputDebug.recordCopySinglePosition(debugDepth, true);
             return singlePositionResolver.copySinglePosition(existing, sourcePosition, outputPosition, size);
         }
         if (positionsResolver == null) {
+            OutputDebug.recordCopySinglePosition(debugDepth, false);
             return null;
         }
+        OutputDebug.recordCopySinglePosition(debugDepth, true);
         return positionsResolver.copyPositions(streams(), existing, new int[] {sourcePosition}, 0, 1, outputPosition, size, false);
     }
 
@@ -213,16 +274,21 @@ public final class Output
     public ProjectedOutput projectPositions(SelectedPositions sourcePositions)
     {
         checkOpen();
-        return positionProjector == null ? null : positionProjector.projectPositions(streams(), sourcePositions);
+        boolean hit = positionProjector != null;
+        OutputDebug.recordProjectPositions(debugDepth, hit);
+        return hit ? positionProjector.projectPositions(streams(), sourcePositions) : null;
     }
 
     public Streams copyPositions(Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
     {
         checkOpen();
         if (sourceCount == 1 && singlePositionResolver != null) {
+            OutputDebug.recordCopyPositions(debugDepth, true);
             return singlePositionResolver.copySinglePosition(existing, sourcePositions[sourceStart], outputStart, size);
         }
-        return positionsResolver == null ? null : positionsResolver.copyPositions(streams(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+        boolean hit = positionsResolver != null;
+        OutputDebug.recordCopyPositions(debugDepth, hit);
+        return hit ? positionsResolver.copyPositions(streams(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange) : null;
     }
 
     public Output select(Set<Stream> selectedStreams)
@@ -233,9 +299,27 @@ public final class Output
             throw new IllegalArgumentException("Selected streams are not exposed by output");
         }
         if (selectedFlags == exposedFlags) {
+            OutputDebug.recordSelectIdentityHit();
             return this;
         }
-        return new Output(selectedStreams, this::borrow, (stream, vector) -> take(stream), (_, _) -> {}, positionProjector, positionsResolver, null);
+        OutputDebug.recordSelectedOutput(positionProjector != null, positionsResolver != null, false, debugDepth + 1);
+        return new Output(selectedStreams, this::borrow, (stream, vector) -> take(stream), (_, _) -> {}, positionProjector, positionsResolver, null, debugDepth + 1, knownAllFalseFlags & selectedFlags);
+    }
+
+    public Output forward(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
+    {
+        requireNonNull(takeResolver, "takeResolver is null");
+        requireNonNull(releaseResolver, "releaseResolver is null");
+        OutputDebug.recordForwardedOutput(positionProjector != null, positionsResolver != null, singlePositionResolver != null, debugDepth + 1);
+        return new Output(streams(), this::borrow, takeResolver, releaseResolver, positionProjector, positionsResolver, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
+    }
+
+    public Output forwardSinglePositionOnly(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
+    {
+        requireNonNull(takeResolver, "takeResolver is null");
+        requireNonNull(releaseResolver, "releaseResolver is null");
+        OutputDebug.recordForwardedOutput(false, false, singlePositionResolver != null, debugDepth + 1);
+        return new Output(streams(), this::borrow, takeResolver, releaseResolver, null, null, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
     }
 
     @Override
@@ -244,11 +328,13 @@ public final class Output
         if (closed) {
             return;
         }
+        OutputDebug.recordClose(debugDepth);
         closed = true;
         int flags = resolvedFlags & ~takenFlags;
         while (flags != 0) {
             int flag = Integer.lowestOneBit(flags);
             Stream stream = stream(flag);
+            OutputDebug.recordRelease(debugDepth, streamIndex(stream));
             releaseResolver.accept(stream, resolvedStreams[streamIndex(stream)]);
             flags &= ~flag;
         }
