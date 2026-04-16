@@ -94,6 +94,34 @@ public final class VectorAccess
         return booleanValues(nulls).value(position);
     }
 
+    /**
+     * Returns true when {@code nulls} represents "no rows are null" — i.e. the reference is null,
+     * or is a run-length-encoded vector whose single run is false, or is a flat boolean vector of
+     * length one with value false. Scalar function implementations can use this to short-circuit
+     * null-propagation loops when both of their inputs are known to be null-free (the common case
+     * for literals, column outputs from scans of non-nullable columns, and outputs of aggregates
+     * that never produce nulls). When both inputs test true, the scalar should omit NULLS from
+     * its output; {@code PlanEvaluator.completeRequestedStreams} will fill the caller's requested
+     * NULLS with an all-false stream if needed.
+     */
+    public static boolean isAllFalseNulls(Vector nulls)
+    {
+        if (nulls == null) {
+            return true;
+        }
+        if (nulls instanceof RleVector rle && rle.values() instanceof BooleanVector runValues && runValues.length() == 1) {
+            return !runValues.values()[0];
+        }
+        if (nulls instanceof BooleanVector flat) {
+            // O(n) on first call, O(1) thereafter. See BooleanVector.isAllFalse() for the caching
+            // contract. This lets upstream operators (aggregations, scans) declare "no rows are null"
+            // without allocating a length-1 representation: a plain flat vector of zeros is detected
+            // and downstream scalar null-propagation loops short-circuit.
+            return flat.isAllFalse();
+        }
+        return false;
+    }
+
     public static BooleanVector writableBooleanVector(Allocator allocator, Allocator.Context allocationContext, Vector existing, int size)
     {
         if (existing instanceof BooleanVector vector) {

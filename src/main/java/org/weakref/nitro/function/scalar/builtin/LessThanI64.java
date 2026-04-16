@@ -72,7 +72,7 @@ public final class LessThanI64
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
-        if (requestedStreams.contains(Stream.NULLS)) {
+        if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
                     allocationContext,

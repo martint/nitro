@@ -71,7 +71,7 @@ public final class EqualI64
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         Streams result = Streams.empty();
-        if (requestedStreams.contains(Stream.NULLS)) {
+        if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
                     allocationContext,

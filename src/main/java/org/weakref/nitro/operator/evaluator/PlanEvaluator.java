@@ -1011,10 +1011,13 @@ public final class PlanEvaluator
             throw new IllegalArgumentException("VALUES stream not produced for request");
         }
         if (wantsNulls && !completed.has(Stream.NULLS)) {
-            completed = completed.with(Stream.NULLS, fillFalseBoolean(null, mask, length));
+            // Synthesise a 1-run RLE of false (O(1)) rather than a flat BooleanVector of batch size
+            // (O(n)). Downstream scalar functions can detect the all-false shape and short-circuit
+            // their null-propagation loop (see VectorAccess.isAllFalseNulls).
+            completed = completed.with(Stream.NULLS, fillBoolean(false, length));
         }
         if (wantsErrors && !completed.has(Stream.ERRORS)) {
-            completed = completed.with(Stream.ERRORS, fillFalseBoolean(null, mask, length));
+            completed = completed.with(Stream.ERRORS, fillBoolean(false, length));
         }
         return completed;
     }

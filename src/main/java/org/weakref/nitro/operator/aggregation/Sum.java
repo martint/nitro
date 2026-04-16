@@ -389,19 +389,30 @@ public class Sum
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         SumStateVector stateVector = (SumStateVector) state.values();
+        int visibleCount = Math.max(maxGroup + 1, 0);
         I64Vector values = allocator.allocateOrGrow(
                 allocationContext,
                 output == null ? null : (I64Vector) output.values(),
                 I64Vector.class,
-                stateVector.length(),
+                visibleCount,
                 I64Vector::new);
-        stateVector.copySumsTo(values);
+        stateVector.copySumsTo(values, visibleCount);
+        // When no group has remained null (every assigned group has received at least one non-null
+        // input), emit NULLS as a 1-run RLE of false — O(1) rather than allocating a flat boolean
+        // vector and copying the state's null chunks. Downstream scalar functions that propagate
+        // NULLS recognise the all-false RLE shape (via {@link VectorAccess#isAllFalseNulls}) and
+        // short-circuit their per-row null-or loop.
+        if (!stateVector.hasAnyNull()) {
+            BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+            Vector nulls = allocator.allocateRle(allocationContext, new int[] {visibleCount}, sentinel);
+            return Streams.ofValues(values).with(Stream.NULLS, nulls);
+        }
         BooleanVector nulls = VectorAccess.writableBooleanVector(
                 allocator,
                 allocationContext,
                 output == null ? null : output.getOrNull(Stream.NULLS),
-                stateVector.length());
-        stateVector.copyNullsTo(nulls);
+                visibleCount);
+        stateVector.copyNullsTo(nulls, visibleCount);
         return Streams.ofValuesAndNulls(values, nulls);
     }
 

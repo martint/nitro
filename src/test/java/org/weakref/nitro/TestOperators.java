@@ -1194,8 +1194,15 @@ public class TestOperators
                                 row(21L, 1L),
                                 row(22L, 2L))))) {
             Batch batch = operator.next();
-            BooleanVector errors = (BooleanVector) batch.output(0).borrow(Stream.ERRORS);
-            assertThat(Arrays.copyOf(errors.values(), batch.borrowMask().count())).containsExactly(false, false, false);
+            Vector errors = batch.output(0).borrow(Stream.ERRORS);
+            org.weakref.nitro.function.scalar.builtin.VectorAccess.BooleanValues errorValues = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(errors);
+            int count = batch.borrowMask().count();
+            boolean[] decoded = new boolean[count];
+            int cursor = 0;
+            for (int position : batch.borrowMask()) {
+                decoded[cursor++] = errorValues.value(position);
+            }
+            assertThat(decoded).containsExactly(false, false, false);
         }
     }
 
@@ -1311,8 +1318,15 @@ public class TestOperators
                                 row(21L, 1L),
                                 row(22L, 2L))))) {
             Batch batch = operator.next();
-            BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
-            assertThat(Arrays.copyOf(nulls.values(), batch.borrowMask().count())).containsExactly(false, false, false);
+            Vector nulls = batch.output(0).borrow(Stream.NULLS);
+            org.weakref.nitro.function.scalar.builtin.VectorAccess.BooleanValues nullValues = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(nulls);
+            int count = batch.borrowMask().count();
+            boolean[] decoded = new boolean[count];
+            int cursor = 0;
+            for (int position : batch.borrowMask()) {
+                decoded[cursor++] = nullValues.value(position);
+            }
+            assertThat(decoded).containsExactly(false, false, false);
         }
     }
 

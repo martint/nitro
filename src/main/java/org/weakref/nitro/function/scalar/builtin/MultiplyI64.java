@@ -65,7 +65,10 @@ public final class MultiplyI64
 
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
-        if (requestedStreams.contains(Stream.NULLS)) {
+        if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {
+            // At least one input could have a real null; produce a concrete NULLS stream.
+            // When both inputs are known not to carry nulls, we skip this work and let
+            // PlanEvaluator.completeRequestedStreams synthesize a constant false NULLS stream.
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
                     allocationContext,

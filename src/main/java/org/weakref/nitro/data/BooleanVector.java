@@ -19,6 +19,12 @@ public class BooleanVector
         implements FlatVector
 {
     private final boolean[] values;
+    // Lazily computed "are all entries false" flag. null = unknown (caller must scan), TRUE/FALSE = known.
+    // Reset to null on clearForReuse since the producer may write new values after reuse. Producers that
+    // directly mutate {@link #values()} after publication invalidate this cache; in the Nitro codebase
+    // BooleanVector instances are treated as immutable after they're exposed via {@link Streams}, so this
+    // is safe. See {@link org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}.
+    private Boolean isAllFalseCache;
 
     public BooleanVector(int size)
     {
@@ -33,6 +39,31 @@ public class BooleanVector
     public boolean[] values()
     {
         return values;
+    }
+
+    /**
+     * Returns true when every entry in the backing array is {@code false}. First call scans the array
+     * in O(n); subsequent calls return the cached result in O(1). Intended for use as a pre-flight check
+     * by scalar null-propagation code paths that want to skip their per-position loop when both inputs'
+     * NULLS vectors carry no nulls.
+     *
+     * <p>Callers that mutate {@link #values()} after publication must not rely on this cache; the Nitro
+     * convention is that vectors are immutable once returned via {@link Streams}.
+     */
+    public boolean isAllFalse()
+    {
+        Boolean cached = isAllFalseCache;
+        if (cached != null) {
+            return cached;
+        }
+        for (boolean value : values) {
+            if (value) {
+                isAllFalseCache = Boolean.FALSE;
+                return false;
+            }
+        }
+        isAllFalseCache = Boolean.TRUE;
+        return true;
     }
 
     @Override
@@ -127,6 +158,9 @@ public class BooleanVector
     public void clearForReuse()
     {
         Arrays.fill(values, false);
+        // The next producer will write new values; force callers to re-scan rather than reuse our stale
+        // "all false" observation from a previous lifecycle.
+        isAllFalseCache = null;
     }
 
     @Override
