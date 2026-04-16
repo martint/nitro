@@ -101,10 +101,12 @@ public final class LessThanI64
 
     private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            nulls[position] = VectorAccess.isNull(leftNulls, position) || VectorAccess.isNull(rightNulls, position);
+            nulls[position] = leftNullValues.value(position) || rightNullValues.value(position);
         }
     }
 

@@ -96,6 +96,40 @@ public final class RleVector
         return index >= 0 ? index : -index - 1;
     }
 
+    /**
+     * Returns the run index for {@code position}, using {@code hint} (typically the previous run index
+     * returned by this method for a lower position) to skip binary search when access is monotonic.
+     * <p>
+     * For positions visited in ascending order this is amortized O(1) per call; backward jumps fall
+     * back to binary search. The caller must thread the returned value back in as the next hint.
+     */
+    public int runIndexFromHint(int position, int hint)
+    {
+        if (position < 0 || position >= length) {
+            throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + length);
+        }
+
+        int[] ends = runEnds;
+        if (ends == null) {
+            ends = computeRunEnds();
+            runEnds = ends;
+        }
+
+        int idx = hint;
+        if (idx < 0 || idx >= ends.length) {
+            idx = 0;
+        }
+        // If the hint overshoots the position, fall back to binary search.
+        if (idx > 0 && position < ends[idx - 1]) {
+            int found = Arrays.binarySearch(ends, position + 1);
+            return found >= 0 ? found : -found - 1;
+        }
+        while (idx < ends.length && position >= ends[idx]) {
+            idx++;
+        }
+        return idx;
+    }
+
     @Override
     public int length()
     {

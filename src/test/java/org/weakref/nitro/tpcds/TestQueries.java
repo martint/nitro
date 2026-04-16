@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.ProjectedRowsDebug;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
@@ -983,7 +982,6 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
-        ProjectedRowsDebug.reset();
         OutputDebug.reset();
         try (Operator query = TpcdsParquetSupport.query64(new Allocator(), primitiveRegistry, tables)) {
             HashJoinOperator.withMaterializationProfile(profile, () -> {
@@ -993,9 +991,6 @@ public class TestQueries
         }
 
         System.out.println(profile.formatReport());
-        if (ProjectedRowsDebug.enabled()) {
-            System.out.println(ProjectedRowsDebug.snapshot());
-        }
         if (OutputDebug.enabled()) {
             System.out.println(OutputDebug.snapshot());
         }

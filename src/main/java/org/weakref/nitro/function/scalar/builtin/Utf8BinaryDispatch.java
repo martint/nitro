@@ -19,7 +19,6 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -936,7 +935,6 @@ public final class Utf8BinaryDispatch
         return switch (vector) {
             case BinaryVector values -> values.length(position);
             case DictionaryVector values -> binaryLength(functionName, values.values(), values.ids()[position]);
-            case SelectionVector values -> binaryLength(functionName, values.values(), values.positions().position(position));
             case RleVector values -> binaryLength(functionName, values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException(functionName + " requires BinaryVector-compatible UTF-8 inputs");
         };
@@ -947,7 +945,6 @@ public final class Utf8BinaryDispatch
         switch (source) {
             case BinaryVector values -> target.setBytes(targetPosition, values.data(), values.startOffset(sourcePosition), values.length(sourcePosition));
             case DictionaryVector values -> copyBinaryBytes(functionName, values.values(), values.ids()[sourcePosition], target, targetPosition);
-            case SelectionVector values -> copyBinaryBytes(functionName, values.values(), values.positions().position(sourcePosition), target, targetPosition);
             case RleVector values -> copyBinaryBytes(functionName, values.values(), values.runIndex(sourcePosition), target, targetPosition);
             default -> throw new IllegalArgumentException(functionName + " requires BinaryVector-compatible UTF-8 inputs");
         }
@@ -965,7 +962,6 @@ public final class Utf8BinaryDispatch
                 }
             }
             case DictionaryVector values -> copyBinaryTraits(values.values(), target);
-            case SelectionVector values -> copyBinaryTraits(values.values(), target);
             case RleVector values -> copyBinaryTraits(values.values(), target);
             default -> throw new IllegalArgumentException("Expected binary-backed vector but found " + source.getClass().getSimpleName());
         }
@@ -986,7 +982,6 @@ public final class Utf8BinaryDispatch
         return switch (vector) {
             case BinaryVector values -> hasUtf8Traits(values);
             case DictionaryVector values -> hasUtf8Traits(values.values());
-            case SelectionVector values -> hasUtf8Traits(values.values());
             case RleVector values -> hasUtf8Traits(values.values());
             default -> false;
         };

@@ -90,7 +90,6 @@ final class OperatorKeySemantics
         return switch (values) {
             case BinaryVector binary -> binary.copyBytes(position);
             case org.weakref.nitro.data.DictionaryVector dictionary -> copyBinaryBytes(dictionary.values(), dictionary.ids()[position]);
-            case org.weakref.nitro.data.SelectionVector selection -> copyBinaryBytes(selection.values(), selection.positions().position(position));
             case org.weakref.nitro.data.RleVector rle -> copyBinaryBytes(rle.values(), OperatorVectorSupport.runIndex(rle, position));
             default -> throw new IllegalArgumentException("Expected binary vector but found " + values.getClass().getSimpleName());
         };

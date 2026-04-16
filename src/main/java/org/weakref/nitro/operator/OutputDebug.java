@@ -174,21 +174,6 @@ public final class OutputDebug
         }
     }
 
-    public static void recordProjectPositions(int depth, boolean hit)
-    {
-        if (!ENABLED) {
-            return;
-        }
-        projectPositionsCalls.increment();
-        if (depth > 0) {
-            projectPositionsDepthCalls.increment();
-            maxDepth.accumulate(depth);
-        }
-        if (hit) {
-            projectPositionsHits.increment();
-        }
-    }
-
     public static void recordCopyPositions(int depth, boolean hit)
     {
         if (!ENABLED) {

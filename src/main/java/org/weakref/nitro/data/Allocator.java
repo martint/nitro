@@ -815,7 +815,12 @@ public class Allocator
 
         public void trackVector(Vector vector, boolean reused)
         {
-            inUseVectors.add(vector);
+            // Only track vectors that participate in pooling. Non-pooled vectors (e.g. DictionaryVector
+            // wrapping borrowed data) can be left to GC without going through the IdentityHashMap on
+            // adoption, which avoids per-position overhead in join output materialization.
+            if (vector.poolFamily() != null) {
+                inUseVectors.add(vector);
+            }
             stats.acquire(vector.retainedBytes(), reused);
         }
 

@@ -21,7 +21,6 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 
 import java.lang.invoke.MethodHandles;
@@ -53,7 +52,6 @@ final class OperatorVectorSupport
         return switch (vector) {
             case DictionaryVector values -> flatten(values.values());
             case RleVector values -> flatten(values.values());
-            case SelectionVector values -> flatten(values.values());
             default -> vector;
         };
     }
@@ -64,7 +62,6 @@ final class OperatorVectorSupport
             case I32Vector values -> values.values()[position];
             case I64Vector values -> values.values()[position];
             case DictionaryVector values -> longValue(values.values(), values.ids()[position]);
-            case SelectionVector values -> longValue(values.values(), values.positions().position(position));
             case RleVector values -> longValue(values.values(), runIndex(values, position));
             default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
         };
@@ -76,7 +73,6 @@ final class OperatorVectorSupport
             case BooleanVector values -> values.values()[position];
             case ConcatenatedBooleanVector values -> values.value(position);
             case DictionaryVector values -> booleanValue(values.values(), values.ids()[position]);
-            case SelectionVector values -> booleanValue(values.values(), values.positions().position(position));
             case RleVector values -> booleanValue(values.values(), runIndex(values, position));
             default -> throw new IllegalArgumentException("Expected boolean vector but found " + vector.getClass().getSimpleName());
         };
@@ -87,7 +83,6 @@ final class OperatorVectorSupport
         return switch (vector) {
             case F64Vector values -> values.values()[position];
             case DictionaryVector values -> doubleValue(values.values(), values.ids()[position]);
-            case SelectionVector values -> doubleValue(values.values(), values.positions().position(position));
             case RleVector values -> doubleValue(values.values(), runIndex(values, position));
             default -> throw new IllegalArgumentException("Expected F64 vector but found " + vector.getClass().getSimpleName());
         };
@@ -98,7 +93,6 @@ final class OperatorVectorSupport
         return switch (vector) {
             case BinaryVector values -> values.length(position);
             case DictionaryVector values -> binaryLength(values.values(), values.ids()[position]);
-            case SelectionVector values -> binaryLength(values.values(), values.positions().position(position));
             case RleVector values -> binaryLength(values.values(), runIndex(values, position));
             default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
         };
@@ -109,7 +103,6 @@ final class OperatorVectorSupport
         return switch (vector) {
             case BinaryVector values -> binaryHash(values.data(), values.startOffset(position), values.length(position));
             case DictionaryVector values -> binaryHash(values.values(), values.ids()[position]);
-            case SelectionVector values -> binaryHash(values.values(), values.positions().position(position));
             case RleVector values -> binaryHash(values.values(), runIndex(values, position));
             default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
         };
@@ -134,7 +127,6 @@ final class OperatorVectorSupport
                 default -> binaryCompare(right, rightPosition, leftValues.data(), leftValues.startOffset(leftPosition), leftValues.length(leftPosition)) * -1;
             };
             case DictionaryVector leftValues -> binaryCompare(leftValues.values(), leftValues.ids()[leftPosition], right, rightPosition);
-            case SelectionVector leftValues -> binaryCompare(leftValues.values(), leftValues.positions().position(leftPosition), right, rightPosition);
             case RleVector leftValues -> binaryCompare(leftValues.values(), runIndex(leftValues, leftPosition), right, rightPosition);
             default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
         };
@@ -157,7 +149,6 @@ final class OperatorVectorSupport
                 default -> binaryEquals(right, rightPosition, leftValues.data(), leftValues.startOffset(leftPosition), leftValues.length(leftPosition));
             };
             case DictionaryVector leftValues -> binaryEquals(leftValues.values(), leftValues.ids()[leftPosition], right, rightPosition);
-            case SelectionVector leftValues -> binaryEquals(leftValues.values(), leftValues.positions().position(leftPosition), right, rightPosition);
             case RleVector leftValues -> binaryEquals(leftValues.values(), runIndex(leftValues, leftPosition), right, rightPosition);
             default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
         };
@@ -173,7 +164,6 @@ final class OperatorVectorSupport
         return switch (left) {
             case BinaryVector values -> binaryCompare(values.data(), values.startOffset(leftPosition), values.length(leftPosition), right, rightOffset, rightLength);
             case DictionaryVector values -> binaryCompare(values.values(), values.ids()[leftPosition], right, rightOffset, rightLength);
-            case SelectionVector values -> binaryCompare(values.values(), values.positions().position(leftPosition), right, rightOffset, rightLength);
             case RleVector values -> binaryCompare(values.values(), runIndex(values, leftPosition), right, rightOffset, rightLength);
             default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
         };
@@ -188,7 +178,6 @@ final class OperatorVectorSupport
         return switch (left) {
             case BinaryVector values -> binaryEquals(values.data(), values.startOffset(leftPosition), right, rightOffset, rightLength);
             case DictionaryVector values -> binaryEquals(values.values(), values.ids()[leftPosition], right, rightOffset, rightLength);
-            case SelectionVector values -> binaryEquals(values.values(), values.positions().position(leftPosition), right, rightOffset, rightLength);
             case RleVector values -> binaryEquals(values.values(), runIndex(values, leftPosition), right, rightOffset, rightLength);
             default -> throw new IllegalArgumentException("Expected binary vector but found " + left.getClass().getSimpleName());
         };

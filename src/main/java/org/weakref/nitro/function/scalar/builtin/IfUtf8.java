@@ -108,11 +108,14 @@ public final class IfUtf8
 
     private static void applyValues(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, VectorAccess.BinaryValues trueValues, VectorAccess.BinaryValues falseValues, Vector trueNulls, Vector falseNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues conditionNullValues = VectorAccess.booleanValues(conditionNulls);
+        VectorAccess.BooleanValues trueNullValues = VectorAccess.booleanValues(trueNulls);
+        VectorAccess.BooleanValues falseNullValues = VectorAccess.booleanValues(falseNulls);
         for (int position : mask) {
-            boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
+            boolean takeTrue = !conditionNullValues.value(position) && conditionValues.value(position);
             VectorAccess.BinaryValues selectedValues = takeTrue ? trueValues : falseValues;
-            Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            if (VectorAccess.isNull(selectedNulls, position)) {
+            VectorAccess.BooleanValues selectedNullValues = takeTrue ? trueNullValues : falseNullValues;
+            if (selectedNullValues.value(position)) {
                 outputValues.setNull(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
@@ -129,12 +132,14 @@ public final class IfUtf8
 
     private static void applyNulls(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueNulls, Vector falseNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues conditionNullValues = VectorAccess.booleanValues(conditionNulls);
+        VectorAccess.BooleanValues trueNullValues = VectorAccess.booleanValues(trueNulls);
+        VectorAccess.BooleanValues falseNullValues = VectorAccess.booleanValues(falseNulls);
         boolean[] nulls = outputNulls.values();
         Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
-            boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
-            Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
-            nulls[position] = VectorAccess.isNull(selectedNulls, position);
+            boolean takeTrue = !conditionNullValues.value(position) && conditionValues.value(position);
+            nulls[position] = takeTrue ? trueNullValues.value(position) : falseNullValues.value(position);
         }
     }
 

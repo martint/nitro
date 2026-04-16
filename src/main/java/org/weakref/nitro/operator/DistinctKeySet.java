@@ -17,7 +17,9 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
 import java.util.Arrays;
 
@@ -56,6 +58,11 @@ final class DistinctKeySet
         return index.add(values, nulls, position);
     }
 
+    public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+    {
+        return index.addBatch(values, nulls, mask, distinctPositions);
+    }
+
     public void reserveAdditional(int additionalEntries)
     {
         index.reserveAdditional(additionalEntries);
@@ -64,6 +71,27 @@ final class DistinctKeySet
     private interface DistinctIndex
     {
         boolean add(Vector[] values, Vector[] nulls, int position);
+
+        default int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                for (int position = 0; position < size; position++) {
+                    if (add(values, nulls, position)) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (add(values, nulls, position)) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
+        }
 
         default void reserveAdditional(int additionalEntries) {}
     }
@@ -91,6 +119,36 @@ final class DistinctKeySet
                 return false;
             }
             return keys.add(OperatorVectorSupport.longValue(values[0], position));
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            VectorAccess.LongValues keyValues = VectorAccess.longValues(values[0]);
+            VectorAccess.BooleanValues keyNulls = VectorAccess.booleanValues(nulls[0]);
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                for (int position = 0; position < size; position++) {
+                    if (keyNulls.value(position)) {
+                        continue;
+                    }
+                    if (keys.add(keyValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (keyNulls.value(position)) {
+                        continue;
+                    }
+                    if (keys.add(keyValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
         }
     }
 
@@ -173,6 +231,54 @@ final class DistinctKeySet
                 return false;
             }
 
+            firstKeys[index] = first;
+            secondKeys[index] = second;
+            occupied[index] = true;
+            size++;
+            if (size >= maxFill) {
+                rehash(occupied.length * 2);
+            }
+            return true;
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+            VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+            VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+            VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                for (int position = 0; position < size; position++) {
+                    if (firstNulls.value(position) || secondNulls.value(position)) {
+                        continue;
+                    }
+                    if (addKey(firstValues.value(position), secondValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (firstNulls.value(position) || secondNulls.value(position)) {
+                        continue;
+                    }
+                    if (addKey(firstValues.value(position), secondValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
+        }
+
+        private boolean addKey(long first, long second)
+        {
+            int index = findSlot(first, second);
+            if (occupied[index]) {
+                return false;
+            }
             firstKeys[index] = first;
             secondKeys[index] = second;
             occupied[index] = true;
@@ -278,11 +384,49 @@ final class DistinctKeySet
             long first = OperatorVectorSupport.longValue(values[0], position);
             long second = OperatorVectorSupport.longValue(values[1], position);
             long third = OperatorVectorSupport.longValue(values[2], position);
+            return addKey(first, second, third);
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+            VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+            VectorAccess.LongValues thirdValues = VectorAccess.longValues(values[2]);
+            VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+            VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+            VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nulls[2]);
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                for (int position = 0; position < size; position++) {
+                    if (firstNulls.value(position) || secondNulls.value(position) || thirdNulls.value(position)) {
+                        continue;
+                    }
+                    if (addKey(firstValues.value(position), secondValues.value(position), thirdValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (firstNulls.value(position) || secondNulls.value(position) || thirdNulls.value(position)) {
+                        continue;
+                    }
+                    if (addKey(firstValues.value(position), secondValues.value(position), thirdValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
+        }
+
+        private boolean addKey(long first, long second, long third)
+        {
             int index = findSlot(first, second, third);
             if (occupied[index]) {
                 return false;
             }
-
             firstKeys[index] = first;
             secondKeys[index] = second;
             thirdKeys[index] = third;
@@ -395,11 +539,51 @@ final class DistinctKeySet
             long second = OperatorVectorSupport.longValue(values[1], position);
             long third = OperatorVectorSupport.longValue(values[2], position);
             long fourth = OperatorVectorSupport.longValue(values[3], position);
+            return addKey(first, second, third, fourth);
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+            VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+            VectorAccess.LongValues thirdValues = VectorAccess.longValues(values[2]);
+            VectorAccess.LongValues fourthValues = VectorAccess.longValues(values[3]);
+            VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+            VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+            VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nulls[2]);
+            VectorAccess.BooleanValues fourthNulls = VectorAccess.booleanValues(nulls[3]);
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                for (int position = 0; position < size; position++) {
+                    if (firstNulls.value(position) || secondNulls.value(position) || thirdNulls.value(position) || fourthNulls.value(position)) {
+                        continue;
+                    }
+                    if (addKey(firstValues.value(position), secondValues.value(position), thirdValues.value(position), fourthValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (firstNulls.value(position) || secondNulls.value(position) || thirdNulls.value(position) || fourthNulls.value(position)) {
+                        continue;
+                    }
+                    if (addKey(firstValues.value(position), secondValues.value(position), thirdValues.value(position), fourthValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
+        }
+
+        private boolean addKey(long first, long second, long third, long fourth)
+        {
             int index = findSlot(first, second, third, fourth);
             if (occupied[index]) {
                 return false;
             }
-
             firstKeys[index] = first;
             secondKeys[index] = second;
             thirdKeys[index] = third;

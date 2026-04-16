@@ -90,12 +90,14 @@ public final class AndBoolean
 
     private static void applyValues(VectorAccess.BooleanValues leftValues, Vector leftNulls, VectorAccess.BooleanValues rightValues, Vector rightNulls, Mask mask, BooleanVector output)
     {
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         boolean[] values = output.values();
         for (int position : mask) {
             boolean leftValue = leftValues.value(position);
             boolean rightValue = rightValues.value(position);
-            boolean leftIsNull = VectorAccess.isNull(leftNulls, position);
-            boolean rightIsNull = VectorAccess.isNull(rightNulls, position);
+            boolean leftIsNull = leftNullValues.value(position);
+            boolean rightIsNull = rightNullValues.value(position);
             values[position] = !leftIsNull && !rightIsNull
                     ? leftValue && rightValue
                     : (!leftValue && !leftIsNull) || (!rightValue && !rightIsNull) ? false : leftValue && rightValue;
@@ -104,13 +106,15 @@ public final class AndBoolean
 
     private static void applyNulls(VectorAccess.BooleanValues leftValues, Vector leftNulls, VectorAccess.BooleanValues rightValues, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
+        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
+        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
         boolean[] nulls = outputNulls.values();
         java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
         for (int position : mask) {
             boolean leftValue = leftValues.value(position);
             boolean rightValue = rightValues.value(position);
-            boolean leftIsNull = VectorAccess.isNull(leftNulls, position);
-            boolean rightIsNull = VectorAccess.isNull(rightNulls, position);
+            boolean leftIsNull = leftNullValues.value(position);
+            boolean rightIsNull = rightNullValues.value(position);
             nulls[position] = (leftIsNull || rightIsNull) &&
                     !((!leftValue && !leftIsNull) || (!rightValue && !rightIsNull));
         }

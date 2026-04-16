@@ -207,7 +207,6 @@ public final class ConcatenatedBooleanVector
             case DictionaryVector values -> isBooleanBacked(values.values());
             case RleVector values -> isBooleanBacked(values.values());
             case ConcatenatedBooleanVector _ -> true;
-            case SelectionVector values -> isBooleanBacked(values.values());
             default -> false;
         };
     }
@@ -219,7 +218,6 @@ public final class ConcatenatedBooleanVector
             case DictionaryVector values -> booleanValue(values.values(), values.ids()[position]);
             case RleVector values -> booleanValue(values.values(), values.runIndex(position));
             case ConcatenatedBooleanVector values -> values.value(position);
-            case SelectionVector values -> booleanValue(values.values(), values.positions().position(position));
             default -> throw new IllegalArgumentException("Expected boolean-backed vector but found " + vector.getClass().getSimpleName());
         };
     }

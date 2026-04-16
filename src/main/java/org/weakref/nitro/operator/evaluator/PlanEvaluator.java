@@ -22,7 +22,6 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
@@ -953,7 +952,6 @@ public final class PlanEvaluator
             case I64Vector values -> values.values()[position];
             case I32Vector values -> values.values()[position];
             case DictionaryVector values -> readLong(values.values(), values.ids()[position]);
-            case SelectionVector values -> readLong(values.values(), values.positions().position(position));
             case RleVector values -> readLong(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
         };
@@ -985,7 +983,6 @@ public final class PlanEvaluator
         return switch (vector) {
             case BooleanVector values -> values.values()[position];
             case DictionaryVector values -> readBoolean(values.values(), values.ids()[position]);
-            case SelectionVector values -> readBoolean(values.values(), values.positions().position(position));
             case RleVector values -> readBoolean(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected boolean vector but found " + vector.getClass().getSimpleName());
         };

@@ -22,8 +22,6 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectedPositions;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 
 public final class VectorAccess
@@ -46,19 +44,14 @@ public final class VectorAccess
                     }
                 };
             }
-            case SelectionVector values -> {
-                yield switch (values.values()) {
-                    case I64Vector selectedValues -> longSelectionValues(values.positions(), selectedValues.values());
-                    case I32Vector selectedValues -> intSelectionValues(values.positions(), selectedValues.values());
-                    default -> {
-                        LongValues selectedValues = longValues(values.values());
-                        yield position -> selectedValues.value(values.positions().position(position));
-                    }
-                };
-            }
             case RleVector values -> {
                 LongValues runValues = longValues(values.values());
-                yield position -> runValues.value(values.runIndex(position));
+                int[] hint = {0};
+                yield position -> {
+                    int runIndex = values.runIndexFromHint(position, hint[0]);
+                    hint[0] = runIndex;
+                    return runValues.value(runIndex);
+                };
             }
             default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
         };
@@ -83,19 +76,14 @@ public final class VectorAccess
                     }
                 };
             }
-            case SelectionVector values -> {
-                yield switch (values.values()) {
-                    case BooleanVector selectedValues -> booleanSelectionValues(values.positions(), selectedValues.values());
-                    case ConcatenatedBooleanVector selectedValues -> concatenatedBooleanSelectionValues(values.positions(), selectedValues);
-                    default -> {
-                        BooleanValues selectedValues = booleanValues(values.values());
-                        yield position -> selectedValues.value(values.positions().position(position));
-                    }
-                };
-            }
             case RleVector values -> {
                 BooleanValues runValues = booleanValues(values.values());
-                yield position -> runValues.value(values.runIndex(position));
+                int[] hint = {0};
+                yield position -> {
+                    int runIndex = values.runIndexFromHint(position, hint[0]);
+                    hint[0] = runIndex;
+                    return runValues.value(runIndex);
+                };
             }
             default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + vector.getClass().getSimpleName());
         };
@@ -141,13 +129,14 @@ public final class VectorAccess
                 int[] ids = values.ids();
                 yield position -> dictionaryValues.value(ids[position]);
             }
-            case SelectionVector values -> {
-                DoubleValues selectedValues = doubleValues(values.values());
-                yield position -> selectedValues.value(values.positions().position(position));
-            }
             case RleVector values -> {
                 DoubleValues runValues = doubleValues(values.values());
-                yield position -> runValues.value(values.runIndex(position));
+                int[] hint = {0};
+                yield position -> {
+                    int runIndex = values.runIndexFromHint(position, hint[0]);
+                    hint[0] = runIndex;
+                    return runValues.value(runIndex);
+                };
             }
             default -> throw new IllegalArgumentException("Expected double vector but found " + vector.getClass().getSimpleName());
         };
@@ -162,13 +151,14 @@ public final class VectorAccess
                 int[] ids = values.ids();
                 yield position -> dictionaryValues.value(ids[position]);
             }
-            case SelectionVector values -> {
-                BinaryValues selectedValues = binaryValues(values.values());
-                yield position -> selectedValues.value(values.positions().position(position));
-            }
             case RleVector values -> {
                 BinaryValues runValues = binaryValues(values.values());
-                yield position -> runValues.value(values.runIndex(position));
+                int[] hint = {0};
+                yield position -> {
+                    int runIndex = values.runIndexFromHint(position, hint[0]);
+                    hint[0] = runIndex;
+                    return runValues.value(runIndex);
+                };
             }
             default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
         };
@@ -200,43 +190,4 @@ public final class VectorAccess
 
     public record BinarySlice(byte[] data, int offset, int length) {}
 
-    private static LongValues longSelectionValues(SelectedPositions positions, long[] values)
-    {
-        int[] array = positions.backingArrayOrNull();
-        if (array != null) {
-            int offset = positions.backingArrayOffset();
-            return position -> values[array[offset + position]];
-        }
-        return position -> values[positions.position(position)];
-    }
-
-    private static LongValues intSelectionValues(SelectedPositions positions, int[] values)
-    {
-        int[] array = positions.backingArrayOrNull();
-        if (array != null) {
-            int offset = positions.backingArrayOffset();
-            return position -> values[array[offset + position]];
-        }
-        return position -> values[positions.position(position)];
-    }
-
-    private static BooleanValues booleanSelectionValues(SelectedPositions positions, boolean[] values)
-    {
-        int[] array = positions.backingArrayOrNull();
-        if (array != null) {
-            int offset = positions.backingArrayOffset();
-            return position -> values[array[offset + position]];
-        }
-        return position -> values[positions.position(position)];
-    }
-
-    private static BooleanValues concatenatedBooleanSelectionValues(SelectedPositions positions, ConcatenatedBooleanVector values)
-    {
-        int[] array = positions.backingArrayOrNull();
-        if (array != null) {
-            int offset = positions.backingArrayOffset();
-            return position -> values.value(array[offset + position]);
-        }
-        return position -> values.value(positions.position(position));
-    }
 }

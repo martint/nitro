@@ -26,7 +26,7 @@ public final class DictionaryVector
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, values, true);
+        this(ids, values, true, true);
     }
 
     public static DictionaryVector wrap(int[] ids, Vector values)
@@ -45,17 +45,21 @@ public final class DictionaryVector
                 }
                 baseValues = nestedDictionary.values();
             }
-            return new DictionaryVector(composedIds, baseValues, false);
+            // composed ids are derived from already-validated id arrays, so bounds are guaranteed
+            return new DictionaryVector(composedIds, baseValues, false, false);
         }
-        return new DictionaryVector(ids, values, false);
+        // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
+        return new DictionaryVector(ids, values, false, false);
     }
 
-    private DictionaryVector(int[] ids, Vector values, boolean copyIds)
+    private DictionaryVector(int[] ids, Vector values, boolean copyIds, boolean validate)
     {
         checkArgument(ids.length >= 0, "ids length is negative");
         this.ids = copyIds ? Arrays.copyOf(ids, ids.length) : ids;
         this.values = values;
-        validateIds(ids, values.length());
+        if (validate) {
+            validateIds(ids, values.length());
+        }
     }
 
     public int[] ids()

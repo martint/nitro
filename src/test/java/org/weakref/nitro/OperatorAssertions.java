@@ -105,7 +105,7 @@ public class OperatorAssertions
                         for (int i = 0; i < columns.size(); i++) {
                             Output output = columns.get(i);
                             Vector values = output.borrow(Stream.VALUES);
-                            BooleanVector nulls = (BooleanVector) output.borrowOrNull(Stream.NULLS);
+                            Vector nulls = output.borrowOrNull(Stream.NULLS);
                             row[i] = decodeValue(values, nulls, position);
                         }
 
@@ -120,12 +120,34 @@ public class OperatorAssertions
             return result;
         }
 
-        private static Object decodeValue(Vector values, BooleanVector nulls, int position)
+        private static Object decodeValue(Vector values, Vector nulls, int position)
         {
-            if (nulls != null && nulls.values()[position]) {
+            if (nulls != null && isNullAt(nulls, position)) {
                 return null;
             }
             return decodeNonNullValue(values, position);
+        }
+
+        private static boolean isNullAt(Vector nulls, int position)
+        {
+            return switch (nulls) {
+                case BooleanVector vector -> vector.values()[position];
+                case DictionaryVector vector -> isNullAt(vector.values(), vector.ids()[position]);
+                case RleVector vector -> isNullAtInRle(vector, position);
+                default -> throw new UnsupportedOperationException("nulls vector type: " + nulls.getClass().getSimpleName());
+            };
+        }
+
+        private static boolean isNullAtInRle(RleVector values, int position)
+        {
+            int count = 0;
+            for (int index = 0; index < values.counts().length; index++) {
+                count += values.counts()[index];
+                if (position < count) {
+                    return isNullAt(values.values(), index);
+                }
+            }
+            throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + values.length());
         }
 
         private static Object decodeNonNullValue(Vector values, int position)

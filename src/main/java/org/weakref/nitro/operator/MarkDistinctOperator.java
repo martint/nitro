@@ -146,22 +146,7 @@ public class MarkDistinctOperator
             distinctPositions = new int[sourceMask.selectedCount()];
         }
 
-        int selectedCount = 0;
-        if (sourceMask.all()) {
-            int size = sourceMask.size();
-            for (int position = 0; position < size; position++) {
-                if (distinctKeySet.add(values, nulls, position)) {
-                    distinctPositions[selectedCount++] = position;
-                }
-            }
-        }
-        else {
-            for (int position : sourceMask) {
-                if (distinctKeySet.add(values, nulls, position)) {
-                    distinctPositions[selectedCount++] = position;
-                }
-            }
-        }
+        int selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);
         if (selectedCount == sourceMask.selectedCount()) {
             return sourceMask;
         }

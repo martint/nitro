@@ -26,8 +26,6 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectedPositions;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -462,8 +460,8 @@ public class TestOperators
                         AllMask.ALL)),
                 List.of(new Reference(selected, Stream.VALUES)));
 
-        Vector noNulls = SelectionVector.wrap(
-                SelectedPositions.positions(new int[] {0, 1, 2, 3}),
+        Vector noNulls = DictionaryVector.wrap(
+                new int[] {0, 1, 2, 3},
                 new BooleanVector(new boolean[] {false, false, false, false}));
         Operator source = new Operator()
         {

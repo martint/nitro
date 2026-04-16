@@ -277,10 +277,16 @@ final class GroupingState
 
     private void assignLongPairGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
+        VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+        VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+        VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+        VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
         for (int position : mask) {
-            byte nullMask = nullMask(nulls, position);
-            long first = isNull(nulls[0], position) ? 0 : OperatorVectorSupport.longValue(values[0], position);
-            long second = isNull(nulls[1], position) ? 0 : OperatorVectorSupport.longValue(values[1], position);
+            boolean firstIsNull = firstNulls.value(position);
+            boolean secondIsNull = secondNulls.value(position);
+            byte nullMask = (byte) ((firstIsNull ? 1 : 0) | (secondIsNull ? 1 << 1 : 0));
+            long first = firstIsNull ? 0 : firstValues.value(position);
+            long second = secondIsNull ? 0 : secondValues.value(position);
             long groupId = longPairGroupingTable.assignGroup(first, second, nullMask, nextGroupId);
             if (groupId == nextGroupId) {
                 ensureLongPairGroupingCapacity(groupId);
@@ -295,12 +301,24 @@ final class GroupingState
 
     private void assignLongQuadGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
+        VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+        VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+        VectorAccess.LongValues thirdValues = VectorAccess.longValues(values[2]);
+        VectorAccess.LongValues fourthValues = VectorAccess.longValues(values[3]);
+        VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+        VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+        VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nulls[2]);
+        VectorAccess.BooleanValues fourthNulls = VectorAccess.booleanValues(nulls[3]);
         for (int position : mask) {
-            byte nullMask = nullMask(nulls, position);
-            long first = isNull(nulls[0], position) ? 0 : OperatorVectorSupport.longValue(values[0], position);
-            long second = isNull(nulls[1], position) ? 0 : OperatorVectorSupport.longValue(values[1], position);
-            long third = isNull(nulls[2], position) ? 0 : OperatorVectorSupport.longValue(values[2], position);
-            long fourth = isNull(nulls[3], position) ? 0 : OperatorVectorSupport.longValue(values[3], position);
+            boolean firstIsNull = firstNulls.value(position);
+            boolean secondIsNull = secondNulls.value(position);
+            boolean thirdIsNull = thirdNulls.value(position);
+            boolean fourthIsNull = fourthNulls.value(position);
+            byte nullMask = (byte) ((firstIsNull ? 1 : 0) | (secondIsNull ? 1 << 1 : 0) | (thirdIsNull ? 1 << 2 : 0) | (fourthIsNull ? 1 << 3 : 0));
+            long first = firstIsNull ? 0 : firstValues.value(position);
+            long second = secondIsNull ? 0 : secondValues.value(position);
+            long third = thirdIsNull ? 0 : thirdValues.value(position);
+            long fourth = fourthIsNull ? 0 : fourthValues.value(position);
             long groupId = longQuadGroupingTable.assignGroup(first, second, third, fourth, nullMask, nextGroupId);
             if (groupId == nextGroupId) {
                 ensureLongQuadGroupingCapacity(groupId);
@@ -317,11 +335,20 @@ final class GroupingState
 
     private void assignLongTripleGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
+        VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+        VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+        VectorAccess.LongValues thirdValues = VectorAccess.longValues(values[2]);
+        VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+        VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+        VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nulls[2]);
         for (int position : mask) {
-            byte nullMask = nullMask(nulls, position);
-            long first = isNull(nulls[0], position) ? 0 : OperatorVectorSupport.longValue(values[0], position);
-            long second = isNull(nulls[1], position) ? 0 : OperatorVectorSupport.longValue(values[1], position);
-            long third = isNull(nulls[2], position) ? 0 : OperatorVectorSupport.longValue(values[2], position);
+            boolean firstIsNull = firstNulls.value(position);
+            boolean secondIsNull = secondNulls.value(position);
+            boolean thirdIsNull = thirdNulls.value(position);
+            byte nullMask = (byte) ((firstIsNull ? 1 : 0) | (secondIsNull ? 1 << 1 : 0) | (thirdIsNull ? 1 << 2 : 0));
+            long first = firstIsNull ? 0 : firstValues.value(position);
+            long second = secondIsNull ? 0 : secondValues.value(position);
+            long third = thirdIsNull ? 0 : thirdValues.value(position);
             long groupId = longTripleGroupingTable.assignGroup(first, second, third, nullMask, nextGroupId);
             if (groupId == nextGroupId) {
                 ensureLongTripleGroupingCapacity(groupId);

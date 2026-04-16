@@ -22,7 +22,6 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
@@ -366,10 +365,6 @@ final class FlatTypeHandlers
                 int dictionaryPosition = dictionary.ids()[position];
                 return OperatorVectorSupport.binaryHash(binaryValues.data(), binaryValues.startOffset(dictionaryPosition), binaryValues.length(dictionaryPosition));
             }
-            if (vector instanceof SelectionVector selection && selection.values() instanceof BinaryVector binaryValues) {
-                int selectedPosition = selection.positions().position(position);
-                return OperatorVectorSupport.binaryHash(binaryValues.data(), binaryValues.startOffset(selectedPosition), binaryValues.length(selectedPosition));
-            }
             if (vector instanceof RleVector rle && rle.values() instanceof BinaryVector binaryValues) {
                 int runIndex = OperatorVectorSupport.runIndex(rle, position);
                 return OperatorVectorSupport.binaryHash(binaryValues.data(), binaryValues.startOffset(runIndex), binaryValues.length(runIndex));
@@ -387,11 +382,6 @@ final class FlatTypeHandlers
             if (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector binaryValues) {
                 int dictionaryPosition = dictionary.ids()[position];
                 writeFlat(binaryValues.data(), binaryValues.startOffset(dictionaryPosition), binaryValues.length(dictionaryPosition), fixedChunk, fixedOffset, variableWidthArena);
-                return;
-            }
-            if (vector instanceof SelectionVector selection && selection.values() instanceof BinaryVector binaryValues) {
-                int selectedPosition = selection.positions().position(position);
-                writeFlat(binaryValues.data(), binaryValues.startOffset(selectedPosition), binaryValues.length(selectedPosition), fixedChunk, fixedOffset, variableWidthArena);
                 return;
             }
             if (vector instanceof RleVector rle && rle.values() instanceof BinaryVector binaryValues) {
@@ -416,11 +406,6 @@ final class FlatTypeHandlers
                 int dictionaryPosition = dictionary.ids()[position];
                 return binaryValues.length(dictionaryPosition) == length &&
                         OperatorVectorSupport.binaryEquals(binaryValues.data(), binaryValues.startOffset(dictionaryPosition), chunk, offset, length);
-            }
-            if (vector instanceof SelectionVector selection && selection.values() instanceof BinaryVector binaryValues) {
-                int selectedPosition = selection.positions().position(position);
-                return binaryValues.length(selectedPosition) == length &&
-                        OperatorVectorSupport.binaryEquals(binaryValues.data(), binaryValues.startOffset(selectedPosition), chunk, offset, length);
             }
             if (vector instanceof RleVector rle && rle.values() instanceof BinaryVector binaryValues) {
                 int runIndex = OperatorVectorSupport.runIndex(rle, position);
@@ -460,7 +445,6 @@ final class FlatTypeHandlers
             return switch (vector) {
                 case BinaryVector binary -> OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(position), binary.length(position));
                 case DictionaryVector dictionary -> hashBinary(dictionary.values(), dictionary.ids()[position]);
-                case SelectionVector selection -> hashBinary(selection.values(), selection.positions().position(position));
                 case RleVector rle -> hashBinary(rle.values(), OperatorVectorSupport.runIndex(rle, position));
                 default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
             };
@@ -472,7 +456,6 @@ final class FlatTypeHandlers
                 case BinaryVector binary -> binary.length(position) == rightLength &&
                         OperatorVectorSupport.binaryEquals(binary.data(), binary.startOffset(position), right, rightOffset, rightLength);
                 case DictionaryVector dictionary -> binaryEquals(dictionary.values(), dictionary.ids()[position], right, rightOffset, rightLength);
-                case SelectionVector selection -> binaryEquals(selection.values(), selection.positions().position(position), right, rightOffset, rightLength);
                 case RleVector rle -> binaryEquals(rle.values(), OperatorVectorSupport.runIndex(rle, position), right, rightOffset, rightLength);
                 default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
             };
@@ -483,7 +466,6 @@ final class FlatTypeHandlers
             switch (vector) {
                 case BinaryVector binary -> writeFlat(binary.data(), binary.startOffset(position), binary.length(position), fixedChunk, fixedOffset, variableWidthArena);
                 case DictionaryVector dictionary -> writeBinaryFlat(dictionary.values(), dictionary.ids()[position], fixedChunk, fixedOffset, variableWidthArena);
-                case SelectionVector selection -> writeBinaryFlat(selection.values(), selection.positions().position(position), fixedChunk, fixedOffset, variableWidthArena);
                 case RleVector rle -> writeBinaryFlat(rle.values(), OperatorVectorSupport.runIndex(rle, position), fixedChunk, fixedOffset, variableWidthArena);
                 default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
             }

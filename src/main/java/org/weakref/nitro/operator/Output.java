@@ -13,8 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.ProjectedRows;
-import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -46,26 +44,6 @@ public final class Output
         Streams copyPositions(Set<Stream> streams, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange);
     }
 
-    @FunctionalInterface
-    public interface PositionProjector
-    {
-        ProjectedOutput projectPositions(Set<Stream> streams, SelectedPositions sourcePositions);
-    }
-
-    public record ProjectedOutput(Output output, ProjectedRows projectedRows)
-    {
-        public ProjectedOutput
-        {
-            requireNonNull(output, "output is null");
-            requireNonNull(projectedRows, "projectedRows is null");
-        }
-
-        public SelectedPositions sourcePositions()
-        {
-            return projectedRows.positions();
-        }
-    }
-
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
@@ -83,7 +61,6 @@ public final class Output
     private final Function<Stream, Vector> resolver;
     private final BiFunction<Stream, Vector, Vector> takeResolver;
     private final BiConsumer<Stream, Vector> releaseResolver;
-    private final PositionProjector positionProjector;
     private final PositionsResolver positionsResolver;
     private final SinglePositionResolver singlePositionResolver;
     private final int knownAllFalseFlags;
@@ -100,42 +77,41 @@ public final class Output
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
-        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null, null, null);
+        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null, null);
         OutputDebug.recordBaseOutput(false, false, false);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
     {
-        this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null, null, null);
+        this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null, null);
         OutputDebug.recordBaseOutput(false, false, false);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
-        this(exposedStreams, resolver, takeResolver, releaseResolver, null, null, null);
+        this(exposedStreams, resolver, takeResolver, releaseResolver, null, null);
         OutputDebug.recordBaseOutput(false, false, false);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, SinglePositionResolver singlePositionResolver)
     {
-        this(exposedStreams, resolver, takeResolver, releaseResolver, null, null, singlePositionResolver);
+        this(exposedStreams, resolver, takeResolver, releaseResolver, null, singlePositionResolver);
         OutputDebug.recordBaseOutput(false, false, singlePositionResolver != null);
     }
 
-    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionProjector positionProjector, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
     {
-        this(exposedStreams, resolver, takeResolver, releaseResolver, positionProjector, positionsResolver, singlePositionResolver, 0, 0);
-        OutputDebug.recordBaseOutput(positionProjector != null, positionsResolver != null, singlePositionResolver != null);
+        this(exposedStreams, resolver, takeResolver, releaseResolver, positionsResolver, singlePositionResolver, 0, 0);
+        OutputDebug.recordBaseOutput(false, positionsResolver != null, singlePositionResolver != null);
     }
 
-    private Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionProjector positionProjector, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver, int debugDepth, int knownAllFalseFlags)
+    private Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver, int debugDepth, int knownAllFalseFlags)
     {
         requireNonNull(exposedStreams, "exposedStreams is null");
         this.exposedFlags = streamFlags(exposedStreams);
         this.resolver = requireNonNull(resolver, "resolver is null");
         this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
         this.releaseResolver = requireNonNull(releaseResolver, "releaseResolver is null");
-        this.positionProjector = positionProjector;
         this.positionsResolver = positionsResolver;
         this.singlePositionResolver = singlePositionResolver;
         this.knownAllFalseFlags = knownAllFalseFlags & this.exposedFlags;
@@ -154,7 +130,6 @@ public final class Output
                 resolver,
                 takeResolver,
                 releaseResolver,
-                positionProjector,
                 positionsResolver,
                 singlePositionResolver,
                 debugDepth,
@@ -266,19 +241,6 @@ public final class Output
         return positionsResolver.copyPositions(streams(), existing, new int[] {sourcePosition}, 0, 1, outputPosition, size, false);
     }
 
-    public ProjectedOutput projectPositions(int[] sourcePositions, int sourceStart, int sourceCount)
-    {
-        return projectPositions(SelectedPositions.positions(sourcePositions, sourceStart, sourceCount));
-    }
-
-    public ProjectedOutput projectPositions(SelectedPositions sourcePositions)
-    {
-        checkOpen();
-        boolean hit = positionProjector != null;
-        OutputDebug.recordProjectPositions(debugDepth, hit);
-        return hit ? positionProjector.projectPositions(streams(), sourcePositions) : null;
-    }
-
     public Streams copyPositions(Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
     {
         checkOpen();
@@ -302,16 +264,16 @@ public final class Output
             OutputDebug.recordSelectIdentityHit();
             return this;
         }
-        OutputDebug.recordSelectedOutput(positionProjector != null, positionsResolver != null, false, debugDepth + 1);
-        return new Output(selectedStreams, this::borrow, (stream, vector) -> take(stream), (_, _) -> {}, positionProjector, positionsResolver, null, debugDepth + 1, knownAllFalseFlags & selectedFlags);
+        OutputDebug.recordSelectedOutput(false, positionsResolver != null, false, debugDepth + 1);
+        return new Output(selectedStreams, this::borrow, (stream, vector) -> take(stream), (_, _) -> {}, positionsResolver, null, debugDepth + 1, knownAllFalseFlags & selectedFlags);
     }
 
     public Output forward(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
         requireNonNull(takeResolver, "takeResolver is null");
         requireNonNull(releaseResolver, "releaseResolver is null");
-        OutputDebug.recordForwardedOutput(positionProjector != null, positionsResolver != null, singlePositionResolver != null, debugDepth + 1);
-        return new Output(streams(), this::borrow, takeResolver, releaseResolver, positionProjector, positionsResolver, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
+        OutputDebug.recordForwardedOutput(false, positionsResolver != null, singlePositionResolver != null, debugDepth + 1);
+        return new Output(streams(), this::borrow, takeResolver, releaseResolver, positionsResolver, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
     }
 
     public Output forwardSinglePositionOnly(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
@@ -319,7 +281,7 @@ public final class Output
         requireNonNull(takeResolver, "takeResolver is null");
         requireNonNull(releaseResolver, "releaseResolver is null");
         OutputDebug.recordForwardedOutput(false, false, singlePositionResolver != null, debugDepth + 1);
-        return new Output(streams(), this::borrow, takeResolver, releaseResolver, null, null, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
+        return new Output(streams(), this::borrow, takeResolver, releaseResolver, null, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
     }
 
     @Override

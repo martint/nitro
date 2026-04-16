@@ -19,7 +19,6 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.SelectionVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskOutcome;
@@ -184,7 +183,6 @@ final class LongComparisonMaskSupport
     {
         return switch (vector) {
             case I32Vector _, I64Vector _ -> true;
-            case SelectionVector selection -> supportsLongValues(selection.values());
             case DictionaryVector dictionary -> supportsLongValues(dictionary.values());
             case RleVector rle -> supportsLongValues(rle.values());
             default -> false;
