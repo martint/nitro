@@ -52,6 +52,7 @@ import io.trino.spiller.SpillerFactory;
 import io.trino.sql.gen.JoinCompiler;
 import io.trino.sql.gen.OrderingCompiler;
 import io.trino.sql.planner.plan.AggregationNode.Step;
+import io.trino.sql.planner.plan.JoinType;
 import io.trino.sql.planner.plan.PlanNodeId;
 import io.trino.sql.relational.CallExpression;
 import io.trino.sql.relational.ConstantExpression;
@@ -7275,7 +7276,7 @@ public final class TrinoTpcdsParquetSupport
                         queryName + ".scan.sales",
                         queryName + ".sink.sales"),
                 List.of(
-                        namedHashJoinStep(queryName + ".join.returns", new HashJoinSpec(80_100 + Math.abs(queryName.hashCode() % 100), salesTypes, List.of(1, 4), relationPlan(tables, returnsTable, returnsColumns, Optional.empty(), identityProjections(returnsTypes), returnsTypes, queryName + ".scan.returns", queryName + ".sink.returns"), returnsTypes, List.of(0, 1))),
+                        namedHashJoinStep(queryName + ".join.returns", new HashJoinSpec(80_100 + Math.abs(queryName.hashCode() % 100), salesTypes, List.of(1, 4), relationPlan(tables, returnsTable, returnsColumns, Optional.empty(), identityProjections(returnsTypes), returnsTypes, queryName + ".scan.returns", queryName + ".sink.returns"), returnsTypes, List.of(0, 1), JoinType.LEFT)),
                         namedFactoryStep(queryName + ".project.inputs", filterAndProjectFactory(
                                 80_200 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
@@ -10820,13 +10821,13 @@ public final class TrinoTpcdsParquetSupport
         List<Type> outputTypes = query64OutputTypes(tables);
 
         return appendPlan(
-                query64CrossSalesPlan(tables, "q64.cross_sales.first"),
+                query64CrossSalesPlan(tables, "q64.cross_sales.first", 1999),
                 List.of(
                         namedHashJoinStep("q64.join.second_year", new HashJoinSpec(
                                 64_40,
                                 crossSalesTypes,
                                 List.of(1, 2, 3),
-                                query64CrossSalesPlan(tables, "q64.cross_sales.second"),
+                                query64CrossSalesPlan(tables, "q64.cross_sales.second", 2000),
                                 crossSalesTypes,
                                 List.of(1, 2, 3))),
                         namedFactoryStep("q64.filter.project.output", filterAndProjectFactory(
@@ -10899,10 +10900,10 @@ public final class TrinoTpcdsParquetSupport
                                         scaledCents(field(2, salesTypes.get(2)), salesTypes.get(2)),
                                         add(
                                                 add(
-                                                        scaledCents(field(4, returnsTypes.get(2)), returnsTypes.get(2)),
-                                                        scaledCents(field(5, returnsTypes.get(3)), returnsTypes.get(3)),
+                                                        scaledCents(field(5, returnsTypes.get(2)), returnsTypes.get(2)),
+                                                        scaledCents(field(6, returnsTypes.get(3)), returnsTypes.get(3)),
                                                         BIGINT),
-                                                scaledCents(field(6, returnsTypes.get(4)), returnsTypes.get(4)),
+                                                scaledCents(field(7, returnsTypes.get(4)), returnsTypes.get(4)),
                                                 BIGINT)),
                                 groupedTypes)),
                         namedFactoryStep("q64.group.cs_ui", hashAggregationFactory(
@@ -10919,7 +10920,7 @@ public final class TrinoTpcdsParquetSupport
                 "q64.sink.cs_ui");
     }
 
-    private PipelinePlan query64CrossSalesPlan(TpcdsParquetTables tables, String queryName)
+    private PipelinePlan query64CrossSalesPlan(TpcdsParquetTables tables, String queryName, long soldYear)
     {
         List<String> factColumns = List.of("ss_store_sk", "ss_sold_date_sk", "ss_customer_sk", "ss_cdemo_sk", "ss_hdemo_sk", "ss_addr_sk", "ss_item_sk", "ss_ticket_number", "ss_promo_sk", "ss_wholesale_cost", "ss_list_price", "ss_coupon_amt");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
@@ -10986,7 +10987,7 @@ public final class TrinoTpcdsParquetSupport
                 tables,
                 "date_dim",
                 List.of("d_date_sk", "d_year"),
-                Optional.empty(),
+                Optional.of(equal(field(1, dateTypes.get(1)), constant(soldYear, dateTypes.get(1)), dateTypes.get(1))),
                 identityProjections(dateTypes),
                 dateTypes,
                 queryName + ".scan.date_dim.sold",
@@ -13911,7 +13912,7 @@ public final class TrinoTpcdsParquetSupport
                 lookupSourceFactory,
                 lookupSourceFactory.getOutputTypes());
         OperatorFactory joinFactory = io.trino.operator.OperatorFactories.join(
-                io.trino.operator.JoinOperatorType.innerJoin(false, false),
+                io.trino.operator.JoinOperatorType.ofJoinNodeType(hashJoinSpec.joinType(), false, false),
                 hashJoinSpec.operatorId(),
                 new PlanNodeId("join-" + hashJoinSpec.operatorId()),
                 joinBridgeManager,
@@ -14740,16 +14741,22 @@ public final class TrinoTpcdsParquetSupport
             PipelinePlan buildPlan,
             List<Type> buildTypes,
             List<Integer> buildHashChannels,
+            JoinType joinType,
             String profileName)
     {
         private HashJoinSpec(int operatorId, List<Type> probeTypes, List<Integer> probeJoinChannels, PipelinePlan buildPlan, List<Type> buildTypes, List<Integer> buildHashChannels)
         {
-            this(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, "join-" + operatorId);
+            this(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, JoinType.INNER, "join-" + operatorId);
+        }
+
+        private HashJoinSpec(int operatorId, List<Type> probeTypes, List<Integer> probeJoinChannels, PipelinePlan buildPlan, List<Type> buildTypes, List<Integer> buildHashChannels, JoinType joinType)
+        {
+            this(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, joinType, "join-" + operatorId);
         }
 
         private HashJoinSpec withProfileName(String profileName)
         {
-            return new HashJoinSpec(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, profileName);
+            return new HashJoinSpec(operatorId, probeTypes, probeJoinChannels, buildPlan, buildTypes, buildHashChannels, joinType, profileName);
         }
     }
 

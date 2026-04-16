@@ -418,8 +418,8 @@ final class TpcdsParquetSupport
 
     public static Operator query64(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator crossSalesFirst = query64CrossSales(allocator, primitiveRegistry, tables, "q64.cross_sales.first");
-        Operator crossSalesSecond = query64CrossSales(allocator, primitiveRegistry, tables, "q64.cross_sales.second");
+        Operator crossSalesFirst = query64CrossSales(allocator, primitiveRegistry, tables, "q64.cross_sales.first", 1999);
+        Operator crossSalesSecond = query64CrossSales(allocator, primitiveRegistry, tables, "q64.cross_sales.second", 2000);
 
         Operator joined = profiled("q64.join.second_year", new HashJoinOperator(allocator, crossSalesFirst, new int[] {1, 2, 3}, crossSalesSecond, new int[] {1, 2, 3}));
         joined = profiled("q64.filter.project.output", filter(allocator, primitiveRegistry, joined, query64YearTransitionPredicate(12, 31, 15, 34)));
@@ -9250,7 +9250,7 @@ final class TpcdsParquetSupport
         return new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES)));
     }
 
-    private static Operator query64CrossSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix)
+    private static Operator query64CrossSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix, long soldYear)
     {
         Operator sales = profiled(profilePrefix + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_store_sk", "ss_sold_date_sk", "ss_customer_sk", "ss_cdemo_sk", "ss_hdemo_sk", "ss_addr_sk", "ss_item_sk", "ss_ticket_number", "ss_promo_sk", "ss_wholesale_cost", "ss_list_price", "ss_coupon_amt"));
         sales = profiled(profilePrefix + ".join.store_returns", new HashJoinOperator(
@@ -9312,7 +9312,15 @@ final class TpcdsParquetSupport
                 allocator,
                 sales,
                 1,
-                scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_year"),
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        equal(1, soldYear),
+                        new String[] {"d_date_sk", "d_year"},
+                        0,
+                        1),
                 0));
         sales = profiled(profilePrefix + ".join.date_dim.first_sales", new HashJoinOperator(
                 allocator,
