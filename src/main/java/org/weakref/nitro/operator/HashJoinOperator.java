@@ -1800,8 +1800,15 @@ public class HashJoinOperator
 
         private static int mix(long first, long second)
         {
-            long hash = 31 * Long.hashCode(first) + Long.hashCode(second);
-            hash ^= (hash >>> 16);
+            // Fibonacci-prime combine + Murmur3 64-bit finalizer. See GroupingState.LongPairGroupingTable.mix
+            // for rationale; TPC-DS surrogate keys have zero upper 32 bits and collide heavily under the
+            // former `31 * Long.hashCode(a) + Long.hashCode(b)` hash.
+            long hash = first * 0x9E3779B97F4A7C15L + second * 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
+            hash *= 0xFF51AFD7ED558CCDL;
+            hash ^= hash >>> 33;
+            hash *= 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
             return (int) hash;
         }
     }
@@ -2012,9 +2019,12 @@ public class HashJoinOperator
 
         private static int mix(long first, long second, long third)
         {
-            long hash = 31 * Long.hashCode(first) + Long.hashCode(second);
-            hash = 31 * hash + Long.hashCode(third);
-            hash ^= (hash >>> 16);
+            long hash = first * 0x9E3779B97F4A7C15L + second * 0xC4CEB9FE1A85EC53L + third * 0x94D049BB133111EBL;
+            hash ^= hash >>> 33;
+            hash *= 0xFF51AFD7ED558CCDL;
+            hash ^= hash >>> 33;
+            hash *= 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
             return (int) hash;
         }
     }

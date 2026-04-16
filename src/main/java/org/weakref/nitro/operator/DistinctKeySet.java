@@ -338,8 +338,12 @@ final class DistinctKeySet
 
         private static int mix(long first, long second)
         {
-            long hash = 31L * Long.hashCode(first) + Long.hashCode(second);
-            hash ^= (hash >>> 16);
+            long hash = first * 0x9E3779B97F4A7C15L + second * 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
+            hash *= 0xFF51AFD7ED558CCDL;
+            hash ^= hash >>> 33;
+            hash *= 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
             return (int) hash;
         }
     }
@@ -490,8 +494,12 @@ final class DistinctKeySet
 
         private static int mix(long first, long second, long third)
         {
-            long hash = 31L * (31L * Long.hashCode(first) + Long.hashCode(second)) + Long.hashCode(third);
-            hash ^= (hash >>> 16);
+            long hash = first * 0x9E3779B97F4A7C15L + second * 0xC4CEB9FE1A85EC53L + third * 0x94D049BB133111EBL;
+            hash ^= hash >>> 33;
+            hash *= 0xFF51AFD7ED558CCDL;
+            hash ^= hash >>> 33;
+            hash *= 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
             return (int) hash;
         }
     }
@@ -651,8 +659,15 @@ final class DistinctKeySet
 
         private static int mix(long first, long second, long third, long fourth)
         {
-            long hash = 31L * (31L * (31L * Long.hashCode(first) + Long.hashCode(second)) + Long.hashCode(third)) + Long.hashCode(fourth);
-            hash ^= (hash >>> 16);
+            long hash = first * 0x9E3779B97F4A7C15L
+                    + second * 0xC4CEB9FE1A85EC53L
+                    + third * 0x94D049BB133111EBL
+                    + fourth * 0xBF58476D1CE4E5B9L;
+            hash ^= hash >>> 33;
+            hash *= 0xFF51AFD7ED558CCDL;
+            hash ^= hash >>> 33;
+            hash *= 0xC4CEB9FE1A85EC53L;
+            hash ^= hash >>> 33;
             return (int) hash;
         }
     }
