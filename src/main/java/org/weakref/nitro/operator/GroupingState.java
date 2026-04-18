@@ -726,11 +726,20 @@ final class GroupingState
     private static final class LongPairGroupingTable
     {
         private static final float LOAD_FACTOR = 0.75f;
+        // Entries are stored in a single interleaved long[] — {firstKey, secondKey, groupId} per
+        // slot — so each probe step touches a contiguous 24-byte range and fits in one cache line.
+        // The previous layout kept three separate long[] (firstKeys, secondKeys, groupIds) plus a
+        // byte[] for nullMasks, forcing three or four independent cache-line loads per probe step
+        // on large tables. nullMasks stays as a parallel byte[] because it is only consulted on
+        // key-matching branches (already rare) and most TPC-DS workloads have nullMask == 0.
+        private static final int ENTRY_STRIDE = 3;
+        private static final int FIRST_KEY_OFFSET = 0;
+        private static final int SECOND_KEY_OFFSET = 1;
+        private static final int GROUP_ID_OFFSET = 2;
+        private static final long EMPTY_GROUP_ID = -1L;
 
-        private long[] firstKeys;
-        private long[] secondKeys;
+        private long[] entries;
         private byte[] nullMasks;
-        private long[] groupIds;
         private int mask;
         private int maxFill;
         private int size;
@@ -741,35 +750,43 @@ final class GroupingState
             while (capacity < expectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
+            entries = allocateEntries(capacity);
             nullMasks = new byte[capacity];
-            groupIds = new long[capacity];
-            Arrays.fill(groupIds, -1);
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
         }
 
+        private static long[] allocateEntries(int capacity)
+        {
+            long[] array = new long[capacity * ENTRY_STRIDE];
+            for (int slot = 0; slot < capacity; slot++) {
+                array[slot * ENTRY_STRIDE + GROUP_ID_OFFSET] = EMPTY_GROUP_ID;
+            }
+            return array;
+        }
+
         public long assignGroup(long first, long second, byte nullMask, long newGroupId)
         {
-            int index = mix(first, second, nullMask) & mask;
+            long[] table = entries;
+            int slot = mix(first, second, nullMask) & mask;
             while (true) {
-                long groupId = groupIds[index];
-                if (groupId == -1) {
-                    firstKeys[index] = first;
-                    secondKeys[index] = second;
-                    nullMasks[index] = nullMask;
-                    groupIds[index] = newGroupId;
+                int base = slot * ENTRY_STRIDE;
+                long groupId = table[base + GROUP_ID_OFFSET];
+                if (groupId == EMPTY_GROUP_ID) {
+                    table[base + FIRST_KEY_OFFSET] = first;
+                    table[base + SECOND_KEY_OFFSET] = second;
+                    table[base + GROUP_ID_OFFSET] = newGroupId;
+                    nullMasks[slot] = nullMask;
                     size++;
                     if (size >= maxFill) {
                         rehash();
                     }
                     return newGroupId;
                 }
-                if (firstKeys[index] == first && secondKeys[index] == second && nullMasks[index] == nullMask) {
+                if (table[base + FIRST_KEY_OFFSET] == first && table[base + SECOND_KEY_OFFSET] == second && nullMasks[slot] == nullMask) {
                     return groupId;
                 }
-                index = (index + 1) & mask;
+                slot = (slot + 1) & mask;
             }
         }
 
@@ -779,7 +796,7 @@ final class GroupingState
                 return;
             }
 
-            int capacity = groupIds.length;
+            int capacity = nullMasks.length;
             while (expectedSize >= (long) (capacity * LOAD_FACTOR)) {
                 capacity <<= 1;
             }
@@ -788,39 +805,40 @@ final class GroupingState
 
         private void rehash()
         {
-            rehash(groupIds.length * 2);
+            rehash(nullMasks.length * 2);
         }
 
         private void rehash(int capacity)
         {
-            long[] previousFirstKeys = firstKeys;
-            long[] previousSecondKeys = secondKeys;
+            long[] previousEntries = entries;
             byte[] previousNullMasks = nullMasks;
-            long[] previousGroupIds = groupIds;
+            int previousCapacity = previousNullMasks.length;
 
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
+            entries = allocateEntries(capacity);
             nullMasks = new byte[capacity];
-            groupIds = new long[capacity];
-            Arrays.fill(groupIds, -1);
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
             size = 0;
 
-            for (int index = 0; index < previousGroupIds.length; index++) {
-                long groupId = previousGroupIds[index];
-                if (groupId == -1) {
+            for (int oldSlot = 0; oldSlot < previousCapacity; oldSlot++) {
+                int previousBase = oldSlot * ENTRY_STRIDE;
+                long groupId = previousEntries[previousBase + GROUP_ID_OFFSET];
+                if (groupId == EMPTY_GROUP_ID) {
                     continue;
                 }
+                long first = previousEntries[previousBase + FIRST_KEY_OFFSET];
+                long second = previousEntries[previousBase + SECOND_KEY_OFFSET];
+                byte nullMask = previousNullMasks[oldSlot];
 
-                int newIndex = mix(previousFirstKeys[index], previousSecondKeys[index], previousNullMasks[index]) & mask;
-                while (groupIds[newIndex] != -1) {
-                    newIndex = (newIndex + 1) & mask;
+                int slot = mix(first, second, nullMask) & mask;
+                while (entries[slot * ENTRY_STRIDE + GROUP_ID_OFFSET] != EMPTY_GROUP_ID) {
+                    slot = (slot + 1) & mask;
                 }
-                firstKeys[newIndex] = previousFirstKeys[index];
-                secondKeys[newIndex] = previousSecondKeys[index];
-                nullMasks[newIndex] = previousNullMasks[index];
-                groupIds[newIndex] = groupId;
+                int base = slot * ENTRY_STRIDE;
+                entries[base + FIRST_KEY_OFFSET] = first;
+                entries[base + SECOND_KEY_OFFSET] = second;
+                entries[base + GROUP_ID_OFFSET] = groupId;
+                nullMasks[slot] = nullMask;
                 size++;
             }
         }

@@ -1610,10 +1610,17 @@ public class HashJoinOperator
             implements JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
+        // Entries are stored in a single interleaved long[] — {firstKey, secondKey, singleRow} per
+        // slot — so each probe step touches a contiguous 24-byte range and fits in one cache line.
+        // The previous layout used three separate long[] (firstKeys, secondKeys, singleRows) which
+        // forced three independent cache-line loads per probe step on large tables (Q80's
+        // store_sales ⨝ store_returns table holds ~2.87M entries, well past L3).
+        private static final int ENTRY_STRIDE = 3;
+        private static final int FIRST_KEY_OFFSET = 0;
+        private static final int SECOND_KEY_OFFSET = 1;
+        private static final int SINGLE_ROW_OFFSET = 2;
 
-        private long[] firstKeys;
-        private long[] secondKeys;
-        private long[] singleRows;
+        private long[] entries;
         private LongArrayList[] rowsBySlot;
         private int mask;
         private int maxFill;
@@ -1626,12 +1633,19 @@ public class HashJoinOperator
             while (capacity < expectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
-            singleRows = emptyRows(capacity);
+            entries = allocateEntries(capacity);
             rowsBySlot = new LongArrayList[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
+        }
+
+        private static long[] allocateEntries(int capacity)
+        {
+            long[] array = new long[capacity * ENTRY_STRIDE];
+            for (int slot = 0; slot < capacity; slot++) {
+                array[slot * ENTRY_STRIDE + SINGLE_ROW_OFFSET] = NO_MATCH_ROW_REFERENCE;
+            }
+            return array;
         }
 
         @Override
@@ -1673,27 +1687,32 @@ public class HashJoinOperator
             long first = OperatorVectorSupport.longValue(values[0], position);
             long second = OperatorVectorSupport.longValue(values[1], position);
             int slot = findSlot(first, second);
-            if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second) {
+            int base = slot * ENTRY_STRIDE;
+            long singleRow = entries[base + SINGLE_ROW_OFFSET];
+            if (singleRow == NO_MATCH_ROW_REFERENCE || entries[base + FIRST_KEY_OFFSET] != first || entries[base + SECOND_KEY_OFFSET] != second) {
                 return LongLists.emptyList();
             }
             LongArrayList rows = rowsBySlot[slot];
             if (rows != null) {
                 return rows;
             }
-            return singleMatch.withValue(singleRows[slot]);
+            return singleMatch.withValue(singleRow);
         }
 
         public void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
             VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+            long[] table = entries;
             if (!hasNulls) {
                 for (int index = 0; index < positionCount; index++) {
                     int position = positions[index];
                     long first = firstValues.value(position);
                     long second = secondValues.value(position);
                     int slot = findSlot(first, second);
-                    if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second) {
+                    int base = slot * ENTRY_STRIDE;
+                    long singleRow = table[base + SINGLE_ROW_OFFSET];
+                    if (singleRow == NO_MATCH_ROW_REFERENCE || table[base + FIRST_KEY_OFFSET] != first || table[base + SECOND_KEY_OFFSET] != second) {
                         matches[index] = LongLists.emptyList();
                         continue;
                     }
@@ -1702,7 +1721,7 @@ public class HashJoinOperator
                         matches[index] = rows;
                     }
                     else {
-                        matches[index] = singleMatches[index].withValue(singleRows[slot]);
+                        matches[index] = singleMatches[index].withValue(singleRow);
                     }
                 }
                 return;
@@ -1718,7 +1737,9 @@ public class HashJoinOperator
                 long first = firstValues.value(position);
                 long second = secondValues.value(position);
                 int slot = findSlot(first, second);
-                if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second) {
+                int base = slot * ENTRY_STRIDE;
+                long singleRow = table[base + SINGLE_ROW_OFFSET];
+                if (singleRow == NO_MATCH_ROW_REFERENCE || table[base + FIRST_KEY_OFFSET] != first || table[base + SECOND_KEY_OFFSET] != second) {
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
@@ -1727,45 +1748,55 @@ public class HashJoinOperator
                     matches[index] = rows;
                 }
                 else {
-                    matches[index] = singleMatches[index].withValue(singleRows[slot]);
+                    matches[index] = singleMatches[index].withValue(singleRow);
                 }
             }
         }
 
         private int findSlot(long first, long second)
         {
+            long[] table = entries;
             int slot = mix(first, second) & mask;
-            while (!isEmptySlot(slot) && (firstKeys[slot] != first || secondKeys[slot] != second)) {
+            while (true) {
+                int base = slot * ENTRY_STRIDE;
+                long singleRow = table[base + SINGLE_ROW_OFFSET];
+                if (singleRow == NO_MATCH_ROW_REFERENCE) {
+                    return slot;
+                }
+                if (table[base + FIRST_KEY_OFFSET] == first && table[base + SECOND_KEY_OFFSET] == second) {
+                    return slot;
+                }
                 slot = (slot + 1) & mask;
             }
-            return slot;
         }
 
         private void rehash()
         {
-            long[] previousFirstKeys = firstKeys;
-            long[] previousSecondKeys = secondKeys;
-            long[] previousSingleRows = singleRows;
+            long[] previousEntries = entries;
             LongArrayList[] previousRowsBySlot = rowsBySlot;
-            int capacity = previousRowsBySlot.length * 2;
+            int previousCapacity = previousRowsBySlot.length;
+            int capacity = previousCapacity * 2;
 
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
-            singleRows = emptyRows(capacity);
+            entries = allocateEntries(capacity);
             rowsBySlot = new LongArrayList[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
             size = 0;
 
-            for (int index = 0; index < previousFirstKeys.length; index++) {
-                if (previousSingleRows[index] == NO_MATCH_ROW_REFERENCE) {
+            for (int oldSlot = 0; oldSlot < previousCapacity; oldSlot++) {
+                int previousBase = oldSlot * ENTRY_STRIDE;
+                long singleRow = previousEntries[previousBase + SINGLE_ROW_OFFSET];
+                if (singleRow == NO_MATCH_ROW_REFERENCE) {
                     continue;
                 }
-                int slot = findSlot(previousFirstKeys[index], previousSecondKeys[index]);
-                firstKeys[slot] = previousFirstKeys[index];
-                secondKeys[slot] = previousSecondKeys[index];
-                singleRows[slot] = previousSingleRows[index];
-                rowsBySlot[slot] = previousRowsBySlot[index];
+                long first = previousEntries[previousBase + FIRST_KEY_OFFSET];
+                long second = previousEntries[previousBase + SECOND_KEY_OFFSET];
+                int slot = findSlot(first, second);
+                int base = slot * ENTRY_STRIDE;
+                entries[base + FIRST_KEY_OFFSET] = first;
+                entries[base + SECOND_KEY_OFFSET] = second;
+                entries[base + SINGLE_ROW_OFFSET] = singleRow;
+                rowsBySlot[slot] = previousRowsBySlot[oldSlot];
                 size++;
             }
         }
@@ -1773,10 +1804,11 @@ public class HashJoinOperator
         private void addRow(long first, long second, long rowReference)
         {
             int slot = findSlot(first, second);
-            if (isEmptySlot(slot)) {
-                firstKeys[slot] = first;
-                secondKeys[slot] = second;
-                singleRows[slot] = rowReference;
+            int base = slot * ENTRY_STRIDE;
+            if (entries[base + SINGLE_ROW_OFFSET] == NO_MATCH_ROW_REFERENCE) {
+                entries[base + FIRST_KEY_OFFSET] = first;
+                entries[base + SECOND_KEY_OFFSET] = second;
+                entries[base + SINGLE_ROW_OFFSET] = rowReference;
                 size++;
                 if (size >= maxFill) {
                     rehash();
@@ -1785,7 +1817,7 @@ public class HashJoinOperator
             }
             if (rowsBySlot[slot] == null) {
                 LongArrayList rows = new LongArrayList(2);
-                rows.add(singleRows[slot]);
+                rows.add(entries[base + SINGLE_ROW_OFFSET]);
                 rows.add(rowReference);
                 rowsBySlot[slot] = rows;
                 return;
@@ -1795,7 +1827,7 @@ public class HashJoinOperator
 
         private boolean isEmptySlot(int slot)
         {
-            return singleRows[slot] == NO_MATCH_ROW_REFERENCE;
+            return entries[slot * ENTRY_STRIDE + SINGLE_ROW_OFFSET] == NO_MATCH_ROW_REFERENCE;
         }
 
         private static int mix(long first, long second)
