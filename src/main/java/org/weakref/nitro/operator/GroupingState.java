@@ -186,6 +186,13 @@ final class GroupingState
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
         if (values.length == 2 && isSingleLongGroupingCandidate(values[0]) && isSingleLongGroupingCandidate(values[1])) {
+            if (Boolean.getBoolean("nitro.experiment.useFlatBigintPairStrategy")) {
+                useFlatGrouping = true;
+                flatGroupingTable = new FlatGroupingTable(
+                        BigintPairFlatKeyLayout.create(values, nullableCompositeKeys),
+                        Math.max(16, values[0].length()));
+                return;
+            }
             useLongPairGrouping = true;
             longPairGroupingTable = new LongPairGroupingTable(Math.max(16, values[0].length()));
             return;
@@ -227,43 +234,53 @@ final class GroupingState
 
     private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
-        if (values.length == 1) {
-            Vector nullVector = nulls[0];
-            for (int position : mask) {
-                if (OperatorVectorSupport.isNull(nullVector, position)) {
-                    result.values()[position] = nullGroup();
-                }
-                else {
-                    long newGroupId = nextGroupId;
-                    long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
-                    if (groupId == newGroupId) {
-                        nextGroupId++;
+        flatGroupingTable.beginBatch(values, nulls);
+        try {
+            if (values.length == 1) {
+                Vector nullVector = nulls[0];
+                for (int position : mask) {
+                    if (OperatorVectorSupport.isNull(nullVector, position)) {
+                        result.values()[position] = nullGroup();
                     }
-                    result.values()[position] = groupId;
+                    else {
+                        long newGroupId = nextGroupId;
+                        long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                        if (groupId == newGroupId) {
+                            nextGroupId++;
+                        }
+                        result.values()[position] = groupId;
+                    }
                 }
+                return;
             }
-            return;
-        }
 
-        for (int position : mask) {
-            long newGroupId = nextGroupId;
-            long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
-            if (groupId == newGroupId) {
-                nextGroupId++;
+            for (int position : mask) {
+                long newGroupId = nextGroupId;
+                long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                if (groupId == newGroupId) {
+                    nextGroupId++;
+                }
+                result.values()[position] = groupId;
             }
-            result.values()[position] = groupId;
+        }
+        finally {
+            flatGroupingTable.endBatch();
         }
     }
 
     private void assignLongGroups(Vector values, Vector nullVector, Mask mask, I64Vector result)
     {
+        // Hoist Vector type dispatch once per batch so the per-position loop body reads
+        // through monomorphic accessor lambdas instead of OperatorVectorSupport's switch.
+        VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
+        VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nullVector);
         for (int position : mask) {
-            if (OperatorVectorSupport.isNull(nullVector, position)) {
+            if (nullValues.value(position)) {
                 result.values()[position] = nullGroup();
                 continue;
             }
 
-            long key = OperatorVectorSupport.longValue(values, position);
+            long key = keyValues.value(position);
             long groupId = longGroups.get(key);
             if (groupId == -1) {
                 groupId = nextGroupId++;

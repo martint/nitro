@@ -69,6 +69,21 @@ final class FlatGroupingTable
         Arrays.fill(recordIndexByGroupId, -1);
     }
 
+    /**
+     * Hook wrapper so callers that drive per-position {@link #assignGroup}/{@link #findGroup} in a
+     * tight loop can declare a batch boundary — lets the underlying {@link FlatKeyLayout} hoist
+     * Vector type resolution and typed accessors once, rather than dispatching on every position.
+     */
+    public void beginBatch(Vector[] values, Vector[] nulls)
+    {
+        layout.beginBatch(values, nulls);
+    }
+
+    public void endBatch()
+    {
+        layout.endBatch();
+    }
+
     public long assignGroup(Vector[] values, Vector[] nulls, int position, long newGroupId)
     {
         long hash = layout.hash(values, nulls, position);

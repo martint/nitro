@@ -286,29 +286,7 @@ public class HashJoinOperator
             preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
         }
 
-        if (joinIndex instanceof LongJoinIndex longJoinIndex && outerJoinColumns.length == 1) {
-            long longProbeStart = System.nanoTime();
-            longJoinIndex.matchRows(currentOuterJoinValues[0], currentOuterJoinNulls[0], preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
-            return;
-        }
-        if (joinIndex instanceof LongPairJoinIndex longPairJoinIndex && outerJoinColumns.length == 2) {
-            longPairJoinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
-            return;
-        }
-        if (joinIndex instanceof LongTripleJoinIndex longTripleJoinIndex && outerJoinColumns.length == 3) {
-            longTripleJoinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
-            return;
-        }
-        long genericProbeStart = System.nanoTime();
-        for (int index = 0; index < preparedOuterCount; index++) {
-            LongList matches = matchesForOuterPosition(preparedOuterPositions[index]);
-            if (matches instanceof SingleLongList singleMatch) {
-                preparedOuterMatches[index] = preparedSingleMatches[index].withValue(singleMatch.getLong(0));
-            }
-            else {
-                preparedOuterMatches[index] = matches;
-            }
-        }
+        joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
     }
 
     private String genericProbeKind()
@@ -1267,6 +1245,31 @@ public class HashJoinOperator
         {
             return matches(values, NO_NULL_STREAMS, position);
         }
+
+        /**
+         * Batched probe entry point. Looks up matches for {@code positionCount} outer rows listed in
+         * {@code positions}, writing results into {@code matches} (which may reuse the supplied
+         * {@code singleMatches} reusable wrappers for single-row matches).
+         *
+         * <p>Implementations should override this to hoist any Vector type dispatch once per call
+         * rather than paying it per position. The default implementation delegates to the
+         * per-position {@link #matches} / {@link #matchesNoNulls} entry points and exists so that
+         * join-index implementations that have not yet been batch-aware continue to work — the
+         * operator always calls this method.
+         */
+        default void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                LongList result = hasNulls ? matches(values, nulls, position) : matchesNoNulls(values, position);
+                if (result instanceof SingleLongList single) {
+                    matches[index] = singleMatches[index].withValue(single.getLong(0));
+                }
+                else {
+                    matches[index] = result;
+                }
+            }
+        }
     }
 
     private static final class LongJoinIndex
@@ -1331,8 +1334,11 @@ public class HashJoinOperator
             return rowsForSlot(findSlot(OperatorVectorSupport.longValue(values[0], position)));
         }
 
-        public void matchRows(Vector values, Vector nulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        @Override
+        public void matchRows(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
+            Vector values = valuesArray[0];
+            Vector nulls = nullsArray == null ? null : nullsArray[0];
             VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
             switch (values) {
                 case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nullValues, positions, positionCount, matches, singleMatches);
@@ -1699,6 +1705,7 @@ public class HashJoinOperator
             return singleMatch.withValue(singleRow);
         }
 
+        @Override
         public void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
@@ -1926,6 +1933,7 @@ public class HashJoinOperator
             return singleMatch.withValue(singleRows[slot]);
         }
 
+        @Override
         public void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);

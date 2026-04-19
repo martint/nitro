@@ -47,6 +47,12 @@ import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SingleBatchOperator;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.PartitionAverageI64WindowFunction;
+import org.weakref.nitro.operator.PartitionOffsetI64WindowFunction;
+import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
+import org.weakref.nitro.operator.RankWindowFunction;
+import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
+import org.weakref.nitro.operator.RunningSumI64WindowFunction;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
@@ -501,8 +507,8 @@ public class TestOperatorBatches
                 new int[] {1},
                 new boolean[] {false},
                 List.of(
-                        new WindowOperator.RunningSumI64WindowFunction(2),
-                        new WindowOperator.RunningMaxI64WindowFunction(2)))) {
+                        new RunningSumI64WindowFunction(2),
+                        new RunningMaxI64WindowFunction(2)))) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 1, 3L, 3L, 3L),
@@ -530,7 +536,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(1)))) {
+                List.of(new PartitionAverageI64WindowFunction(1)))) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 2L, 3L),
@@ -559,7 +565,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionSumI64WindowFunction(1)))) {
+                List.of(new PartitionSumI64WindowFunction(1)))) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 2L, 5L),
@@ -586,7 +592,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionSumI64WindowFunction(1)))) {
+                List.of(new PartitionSumI64WindowFunction(1)))) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 3L, 7L),
@@ -611,7 +617,7 @@ public class TestOperatorBatches
                 new int[0],
                 new int[] {0},
                 new boolean[] {false},
-                List.of(new WindowOperator.RankWindowFunction(new int[] {0}, new boolean[] {false})))) {
+                List.of(new RankWindowFunction(new int[] {0}, new boolean[] {false})))) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, "first-a", 1L),
@@ -636,7 +642,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new int[] {1},
                 new boolean[] {false},
-                List.of(new WindowOperator.RunningSumI64WindowFunction(1)))) {
+                List.of(new RunningSumI64WindowFunction(1)))) {
             int batchCount = 0;
             int rowCount = 0;
             long firstValue = Long.MIN_VALUE;
@@ -903,7 +909,7 @@ public class TestOperatorBatches
                 new int[] {0, 1, 2, 3},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(5)))) {
+                List.of(new PartitionAverageI64WindowFunction(5)))) {
             assertThat(operator(operator)).matchesExactly(expected);
         }
     }
@@ -946,13 +952,13 @@ public class TestOperatorBatches
                         new int[] {0, 1, 2, 3},
                         new int[0],
                         new boolean[0],
-                        List.of(new WindowOperator.PartitionAverageI64WindowFunction(5))),
+                        List.of(new PartitionAverageI64WindowFunction(5))),
                 new int[] {0, 1, 2},
                 new int[] {3, 4},
                 new boolean[] {false, false},
                 List.of(
-                        new WindowOperator.PartitionOffsetI64WindowFunction(5, -1),
-                        new WindowOperator.PartitionOffsetI64WindowFunction(5, 1)))) {
+                        new PartitionOffsetI64WindowFunction(5, -1),
+                        new PartitionOffsetI64WindowFunction(5, 1)))) {
             assertThat(operator(operator)).matchesExactly(expected);
         }
     }
@@ -998,11 +1004,11 @@ public class TestOperatorBatches
                         new int[] {0, 1},
                         new int[0],
                         new boolean[0],
-                        List.of(new WindowOperator.PartitionAverageI64WindowFunction(3))),
+                        List.of(new PartitionAverageI64WindowFunction(3))),
                 new int[] {0},
                 new int[] {1, 2},
                 new boolean[] {false, false},
-                List.of(new WindowOperator.PartitionOffsetI64WindowFunction(3, -1)))) {
+                List.of(new PartitionOffsetI64WindowFunction(3, -1)))) {
             assertThat(operator(operator)).matchesExactly(List.of(
                     row("alpha", 1998L, 12L, 10L, 10L, null),
                     row("alpha", 1999L, 1L, 20L, 25L, 10L),
@@ -1028,7 +1034,7 @@ public class TestOperatorBatches
                 new int[] {0, 1},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(3)))) {
+                List.of(new PartitionAverageI64WindowFunction(3)))) {
             assertThat(operator(operator)).matchesExactly(List.of(
                     row("alpha", 1998L, 12L, 10L, 10L),
                     row("alpha", 1999L, 1L, 20L, 25L),

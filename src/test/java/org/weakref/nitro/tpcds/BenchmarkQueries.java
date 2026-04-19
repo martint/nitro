@@ -50,7 +50,8 @@ public class BenchmarkQueries
     @Setup
     public void setup()
     {
-        tables = TpcdsParquetTables.requiredActual("sf10");
+        // Schema overridable via -Dnitro.tpcds.parquet.schema (defaults to sf10).
+        tables = TpcdsParquetTables.requiredActual();
     }
 
     @Setup(Level.Invocation)

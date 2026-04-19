@@ -40,9 +40,15 @@ final class EquiJoinMatcher
     }
 
     @Override
-    public boolean isCrossJoin()
+    public boolean producesFullCrossProduct()
     {
         return false;
+    }
+
+    @Override
+    public boolean supportsPerPositionEmission()
+    {
+        return true;
     }
 
     @Override

@@ -46,7 +46,8 @@ public class BenchmarkQueries
     public void setup()
     {
         support = new TrinoTpcdsParquetSupport();
-        tables = TpcdsParquetTables.requiredActual("sf10");
+        // Schema overridable via -Dnitro.tpcds.parquet.schema (defaults to sf10).
+        tables = TpcdsParquetTables.requiredActual();
     }
 
     @TearDown

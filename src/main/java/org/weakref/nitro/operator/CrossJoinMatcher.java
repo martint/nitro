@@ -17,9 +17,15 @@ final class CrossJoinMatcher
         implements JoinMatcher
 {
     @Override
-    public boolean isCrossJoin()
+    public boolean producesFullCrossProduct()
     {
         return true;
+    }
+
+    @Override
+    public boolean supportsPerPositionEmission()
+    {
+        return false;
     }
 
     @Override

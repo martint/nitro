@@ -544,12 +544,7 @@ public class GroupedAggregationOperator
                 distinctPositions = new int[mask.selectedCount()];
             }
 
-            int selectedCount = 0;
-            for (int position : mask) {
-                if (distinctKeySet.add(values, nulls, position)) {
-                    distinctPositions[selectedCount++] = position;
-                }
-            }
+            int selectedCount = distinctKeySet.addBatch(values, nulls, mask, distinctPositions);
             return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());
         }
     }

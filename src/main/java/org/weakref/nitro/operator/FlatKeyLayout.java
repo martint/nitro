@@ -19,7 +19,7 @@ import org.weakref.nitro.data.Vector;
 import java.util.Arrays;
 import java.util.Set;
 
-final class FlatKeyLayout
+class FlatKeyLayout
 {
     private final Field[] fields;
     private final int[] inputChannels;
@@ -34,7 +34,7 @@ final class FlatKeyLayout
     private final int fixedRecordSize;
     private final boolean anyVariableWidth;
 
-    private FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
+    FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
         this.fields = fields;
         this.inputChannels = inputChannels;
@@ -103,6 +103,28 @@ final class FlatKeyLayout
     {
         return fields[index];
     }
+
+    /**
+     * Hook called by {@link FlatGroupingTable} / {@link HashJoinOperator.FlatJoinIndex} at the
+     * start of a batch, before a sequence of per-position {@link #hash}/{@link #writeRecord}/
+     * {@link #identicalRecordToInput} calls over the same {@code values}/{@code nulls} arrays.
+     * Specializing subclasses override this to hoist typed accessors (e.g. extract the
+     * {@code long[]} from a flat {@link org.weakref.nitro.data.I64Vector}) so that the per-position
+     * hot methods can read directly without a type dispatch. The architectural rule is that Vector
+     * type checks must be done here, outside the per-position probe loop, and the per-position
+     * methods must stay tight (no dispatch, no branching on Vector shape).
+     *
+     * <p>Default implementation is a no-op; the base {@link #hash}/{@link #writeRecord}/
+     * {@link #identicalRecordToInput} keep their per-position {@link FlatTypeHandler} dispatch for
+     * any layout that hasn't chosen to specialize.
+     */
+    public void beginBatch(Vector[] values, Vector[] nulls) {}
+
+    /**
+     * Hook called by {@link FlatGroupingTable} after a batch completes. Mirror of
+     * {@link #beginBatch}; subclasses release cached references here.
+     */
+    public void endBatch() {}
 
     public long hash(Vector[] values, Vector[] nulls, int position)
     {

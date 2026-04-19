@@ -15,7 +15,20 @@ package org.weakref.nitro.operator;
 
 interface JoinMatcher
 {
-    boolean isCrossJoin();
+    /**
+     * Returns {@code true} when the matcher accepts every outer/inner pair unconditionally. Drives
+     * the nested-loop operator's output shape: a full cross product is emitted in a per-row-over-
+     * all-inner form, while a predicated matcher emits one output row per accepted pair.
+     */
+    boolean producesFullCrossProduct();
+
+    /**
+     * Returns {@code true} when the matcher evaluates outer/inner pairs one at a time and may
+     * therefore benefit from random access to buffered inner batches and from receiving downstream
+     * constraint masks. A full-cross-product matcher has no per-pair selectivity and does not need
+     * either capability.
+     */
+    boolean supportsPerPositionEmission();
 
     boolean matches(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition);
 }

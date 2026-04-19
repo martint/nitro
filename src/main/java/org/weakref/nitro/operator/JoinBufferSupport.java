@@ -27,6 +27,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
@@ -1062,10 +1063,14 @@ final class JoinBufferSupport
     private I64Vector materializeLongs(Vector[] rows)
     {
         I64Vector result = allocator.allocate(allocationContext, I64Vector.class, totalLength(rows), I64Vector::new);
+        long[] target = result.values();
         int outputPosition = 0;
         for (Vector row : rows) {
-            for (int position = 0; position < row.length(); position++) {
-                result.values()[outputPosition++] = OperatorVectorSupport.longValue(row, position);
+            // Hoist Vector type dispatch once per row rather than once per position.
+            VectorAccess.LongValues rowValues = VectorAccess.longValues(row);
+            int rowLength = row.length();
+            for (int position = 0; position < rowLength; position++) {
+                target[outputPosition++] = rowValues.value(position);
             }
         }
         return result;
@@ -1074,10 +1079,13 @@ final class JoinBufferSupport
     private I32Vector materializeInts(Vector[] rows)
     {
         I32Vector result = allocator.allocate(allocationContext, I32Vector.class, totalLength(rows), I32Vector::new);
+        int[] target = result.values();
         int outputPosition = 0;
         for (Vector row : rows) {
-            for (int position = 0; position < row.length(); position++) {
-                result.values()[outputPosition++] = (int) OperatorVectorSupport.longValue(row, position);
+            VectorAccess.LongValues rowValues = VectorAccess.longValues(row);
+            int rowLength = row.length();
+            for (int position = 0; position < rowLength; position++) {
+                target[outputPosition++] = (int) rowValues.value(position);
             }
         }
         return result;
@@ -1086,10 +1094,13 @@ final class JoinBufferSupport
     private BooleanVector materializeBooleans(Vector[] rows)
     {
         BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, totalLength(rows), BooleanVector::new);
+        boolean[] target = result.values();
         int outputPosition = 0;
         for (Vector row : rows) {
-            for (int position = 0; position < row.length(); position++) {
-                result.values()[outputPosition++] = OperatorVectorSupport.booleanValue(row, position);
+            VectorAccess.BooleanValues rowValues = VectorAccess.booleanValues(row);
+            int rowLength = row.length();
+            for (int position = 0; position < rowLength; position++) {
+                target[outputPosition++] = rowValues.value(position);
             }
         }
         return result;
@@ -1098,10 +1109,13 @@ final class JoinBufferSupport
     private F64Vector materializeDoubles(Vector[] rows)
     {
         F64Vector result = allocator.allocate(allocationContext, F64Vector.class, totalLength(rows), F64Vector::new);
+        double[] target = result.values();
         int outputPosition = 0;
         for (Vector row : rows) {
-            for (int position = 0; position < row.length(); position++) {
-                result.values()[outputPosition++] = OperatorVectorSupport.doubleValue(row, position);
+            VectorAccess.DoubleValues rowValues = VectorAccess.doubleValues(row);
+            int rowLength = row.length();
+            for (int position = 0; position < rowLength; position++) {
+                target[outputPosition++] = rowValues.value(position);
             }
         }
         return result;

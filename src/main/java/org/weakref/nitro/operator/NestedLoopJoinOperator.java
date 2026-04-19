@@ -97,7 +97,7 @@ public class NestedLoopJoinOperator
 
     private Mask produceBatch()
     {
-        if (!matcher.isCrossJoin()) {
+        if (!matcher.producesFullCrossProduct()) {
             return produceEquiJoinBatch();
         }
 
@@ -248,7 +248,7 @@ public class NestedLoopJoinOperator
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = matcher.isCrossJoin()
+            outputs[outputIndex] = matcher.producesFullCrossProduct()
                     ? outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, ALLOCATION_CONTEXT)
                     : resultOutput(outputIndex);
         }
@@ -270,7 +270,7 @@ public class NestedLoopJoinOperator
 
     private void loadInnerIfNecessary()
     {
-        bufferedInner.loadAll(inner, BATCH_SIZE, new int[0], !matcher.isCrossJoin() && inner.supportsRetainedBatches());
+        bufferedInner.loadAll(inner, BATCH_SIZE, new int[0], matcher.supportsPerPositionEmission() && inner.supportsRetainedBatches());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
     }
 
@@ -284,7 +284,7 @@ public class NestedLoopJoinOperator
     @Override
     public void constrain(Mask mask)
     {
-        if (!matcher.isCrossJoin()) {
+        if (matcher.supportsPerPositionEmission()) {
             currentOutputMask = mask;
         }
     }

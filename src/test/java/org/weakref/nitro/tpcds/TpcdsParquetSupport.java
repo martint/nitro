@@ -35,6 +35,11 @@ import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.PartitionAverageI64WindowFunction;
+import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
+import org.weakref.nitro.operator.RankWindowFunction;
+import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
+import org.weakref.nitro.operator.RunningSumI64WindowFunction;
 import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
@@ -2020,7 +2025,7 @@ final class TpcdsParquetSupport
                 new int[] {0, 2, 3, 4},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(6)));
+                List.of(new PartitionAverageI64WindowFunction(6)));
         monthlySales = filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(6, 7));
         monthlySales = projectQuery89SortKey(allocator, primitiveRegistry, monthlySales);
         monthlySales = new TopNOperator(allocator, 100, new int[] {8, 3}, new boolean[] {false, false}, monthlySales);
@@ -2036,7 +2041,7 @@ final class TpcdsParquetSupport
                 new int[] {0},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(2)));
+                List.of(new PartitionAverageI64WindowFunction(2)));
         monthlySales = filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(2, 3));
         monthlySales = projectInputs(allocator, primitiveRegistry, monthlySales, 0, 2, 3);
         return new TopNOperator(allocator, 100, new int[] {0, 2, 1}, new boolean[] {false, false, false}, monthlySales);
@@ -2129,7 +2134,7 @@ final class TpcdsParquetSupport
                 new int[] {3},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionSumI64WindowFunction(5)));
+                List.of(new PartitionSumI64WindowFunction(5)));
     }
 
     private static Operator queryRevenueRatioByClassGrouped(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
@@ -2366,8 +2371,8 @@ final class TpcdsParquetSupport
                 new int[] {1},
                 new boolean[] {false},
                 List.of(
-                        new WindowOperator.RunningMaxI64WindowFunction(2),
-                        new WindowOperator.RunningMaxI64WindowFunction(3)));
+                        new RunningMaxI64WindowFunction(2),
+                        new RunningMaxI64WindowFunction(3)));
         joined = filter(allocator, primitiveRegistry, joined, query51CumulativePredicate(4, 5));
         return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
     }
@@ -2381,7 +2386,7 @@ final class TpcdsParquetSupport
                 new int[] {0},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(2)));
+                List.of(new PartitionAverageI64WindowFunction(2)));
         quarterlySales = filter(allocator, primitiveRegistry, quarterlySales, query53QuarterlyDeviationPredicate(2, 3));
         quarterlySales = projectInputs(allocator, primitiveRegistry, quarterlySales, 0, 2, 3);
         return new TopNOperator(allocator, 100, new int[] {2, 1, 0}, new boolean[] {false, false, false}, quarterlySales);
@@ -6475,7 +6480,7 @@ final class TpcdsParquetSupport
                 new int[] {0},
                 new int[] {1},
                 new boolean[] {false},
-                List.of(new WindowOperator.RunningSumI64WindowFunction(2)));
+                List.of(new RunningSumI64WindowFunction(2)));
         return projectInputs(allocator, primitiveRegistry, running, 0, 1, 3);
     }
 
@@ -8413,7 +8418,7 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2, 3},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(5))));
+                List.of(new PartitionAverageI64WindowFunction(5))));
         return profiled("q57.project.current", projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 7, 5, 6));
     }
 
@@ -8953,7 +8958,7 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2, 3},
                 new int[] {4, 5},
                 new boolean[] {false, false},
-                List.of(new WindowOperator.RankWindowFunction(new int[] {4, 5}, new boolean[] {false, false})));
+                List.of(new RankWindowFunction(new int[] {4, 5}, new boolean[] {false, false})));
     }
 
     private static Operator projectQuery31Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int countyIndex, int storeQuarterOneIndex, int storeQuarterTwoIndex, int storeQuarterThreeIndex, int webQuarterOneIndex, int webQuarterTwoIndex, int webQuarterThreeIndex)
@@ -9889,7 +9894,7 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2, 3},
                 new int[0],
                 new boolean[0],
-                List.of(new WindowOperator.PartitionAverageI64WindowFunction(6)));
+                List.of(new PartitionAverageI64WindowFunction(6)));
         return projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 8, 6, 7);
     }
 
@@ -10033,14 +10038,14 @@ final class TpcdsParquetSupport
                 new int[0],
                 new int[] {1},
                 new boolean[] {false},
-                List.of(new WindowOperator.RankWindowFunction(new int[] {1}, new boolean[] {false})));
+                List.of(new RankWindowFunction(new int[] {1}, new boolean[] {false})));
         ranked = new WindowOperator(
                 allocator,
                 ranked,
                 new int[0],
                 new int[] {2},
                 new boolean[] {false},
-                List.of(new WindowOperator.RankWindowFunction(new int[] {2}, new boolean[] {false})));
+                List.of(new RankWindowFunction(new int[] {2}, new boolean[] {false})));
         ranked = filter(allocator, primitiveRegistry, ranked, query49TopRankPredicate(3, 4));
 
         Variable channelName = new Variable(0);
