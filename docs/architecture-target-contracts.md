@@ -168,6 +168,86 @@ while insertion into long-lived grouping or join indexes must materialize
 owned key objects. That keeps steady-state probes allocation-light without
 letting borrowed batch storage leak into retained operator state.
 
+### Genericity and hot-loop discipline
+
+Two rules cross-cut every operator, accumulator, and function in Nitro. They
+are the discipline that separates "Core as an execution substrate" from
+"Core with query-shape-specific optimizations baked in." Both rules have
+been violated repeatedly during local optimization work and are documented
+here so those violations can be recognized and rejected on review.
+
+**Rule 1 — Operators are generic over the operations they execute.** An
+operator must not branch on the identity of a pluggable it was handed. That
+means:
+
+- no `instanceof` against concrete `Accumulator`, `PrimitiveFunction`,
+  `JoinMatcher`, `JoinIndex`, or `RunningWindowFunction` subclasses inside
+  the operator body
+- no string or enum matching on function/aggregate names
+- no boolean flags on pluggable interfaces (`isCrossJoin()`,
+  `isCommutative()`, etc.) that drive a separate operator code path —
+  the strategy-specific behavior belongs behind a polymorphic method on
+  the pluggable itself
+- no "fast paths" inside the operator keyed on which specific pluggables
+  were passed (e.g. a fused min/max path inside `AggregationOperator`)
+
+Operation-specific fast paths and fusions are legitimate optimizations,
+but they belong in the pluggable layer or in the planner. The operator
+stays generic; the pluggable decides how fast its own work is. If a
+fusion requires seeing two pluggables together, the planner fuses them
+into a single pluggable instance before the operator ever runs. The
+operator's only job is to drive the batch/mask/stream loop and call
+interface methods.
+
+The same rule applies to the evaluator and to shared helpers. If a helper
+is tempted to branch on `instanceof AddI64` or on a specific accumulator
+subclass, the branch belongs in the pluggable's own implementation of a
+generic hook, not in the shared helper.
+
+**Rule 2 — Vector type dispatch must be hoisted out of per-position
+loops.** A per-position loop (`for (int position : mask)`,
+`for (int i = 0; i < length; i++)`, or any equivalent per-row shape) must
+not call a method that switches on the concrete `Vector` subtype. In
+practice that means:
+
+- no `OperatorVectorSupport.longValue(vector, position)` /
+  `booleanValue(...)` / `doubleValue(...)` / `isNull(...)` inside a
+  per-position body — resolve the vector once outside the loop via
+  `VectorAccess.longValues(vector)` and call the returned accessor in
+  the loop
+- no `instanceof Vector-subclass` or `switch (vector)` inside a
+  per-position body
+- no `FlatTypeHandler.hashInput(Vector, int)` /
+  `writeFlat(Vector, int, …)` / `identicalFlatToInput(…, Vector, int)`
+  in a per-position body — those signatures take the vector per call
+  and therefore re-check its type on every row. Hoist via a batch hook
+  that resolves typed accessors once and hands tight per-position
+  closures into the inner loop.
+
+Concretely, any interface that is expected to be called per position
+should also expose a `beginBatch(...)` / `endBatch()` pair that lets
+implementations resolve vector types once per batch and cache typed
+accessors. The per-position methods then read from those cached
+accessors directly. This is the same discipline the `Encoding-aware
+dispatch` section applies to scalar functions, generalized: **select
+the specialized path outside the loop, then execute over concrete
+typed state inside it.**
+
+Fixed-shape specializations (such as dedicated 2-BIGINT or 3-BIGINT
+grouping tables) are an acceptable way to realize Rule 2 in places
+where the generic mechanism cannot yet match their performance. But
+the specialization itself must still obey Rule 1: a specialization is
+a pluggable, not a branch inside the operator body.
+
+Both rules are load-bearing. Violating Rule 1 means every new operation
+forces operator edits and cross-cutting regressions. Violating Rule 2
+puts polymorphic dispatch on the tightest hot paths in the engine and
+defeats the JIT's ability to inline encoded-vector reads. The two rules
+reinforce each other: an operator that dispatches per-position on
+operation identity also tends to end up dispatching per-position on
+vector type, because both decisions are being deferred to the inner
+loop instead of resolved at the batch boundary.
+
 ### The evaluator owns scalar semantics
 
 The evaluator is responsible for:
