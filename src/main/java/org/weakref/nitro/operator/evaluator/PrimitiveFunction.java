@@ -43,7 +43,10 @@ public interface PrimitiveFunction
 
     default Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
-        return requestedOutputStreams.contains(Stream.VALUES) ? VALUES_INPUT_STREAMS : NO_INPUT_STREAMS;
+        // Functions commonly derive their nulls and errors streams from the input values (e.g. divide-by-zero
+        // detection), so request the input values whenever any output stream is requested. Functions that can
+        // produce a requested output without the input values should override this to narrow the request.
+        return requestedOutputStreams.isEmpty() ? NO_INPUT_STREAMS : VALUES_INPUT_STREAMS;
     }
 
     default Set<Stream> requiredMaskInputStreams(int inputIndex)
