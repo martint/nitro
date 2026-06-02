@@ -219,9 +219,11 @@ public final class PlanEvaluator
             Reference argument = call.arguments().get(index);
             inputs.add(evaluateArgument(argument, mask, function.requiredInputStreams(index, requestedStreams), false));
         }
-        Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
-        if (peeledResult != null) {
-            return completeRequestedStreams(requestedStreams, peeledResult, mask);
+        if (mask.all()) {
+            Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
+            if (peeledResult != null) {
+                return completeRequestedStreams(requestedStreams, peeledResult, mask);
+            }
         }
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
         return completeRequestedStreams(requestedStreams, result, mask);
@@ -661,7 +663,14 @@ public final class PlanEvaluator
         for (Reference output : outputs) {
             java.util.EnumSet<Stream> streams = projected.computeIfAbsent(output.producer(), _ -> java.util.EnumSet.noneOf(Stream.class));
             streams.add(output.stream());
-            if (output.stream() == Stream.VALUES) {
+        }
+        // When a producer exposes only its VALUES stream, request the companion NULLS and ERRORS
+        // streams alongside it so null/error information propagates with the value. When a producer
+        // is projected through multiple explicit stream references (e.g. VALUES and ERRORS as
+        // separate outputs), the projection is treated as fully explicit and companions are not
+        // auto-added, so each requested sibling stream is memoized together exactly as specified.
+        for (java.util.EnumSet<Stream> streams : projected.values()) {
+            if (streams.equals(java.util.EnumSet.of(Stream.VALUES))) {
                 streams.add(Stream.NULLS);
                 streams.add(Stream.ERRORS);
             }
@@ -1011,13 +1020,13 @@ public final class PlanEvaluator
             throw new IllegalArgumentException("VALUES stream not produced for request");
         }
         if (wantsNulls && !completed.has(Stream.NULLS)) {
-            // Synthesise a 1-run RLE of false (O(1)) rather than a flat BooleanVector of batch size
-            // (O(n)). Downstream scalar functions can detect the all-false shape and short-circuit
-            // their null-propagation loop (see VectorAccess.isAllFalseNulls).
-            completed = completed.with(Stream.NULLS, fillBoolean(false, length));
+            // Synthesise a flat all-false BooleanVector. VectorAccess.isAllFalseNulls still recognises
+            // this shape, so downstream scalar functions keep short-circuiting their null-propagation
+            // loop on null-free inputs.
+            completed = completed.with(Stream.NULLS, fillFalseBoolean(null, mask, length));
         }
         if (wantsErrors && !completed.has(Stream.ERRORS)) {
-            completed = completed.with(Stream.ERRORS, fillBoolean(false, length));
+            completed = completed.with(Stream.ERRORS, fillFalseBoolean(null, mask, length));
         }
         return completed;
     }
