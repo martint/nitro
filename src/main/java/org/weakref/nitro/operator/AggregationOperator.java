@@ -101,7 +101,7 @@ public class AggregationOperator
             for (int i = 0; i < state.length; i++) {
                 state[i] = aggregations.get(i).allocate(allocator, ALLOCATION_CONTEXT, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
-                reusableResults[i] = aggregations.get(i).result(1, state[i], reusableResults[i], allocator, ALLOCATION_CONTEXT);
+                reusableResults[i] = aggregations.get(i).result(0, state[i], reusableResults[i], allocator, ALLOCATION_CONTEXT);
                 batchState.results[i] = reusableResults[i];
             }
 
@@ -118,7 +118,7 @@ public class AggregationOperator
                     for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
                         Accumulator accumulator = aggregations.get(aggregation);
                         accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
-                        reusableResults[aggregation] = accumulator.result(1, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
+                        reusableResults[aggregation] = accumulator.result(0, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
                         batchState.results[aggregation] = reusableResults[aggregation];
                     }
                 }
