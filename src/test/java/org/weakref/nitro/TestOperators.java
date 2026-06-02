@@ -70,7 +70,6 @@ import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;

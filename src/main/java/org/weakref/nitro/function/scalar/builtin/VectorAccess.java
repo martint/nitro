@@ -217,5 +217,4 @@ public final class VectorAccess
     }
 
     public record BinarySlice(byte[] data, int offset, int length) {}
-
 }

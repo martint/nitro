@@ -898,7 +898,6 @@ public final class Utf8BinaryDispatch
         return requireBinaryValues(functionName, vector.values());
     }
 
-
     private static BinaryVector requireBinaryRle(String functionName, RleVector vector)
     {
         return requireBinaryValues(functionName, vector.values());

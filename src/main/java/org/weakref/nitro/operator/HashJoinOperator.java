@@ -18,23 +18,17 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -106,6 +100,7 @@ public class HashJoinOperator
     private boolean done;
     private int preparedInnerRunCount = -1;
     private String profileName;
+
     public static <T> T withMaterializationProfile(MaterializationProfile profile, Supplier<T> supplier)
     {
         MaterializationProfile previous = CURRENT_MATERIALIZATION_PROFILE.get();
@@ -334,11 +329,7 @@ public class HashJoinOperator
         if (!currentOuterJoinHasNulls) {
             return joinIndex.matchesNoNulls(currentOuterJoinValues, outerPosition);
         }
-        try {
-            return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, outerPosition);
-        }
-        finally {
-        }
+        return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, outerPosition);
     }
 
     private void loadInnerIfNecessary()
@@ -619,7 +610,6 @@ public class HashJoinOperator
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
     }
 
-
     private Streams tryWrapMultiRunInnerBooleanSideStreams(int innerOutputIndex)
     {
         if (currentOutputCount == 0 || preparedInnerRunCount <= 1) {
@@ -867,7 +857,6 @@ public class HashJoinOperator
         constrainRetainedInnerBatch(innerBatchIndex, innerBatch, logicalPosition);
         return withSyntheticNulls(existing, buffers.copySinglePositionFresh(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
     }
-
 
     private Streams copyNullInnerPosition(Streams existing, Streams schema, int size, int outputPosition)
     {
@@ -1157,7 +1146,6 @@ public class HashJoinOperator
     {
         return allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
     }
-
 
     private BooleanVector setBooleanPosition(Vector existing, int size, int outputPosition, boolean value)
     {

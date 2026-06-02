@@ -246,7 +246,6 @@ public final class SumStateVector
         }
     }
 
-
     private static int chunkCount(int length)
     {
         return (length + CHUNK_MASK) >> CHUNK_SHIFT;

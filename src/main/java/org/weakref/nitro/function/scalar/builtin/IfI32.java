@@ -15,10 +15,8 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;

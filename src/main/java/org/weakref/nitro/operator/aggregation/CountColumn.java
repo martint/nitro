@@ -18,9 +18,9 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
 import java.util.Arrays;
 

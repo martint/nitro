@@ -179,5 +179,4 @@ public final class ConcatUtf8
             default -> false;
         };
     }
-
 }

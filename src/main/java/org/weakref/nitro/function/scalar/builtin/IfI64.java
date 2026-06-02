@@ -236,5 +236,4 @@ public final class IfI64
         }
         return VectorAccess.booleanValues(nulls).value(position);
     }
-
 }

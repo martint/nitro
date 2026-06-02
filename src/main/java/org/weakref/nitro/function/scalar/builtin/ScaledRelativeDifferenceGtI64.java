@@ -308,5 +308,4 @@ public final class ScaledRelativeDifferenceGtI64
             default -> false;
         };
     }
-
 }

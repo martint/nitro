@@ -20,6 +20,8 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.util.ArrayList;
 import java.util.List;
 
+import static java.lang.Math.toIntExact;
+
 final class BufferedJoinInput
 {
     private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 500_000);
@@ -137,7 +139,7 @@ final class BufferedJoinInput
             return;
         }
 
-        int size = Math.toIntExact(rowCount);
+        int size = toIntExact(rowCount);
         Streams[] columns = new Streams[columnCount];
         int outputStart = 0;
         for (InnerBatch batch : batches) {
@@ -356,6 +358,5 @@ final class BufferedJoinInput
         {
             return positions;
         }
-
     }
 }

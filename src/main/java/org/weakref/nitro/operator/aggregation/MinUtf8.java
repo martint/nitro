@@ -230,6 +230,7 @@ public class MinUtf8
             default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
         };
     }
+
     private static int compare(byte[] left, int leftOffset, int leftLength, byte[] right, int rightOffset, int rightLength)
     {
         int minLength = Math.min(leftLength, rightLength);

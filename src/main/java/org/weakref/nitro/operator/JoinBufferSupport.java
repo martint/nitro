@@ -527,8 +527,7 @@ final class JoinBufferSupport
             case BinaryVector _ -> {
                 return source.copySelectedPositionsInto(allocator, allocationContext, existing, sourcePositions, outputStart, size);
             }
-            default -> {
-            }
+            default -> {}
         }
         return source.copySelectedPositionsInto(allocator, allocationContext, existing, sourcePositions, outputStart, size);
     }
@@ -1352,7 +1351,6 @@ final class JoinBufferSupport
         System.arraycopy(existing.values(), 0, grown.values(), 0, existing.length());
         return grown;
     }
-
 
     private F64Vector ensureDoubleCapacity(F64Vector existing, int size)
     {

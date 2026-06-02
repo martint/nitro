@@ -14,15 +14,11 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 public final class WindowOperator

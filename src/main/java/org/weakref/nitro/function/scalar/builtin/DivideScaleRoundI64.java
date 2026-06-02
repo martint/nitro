@@ -120,5 +120,4 @@ public final class DivideScaleRoundI64
             default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
         };
     }
-
 }
