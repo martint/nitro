@@ -25,7 +25,7 @@ import java.util.List;
 public class TopNRankingOperator
         implements Operator
 {
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.topnranking.maxBatchRows", 10_000);
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.topnranking.maxBatchRows", 4_096);
 
     private final Allocator.Context allocationContext = new Allocator.Context("TopNRankingOperator");
 

@@ -24,7 +24,7 @@ import java.util.List;
 public final class WindowOperator
         implements Operator
 {
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.window.maxBatchRows", 10_000);
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.window.maxBatchRows", 4_096);
 
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("WindowOperator");
