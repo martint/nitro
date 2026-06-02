@@ -1,7 +1,7 @@
 package org.weakref.nitro.tools;
 
 import io.trino.Session;
-import io.trino.plugin.hive.TestingHivePlugin;
+import io.trino.plugin.hive.HivePlugin;
 import io.trino.plugin.tpcds.TpcdsPlugin;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
@@ -39,7 +39,7 @@ public final class TpcdsParquetDumper
             queryRunner.installPlugin(new TpcdsPlugin());
             queryRunner.createCatalog("tpcds", "tpcds");
 
-            queryRunner.installPlugin(new TestingHivePlugin(arguments.outputRoot()));
+            queryRunner.installPlugin(new HivePlugin());
             queryRunner.createCatalog("hive", "hive", Map.of(
                     "hive.metastore", "file",
                     "hive.metastore.catalog.dir", arguments.outputRoot().toAbsolutePath().toString(),
