@@ -554,12 +554,28 @@ public class Allocator
 
     public long currentBytes(Context context)
     {
-        return state(context).stats().current();
+        // Each Context carries a unique scopeId, so allocation routing keys on the exact instance.
+        // Profiling queries, however, identify a context by its (stable) name: aggregate the live
+        // bytes across every scope that shares the requested name so callers can probe usage with a
+        // freshly constructed Context("name") without having to hold the original instance.
+        long current = 0;
+        for (Map.Entry<Context, ContextState> entry : states.entrySet()) {
+            if (entry.getKey().name().equals(context.name())) {
+                current += entry.getValue().stats().current();
+            }
+        }
+        return current;
     }
 
     public long peakBytes(Context context)
     {
-        return state(context).stats().peak();
+        long peak = 0;
+        for (Map.Entry<Context, ContextState> entry : states.entrySet()) {
+            if (entry.getKey().name().equals(context.name())) {
+                peak += entry.getValue().stats().peak();
+            }
+        }
+        return peak;
     }
 
     public void release(Context context)
