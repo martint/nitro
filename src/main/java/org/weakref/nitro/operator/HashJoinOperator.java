@@ -590,8 +590,15 @@ public class HashJoinOperator
         Streams result = null;
         boolean exposeNulls = probeOuterJoin || innerOutputStreams(innerOutputIndex).contains(Stream.NULLS);
         Streams nullInnerSchema = null;
-        for (int index = 0; index < currentOutputMask.count(); index++) {
-            int outputPosition = currentOutputMask.position(index);
+        // The constraint mask can select no rows while a downstream consumer still borrows this column
+        // and indexes a sample position (for example ProjectOperator probes one row to discover which
+        // streams a column exposes). Outer-side columns are always materialized over the full output
+        // range, so an inner-side column must do the same when its constraint is empty; otherwise the
+        // borrowed column has length zero and indexing the sample position throws.
+        boolean materializeFullRange = currentOutputMask.none();
+        int positionCount = materializeFullRange ? currentOutputCount : currentOutputMask.count();
+        for (int index = 0; index < positionCount; index++) {
+            int outputPosition = materializeFullRange ? index : currentOutputMask.position(index);
             long rowReference = outputInnerRows[outputPosition];
             if (rowReference == NO_MATCH_ROW_REFERENCE) {
                 if (nullInnerSchema == null) {
