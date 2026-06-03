@@ -233,7 +233,7 @@ final class TpcdsParquetSupport
                 0);
         joined = new HashJoinOperator(allocator, joined, 8, scalarMonthSequence, 0);
         joined = projectInputs(allocator, primitiveRegistry, joined, 6, 10, 11);
-        joined = new HashJoinOperator(allocator, joined, 2, categoryAggregates, 0, true);
+        joined = new HashJoinOperator(allocator, joined, 2, categoryAggregates, 0);
         joined = filter(allocator, primitiveRegistry, joined, query06ThresholdPredicate(1, 4, 5));
         joined = projectInputs(allocator, primitiveRegistry, joined, 0);
 
@@ -2999,7 +2999,7 @@ final class TpcdsParquetSupport
         Operator customerTotalReturn = query30CustomerTotalReturn(allocator, primitiveRegistry, tables);
         Operator stateAverages = query30StateAverageReturns(allocator, primitiveRegistry, tables);
 
-        Operator joined = new HashJoinOperator(allocator, customerTotalReturn, 1, stateAverages, 0, true);
+        Operator joined = new HashJoinOperator(allocator, customerTotalReturn, 1, stateAverages, 0);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
@@ -3139,7 +3139,7 @@ final class TpcdsParquetSupport
         discounted = projectInputs(allocator, primitiveRegistry, discounted, 1, 2);
 
         Operator itemAverages = query32ItemAverageDiscounts(allocator, primitiveRegistry, tables);
-        Operator joined = new HashJoinOperator(allocator, discounted, 0, itemAverages, 0, true);
+        Operator joined = new HashJoinOperator(allocator, discounted, 0, itemAverages, 0);
         joined = filter(allocator, primitiveRegistry, joined, query92DiscountThresholdPredicate(1, 3));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
         return new AggregationOperator(
@@ -3391,7 +3391,7 @@ final class TpcdsParquetSupport
         Operator customerTotalReturn = query81CustomerTotalReturn(allocator, primitiveRegistry, tables);
         Operator stateAverages = query81StateAverageReturns(allocator, primitiveRegistry, tables);
 
-        Operator joined = new HashJoinOperator(allocator, customerTotalReturn, 1, stateAverages, 0, true);
+        Operator joined = new HashJoinOperator(allocator, customerTotalReturn, 1, stateAverages, 0);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
@@ -3666,7 +3666,7 @@ final class TpcdsParquetSupport
         discounted = projectInputs(allocator, primitiveRegistry, discounted, 1, 2);
 
         Operator itemAverages = query92ItemAverageDiscounts(allocator, primitiveRegistry, tables);
-        Operator joined = new HashJoinOperator(allocator, discounted, 0, itemAverages, 0, true);
+        Operator joined = new HashJoinOperator(allocator, discounted, 0, itemAverages, 0);
         joined = filter(allocator, primitiveRegistry, joined, query92DiscountThresholdPredicate(1, 3));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
         return new AggregationOperator(
