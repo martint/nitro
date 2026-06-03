@@ -270,7 +270,7 @@ public class NestedLoopJoinOperator
 
     private void loadInnerIfNecessary()
     {
-        bufferedInner.loadAll(inner, BATCH_SIZE, new int[0], matcher.supportsPerPositionEmission() && inner.supportsRetainedBatches());
+        bufferedInner.loadAll(inner, BATCH_SIZE, new int[0], matcher.supportsPerPositionEmission() && inner.supportsRetainedBatches(), matcher.supportsPerPositionEmission() && inner.supportsConstrainedReborrow());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
     }
 

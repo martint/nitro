@@ -70,6 +70,22 @@ public interface Operator
     }
 
     /**
+     * Returns whether the most recent batch can be re-borrowed after a {@link #constrain(Mask)}
+     * narrows it, yielding values for the constrained positions.
+     * <p>
+     * This is weaker than {@link #supportsRetainedBatches()}: an operator that recomputes its
+     * output on demand (for example a projection) can satisfy a constrained re-borrow even though it
+     * does not let batches outlive an advance. Leaf sources whose underlying reader advances
+     * irreversibly (for example a Parquet scan) must return {@code false}. Downstream operators use
+     * this to decide whether non-key payload columns can be materialized lazily from a single
+     * retained source batch instead of being eagerly copied during build.
+     */
+    default boolean supportsConstrainedReborrow()
+    {
+        return supportsRetainedBatches();
+    }
+
+    /**
      * Releases any operator-owned resources.
      */
     void close();

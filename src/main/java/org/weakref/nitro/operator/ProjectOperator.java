@@ -123,6 +123,14 @@ public class ProjectOperator
         return false;
     }
 
+    @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // A projection recomputes its outputs on demand after constrain(), so it can satisfy a
+        // constrained re-borrow as long as its own source can.
+        return source.supportsConstrainedReborrow();
+    }
+
     private org.weakref.nitro.data.Vector evaluateOutput(BatchState batchState, Reference outputReference, Stream stream)
     {
         if (!exposedStreams(outputReference.stream()).contains(stream)) {

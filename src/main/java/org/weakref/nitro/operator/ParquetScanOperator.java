@@ -185,6 +185,15 @@ public final class ParquetScanOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // The underlying Parquet reader advances irreversibly: once it moves to the next block, an
+        // earlier block's columns can no longer be re-borrowed. Downstream operators must therefore
+        // materialize required columns eagerly rather than deferring them past an advance.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         try {

@@ -186,6 +186,14 @@ public final class HardwoodParquetScanOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // The underlying Parquet reader advances irreversibly: an earlier batch's columns cannot be
+        // re-borrowed after the reader moves on, so downstream operators must materialize eagerly.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         closeCurrentBatch();

@@ -113,6 +113,14 @@ public class MarkDistinctOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // The output adds a distinct-marker column relative to the source, so it cannot be
+        // re-borrowed by source position after a downstream constrain.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         if (currentBatchState != null) {

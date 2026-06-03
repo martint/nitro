@@ -80,6 +80,14 @@ public class EnforceSingleRowOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // constrain() is a no-op, so a downstream constrain + re-borrow would re-read the full,
+        // differently-indexed output. Cannot satisfy a constrained re-borrow.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         source.close();

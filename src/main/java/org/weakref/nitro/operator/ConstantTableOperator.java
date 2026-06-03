@@ -82,6 +82,14 @@ public class ConstantTableOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // The in-memory rows stay valid for the operator's lifetime and are re-supplied on demand,
+        // indexed by absolute source position, so a constrained re-borrow yields the requested rows.
+        return true;
+    }
+
+    @Override
     public void close()
     {
         allocator.release(ALLOCATION_CONTEXT);

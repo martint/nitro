@@ -73,9 +73,10 @@ public class TopNOperator
         // TODO: flat memory priority queue
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, (left, right) -> state.compareSlots(left.position(), right.position()));
 
+        boolean deferSchemaBorrow = source.supportsConstrainedReborrow();
         while (source.hasNext()) {
             Batch batch = source.next();
-            state.captureSchema(batch);
+            state.captureSchema(batch, deferSchemaBorrow);
             Mask mask = batch.borrowMask();
 
             for (int position : mask) {
@@ -97,7 +98,13 @@ public class TopNOperator
             // Non-retained sources may invalidate the current batch as soon as the
             // caller probes for the next one, so materialize any deferred payload
             // columns before the next hasNext()/next() cycle can advance upstream.
-            if (!source.supportsRetainedBatches()) {
+            // The final batch is exempt only when the source can satisfy a constrained re-borrow
+            // (it stays valid until close() and its payload columns can remain deferred until
+            // output is requested). Sources whose reader advances irreversibly are always flushed.
+            // supportsConstrainedReborrow() is checked first because probing hasNext() on an
+            // advancing source (e.g. a Parquet scan) would itself invalidate the current batch.
+            boolean canDeferFinalBatch = source.supportsConstrainedReborrow() && !source.hasNext();
+            if (!source.supportsRetainedBatches() && !canDeferFinalBatch) {
                 state.flushPendingBatch(batch, queue.stream()
                         .map(Entry::position)
                         .toList());

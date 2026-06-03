@@ -117,6 +117,13 @@ public class FilterOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // Filtering only narrows the active mask; re-borrow safety is whatever the source provides.
+        return source.supportsConstrainedReborrow();
+    }
+
+    @Override
     public void close()
     {
         if (currentBatchState != null) {

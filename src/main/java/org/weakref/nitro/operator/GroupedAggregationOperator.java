@@ -333,6 +333,14 @@ public class GroupedAggregationOperator
         return true;
     }
 
+    @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // Output is fully computed and constrain() is a no-op, so a downstream constrain + re-borrow
+        // would re-read the full, differently-indexed output. Cannot satisfy a constrained re-borrow.
+        return false;
+    }
+
     private Output resultOutput(int output, BatchState batchState)
     {
         if (output < groupedResults.length) {

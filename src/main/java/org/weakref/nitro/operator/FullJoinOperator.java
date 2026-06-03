@@ -106,6 +106,14 @@ public final class FullJoinOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // Output is reshaped relative to either input and constrain() is a no-op, so a downstream
+        // constrain + re-borrow cannot be satisfied by source position.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         outer.close();

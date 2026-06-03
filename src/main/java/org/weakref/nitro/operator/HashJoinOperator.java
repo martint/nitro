@@ -41,7 +41,7 @@ public class HashJoinOperator
         void record(String operatorName, int outputIndex, Streams streams, int rowCount, long nanos);
     }
 
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
@@ -98,6 +98,8 @@ public class HashJoinOperator
     private int preparedOuterCount;
     private int preparedOuterIndex;
     private boolean done;
+    private boolean outerConstrained;
+    private final boolean outerSupportsReborrow;
     private int preparedInnerRunCount = -1;
     private String profileName;
 
@@ -145,6 +147,7 @@ public class HashJoinOperator
         this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
+        this.outerSupportsReborrow = outer.supportsConstrainedReborrow();
         this.outerOutputCount = outer.outputCount();
         this.innerOutputCount = inner.outputCount();
         this.totalOutputCount = outerOutputCount + innerOutputCount;
@@ -180,6 +183,7 @@ public class HashJoinOperator
         long afterProduceBatch = System.nanoTime();
         preparedInnerRunCount = -1;
         currentOutputMask = batchMask;
+        outerConstrained = false;
         currentOuterDictionaryIds = null;
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[totalOutputCount];
@@ -299,7 +303,15 @@ public class HashJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
-            outputBuffer.captureOuterSchema(currentOuterBatch);
+            // When the outer can satisfy a constrained re-borrow, skip eager outer schema capture:
+            // it borrows a representative VALUES vector for every outer column, forcing lazy
+            // projected payloads to materialize. The schema is then derived on demand in
+            // outputSchema() from currentOuterBatch. When the outer's reader advances irreversibly,
+            // capture the schema eagerly now while the batch is live (deferring past the advance
+            // would read an already-advanced source).
+            if (!outerSupportsReborrow) {
+                outputBuffer.captureOuterSchema(currentOuterBatch);
+            }
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 cacheOuterJoinInputs();
@@ -335,7 +347,7 @@ public class HashJoinOperator
     private void loadInnerIfNecessary()
     {
         int batchCountBefore = bufferedInner.batches().size();
-        bufferedInner.loadAll(inner, BATCH_SIZE, innerJoinColumns, inner.supportsRetainedBatches());
+        bufferedInner.loadAll(inner, BATCH_SIZE, innerJoinColumns, inner.supportsRetainedBatches(), !inner.supportsRetainedBatches() && inner.supportsConstrainedReborrow());
         ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
         for (int batchIndex = batchCountBefore; batchIndex < bufferedInner.batches().size(); batchIndex++) {
@@ -523,20 +535,42 @@ public class HashJoinOperator
     private Streams materializeOuterOutput(int outputIndex)
     {
         Output sourceOutput = currentOuterBatch.output(outputIndex);
-        if (sourceOutput.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES))));
+        if (!outerSupportsReborrow) {
+            // Outer cannot satisfy a constrained re-borrow (e.g. a Parquet-backed subplan or a join
+            // result): keep the baseline dictionary-wrap, which borrows the live outer column once
+            // and indexes it by the matched output positions. No constraint is pushed and no deferral
+            // happens past the source's advance.
+            if (sourceOutput.isValuesOnly()) {
+                return Streams.ofValues(allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES))));
+            }
+            Streams.Builder streams = Streams.builder();
+            if (sourceOutput.hasValues()) {
+                streams.put(Stream.VALUES, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES))));
+            }
+            if (sourceOutput.hasNulls() && !sourceOutput.isKnownAllFalse(Stream.NULLS)) {
+                streams.put(Stream.NULLS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.NULLS))));
+            }
+            if (sourceOutput.hasErrors() && !sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
+                streams.put(Stream.ERRORS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.ERRORS))));
+            }
+            return streams.build();
         }
-        Streams.Builder streams = Streams.builder();
-        if (sourceOutput.hasValues()) {
-            streams.put(Stream.VALUES, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES))));
+
+        // Outer can satisfy a constrained re-borrow: narrow it to the matched rows so a lazy
+        // projected payload computes only the rows the join emits, then flat-copy the matched
+        // positions into a dense vector indexable directly by output position. Materialization stays
+        // lazy: it only runs when an outer stream is borrowed.
+        constrainOuterIfNecessary();
+        if (currentOutputMask.all()) {
+            return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
         }
-        if (sourceOutput.hasNulls() && !sourceOutput.isKnownAllFalse(Stream.NULLS)) {
-            streams.put(Stream.NULLS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.NULLS))));
+
+        Streams result = null;
+        for (int index = 0; index < currentOutputMask.count(); index++) {
+            int outputPosition = currentOutputMask.position(index);
+            result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
         }
-        if (sourceOutput.hasErrors() && !sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
-            streams.put(Stream.ERRORS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.ERRORS))));
-        }
-        return streams.build();
+        return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
     }
 
     private int[] outerDictionaryIds()
@@ -552,6 +586,58 @@ public class HashJoinOperator
         // wrapComposedDictionary mutates the passed ids array through nested encodings, so pass a per-column copy
         int[] ids = Arrays.copyOf(outerDictionaryIds(), currentOutputCount);
         return wrapComposedDictionary(ids, source);
+    }
+
+    private void constrainOuterIfNecessary()
+    {
+        // The first time an outer column of this output batch is materialized, narrow the outer
+        // operator to exactly the outer positions that survived the join for this batch. This lets a
+        // lazy outer subplan (a deferred projected payload) compute only the rows the join emits.
+        // Only push a constraint to an outer that can satisfy a constrained re-borrow; a source
+        // whose reader advances irreversibly (a Parquet scan) must not be constrained and re-borrowed
+        // - for those, the flat copy above borrows the live batch column once without deferral.
+        if (!outerSupportsReborrow || outerConstrained || currentOuterBatch == null || !currentOuterBatchFullyConsumed()) {
+            return;
+        }
+        outerConstrained = true;
+        outer.constrain(matchedOuterMask());
+    }
+
+    /**
+     * Whether this output batch is the last one drawing from the current outer batch — i.e. the
+     * outer batch's probe positions are fully exhausted, so no later output batch will reference
+     * {@code currentOuterBatch}. Only then is it safe to push a narrowing constraint to the outer:
+     * its borrowed columns would otherwise be shared by later output batches drawing from the same
+     * outer batch.
+     */
+    private boolean currentOuterBatchFullyConsumed()
+    {
+        return outerRemaining == 0
+                && !currentOuterPositionReady
+                && preparedOuterIndex >= preparedOuterCount
+                && currentOuterMaskIndex >= currentOuterMask.count();
+    }
+
+    private Mask matchedOuterMask()
+    {
+        int totalPositions = currentOuterMask.size();
+        if (currentOutputCount == 0 || currentOutputMask.none()) {
+            return allocator.allocateSparseMask(allocationContext, new int[0], 0, totalPositions);
+        }
+
+        int count = currentOutputMask.count();
+        int[] positions = new int[Math.min(count, currentOuterMask.count())];
+        int selectedCount = 0;
+        int previous = -1;
+        for (int index = 0; index < count; index++) {
+            int outputPosition = currentOutputMask.position(index);
+            int outerPosition = outputOuterPositions[outputPosition];
+            if (outerPosition != previous) {
+                positions[selectedCount++] = outerPosition;
+                previous = outerPosition;
+            }
+        }
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, totalPositions);
     }
 
     private static Set<Stream> sideStreams(Output output)
@@ -694,26 +780,15 @@ public class HashJoinOperator
 
         int innerBatchIndex = outputInnerRunBatchIndexes[0];
         BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
-        if (!innerBatch.retained()) {
-            Streams output = innerBatch.columns()[innerOutputIndex];
-            if (output == null || !output.hasValues()) {
-                return null;
-            }
-
-            if (output.isValuesOnly()) {
-                return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), output.values())));
-            }
-
-            Streams.Builder wrapped = Streams.builder();
-            int[] wrappedPositions = Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount);
-            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.values())));
-            if (output.hasNulls()) {
-                wrapped.put(Stream.NULLS, allocator.adopt(allocationContext, DictionaryVector.wrap(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.get(Stream.NULLS))));
-            }
-            if (output.hasErrors()) {
-                wrapped.put(Stream.ERRORS, allocator.adopt(allocationContext, DictionaryVector.wrap(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.get(Stream.ERRORS))));
-            }
-            return wrapped.build();
+        if (innerBatch.deferred() || !innerBatch.retained()) {
+            // Deferred batches must materialize lazily by constraining the source to the matched
+            // positions and re-borrowing; non-retained (compacted) batches are flat-copied so the
+            // inner VALUES are a dense vector indexable directly by output position. Both fall
+            // through to the per-position copy path (copyInnerPositions): for deferred batches it
+            // constrains the retained batch before borrowing (keeping projected payloads deferred);
+            // for non-retained batches it flat-copies without any constrain. Genuinely retained
+            // batches keep the dictionary-wrap shortcut below.
+            return null;
         }
 
         return tryWrapRetainedInnerOutput(innerOutputIndex, innerBatch);

@@ -119,6 +119,14 @@ public final class WindowOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // Output is fully computed and constrain() is a no-op, so a downstream constrain + re-borrow
+        // would re-read the full, differently-indexed output. Cannot satisfy a constrained re-borrow.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         source.close();

@@ -54,10 +54,24 @@ final class BufferedJoinInput
 
     public void loadAll(Operator source, int batchSize)
     {
-        loadAll(source, batchSize, new int[0], false);
+        loadAll(source, batchSize, new int[0], false, false);
     }
 
     public void loadAll(Operator source, int batchSize, int[] eagerColumns, boolean retainBatches)
+    {
+        loadAll(source, batchSize, eagerColumns, retainBatches, false);
+    }
+
+    /**
+     * Loads the source's batches.
+     *
+     * @param deferSingleBatch when {@code true} and a non-retained source yields exactly one batch,
+     *     the batch is kept as a <em>deferred</em> {@link InnerBatch} so that non-key payload columns
+     *     are materialized lazily by constraining the batch to the matched source positions and
+     *     re-borrowing, rather than eagerly compacting every column at load time. Only set this when
+     *     the source reports {@link Operator#supportsConstrainedReborrow()}.
+     */
+    public void loadAll(Operator source, int batchSize, int[] eagerColumns, boolean retainBatches, boolean deferSingleBatch)
     {
         if (loaded) {
             return;
@@ -73,12 +87,37 @@ final class BufferedJoinInput
         Streams[] columns = new Streams[columnCount];
         int outputPosition = 0;
 
+        boolean first = true;
         while (source.hasNext()) {
             Batch batch = source.next();
-            captureSchema(batch, schema);
             captureStreams(batch, outputStreams);
             captureKnownAllFalse(batch, outputKnownAllFalseFlags, outputKnownAllFalseInitialized);
             Mask mask = batch.borrowMask();
+
+            // Single-batch defer fast path: when the source yields exactly one batch and supports a
+            // constrained re-borrow, retain it as a deferred batch. Build borrows only the join-key
+            // columns; non-key payload columns are materialized lazily (constrain + re-borrow) only
+            // when a downstream output stream is actually requested. Genuinely retained sources keep
+            // using loadRetained above; this path serves sources whose batch does not outlive an
+            // advance but can still satisfy a constrained re-borrow before the next advance.
+            if (deferSingleBatch && first && !source.hasNext() && batches.isEmpty() && outputPosition == 0) {
+                // Do not capture a representative VALUES schema here: borrowing a payload column's
+                // VALUES would force the very materialization we are trying to defer. The schema is
+                // derived lazily from the retained batch in outputSchema() if an empty/null result
+                // ever needs it.
+                if (firstRetainedBatch == null) {
+                    firstRetainedBatch = batch;
+                }
+                if (!mask.none()) {
+                    int[] positions = positions(mask);
+                    rowCount += positions.length;
+                    batches.add(InnerBatch.deferred(batch, positions));
+                }
+                coalesceSmallBatches();
+                return;
+            }
+            first = false;
+            captureSchema(batch, schema);
             int maskOffset = 0;
             while (maskOffset < mask.count()) {
                 int copied = Math.min(mask.count() - maskOffset, batchSize - outputPosition);
@@ -316,17 +355,30 @@ final class BufferedJoinInput
             this(columns, length, null, null);
         }
 
+        private final boolean deferred;
+
         private InnerBatch(Streams[] columns, int length, Batch retainedBatch, int[] positions)
+        {
+            this(columns, length, retainedBatch, positions, false);
+        }
+
+        private InnerBatch(Streams[] columns, int length, Batch retainedBatch, int[] positions, boolean deferred)
         {
             this.columns = columns;
             this.length = length;
             this.retainedBatch = retainedBatch;
             this.positions = positions;
+            this.deferred = deferred;
         }
 
         public static InnerBatch retained(Batch batch, int[] positions)
         {
             return new InnerBatch(null, positions.length, batch, positions);
+        }
+
+        public static InnerBatch deferred(Batch batch, int[] positions)
+        {
+            return new InnerBatch(null, positions.length, batch, positions, true);
         }
 
         public Streams[] columns()
@@ -342,6 +394,11 @@ final class BufferedJoinInput
         public boolean retained()
         {
             return retainedBatch != null;
+        }
+
+        public boolean deferred()
+        {
+            return deferred;
         }
 
         public Batch retainedBatch()

@@ -82,7 +82,7 @@ final class TopNState
         pendingPositions = Arrays.copyOf(pendingPositions, newCapacity);
     }
 
-    public void captureSchema(Batch batch)
+    public void captureSchema(Batch batch, boolean deferSchemaBorrow)
     {
         if (fallbackBatch == null) {
             fallbackBatch = batch;
@@ -92,7 +92,16 @@ final class TopNState
                 Set<Stream> outputStreams = batch.output(outputIndex).streams();
                 exposedStreams[outputIndex] = outputStreams.isEmpty() ? Set.of() : EnumSet.copyOf(outputStreams);
             }
-            if (schema[outputIndex] == null) {
+            // When the source can satisfy a constrained re-borrow, defer borrowing a representative
+            // schema vector: borrowing a column's VALUES would force materialization of lazy
+            // payloads during the build scan. The schema is then derived lazily when output is
+            // requested - from the retained slot rows for non-empty results (ensureMaterializedSchema)
+            // or from the fallback batch for empty results (ensureEmptySchema).
+            //
+            // When the source cannot be re-borrowed (e.g. a Parquet scan whose reader advances
+            // irreversibly), capture the schema eagerly now while the batch is still live, since the
+            // lazy fallback paths could otherwise borrow it after the reader has moved on.
+            if (!deferSchemaBorrow && schema[outputIndex] == null) {
                 try {
                     schema[outputIndex] = buffers.borrowStreams(batch.output(outputIndex));
                 }

@@ -156,6 +156,14 @@ public class SemiJoinOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // The output adds a semi-join match column relative to the outer input, so it cannot be
+        // re-borrowed by source position after a downstream constrain.
+        return false;
+    }
+
+    @Override
     public void close()
     {
         if (currentBatchState != null) {

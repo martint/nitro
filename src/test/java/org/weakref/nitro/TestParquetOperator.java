@@ -41,9 +41,12 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
+import org.weakref.nitro.operator.HashJoinOperator;
+import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.Streams;
@@ -319,6 +322,62 @@ public class TestParquetOperator
                             Row.row(12L, 0L, null),
                             Row.row(13L, 1L, 103L),
                             Row.row(14L, 0L, 104L)));
+        }
+    }
+
+    @Test
+    void testHashJoinLateMaterializesProjectedInnerPayloadOverMultiBatchParquet()
+            throws IOException
+    {
+        // Regression guard for deferred payload materialization over an irreversible source.
+        // The inner side is a projection over a multi-file (irreversibly advancing) Trino Parquet
+        // scan. Such a source reports supportsConstrainedReborrow() == false, so the join must NOT
+        // defer the projected payload past the scan's advance - it must materialize eagerly. This
+        // exercises the exact shape that previously crashed real Parquet joins with an
+        // ArrayIndexOutOfBoundsException and confirms it now materializes correctly without crashing.
+        java.nio.file.Path first = writeParquetFile("join-inner-1.parquet", false, List.of(
+                new ParquetRow(1, true, 10L),
+                new ParquetRow(2, true, 20L)));
+        java.nio.file.Path second = writeParquetFile("join-inner-2.parquet", false, List.of(
+                new ParquetRow(3, true, 30L),
+                new ParquetRow(4, true, 40L)));
+        java.nio.file.Path third = writeParquetFile("join-inner-3.parquet", false, List.of(
+                new ParquetRow(5, true, 50L),
+                new ParquetRow(6, true, 60L)));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Allocator allocator = new Allocator();
+
+        // Project a squared payload that is only computed when the projected output is borrowed.
+        Variable squaredPayload = new Variable(0);
+        EvaluationPlan projectPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        squaredPayload,
+                        new Call("multiply", List.of(
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(squaredPayload, Stream.VALUES)));
+
+        Operator inner = new ProjectOperator(
+                allocator,
+                projectPlan,
+                primitiveRegistry,
+                new TrinoParquetScanOperator(allocator, List.of(first, second, third), List.of("x", "flag", "maybe")));
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(Row.row(2L), Row.row(5L))),
+                0,
+                inner,
+                0)) {
+            // outer key, inner key, inner squared payload
+            assertThat(operator(join))
+                    .matchesExactly(List.of(
+                            Row.row(2L, 2L, 400L),
+                            Row.row(5L, 5L, 2_500L)));
         }
     }
 

@@ -63,6 +63,14 @@ public final class SingleBatchOperator
     }
 
     @Override
+    public boolean supportsConstrainedReborrow()
+    {
+        // The single in-memory batch stays valid for the operator's lifetime, and its outputs are
+        // re-supplied on demand, so a constrained re-borrow yields the requested positions.
+        return true;
+    }
+
+    @Override
     public void close() {}
 
     public Mask currentMask()
