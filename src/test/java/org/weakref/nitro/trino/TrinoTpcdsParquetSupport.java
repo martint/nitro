@@ -3151,7 +3151,7 @@ public final class TrinoTpcdsParquetSupport
                                 tables,
                                 "date_dim",
                                 List.of("d_date_sk", "d_year"),
-                                Optional.empty(),
+                                Optional.of(equal(1, 1998, dateTypes.get(1))),
                                 identityProjections(dateTypes),
                                 dateTypes,
                                 queryName + ".scan.date_dim",
@@ -7105,7 +7105,7 @@ public final class TrinoTpcdsParquetSupport
         return appendPlan(
                 sales,
                 List.of(
-                        namedHashJoinStep(queryName + ".join.returns", new HashJoinSpec(77_100 + Math.abs(queryName.hashCode() % 100), groupedTypes, List.of(0), returns, groupedTypes, List.of(0))),
+                        namedHashJoinStep(queryName + ".join.returns", new HashJoinSpec(77_100 + Math.abs(queryName.hashCode() % 100), groupedTypes, List.of(0), returns, groupedTypes, List.of(0), JoinType.LEFT)),
                         namedFactoryStep(queryName + ".project.output", filterAndProjectFactory(
                                 77_200 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
