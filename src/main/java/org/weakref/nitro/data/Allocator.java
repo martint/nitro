@@ -606,6 +606,24 @@ public class Allocator
         }
     }
 
+    /**
+     * Drops every vector and mask currently tracked as in-use for {@code context} without returning
+     * them to the context's reuse pools. Unlike {@link #releaseIfPresent(Context)}, the freed buffers
+     * become eligible for garbage collection instead of being re-handed-out by a later borrow.
+     * <p>
+     * This is the correct teardown for contexts whose tracked buffers double as produced result
+     * vectors that may still be referenced by a consumer once the producing evaluation is torn down
+     * (for example, scalar primitives whose output buffer is handed back to a {@code PlanEvaluator}).
+     * Pooling such buffers would let a subsequent borrow overwrite a value the consumer still holds.
+     */
+    public void discardAllIfPresent(Context context)
+    {
+        ContextState state = states.get(context);
+        if (state != null) {
+            state.discardAll();
+        }
+    }
+
     public Mask transfer(Context context, Mask mask)
     {
         transferMask(mask, context);
@@ -941,6 +959,19 @@ public class Allocator
                 while (bucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
                     bucket.removeFirst();
                 }
+                mask.clearTrackedInUse();
+                mask = next;
+            }
+            inUseMasksHead = null;
+            inUseVectors.clear();
+            stats.release();
+        }
+
+        public void discardAll()
+        {
+            Mask mask = inUseMasksHead;
+            while (mask != null) {
+                Mask next = mask.trackedNext();
                 mask.clearTrackedInUse();
                 mask = next;
             }

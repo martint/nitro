@@ -150,13 +150,20 @@ public final class PlanEvaluator
     {
         memoizedMasks.clear();
         memoizedStreams.clear();
+        // Drop, rather than pool, every buffer produced during this evaluation cycle. These contexts
+        // hold the result vectors handed back to callers (e.g. projected scalar outputs, literal RLEs,
+        // mask scratch). A produced result can still be referenced by a consumer once the evaluation
+        // is reset for the next constrain()/re-evaluation pass; returning such a buffer to a reuse pool
+        // would let a subsequent borrow overwrite a value the consumer still holds, silently aliasing
+        // independent results. Discarding leaves the buffers to GC, which is the only lifetime that is
+        // provably safe here.
         for (Allocator.Context context : primitiveAllocationContexts) {
-            allocator.releaseIfPresent(context);
+            allocator.discardAllIfPresent(context);
         }
         for (Allocator.Context context : executionContext.allocationContexts()) {
-            allocator.releaseIfPresent(context);
+            allocator.discardAllIfPresent(context);
         }
-        allocator.releaseIfPresent(allocationContext);
+        allocator.discardAllIfPresent(allocationContext);
     }
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)

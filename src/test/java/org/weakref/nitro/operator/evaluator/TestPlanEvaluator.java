@@ -87,6 +87,58 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testTwoIndependentAddColumnsDoNotAliasBuffersAcrossReset()
+    {
+        // Two independent `add` results computed by the same primitive (AddI64) share AddI64's static
+        // allocation context and therefore its vector pool. ProjectOperator reads outputs lazily: it
+        // materializes one column, then re-evaluates the plan after a constrain()/reset() before
+        // reading the other. If the still-referenced buffer of the first result is returned to the
+        // pool by reset() and re-borrowed for the second result, both columns alias and report the
+        // same values. This reproduces that lifecycle without TPC-DS data.
+        PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
+        Variable first = new Variable(0);
+        Variable second = new Variable(1);
+        Reference firstValues = new Reference(first, Stream.VALUES);
+        Reference secondValues = new Reference(second, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(first, new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(second, new Call("add", List.of(
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES))), AllMask.ALL)),
+                List.of(firstValues, secondValues),
+                Map.of(
+                        firstValues, new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE),
+                        secondValues, new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3, 4}),
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30, 40}),
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300, 400}),
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {1000, 2000, 3000, 4000}))), new Allocator());
+
+        // Materialize the first column and hold its result, as a downstream consumer would after the
+        // ProjectOperator hands out the column's vector.
+        I64Vector firstResult = (I64Vector) evaluator.evaluate(firstValues, Mask.all(4)).get(Stream.VALUES);
+        assertThat(firstResult.values()).containsExactly(11L, 22L, 33L, 44L);
+
+        // A constrain()/reset() cycle, as ProjectOperator performs when a downstream operator pushes
+        // a narrower mask. reset() returns the AddI64 buffers to the pool, including firstResult's
+        // buffer, even though the downstream consumer still holds firstResult.
+        evaluator.reset();
+
+        // The second column is re-evaluated after the reset. Its add re-borrows from the AddI64 pool;
+        // if it re-borrows firstResult's buffer it overwrites the value the consumer still holds.
+        I64Vector secondResult = (I64Vector) evaluator.evaluate(secondValues, Mask.all(4)).get(Stream.VALUES);
+        assertThat(secondResult.values()).containsExactly(1100L, 2200L, 3300L, 4400L);
+
+        // firstResult must still hold its own values, not the second column's.
+        assertThat(firstResult.values()).containsExactly(11L, 22L, 33L, 44L);
+    }
+
+    @Test
     void testEvaluatesNullI64Function()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
