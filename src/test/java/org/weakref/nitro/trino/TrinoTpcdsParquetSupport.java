@@ -1351,13 +1351,90 @@ public final class TrinoTpcdsParquetSupport
 
     private PipelinePlan query40Plan(TpcdsParquetTables tables)
     {
+        java.time.LocalDate cutoffDate = java.time.LocalDate.of(2000, 3, 11);
         List<Type> outputTypes = query40OutputTypes(tables);
-        return new PipelinePlan(
-                new UnionPipelineSource(
-                        List.of(
-                                query40SalesContributionPlan(tables, "q40.sales"),
-                                query40ReturnContributionPlan(tables, "q40.returns")),
-                        "q40.union.contributions"),
+
+        List<String> factColumns = List.of("cs_order_number", "cs_item_sk", "cs_warehouse_sk", "cs_sold_date_sk", "cs_sales_price");
+        List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", factColumns);
+        List<Type> returnTypes = tableColumnTypes(tables, "catalog_returns", List.of("cr_order_number", "cr_item_sk", "cr_refunded_cash"));
+        List<Type> warehouseTypes = tableColumnTypes(tables, "warehouse", List.of("w_warehouse_sk", "w_state"));
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_current_price", "i_item_id"));
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_date"));
+
+        // TPC-DS Q40 is a single catalog_sales scan LEFT-OUTER joined to catalog_returns, with the net
+        // contribution computed as cs_sales_price - coalesce(cr_refunded_cash, 0). This matches the
+        // canonical (single-pass) plan that the Nitro harness assembles.
+        PipelinePlan returns = relationPlan(
+                tables,
+                "catalog_returns",
+                List.of("cr_order_number", "cr_item_sk", "cr_refunded_cash"),
+                Optional.empty(),
+                identityProjections(returnTypes),
+                returnTypes,
+                "q40.scan.returns",
+                "q40.sink.returns");
+        PipelinePlan warehouses = relationPlan(
+                tables,
+                "warehouse",
+                List.of("w_warehouse_sk", "w_state"),
+                Optional.empty(),
+                identityProjections(warehouseTypes),
+                warehouseTypes,
+                "q40.scan.warehouse",
+                "q40.sink.warehouse");
+        PipelinePlan items = relationPlan(
+                tables,
+                "item",
+                List.of("i_item_sk", "i_current_price", "i_item_id"),
+                Optional.of(betweenInclusive(field(1, itemTypes.get(1)), constant(99L, itemTypes.get(1)), constant(149L, itemTypes.get(1)), itemTypes.get(1))),
+                List.of(field(0, itemTypes.get(0)), field(2, itemTypes.get(2))),
+                List.of(itemTypes.get(0), itemTypes.get(2)),
+                "q40.scan.item",
+                "q40.sink.item");
+        PipelinePlan dates = relationPlan(
+                tables,
+                "date_dim",
+                List.of("d_date_sk", "d_date"),
+                Optional.of(betweenInclusive(
+                        field(1, dateTypes.get(1)),
+                        constant(cutoffDate.minusDays(30).toEpochDay(), dateTypes.get(1)),
+                        constant(cutoffDate.plusDays(30).toEpochDay(), dateTypes.get(1)),
+                        dateTypes.get(1))),
+                identityProjections(dateTypes),
+                dateTypes,
+                "q40.scan.date_dim",
+                "q40.sink.date_dim");
+
+        // cs_sales_price - coalesce(cr_refunded_cash, 0), both scaled to cents.
+        RowExpression contribution = subtract(
+                scaledCents(field(4, factTypes.get(4)), factTypes.get(4)),
+                coalesce(scaledCents(field(7, returnTypes.get(2)), returnTypes.get(2)), constant(0L, BIGINT), BIGINT),
+                BIGINT);
+
+        PipelinePlan contributions = appendPlan(
+                relationPlan(
+                        tables,
+                        "catalog_sales",
+                        factColumns,
+                        Optional.empty(),
+                        identityProjections(factTypes),
+                        factTypes,
+                        "q40.scan.sales",
+                        "q40.sink.sales"),
+                List.of(
+                        namedHashJoinStep("q40.join.returns", new HashJoinSpec(40_0, factTypes, List.of(0, 1), returns, returnTypes, List.of(0, 1), JoinType.LEFT)),
+                        namedHashJoinStep("q40.join.warehouse", new HashJoinSpec(40_1, concatTypes(factTypes, returnTypes), List.of(2), warehouses, warehouseTypes, List.of(0))),
+                        namedHashJoinStep("q40.join.item", new HashJoinSpec(40_2, concatTypes(concatTypes(factTypes, returnTypes), warehouseTypes), List.of(1), items, List.of(itemTypes.get(0), itemTypes.get(2)), List.of(0))),
+                        namedHashJoinStep("q40.join.date_dim", new HashJoinSpec(40_3, concatTypes(concatTypes(concatTypes(factTypes, returnTypes), warehouseTypes), List.of(itemTypes.get(0), itemTypes.get(2))), List.of(3), dates, dateTypes, List.of(0))),
+                        namedFactoryStep("q40.project.contribution", filterAndProjectFactory(
+                                40_4,
+                                Optional.empty(),
+                                query40ContributionProjections(9, 11, 13, warehouseTypes.get(1), itemTypes.get(2), dateTypes.get(1), contribution, cutoffDate.toEpochDay()),
+                                outputTypes))),
+                "q40.sink.contributions");
+
+        return appendPlan(
+                contributions,
                 List.of(
                         namedFactoryStep("q40.group.final", hashAggregationFactory(
                                 40_20,
@@ -1372,153 +1449,6 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0, 1),
                                 List.of(ASC_NULLS_LAST, ASC_NULLS_LAST)))),
                 "q40.sink.final");
-    }
-
-    private PipelinePlan query40SalesContributionPlan(TpcdsParquetTables tables, String queryName)
-    {
-        java.time.LocalDate cutoffDate = java.time.LocalDate.of(2000, 3, 11);
-        List<String> factColumns = List.of("cs_order_number", "cs_item_sk", "cs_warehouse_sk", "cs_sold_date_sk", "cs_sales_price");
-        List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", factColumns);
-        List<Type> warehouseTypes = tableColumnTypes(tables, "warehouse", List.of("w_warehouse_sk", "w_state"));
-        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_current_price", "i_item_id"));
-        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_date"));
-        List<Type> outputTypes = query40OutputTypes(tables);
-
-        PipelinePlan warehouses = relationPlan(
-                tables,
-                "warehouse",
-                List.of("w_warehouse_sk", "w_state"),
-                Optional.empty(),
-                identityProjections(warehouseTypes),
-                warehouseTypes,
-                queryName + ".scan.warehouse",
-                queryName + ".sink.warehouse");
-        PipelinePlan items = relationPlan(
-                tables,
-                "item",
-                List.of("i_item_sk", "i_current_price", "i_item_id"),
-                Optional.of(betweenInclusive(field(1, itemTypes.get(1)), constant(99L, itemTypes.get(1)), constant(149L, itemTypes.get(1)), itemTypes.get(1))),
-                List.of(field(0, itemTypes.get(0)), field(2, itemTypes.get(2))),
-                List.of(itemTypes.get(0), itemTypes.get(2)),
-                queryName + ".scan.item",
-                queryName + ".sink.item");
-        PipelinePlan dates = relationPlan(
-                tables,
-                "date_dim",
-                List.of("d_date_sk", "d_date"),
-                Optional.of(betweenInclusive(
-                        field(1, dateTypes.get(1)),
-                        constant(cutoffDate.minusDays(30).toEpochDay(), dateTypes.get(1)),
-                        constant(cutoffDate.plusDays(30).toEpochDay(), dateTypes.get(1)),
-                        dateTypes.get(1))),
-                identityProjections(dateTypes),
-                dateTypes,
-                queryName + ".scan.date_dim",
-                queryName + ".sink.date_dim");
-
-        return appendPlan(
-                relationPlan(
-                        tables,
-                        "catalog_sales",
-                        factColumns,
-                        Optional.empty(),
-                        identityProjections(factTypes),
-                        factTypes,
-                        queryName + ".scan.sales",
-                        queryName + ".sink.sales"),
-                List.of(
-                        namedHashJoinStep(queryName + ".join.warehouse", new HashJoinSpec(40_0 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(2), warehouses, warehouseTypes, List.of(0))),
-                        namedHashJoinStep(queryName + ".join.item", new HashJoinSpec(40_100 + Math.abs(queryName.hashCode() % 100), concatTypes(factTypes, warehouseTypes), List.of(1), items, List.of(itemTypes.get(0), itemTypes.get(2)), List.of(0))),
-                        namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(40_200 + Math.abs(queryName.hashCode() % 100), concatTypes(concatTypes(factTypes, warehouseTypes), List.of(itemTypes.get(0), itemTypes.get(2))), List.of(3), dates, dateTypes, List.of(0))),
-                        namedFactoryStep(queryName + ".project.contribution", filterAndProjectFactory(
-                                40_300 + Math.abs(queryName.hashCode() % 100),
-                                Optional.empty(),
-                                query40ContributionProjections(6, 8, 10, warehouseTypes.get(1), itemTypes.get(2), dateTypes.get(1), scaledCents(field(4, factTypes.get(4)), factTypes.get(4)), cutoffDate.toEpochDay()),
-                                outputTypes))),
-                queryName + ".sink.final");
-    }
-
-    private PipelinePlan query40ReturnContributionPlan(TpcdsParquetTables tables, String queryName)
-    {
-        java.time.LocalDate cutoffDate = java.time.LocalDate.of(2000, 3, 11);
-        List<String> factColumns = List.of("cs_order_number", "cs_item_sk", "cs_warehouse_sk", "cs_sold_date_sk");
-        List<Type> factTypes = tableColumnTypes(tables, "catalog_sales", factColumns);
-        List<Type> returnTypes = tableColumnTypes(tables, "catalog_returns", List.of("cr_order_number", "cr_item_sk", "cr_refunded_cash"));
-        List<Type> warehouseTypes = tableColumnTypes(tables, "warehouse", List.of("w_warehouse_sk", "w_state"));
-        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_current_price", "i_item_id"));
-        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_date"));
-        List<Type> outputTypes = query40OutputTypes(tables);
-
-        PipelinePlan returns = relationPlan(
-                tables,
-                "catalog_returns",
-                List.of("cr_order_number", "cr_item_sk", "cr_refunded_cash"),
-                Optional.empty(),
-                identityProjections(returnTypes),
-                returnTypes,
-                queryName + ".scan.returns",
-                queryName + ".sink.returns");
-        PipelinePlan warehouses = relationPlan(
-                tables,
-                "warehouse",
-                List.of("w_warehouse_sk", "w_state"),
-                Optional.empty(),
-                identityProjections(warehouseTypes),
-                warehouseTypes,
-                queryName + ".scan.warehouse",
-                queryName + ".sink.warehouse");
-        PipelinePlan items = relationPlan(
-                tables,
-                "item",
-                List.of("i_item_sk", "i_current_price", "i_item_id"),
-                Optional.of(betweenInclusive(field(1, itemTypes.get(1)), constant(99L, itemTypes.get(1)), constant(149L, itemTypes.get(1)), itemTypes.get(1))),
-                List.of(field(0, itemTypes.get(0)), field(2, itemTypes.get(2))),
-                List.of(itemTypes.get(0), itemTypes.get(2)),
-                queryName + ".scan.item",
-                queryName + ".sink.item");
-        PipelinePlan dates = relationPlan(
-                tables,
-                "date_dim",
-                List.of("d_date_sk", "d_date"),
-                Optional.of(betweenInclusive(
-                        field(1, dateTypes.get(1)),
-                        constant(cutoffDate.minusDays(30).toEpochDay(), dateTypes.get(1)),
-                        constant(cutoffDate.plusDays(30).toEpochDay(), dateTypes.get(1)),
-                        dateTypes.get(1))),
-                identityProjections(dateTypes),
-                dateTypes,
-                queryName + ".scan.date_dim",
-                queryName + ".sink.date_dim");
-
-        return appendPlan(
-                relationPlan(
-                        tables,
-                        "catalog_sales",
-                        factColumns,
-                        Optional.empty(),
-                        identityProjections(factTypes),
-                        factTypes,
-                        queryName + ".scan.sales",
-                        queryName + ".sink.sales"),
-                List.of(
-                        namedHashJoinStep(queryName + ".join.returns", new HashJoinSpec(40_400 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(0, 1), returns, returnTypes, List.of(0, 1))),
-                        namedHashJoinStep(queryName + ".join.warehouse", new HashJoinSpec(40_500 + Math.abs(queryName.hashCode() % 100), concatTypes(factTypes, returnTypes), List.of(2), warehouses, warehouseTypes, List.of(0))),
-                        namedHashJoinStep(queryName + ".join.item", new HashJoinSpec(40_600 + Math.abs(queryName.hashCode() % 100), concatTypes(concatTypes(factTypes, returnTypes), warehouseTypes), List.of(1), items, List.of(itemTypes.get(0), itemTypes.get(2)), List.of(0))),
-                        namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(40_700 + Math.abs(queryName.hashCode() % 100), concatTypes(concatTypes(concatTypes(factTypes, returnTypes), warehouseTypes), List.of(itemTypes.get(0), itemTypes.get(2))), List.of(3), dates, dateTypes, List.of(0))),
-                        namedFactoryStep(queryName + ".project.contribution", filterAndProjectFactory(
-                                40_800 + Math.abs(queryName.hashCode() % 100),
-                                Optional.empty(),
-                                query40ContributionProjections(
-                                        8,
-                                        10,
-                                        12,
-                                        warehouseTypes.get(1),
-                                        itemTypes.get(2),
-                                        dateTypes.get(1),
-                                        subtract(constant(0L, BIGINT), scaledCents(field(6, returnTypes.get(2)), returnTypes.get(2)), BIGINT),
-                                        cutoffDate.toEpochDay()),
-                                outputTypes))),
-                queryName + ".sink.final");
     }
 
     private List<RowExpression> query40ContributionProjections(int stateIndex, int itemIdIndex, int dateIndex, Type stateType, Type itemIdType, Type dateType, RowExpression contribution, long cutoffDateEpochDay)
@@ -2928,28 +2858,37 @@ public final class TrinoTpcdsParquetSupport
         int operatorOffset = query75OperatorOffset(queryName);
         List<Type> baseTypes = query75BaseSalesTypes(tables, salesTable);
         List<Type> yearlyTypes = query75YearlySalesTypes(tables);
-        PipelinePlan positive = appendPlan(
-                query75BaseSalesPlan(tables, queryName + ".positive", salesTable, soldDateColumn, itemColumn, orderColumn, quantityColumn, salesAmountColumn),
-                List.of(namedFactoryStep(queryName + ".project.positive", filterAndProjectFactory(
-                        75_100 + operatorOffset,
-                        Optional.empty(),
-                        List.of(field(0, baseTypes.get(0)), field(1, baseTypes.get(1)), field(2, baseTypes.get(2)), field(3, baseTypes.get(3)), field(4, baseTypes.get(4)), field(7, BIGINT), field(8, BIGINT)),
-                        yearlyTypes))),
-                queryName + ".sink.positive",
-                yearlyTypes);
-        PipelinePlan negative = appendPlan(
-                query75BaseSalesPlan(tables, queryName + ".negative", salesTable, soldDateColumn, itemColumn, orderColumn, quantityColumn, salesAmountColumn),
+        List<Type> returnTypes = tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn));
+
+        // TPC-DS Q75 is a single sales scan LEFT-OUTER joined to its returns table on (item, order),
+        // with net quantity = quantity - coalesce(return_quantity, 0) and net amount = sales -
+        // coalesce(return_amount, 0). This matches the canonical (single-pass) plan that the Nitro
+        // harness assembles.
+        // base sales layout: 0=year 1=brand_id 2=class_id 3=category_id 4=manufact_id
+        //                    5=order_number 6=item_sk 7=quantity 8=sales_amount(cents)
+        // after LEFT join returns: 9=ret_item 10=ret_order 11=ret_quantity 12=ret_amount
+        RowExpression netQuantity = subtract(
+                field(7, baseTypes.get(7)),
+                coalesce(cast(field(11, returnTypes.get(2)), returnTypes.get(2), BIGINT), constant(0L, BIGINT), BIGINT),
+                BIGINT);
+        RowExpression netAmount = subtract(
+                field(8, baseTypes.get(8)),
+                coalesce(scaledCents(field(12, returnTypes.get(3)), returnTypes.get(3)), constant(0L, BIGINT), BIGINT),
+                BIGINT);
+
+        PipelinePlan channel = appendPlan(
+                query75BaseSalesPlan(tables, queryName, salesTable, soldDateColumn, itemColumn, orderColumn, quantityColumn, salesAmountColumn),
                 List.of(
                         namedHashJoinStep(queryName + ".join.returns", new HashJoinSpec(75_110 + operatorOffset, baseTypes, List.of(6, 5), relationPlan(
                                 tables,
                                 returnsTable,
                                 List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn),
                                 Optional.empty(),
-                                identityProjections(tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn))),
-                                tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)),
+                                identityProjections(returnTypes),
+                                returnTypes,
                                 queryName + ".scan.returns",
-                                queryName + ".sink.returns"), tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)), List.of(1, 0))),
-                        namedFactoryStep(queryName + ".project.negative", filterAndProjectFactory(
+                                queryName + ".sink.returns"), returnTypes, List.of(0, 1), JoinType.LEFT)),
+                        namedFactoryStep(queryName + ".project.net", filterAndProjectFactory(
                                 75_120 + operatorOffset,
                                 Optional.empty(),
                                 List.of(
@@ -2958,13 +2897,13 @@ public final class TrinoTpcdsParquetSupport
                                         field(2, baseTypes.get(2)),
                                         field(3, baseTypes.get(3)),
                                         field(4, baseTypes.get(4)),
-                                        subtract(constant(0L, BIGINT), cast(field(11, tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)).get(2)), tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)).get(2), BIGINT), BIGINT),
-                                        subtract(constant(0L, BIGINT), scaledCents(field(12, tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)).get(3)), tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)).get(3)), BIGINT)),
+                                        netQuantity,
+                                        netAmount),
                                 yearlyTypes))),
-                queryName + ".sink.negative",
+                queryName + ".sink.net",
                 yearlyTypes);
-        return new PipelinePlan(
-                new UnionPipelineSource(List.of(positive, negative), queryName + ".union.channel"),
+        return appendPlan(
+                channel,
                 List.of(namedFactoryStep(queryName + ".group.channel", hashAggregationFactory(
                         75_130 + operatorOffset,
                         yearlyTypes.subList(0, 5),
@@ -14706,6 +14645,11 @@ public final class TrinoTpcdsParquetSupport
     private static RowExpression isNull(RowExpression expression)
     {
         return new SpecialForm(SpecialForm.Form.IS_NULL, BOOLEAN, List.of(expression), List.of());
+    }
+
+    private static RowExpression coalesce(RowExpression first, RowExpression second, Type outputType)
+    {
+        return new SpecialForm(SpecialForm.Form.COALESCE, outputType, List.of(first, second), List.of());
     }
 
     private static List<Integer> rangeList(int size)
