@@ -18,7 +18,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.BatchSliceOperator;
-import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
@@ -3430,13 +3429,13 @@ final class TpcdsParquetSupport
 
     public static Operator query97(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator indicators = profiled("q97.union.channels", new UnionAllOperator(4, List.of(
+        Operator indicators = profiled("q97.union.channels", new UnionAllOperator(5, List.of(
                 query97PresenceChannel(allocator, primitiveRegistry, tables, "q97.store", "store_sales", "ss_customer_sk", "ss_item_sk", "ss_sold_date_sk", true),
                 query97PresenceChannel(allocator, primitiveRegistry, tables, "q97.catalog", "catalog_sales", "cs_bill_customer_sk", "cs_item_sk", "cs_sold_date_sk", false))));
         indicators = profiled("q97.group.presence", new GroupedAggregationOperator(
                 allocator,
-                List.of(0, 1),
-                List.of(new Sum(2), new Sum(3)),
+                List.of(0, 1, 2),
+                List.of(new Sum(3), new Sum(4)),
                 indicators));
         indicators = profiled("q97.project.indicators", projectQuery97PresenceIndicators(allocator, primitiveRegistry, indicators));
         return profiled("q97.group.final", new AggregationOperator(
@@ -4713,9 +4712,11 @@ final class TpcdsParquetSupport
 
     private static Operator query95ReturnedEligibleOrders(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
+        // The multi-warehouse constraint is already applied on the sales side (the eligible-orders
+        // join), and the downstream join of these returned orders against the eligible sales restricts
+        // the result to multi-warehouse orders. Joining returns to the multi-warehouse set here would
+        // be redundant, so this is a plain distinct of returned order numbers (matching Trino).
         Operator returns = scannedTable(allocator, tables, "web_returns", "wr_order_number");
-        returns = new HashJoinOperator(allocator, returns, 0, query95MultiWarehouseOrders(allocator, primitiveRegistry, tables), 0);
-        returns = projectInputs(allocator, primitiveRegistry, returns, 0);
         return new MarkDistinctOperator(allocator, 0, returns);
     }
 
@@ -4936,21 +4937,11 @@ final class TpcdsParquetSupport
 
     private static Operator query08QualifiedZipPrefixes(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        List<Row> literalZipRows = TpcdsQueryLiterals.QUERY08_ZIP_VALUES.stream()
-                .map(Row::new)
-                .toList();
-
-        Operator literalZipValues = scannedTable(allocator, tables, "customer_address", "ca_zip");
-        literalZipValues = projectUtf8Prefix(allocator, primitiveRegistry, literalZipValues, 0, 5);
-        literalZipValues = new NestedLoopJoinOperator(
-                allocator,
-                literalZipValues,
-                new ConstantTableOperator(allocator, 1, literalZipRows));
-        literalZipValues = filter(allocator, primitiveRegistry, literalZipValues, equalUtf8Columns(0, 1));
-        literalZipValues = projectInputs(allocator, primitiveRegistry, literalZipValues, 0);
-        literalZipValues = new MarkDistinctOperator(allocator, 0, literalZipValues);
-
-        Operator preferredZipValues = new HashJoinOperator(
+        // TPC-DS Q08 keeps zip prefixes that appear in the literal list AND have more than ten
+        // preferred customers. This is the canonical single-scan form: join the preferred customers
+        // to their addresses, apply the literal zip list as an inline IN filter, group by the
+        // five-character zip prefix keeping counts above ten, then distinct the two-character prefix.
+        Operator qualifiedZipValues = new HashJoinOperator(
                 allocator,
                 filteredProjectedTable(
                         allocator,
@@ -4963,18 +4954,14 @@ final class TpcdsParquetSupport
                 0,
                 scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_zip"),
                 0);
-        preferredZipValues = projectUtf8Prefix(allocator, primitiveRegistry, preferredZipValues, 2, 5);
-        preferredZipValues = new GroupedAggregationOperator(
+        qualifiedZipValues = projectUtf8Prefix(allocator, primitiveRegistry, qualifiedZipValues, 2, 5);
+        qualifiedZipValues = filter(allocator, primitiveRegistry, qualifiedZipValues, query08ZipPrefixListPredicate(0));
+        qualifiedZipValues = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new CountAll()),
-                preferredZipValues);
-        preferredZipValues = filter(allocator, primitiveRegistry, preferredZipValues, greaterThan(1, 10));
-        preferredZipValues = projectInputs(allocator, primitiveRegistry, preferredZipValues, 0);
-
-        Operator qualifiedZipValues = new NestedLoopJoinOperator(allocator, literalZipValues, preferredZipValues);
-        qualifiedZipValues = filter(allocator, primitiveRegistry, qualifiedZipValues, equalUtf8Columns(0, 1));
-        qualifiedZipValues = projectInputs(allocator, primitiveRegistry, qualifiedZipValues, 0);
+                qualifiedZipValues);
+        qualifiedZipValues = filter(allocator, primitiveRegistry, qualifiedZipValues, greaterThan(1, 10));
         qualifiedZipValues = projectUtf8Prefix(allocator, primitiveRegistry, qualifiedZipValues, 0, 2);
         qualifiedZipValues = new MarkDistinctOperator(allocator, 0, qualifiedZipValues);
         return qualifiedZipValues;
@@ -5888,22 +5875,12 @@ final class TpcdsParquetSupport
         return and(equal(1, 2), equal(2, 1998));
     }
 
-    private static FilterSpec query08ZipListPredicate(int zipIndex)
+    private static FilterSpec query08ZipPrefixListPredicate(int prefixIndex)
     {
         List<Assignment> assignments = new ArrayList<>();
-        Variable start = new Variable(0);
-        Variable length = new Variable(1);
-        Variable zipPrefix = new Variable(2);
-        assignments.add(new Assignment(start, new Literal(1L), AllMask.ALL));
-        assignments.add(new Assignment(length, new Literal(5L), AllMask.ALL));
-        assignments.add(new Assignment(zipPrefix, new Call("substring_utf8", List.of(
-                new Reference(new Input(zipIndex), Stream.VALUES),
-                new Reference(start, Stream.VALUES),
-                new Reference(length, Stream.VALUES))), AllMask.ALL));
-
-        int nextVariable = 3;
+        int nextVariable = 0;
         List<Reference> arguments = new ArrayList<>(TpcdsQueryLiterals.QUERY08_ZIP_VALUES.size() + 1);
-        arguments.add(new Reference(zipPrefix, Stream.VALUES));
+        arguments.add(new Reference(new Input(prefixIndex), Stream.VALUES));
         for (String zipValue : TpcdsQueryLiterals.QUERY08_ZIP_VALUES) {
             Variable literal = new Variable(nextVariable++);
             assignments.add(new Assignment(literal, new Literal(zipValue), AllMask.ALL));
@@ -8873,12 +8850,11 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_month_seq", "d_date"},
                         0, 2),
                 0);
-        sales = projectQuery87ChannelPresence(allocator, primitiveRegistry, sales, activeChannel);
-        return new GroupedAggregationOperator(
-                allocator,
-                List.of(0, 1, 2),
-                List.of(new Sum(3), new Sum(4), new Sum(5)),
-                sales);
+        // Emit per-row channel-presence flags only. The global aggregation in query87 groups by
+        // (last_name, first_name, date) and the downstream filter only checks whether each channel's
+        // summed flag is positive or zero, so a per-channel pre-aggregation would be redundant work
+        // that does not change the result (matching Trino, which aggregates once globally).
+        return projectQuery87ChannelPresence(allocator, primitiveRegistry, sales, activeChannel);
     }
 
     private static Operator query55SalesByBrand(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -10225,6 +10201,10 @@ final class TpcdsParquetSupport
                 new String[] {"d_date_sk", "d_month_seq"},
                 0));
         facts = profiled(profilePrefix + ".join.date_dim", new HashJoinOperator(allocator, facts, 2, allowedDates, 0));
+        // The customer key never participates in the FULL OUTER JOIN emulation when it is null
+        // (NULL = NULL is false), so discard null customer keys before marking distinct, matching the
+        // Trino plan. This keeps both harnesses pushing the same row count through the distinct.
+        facts = profiled(profilePrefix + ".filter.non_null_customer", filter(allocator, primitiveRegistry, facts, isNotNullI64(0)));
         facts = profiled(profilePrefix + ".project.keys", projectInputs(allocator, primitiveRegistry, facts, 0, 1));
         return profiled(profilePrefix + ".distinct.mark_distinct", new MarkDistinctOperator(allocator, new int[] {0, 1}, facts));
     }
@@ -10233,16 +10213,38 @@ final class TpcdsParquetSupport
     {
         Variable zero = new Variable(0);
         Variable one = new Variable(1);
+        Variable channelId = new Variable(2);
+        Variable customerIsNull = new Variable(3);
+        Variable itemIsNull = new Variable(4);
+        Variable keyIsNull = new Variable(5);
+        Variable discriminator = new Variable(6);
         Operator source = query97Channel(allocator, primitiveRegistry, tables, profilePrefix, salesTable, customerColumn, itemColumn, soldDateColumn);
 
+        // Emulating the FULL OUTER JOIN with a UNION ALL plus group-by requires a per-channel
+        // discriminator for rows with a null join key, since such rows never join and must remain
+        // distinct groups. This matches the Trino plan and avoids collapsing null-keyed rows across
+        // channels.
         List<Assignment> assignments = List.of(
                 new Assignment(zero, new Literal(0L), AllMask.ALL),
-                new Assignment(one, new Literal(1L), AllMask.ALL));
+                new Assignment(one, new Literal(1L), AllMask.ALL),
+                new Assignment(channelId, new Literal(storeChannel ? 1L : 2L), AllMask.ALL),
+                new Assignment(customerIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                new Assignment(itemIsNull, new Call("is_null_i64", List.of(
+                        new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                new Assignment(keyIsNull, new Call("or", List.of(
+                        new Reference(customerIsNull, Stream.VALUES),
+                        new Reference(itemIsNull, Stream.VALUES))), AllMask.ALL),
+                new Assignment(discriminator, new Call("if_i64", List.of(
+                        new Reference(keyIsNull, Stream.VALUES),
+                        new Reference(channelId, Stream.VALUES),
+                        new Reference(zero, Stream.VALUES))), AllMask.ALL));
         return profiled(profilePrefix + ".project.presence", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(assignments, List.of(
                         new Reference(new Input(0), Stream.VALUES),
                         new Reference(new Input(1), Stream.VALUES),
+                        new Reference(discriminator, Stream.VALUES),
                         storeChannel ? new Reference(one, Stream.VALUES) : new Reference(zero, Stream.VALUES),
                         storeChannel ? new Reference(zero, Stream.VALUES) : new Reference(one, Stream.VALUES))),
                 primitiveRegistry,
@@ -10269,15 +10271,15 @@ final class TpcdsParquetSupport
                 new Assignment(one, new Literal(1L), AllMask.ALL),
                 new Assignment(storePresent, new Call("lt", List.of(
                         new Reference(zero, Stream.VALUES),
-                        new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
                 new Assignment(catalogPresent, new Call("lt", List.of(
                         new Reference(zero, Stream.VALUES),
-                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                        new Reference(new Input(4), Stream.VALUES))), AllMask.ALL),
                 new Assignment(storeMissing, new Call("eq", List.of(
-                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES),
                         new Reference(zero, Stream.VALUES))), AllMask.ALL),
                 new Assignment(catalogMissing, new Call("eq", List.of(
-                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(new Input(4), Stream.VALUES),
                         new Reference(zero, Stream.VALUES))), AllMask.ALL),
                 new Assignment(storeOnlyCondition, new Call("and", List.of(
                         new Reference(storePresent, Stream.VALUES),
