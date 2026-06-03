@@ -3086,26 +3086,36 @@ public final class TrinoTpcdsParquetSupport
     {
         List<Type> channelTypes = query78ChannelTypes(tables);
         List<Type> afterWebTypes = concatTypes(channelTypes, channelTypes);
-        List<Type> afterCatalogTypes = concatTypes(afterWebTypes, channelTypes);
+        // The web and catalog channels are LEFT OUTER joined onto the store channel, so their summed
+        // columns are null for store (year, item, customer) groups absent from those channels. TPC-DS
+        // Q78 coalesces each to 0 before combining, and keeps only rows where the other-channel
+        // quantity is positive.
+        RowExpression webQuantity = ifExpression(isNull(field(9, BIGINT)), constant(0L, BIGINT), field(9, BIGINT), BIGINT);
+        RowExpression webWholesale = ifExpression(isNull(field(10, BIGINT)), constant(0L, BIGINT), field(10, BIGINT), BIGINT);
+        RowExpression webSalesPrice = ifExpression(isNull(field(11, BIGINT)), constant(0L, BIGINT), field(11, BIGINT), BIGINT);
+        RowExpression catalogQuantity = ifExpression(isNull(field(15, BIGINT)), constant(0L, BIGINT), field(15, BIGINT), BIGINT);
+        RowExpression catalogWholesale = ifExpression(isNull(field(16, BIGINT)), constant(0L, BIGINT), field(16, BIGINT), BIGINT);
+        RowExpression catalogSalesPrice = ifExpression(isNull(field(17, BIGINT)), constant(0L, BIGINT), field(17, BIGINT), BIGINT);
+        RowExpression otherQuantity = add(webQuantity, catalogQuantity, BIGINT);
         return appendPlan(
                 query78ChannelPlan(tables, "q78.store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_customer_sk", "ss_ticket_number", "ss_quantity", "ss_wholesale_cost", "ss_sales_price", "store_returns", "sr_item_sk", "sr_ticket_number"),
                 List.of(
-                        namedHashJoinStep("q78.join.web", new HashJoinSpec(78_20, channelTypes, List.of(0, 1, 2), query78ChannelPlan(tables, "q78.web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_customer_sk", "ws_order_number", "ws_quantity", "ws_wholesale_cost", "ws_sales_price", "web_returns", "wr_item_sk", "wr_order_number"), channelTypes, List.of(0, 1, 2))),
-                        namedHashJoinStep("q78.join.catalog", new HashJoinSpec(78_21, afterWebTypes, List.of(0, 1, 2), query78ChannelPlan(tables, "q78.catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_customer_sk", "cs_order_number", "cs_quantity", "cs_wholesale_cost", "cs_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number"), channelTypes, List.of(0, 1, 2))),
+                        namedHashJoinStep("q78.join.web", new HashJoinSpec(78_20, channelTypes, List.of(0, 1, 2), query78ChannelPlan(tables, "q78.web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_customer_sk", "ws_order_number", "ws_quantity", "ws_wholesale_cost", "ws_sales_price", "web_returns", "wr_item_sk", "wr_order_number"), channelTypes, List.of(0, 1, 2), JoinType.LEFT)),
+                        namedHashJoinStep("q78.join.catalog", new HashJoinSpec(78_21, afterWebTypes, List.of(0, 1, 2), query78ChannelPlan(tables, "q78.catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_customer_sk", "cs_order_number", "cs_quantity", "cs_wholesale_cost", "cs_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number"), channelTypes, List.of(0, 1, 2), JoinType.LEFT)),
                         namedFactoryStep("q78.project.output", filterAndProjectFactory(
                                 78_22,
-                                Optional.empty(),
+                                Optional.of(greaterThan(otherQuantity, constant(0L, BIGINT), BIGINT)),
                                 List.of(
                                         field(0, channelTypes.get(0)),
                                         field(1, channelTypes.get(1)),
                                         field(2, channelTypes.get(2)),
-                                        divideScaleRounded(field(3, BIGINT), add(field(9, BIGINT), field(15, BIGINT), BIGINT), 100L),
+                                        divideScaleRounded(field(3, BIGINT), otherQuantity, 100L),
                                         field(3, BIGINT),
                                         field(4, BIGINT),
                                         field(5, BIGINT),
-                                        add(field(9, BIGINT), field(15, BIGINT), BIGINT),
-                                        add(field(10, BIGINT), field(16, BIGINT), BIGINT),
-                                        add(field(11, BIGINT), field(17, BIGINT), BIGINT)),
+                                        otherQuantity,
+                                        add(webWholesale, catalogWholesale, BIGINT),
+                                        add(webSalesPrice, catalogSalesPrice, BIGINT)),
                                 query78OutputTypes(tables))),
                         namedFactoryStep("q78.topn", topNFactory(
                                 78_23,
