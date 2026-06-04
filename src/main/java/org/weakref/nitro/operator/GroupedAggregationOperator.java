@@ -50,6 +50,7 @@ public class GroupedAggregationOperator
     private final Streams[] result;
     private final GroupingState inlineGroupingState;
     private Streams[] states;
+    private int stateCapacity;
     private int maxGroup = -1;
     private boolean done;
     private GroupedKeySource groupedKeySource;
@@ -125,6 +126,7 @@ public class GroupedAggregationOperator
         }
 
         states = new Streams[aggregations.length];
+        stateCapacity = 0;
         long maxObservedGroup = -1;
         while (source.hasNext()) {
             Batch batch = source.next();
@@ -174,6 +176,7 @@ public class GroupedAggregationOperator
     private Mask computeInlineGroupedResults()
     {
         states = new Streams[aggregations.length];
+        stateCapacity = 0;
         long maxObservedGroup = -1;
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
@@ -262,12 +265,24 @@ public class GroupedAggregationOperator
 
     private void prepareAggregationStates(long previousMaxGroup, long maxObservedGroup, int newCapacity)
     {
+        // Only (re)allocate when the highest group seen so far no longer fits the current state capacity.
+        // newCapacity carries growth headroom, so reallocating to it makes the state large enough for many
+        // subsequent batches; recomputing a slightly larger target every batch (as a naive grow would) turns
+        // the amortized-doubling headroom into a linear, O(n^2)-copy reallocation on every batch.
+        int needed = toIntExact(maxObservedGroup + 1);
+        boolean grow = stateCapacity < needed;
         for (int index = 0; index < aggregations.length; index++) {
             Accumulator accumulator = aggregations[index];
-            states[index] = states[index] == null
-                    ? accumulator.allocate(allocator, allocationContext, newCapacity)
-                    : accumulator.grow(allocator, allocationContext, states[index], newCapacity);
+            if (states[index] == null) {
+                states[index] = accumulator.allocate(allocator, allocationContext, newCapacity);
+            }
+            else if (grow) {
+                states[index] = accumulator.grow(allocator, allocationContext, states[index], newCapacity);
+            }
             accumulator.initialize(states[index], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
+        }
+        if (grow) {
+            stateCapacity = newCapacity;
         }
     }
 
