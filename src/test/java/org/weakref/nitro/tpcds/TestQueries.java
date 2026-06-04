@@ -897,7 +897,8 @@ public class TestQueries
     @Test
     void testQuery98WindowedStage()
     {
-        assertApplesToApplesOperatorMatches(
+        // The window has no ORDER BY, so row order within a class partition is unspecified; compare as a bag.
+        assertApplesToApplesOperatorMatchesInAnyOrder(
                 "98",
                 tables -> TpcdsParquetSupport.query98RevenueWindowed(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables),
                 support -> support.query98RevenueWindowed(TpcdsParquetTables.requiredActual("sf10")),
@@ -1851,6 +1852,29 @@ public class TestQueries
             assertThat(normalizeTrinoRows(trinoQuery.apply(support), valueNormalizer))
                     .as("TPC-DS Q%s operator assembly result", queryId)
                     .containsExactlyElementsOf(nitroRows);
+        }
+    }
+
+    /**
+     * Like {@link #assertApplesToApplesOperatorMatches} but order-insensitive, for intermediate stages
+     * whose result is an unordered bag (for example a window function with no ORDER BY, whose row order
+     * within a partition is unspecified).
+     */
+    private static void assertApplesToApplesOperatorMatchesInAnyOrder(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+        assumeTrue(TrinoTpcdsParquetSupport.supportsOperatorAssembly(queryId), "Trino operator assembly is not implemented for Q" + queryId);
+
+        List<org.weakref.nitro.data.Row> nitroRows;
+        try (Operator query = nitroQuery.apply(tables)) {
+            nitroRows = normalizeNitroRows(OperatorAssertions.OperatorAssert.toRows(query), valueNormalizer);
+        }
+
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            assertThat(normalizeTrinoRows(trinoQuery.apply(support), valueNormalizer))
+                    .as("TPC-DS Q%s operator assembly result", queryId)
+                    .containsExactlyInAnyOrderElementsOf(nitroRows);
         }
     }
 

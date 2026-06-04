@@ -221,9 +221,15 @@ public final class WindowOperator
         for (int partitionColumn : partitionColumns) {
             Streams leftStreams = left.page().columns()[partitionColumn];
             Streams rightStreams = right.page().columns()[partitionColumn];
-            if (OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position()) ||
-                    OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position())) {
-                return false;
+            boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position());
+            boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position());
+            if (leftNull || rightNull) {
+                // PARTITION BY groups all null keys together: two nulls share a partition, a null and a
+                // non-null do not.
+                if (leftNull != rightNull) {
+                    return false;
+                }
+                continue;
             }
             if (!OperatorEqualitySemantics.equal(
                     leftStreams.values(),

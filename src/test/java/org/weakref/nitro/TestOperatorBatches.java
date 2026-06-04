@@ -578,10 +578,11 @@ public class TestOperatorBatches
     }
 
     @Test
-    void testWindowOperatorTreatsNullPartitionKeysAsDistinct()
+    void testWindowOperatorGroupsNullPartitionKeysTogether()
     {
         Allocator allocator = new Allocator();
 
+        // PARTITION BY places all null-keyed rows in a single partition, so they share one sum (5 + 7).
         try (Operator operator = new WindowOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -597,8 +598,8 @@ public class TestOperatorBatches
                     .containsExactly(
                             row(1L, 3L, 7L),
                             row(1L, 4L, 7L),
-                            row(null, 5L, 5L),
-                            row(null, 7L, 7L));
+                            row(null, 5L, 12L),
+                            row(null, 7L, 12L));
         }
     }
 
