@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
@@ -33,6 +34,30 @@ class FlatKeyLayout
     private final int singleFixedOffset;
     private final int fixedRecordSize;
     private final boolean anyVariableWidth;
+
+    // Per-batch hash cache for dictionary-encoded key columns. For each key column that arrives as a
+    // DictionaryVector, the hash of every distinct dictionary entry is computed once at beginBatch and
+    // indexed by dictionary id; the per-position hash() then reads it through ids[position] instead of
+    // re-hashing the underlying (often variable-width) value on every probe. This only accelerates
+    // hash COMPUTATION — equality is still settled by identicalRecordToInput against the stored value,
+    // so two distinct values can never collapse into one group regardless of dictionary contents.
+    private int[][] dictionaryHashedIds;
+    private long[][] dictionaryEntryHashes;
+    private Vector[] dictionaryHashedValues;
+
+    // Id-based equality for dictionary-encoded key columns. Each field binds to the first dictionary
+    // identity it sees; while a batch presents that same dictionary instance for the field, the record
+    // stores the dictionary id and equality compares ids directly instead of the underlying bytes. A
+    // record written under the bound dictionary stores id >= 0; any record written when the field was
+    // not id-comparable stores -1 and always falls back to value comparison. Because an id is only ever
+    // compared against another id from the SAME bound dictionary identity, two distinct values can never
+    // be treated as equal, and equal values reached through a different dictionary instance fall back to
+    // the value path. The stored value is always retained for that fallback and for materialization.
+    private Vector[] boundDictionary;
+    private int[][] batchDictionaryIds;
+    private boolean[] fieldIdComparable;
+    private boolean anyFieldIdComparable;
+    private int[][] recordDictionaryIds;
 
     FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
@@ -118,13 +143,73 @@ class FlatKeyLayout
      * {@link #identicalRecordToInput} keep their per-position {@link FlatTypeHandler} dispatch for
      * any layout that hasn't chosen to specialize.
      */
-    public void beginBatch(Vector[] values, Vector[] nulls) {}
+    public void beginBatch(Vector[] values, Vector[] nulls)
+    {
+        if (dictionaryHashedIds == null) {
+            dictionaryHashedIds = new int[handlers.length][];
+            dictionaryEntryHashes = new long[handlers.length][];
+            dictionaryHashedValues = new Vector[handlers.length];
+            boundDictionary = new Vector[handlers.length];
+            batchDictionaryIds = new int[handlers.length][];
+            fieldIdComparable = new boolean[handlers.length];
+        }
+        anyFieldIdComparable = false;
+        for (int index = 0; index < handlers.length; index++) {
+            fieldIdComparable[index] = false;
+            batchDictionaryIds[index] = null;
+            int channel = inputChannels[index];
+            if (channel >= values.length || !(values[channel] instanceof DictionaryVector dictionary)) {
+                dictionaryHashedIds[index] = null;
+                dictionaryEntryHashes[index] = null;
+                dictionaryHashedValues[index] = null;
+                continue;
+            }
+            Vector dictionaryValues = dictionary.values();
+            dictionaryHashedIds[index] = dictionary.ids();
+            // The dictionary base is shared across grouping-set expansions and probe batches, so its
+            // per-entry hashes are computed once per distinct dictionary identity and reused. Index by
+            // the dictionary id at hash() time instead of re-hashing the (variable-width) value.
+            if (dictionaryHashedValues[index] != dictionaryValues || dictionaryEntryHashes[index] == null) {
+                int distinctCount = dictionaryValues.length();
+                FlatTypeHandler handler = handlers[index];
+                long[] entryHashes = new long[distinctCount];
+                for (int id = 0; id < distinctCount; id++) {
+                    entryHashes[id] = handler.hashInput(dictionaryValues, id);
+                }
+                dictionaryEntryHashes[index] = entryHashes;
+                dictionaryHashedValues[index] = dictionaryValues;
+            }
+
+            // Bind the field to the first dictionary identity it sees; id-based equality only applies
+            // for variable-width fields (the byte-compare those would otherwise pay is what we avoid).
+            if (handlers[index].variableWidth()) {
+                if (boundDictionary[index] == null) {
+                    boundDictionary[index] = dictionaryValues;
+                }
+                if (boundDictionary[index] == dictionaryValues) {
+                    fieldIdComparable[index] = true;
+                    batchDictionaryIds[index] = dictionary.ids();
+                    anyFieldIdComparable = true;
+                }
+            }
+        }
+    }
 
     /**
      * Hook called by {@link FlatGroupingTable} after a batch completes. Mirror of
      * {@link #beginBatch}; subclasses release cached references here.
      */
-    public void endBatch() {}
+    public void endBatch()
+    {
+        if (dictionaryHashedIds == null) {
+            return;
+        }
+        // Release only the per-batch id arrays; the per-dictionary entry-hash caches are keyed by the
+        // shared dictionary identity and intentionally survive across batches.
+        for (int index = 0; index < dictionaryHashedIds.length; index++) {
+            dictionaryHashedIds[index] = null;
+        }
+    }
 
     public long hash(Vector[] values, Vector[] nulls, int position)
     {
@@ -132,7 +217,7 @@ class FlatKeyLayout
             if (fieldNull(nulls, singleInputChannel, position)) {
                 return 31;
             }
-            return 31 + singleHandler.hashInput(values[singleInputChannel], position);
+            return 31 + fieldHash(0, singleInputChannel, values[singleInputChannel], position);
         }
         long result = 1;
         for (int index = 0; index < handlers.length; index++) {
@@ -140,13 +225,24 @@ class FlatKeyLayout
                 result = 31 * result + 1;
             }
             else {
-                result = 31 * result + handlers[index].hashInput(values[inputChannels[index]], position);
+                result = 31 * result + fieldHash(index, inputChannels[index], values[inputChannels[index]], position);
             }
         }
         return result;
     }
 
-    public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position)
+    private long fieldHash(int fieldIndex, int channel, Vector value, int position)
+    {
+        if (dictionaryHashedIds != null) {
+            int[] ids = dictionaryHashedIds[fieldIndex];
+            if (ids != null) {
+                return dictionaryEntryHashes[fieldIndex][ids[position]];
+            }
+        }
+        return handlers[fieldIndex].hashInput(value, position);
+    }
+
+    public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         if (nullByteCount > 0) {
             Arrays.fill(fixedChunk, fixedOffset, fixedOffset + nullByteCount, (byte) 0);
@@ -158,6 +254,7 @@ class FlatKeyLayout
             else {
                 singleHandler.writeFlat(values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena);
             }
+            storeRecordDictionaryIds(recordIndex, position);
             return;
         }
         for (int index = 0; index < handlers.length; index++) {
@@ -168,9 +265,10 @@ class FlatKeyLayout
                 handlers[index].writeFlat(values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
             }
         }
+        storeRecordDictionaryIds(recordIndex, position);
     }
 
-    public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position)
+    public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         if (singleField) {
             if (fieldNull(nulls, singleInputChannel, position)) {
@@ -178,6 +276,9 @@ class FlatKeyLayout
             }
             if (isNull(fixedChunk, fixedOffset, 0)) {
                 return false;
+            }
+            if (idComparable(0, recordIndex)) {
+                return recordDictionaryIds[0][recordIndex] == batchDictionaryIds[0][position];
             }
             return singleHandler.identicalFlatToInput(fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position);
         }
@@ -187,11 +288,73 @@ class FlatKeyLayout
             if (inputNull != recordNull) {
                 return false;
             }
-            if (!inputNull && !handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
+            if (inputNull) {
+                continue;
+            }
+            if (idComparable(index, recordIndex)) {
+                if (recordDictionaryIds[index][recordIndex] != batchDictionaryIds[index][position]) {
+                    return false;
+                }
+                continue;
+            }
+            if (!handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
             }
         }
         return true;
+    }
+
+    private boolean idComparable(int fieldIndex, int recordIndex)
+    {
+        return anyFieldIdComparable
+                && fieldIdComparable[fieldIndex]
+                && recordDictionaryIds != null
+                && recordDictionaryIds[fieldIndex] != null
+                && recordIndex < recordDictionaryIds[fieldIndex].length
+                && recordDictionaryIds[fieldIndex][recordIndex] >= 0;
+    }
+
+    private void storeRecordDictionaryIds(int recordIndex, int position)
+    {
+        if (!anyFieldIdComparable) {
+            return;
+        }
+        ensureRecordDictionaryIdCapacity(recordIndex + 1);
+        for (int index = 0; index < handlers.length; index++) {
+            if (recordDictionaryIds[index] == null) {
+                continue;
+            }
+            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? batchDictionaryIds[index][position] : -1;
+        }
+    }
+
+    private void ensureRecordDictionaryIdCapacity(int required)
+    {
+        if (recordDictionaryIds == null) {
+            recordDictionaryIds = new int[handlers.length][];
+        }
+        for (int index = 0; index < handlers.length; index++) {
+            // Allocate per-record id storage lazily, only for fields that have ever been id-comparable.
+            if (boundDictionary[index] == null || !handlers[index].variableWidth()) {
+                continue;
+            }
+            if (recordDictionaryIds[index] == null) {
+                int initial = Math.max(16, required);
+                int[] ids = new int[initial];
+                Arrays.fill(ids, -1);
+                recordDictionaryIds[index] = ids;
+            }
+            else if (recordDictionaryIds[index].length < required) {
+                int previousLength = recordDictionaryIds[index].length;
+                int newLength = previousLength;
+                while (newLength < required) {
+                    newLength *= 2;
+                }
+                int[] ids = Arrays.copyOf(recordDictionaryIds[index], newLength);
+                Arrays.fill(ids, previousLength, newLength, -1);
+                recordDictionaryIds[index] = ids;
+            }
+        }
     }
 
     public boolean fieldNull(byte[] fixedChunk, int fixedOffset, int fieldIndex)

@@ -18,6 +18,7 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -80,6 +81,11 @@ public class HashJoinOperator
     private final Streams[] currentOutputs;
     private int[] retainedConstraintCountsByBatch = new int[16];
     private int[][] retainedConstraintPositionsByBatch = new int[16][];
+    // Lazily built, per (inner batch, inner column) unified dictionary view for non-retained build
+    // columns whose VALUES are a BinaryVector. Built once over the (small) build side; reused to emit
+    // every probe-output batch's matched rows as a DictionaryVector over the shared dictionary instead
+    // of flattening the bytes per output row. Keyed by batchIndex * innerOutputCount + innerOutputIndex.
+    private final Map<Integer, BuildDictionary> buildDictionaries = new HashMap<>();
     private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
@@ -660,6 +666,19 @@ public class HashJoinOperator
             if (wrapped != null) {
                 return wrapped;
             }
+            Vector dictionaryValues = tryWrapNonRetainedDictionaryValues(innerOutputIndex);
+            if (dictionaryValues != null) {
+                Streams result = Streams.ofValues(allocator.adopt(allocationContext, dictionaryValues));
+                // VALUES are carried as a unified dictionary (no byte copy); the cheap boolean side
+                // streams still flatten through the standard per-run copy path.
+                for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                    int outputStart = outputInnerRunStarts[runIndex];
+                    int runLength = outputInnerRunLengths[runIndex];
+                    BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
+                    result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, false, true, true);
+                }
+                return result;
+            }
             Streams wrappedSideStreams = tryWrapMultiRunInnerBooleanSideStreams(innerOutputIndex);
             Streams result = wrappedSideStreams;
             boolean copyNulls = wrappedSideStreams == null || !wrappedSideStreams.hasNulls();
@@ -792,6 +811,114 @@ public class HashJoinOperator
         }
 
         return tryWrapRetainedInnerOutput(innerOutputIndex, innerBatch);
+    }
+
+    /**
+     * Emits a single-run, non-retained build column's VALUES as a {@link DictionaryVector} over a
+     * unified per-build-column dictionary, rather than flattening the (variable-width) bytes once per
+     * matched output row. Restricted to the common, safe shape: the whole output batch draws from one
+     * build batch ({@code preparedInnerRunCount == 1}), the build column is values-only with a
+     * {@link BinaryVector} payload, and there are no NO-MATCH rows. Any other shape (multiple runs,
+     * retained batch, null/error side streams, non-binary payload) returns {@code null} so the caller
+     * falls back to the existing flatten path. Grouping downstream still settles equality by value, so
+     * the unified dictionary only changes representation, never which rows group together.
+     */
+    private Vector tryWrapNonRetainedDictionaryValues(int innerOutputIndex)
+    {
+        if (currentOutputCount == 0 || preparedInnerRunCount != 1) {
+            return null;
+        }
+        int innerBatchIndex = outputInnerRunBatchIndexes[0];
+        BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+        if (innerBatch.retained()) {
+            return null;
+        }
+        Streams column = innerBatch.columns()[innerOutputIndex];
+        if (column == null || !column.hasValues() || !(column.values() instanceof BinaryVector binarySource)) {
+            return null;
+        }
+
+        BuildDictionary dictionary = buildDictionaryFor(innerBatchIndex, innerOutputIndex, binarySource, innerBatch.length());
+        if (dictionary == NOT_DICTIONARY) {
+            return null;
+        }
+        int[] sourceIdByPosition = dictionary.idByPosition();
+        int[] valueIds = new int[currentOutputCount];
+        for (int index = 0; index < currentOutputCount; index++) {
+            valueIds[index] = sourceIdByPosition[outputInnerLogicalPositions[index]];
+        }
+        return DictionaryVector.wrap(valueIds, dictionary.values());
+    }
+
+    private BuildDictionary buildDictionaryFor(int innerBatchIndex, int innerOutputIndex, BinaryVector source, int length)
+    {
+        int key = innerBatchIndex * Math.max(1, innerOutputCount) + innerOutputIndex;
+        BuildDictionary cached = buildDictionaries.get(key);
+        if (cached != null) {
+            return cached;
+        }
+
+        // Scan only the build batch's valid row range: the buffered BinaryVector may be pre-sized with
+        // stale trailing offsets beyond the real rows, which are never referenced by a logical position.
+        int[] idByPosition = new int[length];
+        // Deduplicate distinct byte values into a single dictionary. This only pays off when the column
+        // is low cardinality: a near-unique build column (e.g. a natural key carried straight to the
+        // output and never grouped) gains nothing from dictionary grouping while the dedup scan and the
+        // per-output-row id remap are pure overhead. Abandon as soon as the distinct count shows the
+        // column is high cardinality and cache a NOT_DICTIONARY marker so the caller flattens normally.
+        int distinctLimit = Math.max(16, length / 2);
+        Map<BinaryValue, Integer> distinct = new HashMap<>();
+        java.util.List<Integer> distinctPositions = new java.util.ArrayList<>();
+        long totalBytes = 0;
+        for (int position = 0; position < length; position++) {
+            BinaryValue value = new BinaryValue(source.copyBytes(position));
+            Integer id = distinct.get(value);
+            if (id == null) {
+                if (distinctPositions.size() >= distinctLimit) {
+                    buildDictionaries.put(key, NOT_DICTIONARY);
+                    return NOT_DICTIONARY;
+                }
+                id = distinctPositions.size();
+                distinct.put(value, id);
+                distinctPositions.add(position);
+                totalBytes += value.bytes().length;
+            }
+            idByPosition[position] = id;
+        }
+
+        if (totalBytes > Integer.MAX_VALUE) {
+            buildDictionaries.put(key, NOT_DICTIONARY);
+            return NOT_DICTIONARY;
+        }
+        BinaryVector values = BinaryVector.allocate(allocator, allocationContext, distinctPositions.size(), (int) totalBytes);
+        Arrays.fill(values.offsets(), 0);
+        values.clearTraits();
+        values.addTraits(source.traits());
+        for (int id = 0; id < distinctPositions.size(); id++) {
+            values.setBytes(id, source.copyBytes(distinctPositions.get(id)));
+        }
+        BuildDictionary dictionary = new BuildDictionary(idByPosition, values);
+        buildDictionaries.put(key, dictionary);
+        return dictionary;
+    }
+
+    private static final BuildDictionary NOT_DICTIONARY = new BuildDictionary(new int[0], null);
+
+    private record BuildDictionary(int[] idByPosition, Vector values) {}
+
+    private record BinaryValue(byte[] bytes)
+    {
+        @Override
+        public boolean equals(Object other)
+        {
+            return other instanceof BinaryValue value && Arrays.equals(bytes, value.bytes);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Arrays.hashCode(bytes);
+        }
     }
 
     private Streams tryWrapRetainedInnerOutput(int innerOutputIndex, BufferedJoinInput.InnerBatch innerBatch)

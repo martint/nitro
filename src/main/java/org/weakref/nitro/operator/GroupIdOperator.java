@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -149,7 +150,7 @@ public final class GroupIdOperator
     private Streams materializeOutput(int outputIndex, int sourceIndex, int rowCount)
     {
         Output sourceOutput = currentSourceBatch.output(sourceIndex >= 0 ? sourceIndex : outputIndex);
-        Vector values = allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.VALUES), currentSourcePositions);
+        Vector values = selectValues(sourceOutput.borrow(Stream.VALUES), currentSourcePositions);
 
         Streams.Builder streams = Streams.builder()
                 .put(Stream.VALUES, values);
@@ -173,6 +174,27 @@ public final class GroupIdOperator
             streams.put(Stream.ERRORS, booleanVector(rowCount, false));
         }
         return streams.build();
+    }
+
+    /**
+     * Selects {@code positions} out of {@code source} for one grouping-set expansion. A
+     * dictionary-encoded column is carried through by reference: only its id array is remapped to the
+     * selected positions while the underlying dictionary values are shared across every grouping set.
+     * This avoids copying the (often variable-width) values N times for an N-way rollup and, crucially,
+     * keeps the same dictionary instance flowing into grouping so {@link FlatGroupingTable} can hash
+     * by id rather than by raw bytes. All other shapes fall back to a dense copy.
+     */
+    private Vector selectValues(Vector source, int[] positions)
+    {
+        if (source instanceof DictionaryVector dictionary) {
+            int[] sourceIds = dictionary.ids();
+            int[] ids = new int[positions.length];
+            for (int index = 0; index < positions.length; index++) {
+                ids[index] = sourceIds[positions[index]];
+            }
+            return allocator.allocateDictionary(allocationContext, ids, dictionary.values());
+        }
+        return allocator.copyVector(allocationContext, source, positions);
     }
 
     private static int[] materializedPositions(Mask mask)

@@ -139,7 +139,7 @@ final class BigintPairFlatKeyLayout
     }
 
     @Override
-    public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position)
+    public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         long first = firstKeyAccessor.value(position);
         long second = secondKeyAccessor.value(position);
@@ -160,7 +160,7 @@ final class BigintPairFlatKeyLayout
     }
 
     @Override
-    public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position)
+    public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         long first = firstKeyAccessor.value(position);
         long second = secondKeyAccessor.value(position);

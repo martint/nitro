@@ -165,7 +165,7 @@ final class FlatGroupingTable
         if (storedHash != hash) {
             return false;
         }
-        return layout.identicalRecordToInput(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, nulls, position);
+        return layout.identicalRecordToInput(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, nulls, position, recordIndex);
     }
 
     private void addNewGroup(int index, Vector[] values, Vector[] nulls, int position, long hash, long groupId)
@@ -180,7 +180,7 @@ final class FlatGroupingTable
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
         LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
-        layout.writeRecord(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, nulls, position);
+        layout.writeRecord(fixedChunk, fixedOffset + Long.BYTES, variableWidthArena, values, nulls, position, recordIndex);
     }
 
     private void ensureGroupIdCapacity(int groupId)
