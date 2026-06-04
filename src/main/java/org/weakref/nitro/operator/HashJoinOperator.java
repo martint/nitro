@@ -1473,14 +1473,24 @@ public class HashJoinOperator
             implements JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
+        private static final int EMPTY = -1;
 
+        // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
         private long[] keys;
-        private long[] singleRows;
-        private LongArrayList[] rowsBySlot;
+        private int[] slotHead;
+        private int[] slotTail;
+        private int[] slotCount;
+        // Build rows, indexed by a dense ordinal: rowReferences[o] with chainNext[o] linking each key's
+        // rows in insertion (FIFO) order. One flat int[] chain replaces a per-key growable list.
+        private long[] rowReferences;
+        private int[] chainNext;
+        private int rowCount;
         private int mask;
         private int maxFill;
         private int size;
         private final SingleLongList singleMatch = new SingleLongList();
+        private final ChainLongList scalarChain = new ChainLongList();
+        private final ChainLongList[] chainMatches = createChainLongLists(BATCH_SIZE);
 
         private LongJoinIndex(int expectedSize)
         {
@@ -1489,10 +1499,15 @@ public class HashJoinOperator
                 capacity <<= 1;
             }
             keys = new long[capacity];
-            singleRows = emptyRows(capacity);
-            rowsBySlot = new LongArrayList[capacity];
+            slotHead = new int[capacity];
+            Arrays.fill(slotHead, EMPTY);
+            slotTail = new int[capacity];
+            slotCount = new int[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
+            int initialRows = Math.max(16, expectedSize);
+            rowReferences = new long[initialRows];
+            chainNext = new int[initialRows];
         }
 
         @Override
@@ -1528,7 +1543,7 @@ public class HashJoinOperator
         @Override
         public LongList matchesNoNulls(Vector[] values, int position)
         {
-            return rowsForSlot(findSlot(OperatorVectorSupport.longValue(values[0], position)));
+            return rowsForSlot(findSlot(OperatorVectorSupport.longValue(values[0], position)), singleMatch, scalarChain);
         }
 
         @Override
@@ -1550,7 +1565,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = batchedRowsForSlot(findSlot(rowValues.value(position)), singleMatches[index]);
+                            matches[index] = rowsForSlot(findSlot(rowValues.value(position)), singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1561,7 +1576,7 @@ public class HashJoinOperator
         {
             int index = mix(key) & mask;
             while (true) {
-                if (isEmptySlot(index) || keys[index] == key) {
+                if (slotHead[index] == EMPTY || keys[index] == key) {
                     return index;
                 }
                 index = (index + 1) & mask;
@@ -1571,66 +1586,72 @@ public class HashJoinOperator
         private void rehash()
         {
             long[] previousKeys = keys;
-            long[] previousSingleRows = singleRows;
-            LongArrayList[] previousRowsBySlot = rowsBySlot;
-            int capacity = previousRowsBySlot.length * 2;
+            int[] previousHead = slotHead;
+            int[] previousTail = slotTail;
+            int[] previousCount = slotCount;
+            int capacity = previousKeys.length * 2;
 
             keys = new long[capacity];
-            singleRows = emptyRows(capacity);
-            rowsBySlot = new LongArrayList[capacity];
+            slotHead = new int[capacity];
+            Arrays.fill(slotHead, EMPTY);
+            slotTail = new int[capacity];
+            slotCount = new int[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
-            size = 0;
 
             for (int index = 0; index < previousKeys.length; index++) {
-                if (previousSingleRows[index] == NO_MATCH_ROW_REFERENCE) {
+                if (previousHead[index] == EMPTY) {
                     continue;
                 }
                 int newIndex = findSlot(previousKeys[index]);
                 keys[newIndex] = previousKeys[index];
-                singleRows[newIndex] = previousSingleRows[index];
-                rowsBySlot[newIndex] = previousRowsBySlot[index];
-                size++;
+                slotHead[newIndex] = previousHead[index];
+                slotTail[newIndex] = previousTail[index];
+                slotCount[newIndex] = previousCount[index];
             }
         }
 
         private void addRow(long key, long rowReference)
         {
-            int index = findSlot(key);
-            if (isEmptySlot(index)) {
-                keys[index] = key;
-                singleRows[index] = rowReference;
+            int slot = findSlot(key);
+            boolean newKey = slotHead[slot] == EMPTY;
+            if (rowCount == rowReferences.length) {
+                int newCapacity = rowReferences.length * 2;
+                rowReferences = Arrays.copyOf(rowReferences, newCapacity);
+                chainNext = Arrays.copyOf(chainNext, newCapacity);
+            }
+            int ordinal = rowCount++;
+            rowReferences[ordinal] = rowReference;
+            chainNext[ordinal] = EMPTY;
+            if (newKey) {
+                keys[slot] = key;
+                slotHead[slot] = ordinal;
+                slotTail[slot] = ordinal;
+                slotCount[slot] = 1;
                 size++;
+                // Rehash after the slot is populated so it carries a non-empty head into the new table.
                 if (size >= maxFill) {
                     rehash();
                 }
                 return;
             }
-            if (rowsBySlot[index] == null) {
-                LongArrayList rows = new LongArrayList(2);
-                rows.add(singleRows[index]);
-                rows.add(rowReference);
-                rowsBySlot[index] = rows;
-                return;
-            }
-            rowsBySlot[index].add(rowReference);
+            // Append at the tail to preserve insertion (FIFO) order within a key.
+            chainNext[slotTail[slot]] = ordinal;
+            slotTail[slot] = ordinal;
+            slotCount[slot]++;
         }
 
-        private LongList rowsForSlot(int index)
+        private LongList rowsForSlot(int slot, SingleLongList single, ChainLongList chain)
         {
-            if (isEmptySlot(index)) {
+            int head = slotHead[slot];
+            if (head == EMPTY) {
                 return LongLists.emptyList();
             }
-            LongArrayList rows = rowsBySlot[index];
-            if (rows != null) {
-                return rows;
+            int count = slotCount[slot];
+            if (count == 1) {
+                return single.withValue(rowReferences[head]);
             }
-            return singleMatch.withValue(singleRows[index]);
-        }
-
-        private boolean isEmptySlot(int index)
-        {
-            return singleRows[index] == NO_MATCH_ROW_REFERENCE;
+            return chain.reset(rowReferences, chainNext, head, count);
         }
 
         private static int mix(long key)
@@ -1651,7 +1672,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = batchedRowsForSlot(findSlot(values[position]), singleMatches[index]);
+                    matches[index] = rowsForSlot(findSlot(values[position]), singleMatches[index], chainMatches[index]);
                 }
             }
         }
@@ -1664,7 +1685,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = batchedRowsForSlot(findSlot(values[position]), singleMatches[index]);
+                    matches[index] = rowsForSlot(findSlot(values[position]), singleMatches[index], chainMatches[index]);
                 }
             }
         }
@@ -1681,7 +1702,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = batchedRowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index]);
+                            matches[index] = rowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1693,7 +1714,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = batchedRowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index]);
+                            matches[index] = rowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1705,7 +1726,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = batchedRowsForSlot(findSlot(dictionaryValues.value(ids[position])), singleMatches[index]);
+                            matches[index] = rowsForSlot(findSlot(dictionaryValues.value(ids[position])), singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1721,21 +1742,9 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = batchedRowsForSlot(findSlot(rowValues.value(position)), singleMatches[index]);
+                    matches[index] = rowsForSlot(findSlot(rowValues.value(position)), singleMatches[index], chainMatches[index]);
                 }
             }
-        }
-
-        private LongList batchedRowsForSlot(int index, SingleLongList singleMatch)
-        {
-            if (isEmptySlot(index)) {
-                return LongLists.emptyList();
-            }
-            LongArrayList rows = rowsBySlot[index];
-            if (rows != null) {
-                return rows;
-            }
-            return singleMatch.withValue(singleRows[index]);
         }
     }
 
@@ -2278,6 +2287,65 @@ public class HashJoinOperator
         SingleLongList[] matches = new SingleLongList[size];
         for (int index = 0; index < size; index++) {
             matches[index] = new SingleLongList();
+        }
+        return matches;
+    }
+
+    /**
+     * Reusable view over one key's build rows, threaded through a shared chain ({@code next}) starting at
+     * {@code head}. Reading is cursor-cached so the sequential {@code getLong(0..size-1)} access the join
+     * output loop performs is O(1) per element; out-of-order access falls back to a walk from the head.
+     */
+    private static final class ChainLongList
+            extends AbstractLongList
+    {
+        private long[] rows;
+        private int[] next;
+        private int head;
+        private int length;
+        private int cursorIndex;
+        private int cursorOrdinal;
+
+        public ChainLongList reset(long[] rows, int[] next, int head, int length)
+        {
+            this.rows = rows;
+            this.next = next;
+            this.head = head;
+            this.length = length;
+            this.cursorIndex = 0;
+            this.cursorOrdinal = head;
+            return this;
+        }
+
+        @Override
+        public long getLong(int index)
+        {
+            if (index < 0 || index >= length) {
+                throw new IndexOutOfBoundsException("index " + index);
+            }
+            if (index < cursorIndex) {
+                cursorIndex = 0;
+                cursorOrdinal = head;
+            }
+            while (cursorIndex < index) {
+                cursorOrdinal = next[cursorOrdinal];
+                cursorIndex++;
+            }
+            return rows[cursorOrdinal];
+        }
+
+        @Override
+        public int size()
+        {
+            return length;
+        }
+    }
+
+    private static ChainLongList[] createChainLongLists(int size)
+    {
+        ChainLongList[] matches = new ChainLongList[size];
+        for (int index = 0; index < size; index++) {
+            matches[index] = new ChainLongList();
         }
         return matches;
     }
