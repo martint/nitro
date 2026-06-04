@@ -21,6 +21,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
@@ -120,6 +121,52 @@ public final class VectorAccess
             return flat.isAllFalse();
         }
         return false;
+    }
+
+    /**
+     * Computes {@code outputNulls[p] = isNull(leftNulls, p) || isNull(rightNulls, p)} for each selected
+     * position (others false) — the standard null propagation for a binary scalar function. Specializes
+     * the common cases: a side known to be null-free is skipped entirely, and a lone flat null vector is
+     * copied in bulk rather than read through a per-position accessor, avoiding the megamorphic
+     * {@link #booleanValues} lambda when only one operand can actually be null.
+     */
+    public static void combineNullsOr(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
+    {
+        boolean[] target = outputNulls.values();
+        int length = outputNulls.length();
+        boolean leftFree = isAllFalseNulls(leftNulls);
+        boolean rightFree = isAllFalseNulls(rightNulls);
+        if (leftFree) {
+            copyNulls(rightNulls, rightFree, mask, target, length);
+            return;
+        }
+        if (rightFree) {
+            copyNulls(leftNulls, false, mask, target, length);
+            return;
+        }
+        java.util.Arrays.fill(target, 0, length, false);
+        BooleanValues left = booleanValues(leftNulls);
+        BooleanValues right = booleanValues(rightNulls);
+        for (int position : mask) {
+            target[position] = left.value(position) || right.value(position);
+        }
+    }
+
+    private static void copyNulls(Vector nulls, boolean allFalse, Mask mask, boolean[] target, int length)
+    {
+        if (allFalse) {
+            java.util.Arrays.fill(target, 0, length, false);
+            return;
+        }
+        if (nulls instanceof BooleanVector flat && mask.all() && flat.values().length >= length) {
+            System.arraycopy(flat.values(), 0, target, 0, length);
+            return;
+        }
+        java.util.Arrays.fill(target, 0, length, false);
+        BooleanValues values = booleanValues(nulls);
+        for (int position : mask) {
+            target[position] = values.value(position);
+        }
     }
 
     public static BooleanVector writableBooleanVector(Allocator allocator, Allocator.Context allocationContext, Vector existing, int size)

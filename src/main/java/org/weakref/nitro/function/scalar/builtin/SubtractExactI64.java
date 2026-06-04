@@ -136,13 +136,7 @@ public final class SubtractExactI64
 
     private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
-        VectorAccess.BooleanValues leftNullValues = VectorAccess.booleanValues(leftNulls);
-        VectorAccess.BooleanValues rightNullValues = VectorAccess.booleanValues(rightNulls);
-        boolean[] nulls = outputNulls.values();
-        java.util.Arrays.fill(nulls, 0, outputNulls.length(), false);
-        for (int position : mask) {
-            nulls[position] = leftNullValues.value(position) || rightNullValues.value(position);
-        }
+        VectorAccess.combineNullsOr(leftNulls, rightNulls, mask, outputNulls);
     }
 
     private static void apply(long leftValue, long rightValue, long[] values, boolean[] errors, int position)
