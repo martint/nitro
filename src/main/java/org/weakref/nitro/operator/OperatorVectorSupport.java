@@ -108,6 +108,31 @@ final class OperatorVectorSupport
         };
     }
 
+    /**
+     * Hashes the value at {@code position}, consistent with {@link OperatorEqualitySemantics#equal}:
+     * two positions that compare equal produce the same hash. Nulls hash to a fixed sentinel.
+     */
+    public static int hash(Vector values, Vector nulls, int position)
+    {
+        if (isNull(nulls, position)) {
+            return 0;
+        }
+        Vector value = flatten(values);
+        if (value instanceof I64Vector || value instanceof I32Vector) {
+            return Long.hashCode(longValue(values, position));
+        }
+        if (value instanceof BooleanVector || value instanceof ConcatenatedBooleanVector) {
+            return Boolean.hashCode(booleanValue(values, position));
+        }
+        if (value instanceof F64Vector) {
+            return Double.hashCode(doubleValue(values, position));
+        }
+        if (value instanceof BinaryVector) {
+            return binaryHash(values, position);
+        }
+        throw new IllegalArgumentException("Unsupported hash for " + value.getClass().getSimpleName());
+    }
+
     public static int binaryHash(byte[] bytes)
     {
         return binaryHash(bytes, 0, bytes.length);

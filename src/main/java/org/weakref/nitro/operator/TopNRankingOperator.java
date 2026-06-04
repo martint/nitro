@@ -20,7 +20,10 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
 
 public class TopNRankingOperator
         implements Operator
@@ -172,29 +175,40 @@ public class TopNRankingOperator
         }
 
         List<RowReference> rows = rows(pages);
-        rows.sort(this::compareRows);
 
-        List<RowReference> selected = new ArrayList<>();
-        List<Long> selectedRanks = new ArrayList<>();
-        RowReference previous = null;
-        long partitionRowNumber = 0;
-        long currentRank = 0;
-        for (RowReference row : rows) {
-            if (previous == null || !samePartition(previous, row)) {
-                partitionRowNumber = 1;
-                currentRank = 1;
-            }
-            else {
-                partitionRowNumber++;
-                if (!sameOrderingValue(previous, row)) {
-                    currentRank = partitionRowNumber;
+        // A full global sort would order every row by (partition, ordering) only to keep the rank<=limit
+        // prefix of each partition. Instead, bucket rows by partition and select a bounded top-N per
+        // bucket: the comparator never compares partition columns, and per-partition work scales with
+        // the limit rather than the partition size.
+        List<RankedRow> ranked = new ArrayList<>();
+        if (limit > 0) {
+            // A row with a null in any partition column never shares a partition with another row, because
+            // partition equality is value equality and that is false in the presence of nulls. Each such
+            // row is therefore its own singleton partition with rank 1. Bucket the rest by partition value.
+            Map<PartitionKey, List<RowReference>> partitions = new HashMap<>();
+            for (RowReference row : rows) {
+                if (hasNullPartition(row)) {
+                    ranked.add(new RankedRow(row, 1));
+                }
+                else {
+                    partitions.computeIfAbsent(new PartitionKey(row), _ -> new ArrayList<>()).add(row);
                 }
             }
-            if (currentRank <= limit) {
-                selected.add(row);
-                selectedRanks.add(currentRank);
+            for (List<RowReference> partition : partitions.values()) {
+                rankPartition(partition, ranked);
             }
-            previous = row;
+        }
+
+        // Restore the global (partition, ordering) order a full sort would have produced so output order
+        // and rank alignment are identical regardless of how rows were bucketed. The ranked set is
+        // bounded (~limit per partition), so this sort is cheap.
+        ranked.sort((left, right) -> compareRows(left.row(), right.row()));
+
+        List<RowReference> selected = new ArrayList<>(ranked.size());
+        List<Long> selectedRanks = new ArrayList<>(ranked.size());
+        for (RankedRow row : ranked) {
+            selected.add(row.row());
+            selectedRanks.add(row.rank());
         }
 
         selectedRows = selected;
@@ -224,14 +238,93 @@ public class TopNRankingOperator
         return 0;
     }
 
-    private boolean samePartition(RowReference left, RowReference right)
+    /**
+     * Selects the rows of a single partition with {@code rank() <= limit} and appends them with their
+     * ranks. The bounded candidate set already contains every row that can reach {@code rank <= limit}
+     * (all rows ordering-before-or-equal to the limit-th best), so the standard rank walk over it assigns
+     * the same ranks a full-partition walk would.
+     */
+    private void rankPartition(List<RowReference> partition, List<RankedRow> ranked)
     {
-        for (int partitionColumn : partitionColumns) {
-            if (!equalColumn(partitionColumn, left, right)) {
-                return false;
+        List<RowReference> candidates = boundedTopN(partition);
+        candidates.sort(this::compareOrdering);
+
+        RowReference previous = null;
+        long partitionRowNumber = 0;
+        long currentRank = 0;
+        for (RowReference row : candidates) {
+            if (previous == null) {
+                partitionRowNumber = 1;
+                currentRank = 1;
+            }
+            else {
+                partitionRowNumber++;
+                if (!sameOrderingValue(previous, row)) {
+                    currentRank = partitionRowNumber;
+                }
+            }
+            if (currentRank <= limit) {
+                ranked.add(new RankedRow(row, currentRank));
+            }
+            previous = row;
+        }
+    }
+
+    /**
+     * Returns the smallest set of rows that contains every row of the partition with {@code rank <= limit}.
+     * The limit-th best row (the rank threshold) is found with a bounded min-heap; every row ordering
+     * better than or equal to it is a candidate. For partitions no larger than the limit, every row
+     * qualifies.
+     */
+    private List<RowReference> boundedTopN(List<RowReference> partition)
+    {
+        if (partition.size() <= limit) {
+            return partition;
+        }
+        // Min-heap whose root is the worst of the best `limit` rows seen so far.
+        PriorityQueue<RowReference> bestRows = new PriorityQueue<>(limit, (left, right) -> compareOrdering(right, left));
+        for (RowReference row : partition) {
+            if (bestRows.size() < limit) {
+                bestRows.add(row);
+            }
+            else if (compareOrdering(row, bestRows.peek()) < 0) {
+                bestRows.poll();
+                bestRows.add(row);
             }
         }
-        return true;
+        RowReference threshold = bestRows.peek();
+        List<RowReference> candidates = new ArrayList<>();
+        for (RowReference row : partition) {
+            if (compareOrdering(row, threshold) <= 0) {
+                candidates.add(row);
+            }
+        }
+        return candidates;
+    }
+
+    private boolean hasNullPartition(RowReference row)
+    {
+        for (int partitionColumn : partitionColumns) {
+            Streams streams = row.page().columns()[partitionColumn];
+            if (OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), row.position())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int compareOrdering(RowReference left, RowReference right)
+    {
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int comparison = compareColumn(orderingColumns[orderingIndex], left, right);
+            if (descendingByColumn[orderingIndex]) {
+                comparison = -comparison;
+            }
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
     }
 
     private boolean sameOrderingValue(RowReference left, RowReference right)
@@ -363,4 +456,53 @@ public class TopNRankingOperator
     }
 
     private record RowReference(int pageIndex, TableOperator.Page page, int position) {}
+
+    private record RankedRow(RowReference row, long rank) {}
+
+    /**
+     * Groups rows by partition value. Only built for rows whose partition columns are all non-null, so
+     * equality and hashing never observe nulls and the standard hash-map contract holds.
+     */
+    private final class PartitionKey
+    {
+        private final RowReference row;
+        private final int hash;
+
+        private PartitionKey(RowReference row)
+        {
+            this.row = row;
+            int result = 1;
+            for (int partitionColumn : partitionColumns) {
+                Streams streams = row.page().columns()[partitionColumn];
+                result = 31 * result + OperatorVectorSupport.hash(streams.values(), streams.getOrNull(Stream.NULLS), row.position());
+            }
+            this.hash = result;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object other)
+        {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof PartitionKey that)) {
+                return false;
+            }
+            if (hash != that.hash) {
+                return false;
+            }
+            for (int partitionColumn : partitionColumns) {
+                if (!equalColumn(partitionColumn, row, that.row)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
 }
