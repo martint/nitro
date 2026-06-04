@@ -88,6 +88,8 @@ public final class TrinoParquetScanOperator
     private static final DataSize MAX_PAGE_READ_SIZE = DataSize.of(2, MEGABYTE);
     private static final Method LONG_ARRAY_RAW_VALUES = declaredMethod(LongArrayBlock.class, "getRawValues");
     private static final Method LONG_ARRAY_RAW_VALUES_OFFSET = declaredMethod(LongArrayBlock.class, "getRawValuesOffset");
+    private static final Method LONG_ARRAY_RAW_NULLS = declaredMethod(LongArrayBlock.class, "getRawValueIsNull");
+    private static final Method INT_ARRAY_RAW_NULLS = declaredMethod(IntArrayBlock.class, "getRawValueIsNull");
     private static final Method VARIABLE_WIDTH_RAW_OFFSETS = declaredMethod(VariableWidthBlock.class, "getRawOffsets");
     private static final Method VARIABLE_WIDTH_RAW_ARRAY_BASE = declaredMethod(VariableWidthBlock.class, "getRawArrayBase");
     private static final Field PARQUET_SOURCE_PAGE_BLOCKS = declaredField("io.trino.parquet.reader.ParquetReader$ParquetSourcePage", "blocks");
@@ -722,13 +724,59 @@ public final class TrinoParquetScanOperator
 
     private BooleanVector copyNulls(Block block, Mask mask)
     {
-        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, block.getPositionCount(), BooleanVector::new);
+        int positionCount = block.getPositionCount();
+        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, positionCount, BooleanVector::new);
         if (!block.mayHaveNull()) {
             return nulls;
         }
         boolean[] output = nulls.values();
+        // Fixed-width blocks expose their null flags as a boolean[] with the same true==null convention
+        // as BooleanVector, so copy them in bulk instead of calling isNull() per position via a lambda.
+        boolean[] rawNulls = rawValueIsNull(block);
+        if (rawNulls != null) {
+            int offset = rawValueIsNullOffset(block);
+            if (mask.all()) {
+                System.arraycopy(rawNulls, offset, output, 0, positionCount);
+            }
+            else {
+                for (int index = 0; index < mask.selectedCount(); index++) {
+                    int position = mask.position(index);
+                    output[position] = rawNulls[offset + position];
+                }
+            }
+            return nulls;
+        }
         forEachSelected(mask, position -> output[position] = block.isNull(position));
         return nulls;
+    }
+
+    // Raw null flags (true == null) for fixed-width blocks that expose them, indexed by
+    // rawValueIsNullOffset(block) + position; null for blocks with a different layout.
+    private static boolean[] rawValueIsNull(Block block)
+    {
+        try {
+            if (block instanceof LongArrayBlock longBlock) {
+                return (boolean[]) LONG_ARRAY_RAW_NULLS.invoke(longBlock);
+            }
+            if (block instanceof IntArrayBlock intBlock) {
+                return (boolean[]) INT_ARRAY_RAW_NULLS.invoke(intBlock);
+            }
+        }
+        catch (IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalStateException("Unable to access Trino block null flags", exception);
+        }
+        return null;
+    }
+
+    private static int rawValueIsNullOffset(Block block)
+    {
+        if (block instanceof LongArrayBlock longBlock) {
+            return rawValuesOffset(longBlock);
+        }
+        if (block instanceof IntArrayBlock intBlock) {
+            return intBlock.getRawValuesOffset();
+        }
+        return 0;
     }
 
     private BooleanVector selectedNulls(Mask mask)
