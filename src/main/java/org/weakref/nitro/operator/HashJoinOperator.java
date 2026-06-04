@@ -1488,6 +1488,16 @@ public class HashJoinOperator
         private int mask;
         private int maxFill;
         private int size;
+        // Array-mode (Velox kArray-style direct addressing): when the build keys are unique and form a
+        // dense integer range, a probe is a bounds check plus one array index — no hash, no probe loop.
+        // Built lazily on the first probe; the hash table is the fallback for sparse or duplicate keys.
+        private static final int MAX_ARRAY_RANGE = 1 << 26; // cap direct array at ~64M entries (512MB)
+        private long minKey = Long.MAX_VALUE;
+        private long maxKey = Long.MIN_VALUE;
+        private boolean hasDuplicates;
+        private boolean finalized;
+        private boolean arrayMode;
+        private long[] directRows;
         private final SingleLongList singleMatch = new SingleLongList();
         private final ChainLongList scalarChain = new ChainLongList();
         private final ChainLongList[] chainMatches = createChainLongLists(BATCH_SIZE);
@@ -1543,12 +1553,18 @@ public class HashJoinOperator
         @Override
         public LongList matchesNoNulls(Vector[] values, int position)
         {
-            return rowsForSlot(findSlot(OperatorVectorSupport.longValue(values[0], position)), singleMatch, scalarChain);
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            return rowsForKey(OperatorVectorSupport.longValue(values[0], position), singleMatch, scalarChain);
         }
 
         @Override
         public void matchRows(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
+            if (!finalized) {
+                finalizeForProbe();
+            }
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
             VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
@@ -1565,7 +1581,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForSlot(findSlot(rowValues.value(position)), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1613,8 +1629,17 @@ public class HashJoinOperator
 
         private void addRow(long key, long rowReference)
         {
+            if (key < minKey) {
+                minKey = key;
+            }
+            if (key > maxKey) {
+                maxKey = key;
+            }
             int slot = findSlot(key);
             boolean newKey = slotHead[slot] == EMPTY;
+            if (!newKey) {
+                hasDuplicates = true;
+            }
             if (rowCount == rowReferences.length) {
                 int newCapacity = rowReferences.length * 2;
                 rowReferences = Arrays.copyOf(rowReferences, newCapacity);
@@ -1654,6 +1679,49 @@ public class HashJoinOperator
             return chain.reset(rowReferences, chainNext, head, count);
         }
 
+        // Chooses array mode when the build is unique and its keys form a dense integer range, so the
+        // probe can index a direct array by (key - minKey) instead of hashing and probing.
+        private void finalizeForProbe()
+        {
+            finalized = true;
+            if (size == 0 || hasDuplicates) {
+                return;
+            }
+            long range = maxKey - minKey + 1;
+            if (range <= 0 || range > MAX_ARRAY_RANGE || range > 2L * size) {
+                return;
+            }
+            long[] direct = new long[(int) range];
+            Arrays.fill(direct, NO_MATCH_ROW_REFERENCE);
+            for (int slot = 0; slot < keys.length; slot++) {
+                int head = slotHead[slot];
+                if (head != EMPTY) {
+                    direct[(int) (keys[slot] - minKey)] = rowReferences[head];
+                }
+            }
+            directRows = direct;
+            arrayMode = true;
+            // The hash table and chain are no longer consulted in array mode.
+            keys = null;
+            slotHead = null;
+            slotTail = null;
+            slotCount = null;
+            chainNext = null;
+            rowReferences = null;
+        }
+
+        private LongList rowsForKey(long key, SingleLongList single, ChainLongList chain)
+        {
+            if (arrayMode) {
+                if (key < minKey || key > maxKey) {
+                    return LongLists.emptyList();
+                }
+                long rowReference = directRows[(int) (key - minKey)];
+                return rowReference == NO_MATCH_ROW_REFERENCE ? LongLists.emptyList() : single.withValue(rowReference);
+            }
+            return rowsForSlot(findSlot(key), single, chain);
+        }
+
         private static int mix(long key)
         {
             long hash = key ^ (key >>> 33);
@@ -1672,7 +1740,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = rowsForSlot(findSlot(values[position]), singleMatches[index], chainMatches[index]);
+                    matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
                 }
             }
         }
@@ -1685,7 +1753,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = rowsForSlot(findSlot(values[position]), singleMatches[index], chainMatches[index]);
+                    matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
                 }
             }
         }
@@ -1702,7 +1770,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1714,7 +1782,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForSlot(findSlot(dictionaryValues[ids[position]]), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1726,7 +1794,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForSlot(findSlot(dictionaryValues.value(ids[position])), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(dictionaryValues.value(ids[position]), singleMatches[index], chainMatches[index]);
                         }
                     }
                 }
@@ -1742,7 +1810,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = rowsForSlot(findSlot(rowValues.value(position)), singleMatches[index], chainMatches[index]);
+                    matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
                 }
             }
         }
