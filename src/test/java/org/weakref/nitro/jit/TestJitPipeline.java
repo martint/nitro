@@ -103,7 +103,7 @@ public class TestJitPipeline
         Plan.Pipeline arrayPlan = new Plan.Pipeline(
                 2,
                 null,
-                -1,
+                null,
                 List.of(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(0))),
                 List.of(new Plan.Col(0)),
                 new Plan.Domain(0, 4999),
@@ -227,6 +227,61 @@ public class TestJitPipeline
         long[] aSums = arrayResult.columns()[1];
         for (int g = 0; g < arrayResult.rowCount(); g++) {
             assertThat(aSums[g]).as("array sum for attr %d", aKeys[g]).isEqualTo(reference.get(aKeys[g]));
+        }
+    }
+
+    @Test
+    void compilesAndComputesMultiKeyJoinGroupedAggregate()
+    {
+        // fact(fk0, fk1, measure) JOIN dim(dk0, dk1, dattr) ON fk0=dk0 AND fk1=dk1 GROUP BY dattr, sum(measure)
+        // combined columns: probe [0=fk0, 1=fk1, 2=measure], build [3=dk0, 4=dk1, 5=dattr]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                new Plan.Build(3, new int[] {0, 1}),
+                new int[] {0, 1},
+                List.of(),
+                List.of(new Plan.Col(5)),
+                null,
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
+
+        int dim0 = 100;
+        int dim1 = 10;
+        int dim = dim0 * dim1;            // 1000 dim rows, unique (dk0, dk1)
+        int groups = 20;
+        long[] dk0 = new long[dim];
+        long[] dk1 = new long[dim];
+        long[] dattr = new long[dim];
+        for (int a0 = 0; a0 < dim0; a0++) {
+            for (int a1 = 0; a1 < dim1; a1++) {
+                int row = a0 * dim1 + a1;
+                dk0[row] = a0;
+                dk1[row] = a1;
+                dattr[row] = row % groups;
+            }
+        }
+        int fact = 500_000;
+        long[] fk0 = new long[fact];
+        long[] fk1 = new long[fact];
+        long[] measure = new long[fact];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < fact; i++) {
+            fk0[i] = i % dim0;
+            fk1[i] = i % dim1;
+            measure[i] = (i % 50) + 1;
+            long attr = dattr[(int) (fk0[i] * dim1 + fk1[i])];
+            reference.merge(attr, measure[i], Long::sum);
+        }
+
+        System.out.println("=== generated multi-key join source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{fk0, fk1, measure}, {dk0, dk1, dattr}}, new int[] {fact, dim});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for attr %d", keys[g]).isEqualTo(reference.get(keys[g]));
         }
     }
 }

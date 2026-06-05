@@ -127,12 +127,26 @@ public final class PipelineCompiler
     {
         Plan.Build build = pipeline.build();
         int probeColumns = pipeline.columnCount();
+        int[] probeKeys = pipeline.probeKeyColumns();
+        int[] buildKeys = build.keyColumns();
+        int keyCount = buildKeys.length;
+        if (probeKeys.length != keyCount) {
+            throw new IllegalArgumentException("join key count mismatch: probe " + probeKeys.length + " vs build " + keyCount);
+        }
+        boolean dense = build.denseKeys();
+        if (dense && keyCount != 1) {
+            throw new UnsupportedOperationException("array-mode join (denseKeys) requires exactly one key");
+        }
 
         TreeSet<Integer> combined = referencedColumns(pipeline);
-        combined.add(pipeline.probeKeyColumn());
+        for (int probeKey : probeKeys) {
+            combined.add(probeKey);
+        }
         TreeSet<Integer> probeReferenced = new TreeSet<>();
         TreeSet<Integer> buildReferenced = new TreeSet<>();
-        buildReferenced.add(build.keyColumn());
+        for (int buildKey : buildKeys) {
+            buildReferenced.add(buildKey);
+        }
         for (int column : combined) {
             if (column < probeColumns) {
                 probeReferenced.add(column);
@@ -150,10 +164,9 @@ public final class PipelineCompiler
         for (int column : buildReferenced) {
             out.append("    long[] b").append(column).append(" = build[").append(column).append("];\n");
         }
-        String buildKey = "b" + build.keyColumn();
-        boolean dense = build.denseKeys();
         if (dense) {
             // Array mode: index a build-row array directly by (key - min) -- no hashing, no probe loop.
+            String buildKey = "b" + buildKeys[0];
             out.append("    long minKey = Long.MAX_VALUE, maxKey = Long.MIN_VALUE;\n");
             out.append("    for (int r = 0; r < buildRows; r++) { long key = ").append(buildKey)
                     .append("[r]; if (key < minKey) { minKey = key; } if (key > maxKey) { maxKey = key; } }\n");
@@ -163,15 +176,22 @@ public final class PipelineCompiler
                     .append("[r] - minKey)] = r; }\n");
         }
         else {
-            // Open-addressing key -> build-row hash table (build keys assumed unique).
+            // Open-addressing composite-key -> build-row hash table (build keys assumed unique).
             out.append("    int jcap = 16; while (jcap * 0.75f < buildRows) { jcap <<= 1; }\n");
-            out.append("    long[] jKey = new long[jcap]; int[] jRow = new int[jcap];\n");
-            out.append("    java.util.Arrays.fill(jRow, -1); int jMask = jcap - 1;\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append("    long[] jKey").append(kx).append(" = new long[jcap];\n");
+            }
+            out.append("    int[] jRow = new int[jcap]; java.util.Arrays.fill(jRow, -1); int jMask = jcap - 1;\n");
             out.append("    for (int r = 0; r < buildRows; r++) {\n");
-            out.append("      long key = ").append(buildKey).append("[r];\n");
-            out.append("      int slot = mix(key) & jMask;\n");
-            out.append("      while (jRow[slot] != -1 && jKey[slot] != key) { slot = (slot + 1) & jMask; }\n");
-            out.append("      jKey[slot] = key; jRow[slot] = r;\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append("      long bk").append(kx).append(" = b").append(buildKeys[kx]).append("[r];\n");
+            }
+            out.append("      int slot = mix(").append(hashFold("bk", "", keyCount)).append(") & jMask;\n");
+            out.append("      while (jRow[slot] != -1) { slot = (slot + 1) & jMask; }\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append("      jKey").append(kx).append("[slot] = bk").append(kx).append(";\n");
+            }
+            out.append("      jRow[slot] = r;\n");
             out.append("    }\n");
         }
 
@@ -185,16 +205,21 @@ public final class PipelineCompiler
         else {
             emitGlobalState(out, pipeline.aggregates().size());
         }
-        String probeKey = "p" + pipeline.probeKeyColumn();
         out.append("    for (int i = 0; i < probeRows; i++) {\n");
-        out.append("      long jk = ").append(probeKey).append("[i];\n");
         if (dense) {
+            out.append("      long jk = p").append(probeKeys[0]).append("[i];\n");
             out.append("      int buildRow = (jk >= minKey && jk <= maxKey) ? buildRowByKey[(int) (jk - minKey)] : -1;\n");
         }
         else {
-            out.append("      int js = mix(jk) & jMask;\n");
-            out.append("      while (jRow[js] != -1 && jKey[js] != jk) { js = (js + 1) & jMask; }\n");
-            out.append("      int buildRow = jRow[js];\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append("      long pk").append(kx).append(" = p").append(probeKeys[kx]).append("[i];\n");
+            }
+            out.append("      int js = mix(").append(hashFold("pk", "", keyCount)).append(") & jMask;\n");
+            out.append("      int buildRow = -1;\n");
+            out.append("      while (jRow[js] != -1) {\n");
+            out.append("        if (").append(joinKeyCompare(keyCount)).append(") { buildRow = jRow[js]; break; }\n");
+            out.append("        js = (js + 1) & jMask;\n");
+            out.append("      }\n");
         }
         out.append("      if (buildRow != -1) {\n");
         emitRowBody(out, "        ", pipeline, resolver, grouped);
@@ -412,6 +437,19 @@ public final class PipelineCompiler
                 compare.append(" && ");
             }
             compare.append("htKey").append(kx).append("[").append(slot).append("] == gk").append(kx);
+        }
+        return compare.toString();
+    }
+
+    /** Conjunction {@code jKey0[js] == pk0 && ...} comparing every stored build key component to the probe. */
+    private static String joinKeyCompare(int keyCount)
+    {
+        StringBuilder compare = new StringBuilder();
+        for (int kx = 0; kx < keyCount; kx++) {
+            if (kx > 0) {
+                compare.append(" && ");
+            }
+            compare.append("jKey").append(kx).append("[js] == pk").append(kx);
         }
         return compare.toString();
     }

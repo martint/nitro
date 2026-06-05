@@ -64,16 +64,32 @@ public final class Plan
 
     /**
      * Build (inner/dimension) side of an inner hash join. {@code columnCount} build columns, joined on
-     * {@code keyColumn}. Build keys are assumed unique (the TPC-DS fact-to-dimension-PK case). When
-     * {@code denseKeys} is set, the compiler emits direct array-mode lookup (Velox kArray-style: index by
+     * {@code keyColumns} (one or more, paired positionally with the pipeline's probe key columns). Build keys
+     * are assumed unique on the composite (the TPC-DS fact-to-dimension-PK case). When {@code denseKeys} is set
+     * — only valid for a single key — the compiler emits direct array-mode lookup (Velox kArray-style: index by
      * {@code key - min}, no hashing) instead of a hash table — the right specialization for dense surrogate
      * keys, and the kind of choice a production engine would make at runtime with a deopt guard.
      */
-    public record Build(int columnCount, int keyColumn, boolean denseKeys)
+    public record Build(int columnCount, int[] keyColumns, boolean denseKeys)
     {
+        public Build
+        {
+            keyColumns = keyColumns.clone();
+        }
+
+        public Build(int columnCount, int[] keyColumns)
+        {
+            this(columnCount, keyColumns, false);
+        }
+
         public Build(int columnCount, int keyColumn)
         {
-            this(columnCount, keyColumn, false);
+            this(columnCount, new int[] {keyColumn}, false);
+        }
+
+        public Build(int columnCount, int keyColumn, boolean denseKeys)
+        {
+            this(columnCount, new int[] {keyColumn}, denseKeys);
         }
     }
 
@@ -84,25 +100,26 @@ public final class Plan
      * {@code groupKeys} (empty = global aggregation); and computes {@code aggregates}. When {@code groupDomain}
      * is non-null the single group key is treated as dense and grouped in array mode.
      */
-    public record Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, Domain groupDomain, List<Aggregate> aggregates)
+    public record Pipeline(int columnCount, Build build, int[] probeKeyColumns, List<Predicate> filters, List<Expr> groupKeys, Domain groupDomain, List<Aggregate> aggregates)
     {
         public Pipeline
         {
+            probeKeyColumns = probeKeyColumns == null ? new int[0] : probeKeyColumns.clone();
             filters = List.copyOf(filters);
             groupKeys = List.copyOf(groupKeys);
             aggregates = List.copyOf(aggregates);
         }
 
-        /** Convenience for a join pipeline with hash-mode (or no) grouping. */
+        /** Convenience for a single-key join pipeline with hash-mode (or no) grouping. */
         public Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, build, probeKeyColumn, filters, groupKeys, null, aggregates);
+            this(columnCount, build, new int[] {probeKeyColumn}, filters, groupKeys, null, aggregates);
         }
 
         /** Convenience for a single-input pipeline (no join). */
         public Pipeline(int columnCount, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, null, -1, filters, groupKeys, null, aggregates);
+            this(columnCount, null, new int[0], filters, groupKeys, null, aggregates);
         }
     }
 }

@@ -107,7 +107,7 @@ public class BenchmarkCompiledGroupBy
         Plan.Pipeline arrayPlan = new Plan.Pipeline(
                 2,
                 null,
-                -1,
+                null,
                 List.of(),
                 List.of(new Plan.Col(0)),
                 new Plan.Domain(0, groups - 1),
