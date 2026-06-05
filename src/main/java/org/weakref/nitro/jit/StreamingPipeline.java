@@ -40,5 +40,11 @@ public interface StreamingPipeline
         Column[] columns();
     }
 
-    CompiledPipeline.Result execute(Source source);
+    /**
+     * Run the pipeline, streaming {@code source} (the probe / fact side) batch-by-batch. {@code builds} are the
+     * join build (dimension) sides, materialized once into hash tables before the probe streams -- one
+     * {@link Column}[] per build with its row count in {@code buildRowCounts}. Both are empty for a single-input
+     * pipeline (no joins).
+     */
+    CompiledPipeline.Result execute(Source source, Column[][] builds, int[] buildRowCounts);
 }

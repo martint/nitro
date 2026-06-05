@@ -418,7 +418,7 @@ public class TestJitPipeline
 
         int batchSize = 4096;
         StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
-        CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, k, v));
+        CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, k, v), new Column[0][], new int[0]);
         Map<Long, Long> result = groupSums(streamed);
 
         assertThat(result).isEqualTo(eager);

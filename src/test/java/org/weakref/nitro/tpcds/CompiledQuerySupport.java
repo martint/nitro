@@ -239,8 +239,24 @@ public final class CompiledQuerySupport
      */
     public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, TpcdsParquetTables tables, String table, String... columns)
     {
-        int width = columns.length;
-        Operator operator = scan(allocator, tables, table, columns);
+        List<org.weakref.nitro.jit.QueryLowering.Column> specs = new ArrayList<>();
+        for (String column : columns) {
+            specs.add(new org.weakref.nitro.jit.QueryLowering.Column(column));   // FLAT, non-null
+        }
+        return parquetFlatSource(allocator, tables, table, specs);
+    }
+
+    /**
+     * Spec-aware flat streaming source: each batch produces one {@link org.weakref.nitro.jit.Column.FlatColumn}
+     * per column, value-only, plus a null mask exactly when the spec is nullable -- mirroring the eager loader so
+     * the compiled routine's null handling matches. String probe columns are not supported (they would need a
+     * dictionary consistent across batches).
+     */
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, TpcdsParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        int width = specs.size();
+        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+        Operator operator = scan(allocator, tables, table, names);
         return new org.weakref.nitro.jit.StreamingPipeline.Source()
         {
             private org.weakref.nitro.jit.Column[] current;
@@ -256,20 +272,24 @@ public final class CompiledQuerySupport
                         if (count == 0) {
                             continue;
                         }
-                        Vector[] vectors = new Vector[width];
-                        Vector[] nulls = new Vector[width];
-                        for (int c = 0; c < width; c++) {
-                            vectors[c] = batch.output(c).borrow(Stream.VALUES);
-                            nulls[c] = batch.output(c).borrowOrNull(Stream.NULLS);
-                        }
                         org.weakref.nitro.jit.Column[] columns = new org.weakref.nitro.jit.Column[width];
                         for (int c = 0; c < width; c++) {
+                            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
+                                throw new UnsupportedOperationException("streaming string probe columns not supported: " + specs.get(c).name());
+                            }
+                            Vector vector = batch.output(c).borrow(Stream.VALUES);
+                            Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
                             long[] values = new long[count];
+                            boolean[] nullMask = specs.get(c).nullable() ? new boolean[count] : null;
                             for (int index = 0; index < count; index++) {
                                 int position = mask.position(index);
-                                values[index] = nulls[c] != null && isNull(nulls[c], position) ? 0 : longValue(vectors[c], position);
+                                boolean isNull = nulls != null && isNull(nulls, position);
+                                if (nullMask != null) {
+                                    nullMask[index] = isNull;
+                                }
+                                values[index] = isNull ? 0 : longValue(vector, position);
                             }
-                            columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(values);
+                            columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
                         }
                         current = columns;
                         currentRows = count;
@@ -370,6 +390,29 @@ public final class CompiledQuerySupport
             rowCounts[s] = loaded.rows;
         }
         return new LoadedInputs(inputs, rowCounts);
+    }
+
+    /**
+     * Run a lowered star query through a compiled {@link org.weakref.nitro.jit.StreamingPipeline}: the build
+     * (dimension) inputs are materialized once into hash tables; the probe (fact) input is streamed from Parquet
+     * batch-by-batch (flat columns). Returns the raw result.
+     */
+    public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming)
+    {
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
+        int buildCount = sources.size() - 1;
+        org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
+        int[] buildRowCounts = new int[buildCount];
+        for (int b = 0; b < buildCount; b++) {
+            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(b + 1);
+            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+            DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+            builds[b] = loaded.columns;
+            buildRowCounts[b] = loaded.rows;
+        }
+        org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
+        return streaming.execute(parquetFlatSource(allocator, tables, probe.table(), probe.columns()), builds, buildRowCounts);
     }
 
     /** Load a lowered query's inputs from Parquet and run it. */

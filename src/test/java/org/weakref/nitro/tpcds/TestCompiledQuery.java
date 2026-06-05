@@ -138,9 +138,11 @@ public class TestCompiledQuery
         org.weakref.nitro.jit.StreamingPipeline streaming =
                 org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         Map<Long, Long> streamed = toMap(streaming.execute(
-                CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity")));
+                CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity"),
+                new org.weakref.nitro.jit.Column[0][], new int[0]));
         Map<Long, Long> zeroCopy = toMap(streaming.execute(
-                CompiledQuerySupport.parquetColumnarSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity")));
+                CompiledQuerySupport.parquetColumnarSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity"),
+                new org.weakref.nitro.jit.Column[0][], new int[0]));
 
         assertThat(streamed).isEqualTo(eager);
         assertThat(zeroCopy).isEqualTo(eager);

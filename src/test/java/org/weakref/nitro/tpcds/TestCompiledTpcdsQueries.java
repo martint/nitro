@@ -80,6 +80,42 @@ public class TestCompiledTpcdsQueries
         assertMatchesHarness(CompiledTpcdsQueries.query96(), TpcdsParquetSupport::query96);
     }
 
+    @Test
+    void streamingJoinMatchesEager()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // The Q42 star query (2 joins, build-side string group key, decimal sum, top-100) run two ways: eager
+        // (probe materialized) and streaming (dimensions built once, fact streamed batch-by-batch). The build-side
+        // i_category dictionary is materialized once, so its group-key ids stay consistent across probe batches.
+        org.weakref.nitro.jit.QueryLowering.Lowered lowered = CompiledTpcdsQueries.query42().query().lower();
+
+        org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(), tables, lowered).result();
+
+        org.weakref.nitro.jit.StreamingPipeline streaming =
+                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        org.weakref.nitro.jit.CompiledPipeline.Result streamed =
+                CompiledQuerySupport.runStreamingLowered(new Allocator(), tables, lowered, streaming);
+
+        assertThat(rows(streamed)).isEqualTo(rows(eager));
+        assertThat(streamed.rowCount()).isGreaterThan(0);
+    }
+
+    /** A result as the set of its rows (each a list of the column slot values), order-insensitive. */
+    private static java.util.Set<List<Long>> rows(org.weakref.nitro.jit.CompiledPipeline.Result result)
+    {
+        java.util.Set<List<Long>> set = new java.util.HashSet<>();
+        for (int r = 0; r < result.rowCount(); r++) {
+            List<Long> row = new ArrayList<>();
+            for (long[] column : result.columns()) {
+                row.add(column[r]);
+            }
+            set.add(row);
+        }
+        return set;
+    }
+
     /** A harness operator chain built from a fresh allocator + the shared primitive registry over the given tables. */
     private interface HarnessChain
     {

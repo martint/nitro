@@ -94,16 +94,15 @@ public final class PipelineCompiler
     }
 
     /**
-     * Compile {@code pipeline} as a {@link StreamingPipeline}: a single scanned input consumed batch-by-batch,
-     * folding into grouping/aggregation state that persists across batches. No joins (yet); array-mode group
-     * speculation is off (the domain is not known up front), so grouping uses the hash path. String group keys
-     * require a dictionary consistent across batches -- a later step; flat keys stream correctly today.
+     * Compile {@code pipeline} as a {@link StreamingPipeline}: the probe / scanned input is consumed
+     * batch-by-batch, folding into grouping/aggregation state that persists across batches; join build sides are
+     * materialized once into hash tables before the probe streams. Array-mode group speculation is off (the
+     * domain is not known up front), so grouping uses the hash path. Probe-side string group keys would need a
+     * dictionary consistent across batches (a later step); build-side string keys (the usual dimension case)
+     * stream correctly since their dictionary is materialized once.
      */
     public static StreamingPipeline compileStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
-        if (!pipeline.joins().isEmpty()) {
-            throw new UnsupportedOperationException("streaming joins are not implemented yet");
-        }
         String simpleName = "Streaming_" + COUNTER.incrementAndGet();
         String source = renderStreaming(pipeline, encodings, nullable, simpleName);
         try {
@@ -127,11 +126,23 @@ public final class PipelineCompiler
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.StreamingPipeline {\n");
-        if (!pipeline.groupKeys().isEmpty()) {
+        boolean needsMix = !pipeline.groupKeys().isEmpty() || !pipeline.joins().isEmpty();
+        if (needsMix) {
             emitMix(out);
         }
         List<Type> resultTypes = outputColumnTypes(pipeline, encodings);
-        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.StreamingPipeline.Source source) {\n");
+        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
+                + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
+
+        if (!pipeline.joins().isEmpty()) {
+            emitJoinBody(out, pipeline, encodings, nullable, resultTypes, true);
+            out.append("  }\n");
+            emitApplyHaving(out, pipeline.having(), resultTypes);
+            emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+            emitApplyProjection(out, pipeline.projections(), resultTypes);
+            out.append("}\n");
+            return out.toString();
+        }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
         // State lives across batches: initialize it once, before the batch loop.
@@ -749,6 +760,18 @@ public final class PipelineCompiler
 
     private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
+        emitJoinBody(out, pipeline, encodings, nullable, resultTypes, false);
+    }
+
+    /**
+     * Probe ⋈ builds → filter → aggregate. When {@code streaming}, the build sides are materialized once from
+     * {@code builds}/{@code buildRowCounts} into hash tables and the probe is consumed batch-by-batch from a
+     * {@link StreamingPipeline.Source} {@code source}; otherwise everything comes materialized from
+     * {@code inputs}/{@code rowCounts}. Build-side string-filter masks build once; probe-side masks rebuild per
+     * batch (the probe's per-batch dictionary).
+     */
+    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes, boolean streaming)
+    {
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
         int joinCount = joins.size();
@@ -805,17 +828,18 @@ public final class PipelineCompiler
             return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, local), "buildRow" + build);
         };
 
-        out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
-        for (int column : probeReferenced) {
-            emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
-        }
+        // Builds (dimensions) are materialized once into hash tables: eager from inputs[k+1], streaming from builds[k].
+        String buildsArray = streaming ? "builds" : "inputs";
+        String buildCounts = streaming ? "buildRowCounts" : "rowCounts";
+        int buildBase = streaming ? 0 : 1;
         for (int k = 0; k < joinCount; k++) {
             Plan.Join join = joins.get(k);
             int keyCount = join.build().keyColumns().length;
             if (join.probeKeyColumns().length != keyCount) {
                 throw new IllegalArgumentException("join " + k + " key count mismatch: probe " + join.probeKeyColumns().length + " vs build " + keyCount);
             }
-            out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = inputs[").append(k + 1).append("]; int build").append(k).append("Rows = rowCounts[").append(k + 1).append("];\n");
+            out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = ").append(buildsArray).append("[").append(k + buildBase)
+                    .append("]; int build").append(k).append("Rows = ").append(buildCounts).append("[").append(k + buildBase).append("];\n");
             for (int column : buildReferenced.get(k)) {
                 int combinedIndex = buildOffset[k] + column;
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, combinedIndex), combinedNullable(pipeline, nullable, combinedIndex), "build" + k + "[" + column + "]", buildVars(k, column));
@@ -823,19 +847,23 @@ public final class PipelineCompiler
             emitBuildStructures(out, k, join.build().keyColumns());
         }
 
-        // Predicate-over-dictionary for string filters, evaluated once per dictionary entry into an id mask. The
-        // filtered column may be on the probe or any build side; resolve its combined index to the right dictionary.
+        // Predicate-over-dictionary string-filter masks. Collect + assign a stable id per predicate; build-side
+        // masks build once here (their dictionary is materialized), probe-side masks build per batch (below).
         List<Plan.Condition> stringMatches = new ArrayList<>();
         for (Plan.Condition filter : pipeline.filters()) {
             collectStringMatches(filter, stringMatches);
         }
         Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
         for (int s = 0; s < stringMatches.size(); s++) {
+            stringMaskIds.put(stringMatches.get(s), s);
+        }
+        for (int s = 0; s < stringMatches.size(); s++) {
             Plan.Condition match = stringMatches.get(s);
-            stringMaskIds.put(match, s);
             int column = stringMatchColumn(match);
-            ColumnVars vars = column < probeColumns ? probeVars(column) : buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]);
-            emitStringMaskPrelude(out, match, s, vars.stringDict());
+            if (column >= probeColumns) {
+                int build = buildOf(joins, buildOffset, column);
+                emitStringMaskPrelude(out, match, s, buildVars(build, column - buildOffset[build]).stringDict());
+            }
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
@@ -844,6 +872,25 @@ public final class PipelineCompiler
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
+        }
+
+        // Probe rows: one pass over the materialized probe (eager), or batch-by-batch from the source (streaming).
+        if (streaming) {
+            out.append("    while (source.advance()) {\n");
+            out.append("      org.weakref.nitro.jit.Column[] probe = source.columns(); int probeRows = source.rows();\n");
+        }
+        else {
+            out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
+        }
+        for (int column : probeReferenced) {
+            emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
+        }
+        for (int s = 0; s < stringMatches.size(); s++) {
+            Plan.Condition match = stringMatches.get(s);
+            int column = stringMatchColumn(match);
+            if (column < probeColumns) {
+                emitStringMaskPrelude(out, match, s, probeVars(column).stringDict());
+            }
         }
 
         out.append("    for (int i = 0; i < probeRows; i++) {\n");
@@ -860,6 +907,9 @@ public final class PipelineCompiler
             out.append(indent).append("}\n");
         }
         out.append("    }\n");
+        if (streaming) {
+            out.append("    }\n");   // close the batch loop
+        }
 
         if (grouped) {
             emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);

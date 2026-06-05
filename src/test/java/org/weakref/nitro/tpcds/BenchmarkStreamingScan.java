@@ -51,6 +51,8 @@ public class BenchmarkStreamingScan
 {
     private static final String TABLE = "store_sales";
     private static final String[] COLUMNS = {"ss_item_sk", "ss_quantity", "ss_wholesale_cost", "ss_list_price", "ss_sales_price", "ss_ext_sales_price"};
+    private static final org.weakref.nitro.jit.Column[][] NO_BUILDS = new org.weakref.nitro.jit.Column[0][];
+    private static final int[] NO_BUILD_ROWS = new int[0];
 
     private Allocator allocator;
     private TpcdsParquetTables tables;
@@ -96,12 +98,12 @@ public class BenchmarkStreamingScan
     @Benchmark
     public Object streaming()
     {
-        return streaming.execute(CompiledQuerySupport.parquetFlatSource(allocator, tables, TABLE, COLUMNS));
+        return streaming.execute(CompiledQuerySupport.parquetFlatSource(allocator, tables, TABLE, COLUMNS), NO_BUILDS, NO_BUILD_ROWS);
     }
 
     @Benchmark
     public Object streamingZeroCopy()
     {
-        return streaming.execute(CompiledQuerySupport.parquetColumnarSource(allocator, tables, TABLE, COLUMNS));
+        return streaming.execute(CompiledQuerySupport.parquetColumnarSource(allocator, tables, TABLE, COLUMNS), NO_BUILDS, NO_BUILD_ROWS);
     }
 }
