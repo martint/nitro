@@ -26,6 +26,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,12 +83,12 @@ public final class PipelineCompiler
                 .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
         // Any grouping needs mix() (array-mode grouping still keeps a hash table for the deopt fallback); so
         // does a join (its hash-table fallback branch).
-        boolean needsMix = !pipeline.groupKeys().isEmpty() || pipeline.build() != null;
+        boolean needsMix = !pipeline.groupKeys().isEmpty() || !pipeline.joins().isEmpty();
         if (needsMix) {
             emitMix(out);
         }
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][][] inputs, int[] rowCounts) {\n");
-        if (pipeline.build() != null) {
+        if (!pipeline.joins().isEmpty()) {
             emitJoinBody(out, pipeline);
         }
         else {
@@ -146,66 +147,74 @@ public final class PipelineCompiler
         out.append("    int aSize = speculateArray ? (int) Math.min(").append(MAX_ARRAY_RANGE).append("L, sRange + (sRange >> 1) + 64) : 0;\n");
     }
 
-    // ---- scan(probe) inner-join build -> filter -> aggregate ----
+    // ---- scan(probe) inner-join builds -> filter -> aggregate ----
 
     private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline)
     {
-        Plan.Build build = pipeline.build();
         int probeColumns = pipeline.columnCount();
-        int[] probeKeys = pipeline.probeKeyColumns();
-        int[] buildKeys = build.keyColumns();
-        int keyCount = buildKeys.length;
-        if (probeKeys.length != keyCount) {
-            throw new IllegalArgumentException("join key count mismatch: probe " + probeKeys.length + " vs build " + keyCount);
+        List<Plan.Join> joins = pipeline.joins();
+        int joinCount = joins.size();
+
+        // Where each build's columns begin in the combined column space (probe columns first, then each build).
+        int[] buildOffset = new int[joinCount];
+        int offset = probeColumns;
+        for (int k = 0; k < joinCount; k++) {
+            buildOffset[k] = offset;
+            offset += joins.get(k).build().columnCount();
         }
 
+        // Partition referenced columns into probe columns and per-build columns, always including join keys.
         TreeSet<Integer> combined = referencedColumns(pipeline);
-        for (int probeKey : probeKeys) {
-            combined.add(probeKey);
+        for (Plan.Join join : joins) {
+            for (int probeKey : join.probeKeyColumns()) {
+                combined.add(probeKey);
+            }
         }
         TreeSet<Integer> probeReferenced = new TreeSet<>();
-        TreeSet<Integer> buildReferenced = new TreeSet<>();
-        for (int buildKey : buildKeys) {
-            buildReferenced.add(buildKey);
+        List<TreeSet<Integer>> buildReferenced = new ArrayList<>();
+        for (int k = 0; k < joinCount; k++) {
+            TreeSet<Integer> set = new TreeSet<>();
+            for (int buildKey : joins.get(k).build().keyColumns()) {
+                set.add(buildKey);
+            }
+            buildReferenced.add(set);
         }
         for (int column : combined) {
             if (column < probeColumns) {
                 probeReferenced.add(column);
             }
             else {
-                buildReferenced.add(column - probeColumns);
+                int build = buildOf(joins, buildOffset, column);
+                buildReferenced.get(build).add(column - buildOffset[build]);
             }
         }
 
+        IntFunction<String> resolver = index -> {
+            if (index < probeColumns) {
+                return "p" + index + "[i]";
+            }
+            int build = buildOf(joins, buildOffset, index);
+            return "b" + build + "_" + (index - buildOffset[build]) + "[buildRow" + build + "]";
+        };
+
         out.append("    long[][] probe = inputs[0]; int probeRows = rowCounts[0];\n");
-        out.append("    long[][] build = inputs[1]; int buildRows = rowCounts[1];\n");
         for (int column : probeReferenced) {
             out.append("    long[] p").append(column).append(" = probe[").append(column).append("];\n");
         }
-        for (int column : buildReferenced) {
-            out.append("    long[] b").append(column).append(" = build[").append(column).append("];\n");
+        for (int k = 0; k < joinCount; k++) {
+            Plan.Join join = joins.get(k);
+            int keyCount = join.build().keyColumns().length;
+            if (join.probeKeyColumns().length != keyCount) {
+                throw new IllegalArgumentException("join " + k + " key count mismatch: probe " + join.probeKeyColumns().length + " vs build " + keyCount);
+            }
+            out.append("    long[][] build").append(k).append(" = inputs[").append(k + 1).append("]; int build").append(k).append("Rows = rowCounts[").append(k + 1).append("];\n");
+            for (int column : buildReferenced.get(k)) {
+                out.append("    long[] b").append(k).append("_").append(column).append(" = build").append(k).append("[").append(column).append("];\n");
+            }
+            emitBuildStructures(out, k, join.build().keyColumns());
         }
 
-        IntFunction<String> resolver = index -> index < probeColumns
-                ? "p" + index + "[i]"
-                : "b" + (index - probeColumns) + "[buildRow]";
         boolean grouped = !pipeline.groupKeys().isEmpty();
-
-        // Only a single key can use array mode (it needs a dense scalar domain). For one key, measure the build
-        // key range and decide array vs hash at runtime; for composite keys, go straight to the hash table.
-        boolean arrayCandidate = keyCount == 1;
-        if (arrayCandidate) {
-            String buildKey = "b" + buildKeys[0];
-            out.append("    long minKey = Long.MAX_VALUE, maxKey = Long.MIN_VALUE;\n");
-            out.append("    for (int r = 0; r < buildRows; r++) { long key = ").append(buildKey)
-                    .append("[r]; if (key < minKey) { minKey = key; } if (key > maxKey) { maxKey = key; } }\n");
-            out.append("    long keyRange = buildRows == 0 ? 0 : (maxKey - minKey + 1);\n");
-            // Array mode pays off when the key domain is dense (range within a small factor of the row count)
-            // and bounded (array fits in memory); otherwise the open-addressing table wins.
-            out.append("    boolean useArray = buildRows > 0 && keyRange >= 1 && keyRange <= ")
-                    .append(MAX_ARRAY_RANGE).append("L && keyRange <= (long) buildRows * ").append(DENSITY_FACTOR).append("L;\n");
-        }
-
         if (grouped) {
             emitGroupedState(out, pipeline, false);
         }
@@ -213,16 +222,19 @@ public final class PipelineCompiler
             emitGlobalState(out, pipeline.aggregates().size());
         }
 
-        if (arrayCandidate) {
-            out.append("    if (useArray) {\n");
-            emitArrayJoinProbe(out, "      ", pipeline, probeKeys[0], "b" + buildKeys[0], resolver, grouped);
-            out.append("    }\n    else {\n");
-            emitHashJoinProbe(out, "      ", pipeline, probeKeys, buildKeys, keyCount, resolver, grouped);
-            out.append("    }\n");
+        out.append("    for (int i = 0; i < probeRows; i++) {\n");
+        String indent = "      ";
+        for (int k = 0; k < joinCount; k++) {
+            emitProbeLookup(out, indent, k, joins.get(k));
+            out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+            indent += "  ";
         }
-        else {
-            emitHashJoinProbe(out, "    ", pipeline, probeKeys, buildKeys, keyCount, resolver, grouped);
+        emitRowBody(out, indent, pipeline, resolver, grouped, false);
+        for (int k = 0; k < joinCount; k++) {
+            indent = indent.substring(2);
+            out.append(indent).append("}\n");
         }
+        out.append("    }\n");
 
         if (grouped) {
             emitGroupedResult(out, pipeline, false);
@@ -232,54 +244,118 @@ public final class PipelineCompiler
         }
     }
 
-    /** Array-mode build + probe (single key): direct index by {@code key - minKey}. Assumes minKey/maxKey/keyRange in scope. */
-    private static void emitArrayJoinProbe(StringBuilder out, String indent, Plan.Pipeline pipeline, int probeKey, String buildKey, IntFunction<String> resolver, boolean grouped)
+    private static int buildOf(List<Plan.Join> joins, int[] buildOffset, int combinedColumn)
     {
-        out.append(indent).append("int range = (int) keyRange;\n");
-        out.append(indent).append("int[] buildRowByKey = new int[range]; java.util.Arrays.fill(buildRowByKey, -1);\n");
-        out.append(indent).append("for (int r = 0; r < buildRows; r++) { buildRowByKey[(int) (").append(buildKey).append("[r] - minKey)] = r; }\n");
-        out.append(indent).append("for (int i = 0; i < probeRows; i++) {\n");
-        out.append(indent).append("  long jk = p").append(probeKey).append("[i];\n");
-        out.append(indent).append("  int buildRow = (jk >= minKey && jk <= maxKey) ? buildRowByKey[(int) (jk - minKey)] : -1;\n");
-        out.append(indent).append("  if (buildRow != -1) {\n");
-        emitRowBody(out, indent + "    ", pipeline, resolver, grouped, false);
-        out.append(indent).append("  }\n");
+        for (int k = 0; k < joins.size(); k++) {
+            int start = buildOffset[k];
+            int end = start + joins.get(k).build().columnCount();
+            if (combinedColumn >= start && combinedColumn < end) {
+                return k;
+            }
+        }
+        throw new IllegalArgumentException("combined column out of range: " + combinedColumn);
+    }
+
+    /**
+     * Build the lookup structure for join {@code k} into method-scope variables. A single-key build measures its
+     * key range and chooses array mode (direct index) or an open-addressing hash table at runtime; a composite
+     * key always uses the hash table. The probe loop selects the matching lookup via {@code useArray<k>}.
+     */
+    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys)
+    {
+        int keyCount = buildKeys.length;
+        String rows = "build" + k + "Rows";
+        if (keyCount == 1) {
+            String buildKey = "b" + k + "_" + buildKeys[0];
+            out.append("    long minKey").append(k).append(" = Long.MAX_VALUE, maxKey").append(k).append(" = Long.MIN_VALUE;\n");
+            out.append("    for (int r = 0; r < ").append(rows).append("; r++) { long key = ").append(buildKey)
+                    .append("[r]; if (key < minKey").append(k).append(") { minKey").append(k).append(" = key; } if (key > maxKey").append(k).append(") { maxKey").append(k).append(" = key; } }\n");
+            out.append("    long keyRange").append(k).append(" = ").append(rows).append(" == 0 ? 0 : (maxKey").append(k).append(" - minKey").append(k).append(" + 1);\n");
+            out.append("    boolean useArray").append(k).append(" = ").append(rows).append(" > 0 && keyRange").append(k).append(" >= 1 && keyRange").append(k).append(" <= ")
+                    .append(MAX_ARRAY_RANGE).append("L && keyRange").append(k).append(" <= (long) ").append(rows).append(" * ").append(DENSITY_FACTOR).append("L;\n");
+            out.append("    int[] buildRowByKey").append(k).append(" = null;\n");
+            out.append("    long[] jKey").append(k).append("_0 = null; int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
+            out.append("    if (useArray").append(k).append(") {\n");
+            out.append("      int range = (int) keyRange").append(k).append("; buildRowByKey").append(k).append(" = new int[range]; java.util.Arrays.fill(buildRowByKey").append(k).append(", -1);\n");
+            out.append("      for (int r = 0; r < ").append(rows).append("; r++) { buildRowByKey").append(k).append("[(int) (").append(buildKey).append("[r] - minKey").append(k).append(")] = r; }\n");
+            out.append("    }\n    else {\n");
+            emitHashBuild(out, "      ", k, buildKeys);
+            out.append("    }\n");
+        }
+        else {
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append("    long[] jKey").append(k).append("_").append(kx).append(" = null;\n");
+            }
+            out.append("    int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
+            out.append("    {\n");
+            emitHashBuild(out, "      ", k, buildKeys);
+            out.append("    }\n");
+        }
+    }
+
+    /** Open-addressing build for join {@code k} (build keys assumed unique), populating the join's slot arrays. */
+    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys)
+    {
+        int keyCount = buildKeys.length;
+        String rows = "build" + k + "Rows";
+        out.append(indent).append("int jcap = 16; while (jcap * 0.75f < ").append(rows).append(") { jcap <<= 1; }\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(indent).append("jKey").append(k).append("_").append(kx).append(" = new long[jcap];\n");
+        }
+        out.append(indent).append("jRow").append(k).append(" = new int[jcap]; java.util.Arrays.fill(jRow").append(k).append(", -1); jMask").append(k).append(" = jcap - 1;\n");
+        out.append(indent).append("for (int r = 0; r < ").append(rows).append("; r++) {\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(indent).append("  long bk").append(kx).append(" = b").append(k).append("_").append(buildKeys[kx]).append("[r];\n");
+        }
+        out.append(indent).append("  int slot = mix(").append(hashFold("bk", "", keyCount)).append(") & jMask").append(k).append(";\n");
+        out.append(indent).append("  while (jRow").append(k).append("[slot] != -1) { slot = (slot + 1) & jMask").append(k).append("; }\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(indent).append("  jKey").append(k).append("_").append(kx).append("[slot] = bk").append(kx).append(";\n");
+        }
+        out.append(indent).append("  jRow").append(k).append("[slot] = r;\n");
         out.append(indent).append("}\n");
     }
 
-    /** Open-addressing composite-key build + probe (build keys assumed unique). */
-    private static void emitHashJoinProbe(StringBuilder out, String indent, Plan.Pipeline pipeline, int[] probeKeys, int[] buildKeys, int keyCount, IntFunction<String> resolver, boolean grouped)
+    /** Per-row lookup for join {@code k}, leaving {@code int buildRow<k>} in scope (-1 = no match). */
+    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join)
     {
-        out.append(indent).append("int jcap = 16; while (jcap * 0.75f < buildRows) { jcap <<= 1; }\n");
+        int[] probeKeys = join.probeKeyColumns();
+        int keyCount = probeKeys.length;
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("long[] jKey").append(kx).append(" = new long[jcap];\n");
+            out.append(indent).append("long pk").append(k).append("_").append(kx).append(" = p").append(probeKeys[kx]).append("[i];\n");
         }
-        out.append(indent).append("int[] jRow = new int[jcap]; java.util.Arrays.fill(jRow, -1); int jMask = jcap - 1;\n");
-        out.append(indent).append("for (int r = 0; r < buildRows; r++) {\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("  long bk").append(kx).append(" = b").append(buildKeys[kx]).append("[r];\n");
+        out.append(indent).append("int buildRow").append(k).append(";\n");
+        if (keyCount == 1) {
+            out.append(indent).append("if (useArray").append(k).append(") {\n");
+            out.append(indent).append("  long jk = pk").append(k).append("_0;\n");
+            out.append(indent).append("  buildRow").append(k).append(" = (jk >= minKey").append(k).append(" && jk <= maxKey").append(k).append(") ? buildRowByKey").append(k).append("[(int) (jk - minKey").append(k).append(")] : -1;\n");
+            out.append(indent).append("}\n    ").append(indent).append("else {\n");
         }
-        out.append(indent).append("  int slot = mix(").append(hashFold("bk", "", keyCount)).append(") & jMask;\n");
-        out.append(indent).append("  while (jRow[slot] != -1) { slot = (slot + 1) & jMask; }\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("  jKey").append(kx).append("[slot] = bk").append(kx).append(";\n");
+        else {
+            out.append(indent).append("{\n");
         }
-        out.append(indent).append("  jRow[slot] = r;\n");
+        String body = indent + "  ";
+        out.append(body).append("int js = mix(").append(hashFold("pk" + k + "_", "", keyCount)).append(") & jMask").append(k).append(";\n");
+        out.append(body).append("int br = -1;\n");
+        out.append(body).append("while (jRow").append(k).append("[js] != -1) {\n");
+        out.append(body).append("  if (").append(probeKeyCompare(k, keyCount)).append(") { br = jRow").append(k).append("[js]; break; }\n");
+        out.append(body).append("  js = (js + 1) & jMask").append(k).append(";\n");
+        out.append(body).append("}\n");
+        out.append(body).append("buildRow").append(k).append(" = br;\n");
         out.append(indent).append("}\n");
-        out.append(indent).append("for (int i = 0; i < probeRows; i++) {\n");
+    }
+
+    /** Conjunction {@code jKey<k>_0[js] == pk<k>_0 && ...} comparing every stored build key component. */
+    private static String probeKeyCompare(int k, int keyCount)
+    {
+        StringBuilder compare = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("  long pk").append(kx).append(" = p").append(probeKeys[kx]).append("[i];\n");
+            if (kx > 0) {
+                compare.append(" && ");
+            }
+            compare.append("jKey").append(k).append("_").append(kx).append("[js] == pk").append(k).append("_").append(kx);
         }
-        out.append(indent).append("  int js = mix(").append(hashFold("pk", "", keyCount)).append(") & jMask;\n");
-        out.append(indent).append("  int buildRow = -1;\n");
-        out.append(indent).append("  while (jRow[js] != -1) {\n");
-        out.append(indent).append("    if (").append(joinKeyCompare(keyCount)).append(") { buildRow = jRow[js]; break; }\n");
-        out.append(indent).append("    js = (js + 1) & jMask;\n");
-        out.append(indent).append("  }\n");
-        out.append(indent).append("  if (buildRow != -1) {\n");
-        emitRowBody(out, indent + "    ", pipeline, resolver, grouped, false);
-        out.append(indent).append("  }\n");
-        out.append(indent).append("}\n");
+        return compare.toString();
     }
 
     // ---- shared per-row body: optional filter, then accumulate ----
@@ -565,19 +641,6 @@ public final class PipelineCompiler
                 compare.append(" && ");
             }
             compare.append("htKey").append(kx).append("[").append(slot).append("] == gk").append(kx);
-        }
-        return compare.toString();
-    }
-
-    /** Conjunction {@code jKey0[js] == pk0 && ...} comparing every stored build key component to the probe. */
-    private static String joinKeyCompare(int keyCount)
-    {
-        StringBuilder compare = new StringBuilder();
-        for (int kx = 0; kx < keyCount; kx++) {
-            if (kx > 0) {
-                compare.append(" && ");
-            }
-            compare.append("jKey").append(kx).append("[js] == pk").append(kx);
         }
         return compare.toString();
     }

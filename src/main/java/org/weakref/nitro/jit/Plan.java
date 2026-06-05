@@ -76,33 +76,56 @@ public final class Plan
     }
 
     /**
-     * A push pipeline. Scans {@code columnCount} probe columns; if {@code build} is non-null, inner-joins it
-     * on {@code probeKeyColumn = build.keyColumn} (combined columns address probe {@code [0,columnCount)} then
-     * build {@code [columnCount, columnCount+build.columnCount)}); keeps rows passing every filter; groups by
-     * {@code groupKeys} (empty = global aggregation); and computes {@code aggregates}. For a single group key
-     * in a scan pipeline the compiler speculates array-mode grouping and deopts to a hash table at runtime; the
-     * structure is chosen from the data, not declared in the plan.
+     * One inner join of the probe stream against a {@link Build}, matching the probe's {@code probeKeyColumns}
+     * positionally against {@code build.keyColumns}. Joins are applied in order; build {@code k}'s columns occupy
+     * the combined column space immediately after the probe columns and all earlier builds.
      */
-    public record Pipeline(int columnCount, Build build, int[] probeKeyColumns, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+    public record Join(Build build, int[] probeKeyColumns)
+    {
+        public Join
+        {
+            probeKeyColumns = probeKeyColumns.clone();
+        }
+
+        public Join(Build build, int probeKeyColumn)
+        {
+            this(build, new int[] {probeKeyColumn});
+        }
+    }
+
+    /**
+     * A push pipeline. Scans {@code columnCount} probe columns; inner-joins each of {@code joins} in order
+     * (combined columns address probe {@code [0,columnCount)} then each build's columns appended in turn);
+     * keeps rows passing every filter; groups by {@code groupKeys} (empty = global aggregation); and computes
+     * {@code aggregates}. For a single group key in a scan pipeline the compiler speculates array-mode grouping
+     * and deopts to a hash table at runtime; the structure is chosen from the data, not declared in the plan.
+     */
+    public record Pipeline(int columnCount, List<Join> joins, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
     {
         public Pipeline
         {
-            probeKeyColumns = probeKeyColumns == null ? new int[0] : probeKeyColumns.clone();
+            joins = List.copyOf(joins);
             filters = List.copyOf(filters);
             groupKeys = List.copyOf(groupKeys);
             aggregates = List.copyOf(aggregates);
         }
 
-        /** Convenience for a single-key join pipeline. */
+        /** Convenience for a single-key single-join pipeline. */
         public Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, build, new int[] {probeKeyColumn}, filters, groupKeys, aggregates);
+            this(columnCount, List.of(new Join(build, probeKeyColumn)), filters, groupKeys, aggregates);
+        }
+
+        /** Convenience for a composite-key single-join pipeline. */
+        public Pipeline(int columnCount, Build build, int[] probeKeyColumns, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        {
+            this(columnCount, List.of(new Join(build, probeKeyColumns)), filters, groupKeys, aggregates);
         }
 
         /** Convenience for a single-input pipeline (no join). */
         public Pipeline(int columnCount, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, null, new int[0], filters, groupKeys, aggregates);
+            this(columnCount, List.of(), filters, groupKeys, aggregates);
         }
     }
 }

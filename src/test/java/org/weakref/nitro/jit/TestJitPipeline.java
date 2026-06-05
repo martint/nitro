@@ -248,6 +248,62 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesAndComputesTwoJoinStarGroupedAggregate()
+    {
+        // fact(fk_a, fk_b, measure) JOIN dimA(da_key, da_attr) ON fk_a=da_key JOIN dimB(db_key, db_attr) ON
+        // fk_b=db_key WHERE db_attr >= 2 GROUP BY da_attr, sum(measure)
+        // combined columns: probe [0=fk_a, 1=fk_b, 2=measure], dimA [3=da_key, 4=da_attr], dimB [5=db_key, 6=db_attr]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(
+                        new Plan.Join(new Plan.Build(2, 0), 0),
+                        new Plan.Join(new Plan.Build(2, 0), 1)),
+                List.of(new Plan.Predicate(">=", new Plan.Col(6), new Plan.Lit(2))),
+                List.of(new Plan.Col(4)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
+
+        int dimA = 100;
+        int dimB = 50;
+        long[] daKey = new long[dimA];
+        long[] daAttr = new long[dimA];
+        for (int d = 0; d < dimA; d++) {
+            daKey[d] = d;
+            daAttr[d] = d % 10;
+        }
+        long[] dbKey = new long[dimB];
+        long[] dbAttr = new long[dimB];
+        for (int d = 0; d < dimB; d++) {
+            dbKey[d] = d;
+            dbAttr[d] = d % 5;
+        }
+        int fact = 500_000;
+        long[] fkA = new long[fact];
+        long[] fkB = new long[fact];
+        long[] measure = new long[fact];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < fact; i++) {
+            fkA[i] = i % dimA;
+            fkB[i] = i % dimB;
+            measure[i] = (i % 50) + 1;
+            if (dbAttr[(int) fkB[i]] >= 2) {
+                reference.merge(daAttr[(int) fkA[i]], measure[i], Long::sum);
+            }
+        }
+
+        System.out.println("=== generated two-join star source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{fkA, fkB, measure}, {daKey, daAttr}, {dbKey, dbAttr}}, new int[] {fact, dimA, dimB});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for da_attr %d", keys[g]).isEqualTo(reference.get(keys[g]));
+        }
+    }
+
+    @Test
     void compilesAndComputesMultiKeyJoinGroupedAggregate()
     {
         // fact(fk0, fk1, measure) JOIN dim(dk0, dk1, dattr) ON fk0=dk0 AND fk1=dk1 GROUP BY dattr, sum(measure)
