@@ -92,6 +92,51 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesJoinWithNullProbeKey()
+    {
+        // SELECT sum(v) FROM fact JOIN dim ON fact.k = dim.k -- some fact.k are null. A null key must match
+        // nothing, even though the dimension has a row with key 0 (the raw value a null reads as).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                              // probe: 0=k (nullable), 1=v
+                new Plan.Build(1, 0),           // build: 0=k
+                0,
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int dimRows = 50;
+        long[] dimKey = new long[dimRows];
+        for (int d = 0; d < dimRows; d++) {
+            dimKey[d] = d;                       // includes key 0
+        }
+        int factRows = 100_000;
+        long[] factKey = new long[factRows];
+        boolean[] factKeyNull = new boolean[factRows];
+        long[] v = new long[factRows];
+        long expected = 0;
+        for (int i = 0; i < factRows; i++) {
+            v[i] = (i % 20) + 1;
+            if (i % 5 == 0) {
+                factKeyNull[i] = true;           // null FK: must not join, even to dim key 0
+            }
+            else {
+                factKey[i] = i % dimRows;        // all match a dimension row
+                expected += v[i];
+            }
+        }
+
+        boolean[][] nullable = {{true, false}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        Column[][] inputs = {
+                {new Column.FlatColumn(factKey, factKeyNull), new Column.FlatColumn(v)},
+                {new Column.FlatColumn(dimKey)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {factRows, dimRows});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
     void compilesJoinWithStringBuildColumnGroupKey()
     {
         // SELECT s, sum(v) FROM fact JOIN dim ON fact.k = dim.k GROUP BY s -- s is a STRING column on the build

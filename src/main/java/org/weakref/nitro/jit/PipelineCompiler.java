@@ -631,7 +631,7 @@ public final class PipelineCompiler
         out.append("    for (int i = 0; i < probeRows; i++) {\n");
         String indent = "      ";
         for (int k = 0; k < joinCount; k++) {
-            emitProbeLookup(out, indent, k, joins.get(k));
+            emitProbeLookup(out, indent, k, joins.get(k), pipeline, nullable);
             out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
             indent += "  ";
         }
@@ -724,14 +724,26 @@ public final class PipelineCompiler
     }
 
     /** Per-row lookup for join {@code k}, leaving {@code int buildRow<k>} in scope (-1 = no match). */
-    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join)
+    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, Plan.Pipeline pipeline, boolean[][] nullable)
     {
         int[] probeKeys = join.probeKeyColumns();
         int keyCount = probeKeys.length;
+        // A null probe key matches nothing (SQL: NULL never equals anything) -- short-circuit before the lookup.
+        StringBuilder keyNull = new StringBuilder();
+        for (int kx = 0; kx < keyCount; kx++) {
+            if (combinedNullable(pipeline, nullable, probeKeys[kx])) {
+                keyNull.append(keyNull.length() == 0 ? "" : " || ").append("pN").append(probeKeys[kx]).append("[i]");
+            }
+        }
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(indent).append("long pk").append(k).append("_").append(kx).append(" = p").append(probeKeys[kx]).append("[i];\n");
         }
         out.append(indent).append("int buildRow").append(k).append(";\n");
+        if (keyNull.length() > 0) {
+            out.append(indent).append("if (").append(keyNull).append(") { buildRow").append(k).append(" = -1; }\n");
+            out.append(indent).append("else {\n");
+            indent += "  ";
+        }
         if (keyCount == 1) {
             out.append(indent).append("if (useArray").append(k).append(") {\n");
             out.append(indent).append("  long jk = pk").append(k).append("_0;\n");
@@ -750,6 +762,10 @@ public final class PipelineCompiler
         out.append(body).append("}\n");
         out.append(body).append("buildRow").append(k).append(" = br;\n");
         out.append(indent).append("}\n");
+        if (keyNull.length() > 0) {
+            indent = indent.substring(2);
+            out.append(indent).append("}\n");
+        }
     }
 
     /** Conjunction {@code jKey<k>_0[js] == pk<k>_0 && ...} comparing every stored build key component. */
