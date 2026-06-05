@@ -125,6 +125,49 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesAndComputesMultiKeyGroupedAggregate()
+    {
+        // SELECT k0, k1, sum(v), count(*) GROUP BY k0, k1
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Col(0), new Plan.Col(1)),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Col(2)),
+                        new Plan.Aggregate("count", null)));
+
+        int rows = 200_000;
+        long[] k0 = new long[rows];
+        long[] k1 = new long[rows];
+        long[] v = new long[rows];
+        Map<List<Long>, long[]> reference = new HashMap<>();   // (k0, k1) -> {sum, count}
+        for (int i = 0; i < rows; i++) {
+            k0[i] = i % 50;
+            k1[i] = i % 37;        // 50 * 37 = 1850 distinct composite groups
+            v[i] = i % 13;
+            long[] acc = reference.computeIfAbsent(List.of(k0[i], k1[i]), ignored -> new long[2]);
+            acc[0] += v[i];
+            acc[1]++;
+        }
+
+        System.out.println("=== generated multi-key grouped source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k0, k1, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+
+        long[] outK0 = result.columns()[0];
+        long[] outK1 = result.columns()[1];
+        long[] sums = result.columns()[2];
+        long[] counts = result.columns()[3];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = reference.get(List.of(outK0[g], outK1[g]));
+            assertThat(expected).as("group (%d, %d)", outK0[g], outK1[g]).isNotNull();
+            assertThat(sums[g]).as("sum for group (%d, %d)", outK0[g], outK1[g]).isEqualTo(expected[0]);
+            assertThat(counts[g]).as("count for group (%d, %d)", outK0[g], outK1[g]).isEqualTo(expected[1]);
+        }
+    }
+
+    @Test
     void compilesAndComputesJoinGroupedAggregate()
     {
         // fact(fk, measure) JOIN dim(dkey, dattr) ON fk=dkey GROUP BY dattr, sum(measure)

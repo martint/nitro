@@ -69,8 +69,8 @@ public final class PipelineCompiler
 
     private static String render(Plan.Pipeline pipeline, String simpleName)
     {
-        if (pipeline.groupKeys().size() > 1) {
-            throw new UnsupportedOperationException("multi-key grouping not yet supported (same shape, composite hash)");
+        if (pipeline.groupDomain() != null && pipeline.groupKeys().size() != 1) {
+            throw new UnsupportedOperationException("array-mode grouping (groupDomain) requires exactly one dense key");
         }
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
@@ -272,11 +272,17 @@ public final class PipelineCompiler
             }
             return;
         }
+        int keyCount = pipeline.groupKeys().size();
         out.append("    int cap = 1024;\n");
-        out.append("    long[] htKey = new long[cap]; int[] htGid = new int[cap];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append("    long[] htKey").append(kx).append(" = new long[cap];\n");
+        }
+        out.append("    int[] htGid = new int[cap];\n");
         out.append("    java.util.Arrays.fill(htGid, -1);\n");
         out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
-        out.append("    long[] keyByGid = new long[16];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
+        }
         for (int a = 0; a < aggregateCount; a++) {
             out.append("    long[] agg").append(a).append(" = new long[16];\n");
         }
@@ -294,27 +300,48 @@ public final class PipelineCompiler
             }
             return;
         }
-        out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), resolver)).append(";\n");
-        out.append(indent).append("int gslot = mix(gkey) & htMask;\n");
-        out.append(indent).append("while (htGid[gslot] != -1 && htKey[gslot] != gkey) { gslot = (gslot + 1) & htMask; }\n");
+        int keyCount = pipeline.groupKeys().size();
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(indent).append("long gk").append(kx).append(" = ").append(expr(pipeline.groupKeys().get(kx), resolver)).append(";\n");
+        }
+        out.append(indent).append("int gslot = mix(").append(hashFold("gk", "", keyCount)).append(") & htMask;\n");
+        out.append(indent).append("while (htGid[gslot] != -1 && !(").append(keyCompare("gslot", keyCount)).append(")) { gslot = (gslot + 1) & htMask; }\n");
         out.append(indent).append("int gid = htGid[gslot];\n");
         out.append(indent).append("if (gid == -1) {\n");
         String b = indent + "  ";
-        out.append(b).append("gid = groupCount++; htKey[gslot] = gkey; htGid[gslot] = gid;\n");
-        out.append(b).append("if (gid == keyByGid.length) {\n");
-        out.append(b).append("  int n = keyByGid.length * 2; keyByGid = java.util.Arrays.copyOf(keyByGid, n);\n");
+        out.append(b).append("gid = groupCount++; htGid[gslot] = gid;\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(b).append("htKey").append(kx).append("[gslot] = gk").append(kx).append(";\n");
+        }
+        out.append(b).append("if (gid == keyByGid0.length) {\n");
+        out.append(b).append("  int n = keyByGid0.length * 2;\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(b).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
+        }
         for (int a = 0; a < aggregates.size(); a++) {
             out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
         }
         out.append(b).append("}\n");
-        out.append(b).append("keyByGid[gid] = gkey;\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(b).append("keyByGid").append(kx).append("[gid] = gk").append(kx).append(";\n");
+        }
         out.append(b).append("if (groupCount > htFill) {\n");
-        out.append(b).append("  int ncap = cap * 2; long[] nKey = new long[ncap]; int[] nGid = new int[ncap];\n");
+        out.append(b).append("  int ncap = cap * 2;\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(b).append("  long[] nKey").append(kx).append(" = new long[ncap];\n");
+        }
+        out.append(b).append("  int[] nGid = new int[ncap];\n");
         out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
         out.append(b).append("  for (int s = 0; s < cap; s++) { if (htGid[s] != -1) {\n");
-        out.append(b).append("    int ns = mix(htKey[s]) & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
-        out.append(b).append("    nKey[ns] = htKey[s]; nGid[ns] = htGid[s]; } }\n");
-        out.append(b).append("  htKey = nKey; htGid = nGid; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
+        out.append(b).append("    int ns = mix(").append(hashFold("htKey", "[s]", keyCount)).append(") & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(b).append("    nKey").append(kx).append("[ns] = htKey").append(kx).append("[s];\n");
+        }
+        out.append(b).append("    nGid[ns] = htGid[s]; } }\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(b).append("  htKey").append(kx).append(" = nKey").append(kx).append(";\n");
+        }
+        out.append(b).append("  htGid = nGid; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
@@ -349,15 +376,45 @@ public final class PipelineCompiler
             out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
             return;
         }
-        out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
-        out.append("    result[0] = java.util.Arrays.copyOf(keyByGid, groupCount);\n");
+        int keyCount = pipeline.groupKeys().size();
+        out.append("    long[][] result = new long[").append(keyCount + aggregateCount).append("][];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append("    result[").append(kx).append("] = java.util.Arrays.copyOf(keyByGid").append(kx).append(", groupCount);\n");
+        }
         for (int a = 0; a < aggregateCount; a++) {
-            out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
+            out.append("    result[").append(keyCount + a).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
         }
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
     }
 
     // ---- helpers ----
+
+    /**
+     * Composite-key hash input over {@code keyCount} components named {@code <base>{i}<suffix>} (e.g.
+     * {@code gk0}, or {@code htKey0[s]}). One component folds to itself (preserving the single-key form);
+     * multiple fold with a Fibonacci-style multiply-add so each component shifts the others' bits.
+     */
+    private static String hashFold(String base, String suffix, int keyCount)
+    {
+        String folded = base + "0" + suffix;
+        for (int kx = 1; kx < keyCount; kx++) {
+            folded = "(" + folded + ") * 0x9E3779B97F4A7C15L + " + base + kx + suffix;
+        }
+        return folded;
+    }
+
+    /** Conjunction {@code htKey0[slot] == gk0 && ...} comparing every stored key component to the probe. */
+    private static String keyCompare(String slot, int keyCount)
+    {
+        StringBuilder compare = new StringBuilder();
+        for (int kx = 0; kx < keyCount; kx++) {
+            if (kx > 0) {
+                compare.append(" && ");
+            }
+            compare.append("htKey").append(kx).append("[").append(slot).append("] == gk").append(kx);
+        }
+        return compare.toString();
+    }
 
     private static void emitMix(StringBuilder out)
     {
