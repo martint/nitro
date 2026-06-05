@@ -182,6 +182,18 @@ public final class PipelineCompiler
         return false;
     }
 
+    /** Whether any aggregate can finalize to SQL NULL (e.g. an average over zero non-null inputs). */
+    private static boolean anyAggregateNullable(Plan.Pipeline pipeline)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        for (int a = 0; a < aggregates.size(); a++) {
+            if (aggregator(aggregates.get(a)).resultNull(cells(aggregates, a, "c", "i")) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, string dictionary, constant) plus its null mask. */
     private record ColumnVars(String flat, String ids, String dict, String stringDict, String constant, String nulls) {}
 
@@ -452,9 +464,10 @@ public final class PipelineCompiler
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         boolean grouped = !pipeline.groupKeys().isEmpty();
         // A single-key scan group can speculate array mode: estimate the key domain from a sample, bet on a
-        // direct-indexed array, and deopt to a hash table if a later key falls outside the bet. A nullable key
-        // routes through the null-aware hash path instead (array mode has no slot for a null group).
-        boolean speculate = grouped && pipeline.groupKeys().size() == 1 && !anyGroupKeyNullable(pipeline, nullable);
+        // direct-indexed array, and deopt to a hash table if a later key falls outside the bet. A nullable key or
+        // a nullable aggregate routes through the null-aware hash path instead (array mode emits no result null mask).
+        boolean speculate = grouped && pipeline.groupKeys().size() == 1
+                && !anyGroupKeyNullable(pipeline, nullable) && !anyAggregateNullable(pipeline);
 
         // Group-on-id: when the single group key is a dictionary column, group on its dense id (so array mode
         // applies even when the dictionary's values are sparse) and reconstruct the value at finalize.
@@ -920,6 +933,23 @@ public final class PipelineCompiler
             out.append("    result[").append(a).append("] = new long[] { ").append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "a", null))).append(" };\n");
         }
         emitResultTypes(out, "    ", resultTypes);
+        boolean nullableAggregate = false;
+        for (int a = 0; a < n; a++) {
+            if (aggregator(aggregates.get(a)).resultNull(cells(aggregates, a, "a", null)) != null) {
+                nullableAggregate = true;
+            }
+        }
+        if (nullableAggregate) {
+            out.append("    boolean[][] resultNulls = new boolean[").append(n).append("][];\n");
+            for (int a = 0; a < n; a++) {
+                String resultNull = aggregator(aggregates.get(a)).resultNull(cells(aggregates, a, "a", null));
+                if (resultNull != null) {
+                    out.append("    resultNulls[").append(a).append("] = new boolean[] { ").append(resultNull).append(" };\n");
+                }
+            }
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types, resultNulls))));\n");
+            return;
+        }
         out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types))));\n");
     }
 
@@ -1127,11 +1157,19 @@ public final class PipelineCompiler
         }
         emitAggregateResultColumns(out, "    ", keyCount, aggregates);
         emitResultTypes(out, "    ", resultTypes);
-        if (anyGroupKeyNullable(pipeline, nullable)) {
+        if (anyGroupKeyNullable(pipeline, nullable) || anyAggregateNullable(pipeline)) {
             out.append("    boolean[][] resultNulls = new boolean[").append(keyCount + aggregateCount).append("][];\n");
             for (int kx = 0; kx < keyCount; kx++) {
                 if (keyNullable(pipeline, nullable, kx)) {
                     out.append("    resultNulls[").append(kx).append("] = java.util.Arrays.copyOf(nullByGid").append(kx).append(", groupCount);\n");
+                }
+            }
+            for (int a = 0; a < aggregateCount; a++) {
+                String resultNull = aggregator(aggregates.get(a)).resultNull(cells(aggregates, a, "agg", "g"));
+                if (resultNull != null) {
+                    out.append("    boolean[] aggNull").append(a).append(" = new boolean[groupCount];\n");
+                    out.append("    for (int g = 0; g < groupCount; g++) { aggNull").append(a).append("[g] = ").append(resultNull).append("; }\n");
+                    out.append("    resultNulls[").append(keyCount + a).append("] = aggNull").append(a).append(";\n");
                 }
             }
             out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");

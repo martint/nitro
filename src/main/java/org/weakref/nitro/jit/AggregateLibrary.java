@@ -56,6 +56,15 @@ public final class AggregateLibrary
 
         /** The output value expression (a {@code long}; for {@code DOUBLE} output, its {@code doubleToRawLongBits}). */
         String result(List<String> cells);
+
+        /**
+         * Boolean expression that is true when the finalized result is SQL NULL (e.g. an average over zero
+         * non-null inputs). {@code null} means the aggregate is never null (the default; e.g. {@code count}).
+         */
+        default String resultNull(List<String> cells)
+        {
+            return null;
+        }
     }
 
     private static final Map<String, AggregateCompiler> REGISTRY = new ConcurrentHashMap<>();
@@ -98,6 +107,11 @@ public final class AggregateLibrary
             @Override public String result(List<String> cells)
             {
                 return "Double.doubleToRawLongBits(" + cells.get(1) + " == 0L ? 0.0 : (double) " + cells.get(0) + " / (double) " + cells.get(1) + ")";
+            }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                return cells.get(1) + " == 0L";   // average over zero non-null inputs is NULL
             }
         });
         // Sample standard deviation: cells [count, sum, sum of squares]. Long state can overflow on large
@@ -142,6 +156,11 @@ public final class AggregateLibrary
                 String sumSquares = "(double) " + cells.get(2);
                 String variance = "((" + sumSquares + " - " + sum + " * " + sum + " / " + n + ") / (double) (" + cells.get(0) + " - 1L))";
                 return "Double.doubleToRawLongBits(" + cells.get(0) + " < 2L ? 0.0 : Math.sqrt(" + variance + "))";
+            }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                return cells.get(0) + " < 2L";   // sample standard deviation needs at least two values
             }
         });
     }
