@@ -159,6 +159,69 @@ public final class CompiledQuerySupport
                 path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
     }
 
+    /**
+     * A {@link org.weakref.nitro.jit.StreamingPipeline.Source} over {@code table}'s {@code columns}, scanned from
+     * Parquet one batch at a time and exposed as flat {@code long} columns (value-only; the same per-position read
+     * the eager loader uses). The compiled streaming routine folds each batch without the whole table ever being
+     * materialized.
+     */
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, TpcdsParquetTables tables, String table, String... columns)
+    {
+        int width = columns.length;
+        Operator operator = scan(allocator, tables, table, columns);
+        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        {
+            private org.weakref.nitro.jit.Column[] current;
+            private int currentRows;
+
+            @Override
+            public boolean advance()
+            {
+                while (operator.hasNext()) {
+                    try (Batch batch = operator.next()) {
+                        Mask mask = batch.borrowMask();
+                        int count = mask.count();
+                        if (count == 0) {
+                            continue;
+                        }
+                        Vector[] vectors = new Vector[width];
+                        Vector[] nulls = new Vector[width];
+                        for (int c = 0; c < width; c++) {
+                            vectors[c] = batch.output(c).borrow(Stream.VALUES);
+                            nulls[c] = batch.output(c).borrowOrNull(Stream.NULLS);
+                        }
+                        org.weakref.nitro.jit.Column[] columns = new org.weakref.nitro.jit.Column[width];
+                        for (int c = 0; c < width; c++) {
+                            long[] values = new long[count];
+                            for (int index = 0; index < count; index++) {
+                                int position = mask.position(index);
+                                values[index] = nulls[c] != null && isNull(nulls[c], position) ? 0 : longValue(vectors[c], position);
+                            }
+                            columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(values);
+                        }
+                        current = columns;
+                        currentRows = count;
+                        return true;
+                    }
+                }
+                operator.close();
+                return false;
+            }
+
+            @Override
+            public int rows()
+            {
+                return currentRows;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] columns()
+            {
+                return current;
+            }
+        };
+    }
+
     /** Drain a scan into per-column arrays, dropping any row that is null in any selected column. */
     private static long[][] drain(Operator operator)
     {

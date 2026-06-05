@@ -118,6 +118,41 @@ public class TestCompiledQuery
         assertThat(OperatorAssertions.operator(bridged)).matches(interpreted);
     }
 
+    @Test
+    void streamingMatchesEagerOnStoreSalesAggregate()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // SELECT ss_item_sk, sum(ss_quantity) FROM store_sales GROUP BY ss_item_sk -- run eagerly (whole columns
+        // materialized) and by streaming the Parquet scan batch-by-batch; the two must agree.
+        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity"))
+                .groupBy("ss_item_sk")
+                .aggregate("sum", "ss_quantity");
+        org.weakref.nitro.jit.QueryLowering.Lowered lowered = query.lower();
+
+        Map<Long, Long> eager = toMap(CompiledQuerySupport.runLowered(new Allocator(), tables, lowered).result());
+
+        org.weakref.nitro.jit.StreamingPipeline streaming =
+                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        Map<Long, Long> streamed = toMap(streaming.execute(
+                CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity")));
+
+        assertThat(streamed).isEqualTo(eager);
+        assertThat(streamed).isNotEmpty();
+    }
+
+    private static Map<Long, Long> toMap(CompiledPipeline.Result result)
+    {
+        Map<Long, Long> map = new HashMap<>();
+        for (int g = 0; g < result.rowCount(); g++) {
+            map.put(result.columns()[0][g], result.columns()[1][g]);
+        }
+        return map;
+    }
+
     private static Map<Long, Long> runLowered(CompiledQuerySupport.Loaded data)
     {
         org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
