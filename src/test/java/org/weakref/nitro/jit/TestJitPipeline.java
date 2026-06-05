@@ -86,9 +86,45 @@ public class TestJitPipeline
 
         System.out.println("=== generated grouped source ===\n" + PipelineCompiler.render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
-        assertThat(result.rowCount()).isEqualTo(reference.size());
+        // Dense keys in [0, 5000): the sample speculates array mode and the bet holds (no deopt).
+        verifyGroupedSumCount(pipeline, k, v, reference);
 
+        // Deopt: the first SAMPLE_SIZE rows look narrow ([0, 50)), so the array is sized small, then later
+        // rows reach up to 4999 and force a mid-stream migration into the hash table. Results must still match.
+        long[] kDeopt = new long[rows];
+        long[] vDeopt = new long[rows];
+        Map<Long, long[]> deoptReference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            kDeopt[i] = i < 4096 ? i % 50 : i % 5000;
+            vDeopt[i] = (i % 11) - 2;
+            if (vDeopt[i] > 0) {
+                long[] acc = deoptReference.computeIfAbsent(kDeopt[i], ignored -> new long[2]);
+                acc[0] += vDeopt[i];
+                acc[1]++;
+            }
+        }
+        verifyGroupedSumCount(pipeline, kDeopt, vDeopt, deoptReference);
+
+        // Never speculate: the key domain exceeds the array cap, so it runs on the hash table from row 0.
+        long[] kSparse = new long[rows];
+        long[] vSparse = new long[rows];
+        Map<Long, long[]> sparseReference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            kSparse[i] = (i % 1000) * 1_000_000L;   // max ~1e9 > array cap
+            vSparse[i] = (i % 11) - 2;
+            if (vSparse[i] > 0) {
+                long[] acc = sparseReference.computeIfAbsent(kSparse[i], ignored -> new long[2]);
+                acc[0] += vSparse[i];
+                acc[1]++;
+            }
+        }
+        verifyGroupedSumCount(pipeline, kSparse, vSparse, sparseReference);
+    }
+
+    private static void verifyGroupedSumCount(Plan.Pipeline pipeline, long[] k, long[] v, Map<Long, long[]> reference)
+    {
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {k.length});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
         long[] keys = result.columns()[0];
         long[] sums = result.columns()[1];
         long[] counts = result.columns()[2];
@@ -97,30 +133,6 @@ public class TestJitPipeline
             assertThat(expected).as("group %d", keys[g]).isNotNull();
             assertThat(sums[g]).as("sum for group %d", keys[g]).isEqualTo(expected[0]);
             assertThat(counts[g]).as("count for group %d", keys[g]).isEqualTo(expected[1]);
-        }
-
-        // Array-mode grouping: declared dense key domain [0, 4999], direct-indexed. Identical results.
-        Plan.Pipeline arrayPlan = new Plan.Pipeline(
-                2,
-                null,
-                null,
-                List.of(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(0))),
-                List.of(new Plan.Col(0)),
-                new Plan.Domain(0, 4999),
-                List.of(
-                        new Plan.Aggregate("sum", new Plan.Col(1)),
-                        new Plan.Aggregate("count", null)));
-        System.out.println("=== generated array-mode grouped source ===\n" + PipelineCompiler.render(arrayPlan));
-        CompiledPipeline.Result arrayResult = PipelineCompiler.compile(arrayPlan).execute(new long[][][] {{k, v}}, new int[] {rows});
-        assertThat(arrayResult.rowCount()).isEqualTo(reference.size());
-        long[] aKeys = arrayResult.columns()[0];
-        long[] aSums = arrayResult.columns()[1];
-        long[] aCounts = arrayResult.columns()[2];
-        for (int g = 0; g < arrayResult.rowCount(); g++) {
-            long[] expected = reference.get(aKeys[g]);
-            assertThat(expected).as("array group %d", aKeys[g]).isNotNull();
-            assertThat(aSums[g]).as("array sum for group %d", aKeys[g]).isEqualTo(expected[0]);
-            assertThat(aCounts[g]).as("array count for group %d", aKeys[g]).isEqualTo(expected[1]);
         }
     }
 
@@ -246,7 +258,6 @@ public class TestJitPipeline
                 new int[] {0, 1},
                 List.of(),
                 List.of(new Plan.Col(5)),
-                null,
                 List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
 
         int dim0 = 100;

@@ -50,6 +50,8 @@ public final class PipelineCompiler
     // DENSITY_FACTOR x the row count (dense enough) and at most MAX_ARRAY_RANGE entries (bounded memory).
     private static final long MAX_ARRAY_RANGE = 1L << 27;
     private static final int DENSITY_FACTOR = 8;
+    // Rows sampled to estimate a streaming group key's domain before speculating array-mode grouping.
+    private static final int SAMPLE_SIZE = 4096;
 
     private PipelineCompiler() {}
 
@@ -74,17 +76,13 @@ public final class PipelineCompiler
 
     private static String render(Plan.Pipeline pipeline, String simpleName)
     {
-        if (pipeline.groupDomain() != null && pipeline.groupKeys().size() != 1) {
-            throw new UnsupportedOperationException("array-mode grouping (groupDomain) requires exactly one dense key");
-        }
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
-        boolean hashGroup = !pipeline.groupKeys().isEmpty() && pipeline.groupDomain() == null;
-        // A join always emits a hash-table fallback branch (used when the runtime density check fails), which
-        // needs mix(); so does hash-mode grouping.
-        boolean needsMix = hashGroup || pipeline.build() != null;
+        // Any grouping needs mix() (array-mode grouping still keeps a hash table for the deopt fallback); so
+        // does a join (its hash-table fallback branch).
+        boolean needsMix = !pipeline.groupKeys().isEmpty() || pipeline.build() != null;
         if (needsMix) {
             emitMix(out);
         }
@@ -110,21 +108,42 @@ public final class PipelineCompiler
         }
         IntFunction<String> resolver = index -> "c" + index + "[i]";
         boolean grouped = !pipeline.groupKeys().isEmpty();
+        // A single-key scan group can speculate array mode: estimate the key domain from a sample, bet on a
+        // direct-indexed array, and deopt to a hash table if a later key falls outside the bet.
+        boolean speculate = grouped && pipeline.groupKeys().size() == 1;
+        if (speculate) {
+            emitGroupSampleProlog(out, pipeline.groupKeys().getFirst());
+        }
         if (grouped) {
-            emitGroupedState(out, pipeline);
+            emitGroupedState(out, pipeline, speculate);
         }
         else {
             emitGlobalState(out, pipeline.aggregates().size());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, resolver, grouped);
+        emitRowBody(out, "      ", pipeline, resolver, grouped, speculate);
         out.append("    }\n");
         if (grouped) {
-            emitGroupedResult(out, pipeline);
+            emitGroupedResult(out, pipeline, speculate);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates().size());
         }
+    }
+
+    /** Sample the first rows to estimate the single group key's domain and decide whether to speculate array mode. */
+    private static void emitGroupSampleProlog(StringBuilder out, Plan.Expr groupKey)
+    {
+        String sampleKey = expr(groupKey, index -> "c" + index + "[s]");
+        out.append("    int sampleCount = Math.min(rowCount, ").append(SAMPLE_SIZE).append(");\n");
+        out.append("    long sMin = Long.MAX_VALUE, sMax = Long.MIN_VALUE;\n");
+        out.append("    for (int s = 0; s < sampleCount; s++) { long kk = ").append(sampleKey)
+                .append("; if (kk < sMin) { sMin = kk; } if (kk > sMax) { sMax = kk; } }\n");
+        out.append("    long sRange = sampleCount == 0 ? 0 : (sMax - sMin + 1);\n");
+        out.append("    boolean speculateArray = sampleCount > 0 && sRange >= 1 && sRange <= ").append(MAX_ARRAY_RANGE).append("L;\n");
+        out.append("    long aMin = sMin;\n");
+        // Give the bet headroom above the sampled max so minor domain underestimates do not deopt immediately.
+        out.append("    int aSize = speculateArray ? (int) Math.min(").append(MAX_ARRAY_RANGE).append("L, sRange + (sRange >> 1) + 64) : 0;\n");
     }
 
     // ---- scan(probe) inner-join build -> filter -> aggregate ----
@@ -188,7 +207,7 @@ public final class PipelineCompiler
         }
 
         if (grouped) {
-            emitGroupedState(out, pipeline);
+            emitGroupedState(out, pipeline, false);
         }
         else {
             emitGlobalState(out, pipeline.aggregates().size());
@@ -206,7 +225,7 @@ public final class PipelineCompiler
         }
 
         if (grouped) {
-            emitGroupedResult(out, pipeline);
+            emitGroupedResult(out, pipeline, false);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates().size());
@@ -223,7 +242,7 @@ public final class PipelineCompiler
         out.append(indent).append("  long jk = p").append(probeKey).append("[i];\n");
         out.append(indent).append("  int buildRow = (jk >= minKey && jk <= maxKey) ? buildRowByKey[(int) (jk - minKey)] : -1;\n");
         out.append(indent).append("  if (buildRow != -1) {\n");
-        emitRowBody(out, indent + "    ", pipeline, resolver, grouped);
+        emitRowBody(out, indent + "    ", pipeline, resolver, grouped, false);
         out.append(indent).append("  }\n");
         out.append(indent).append("}\n");
     }
@@ -258,14 +277,14 @@ public final class PipelineCompiler
         out.append(indent).append("    js = (js + 1) & jMask;\n");
         out.append(indent).append("  }\n");
         out.append(indent).append("  if (buildRow != -1) {\n");
-        emitRowBody(out, indent + "    ", pipeline, resolver, grouped);
+        emitRowBody(out, indent + "    ", pipeline, resolver, grouped, false);
         out.append(indent).append("  }\n");
         out.append(indent).append("}\n");
     }
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, boolean grouped)
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, boolean grouped, boolean speculate)
     {
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
@@ -276,7 +295,7 @@ public final class PipelineCompiler
             bodyIndent = indent + "  ";
         }
         if (grouped) {
-            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver);
+            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver, speculate);
         }
         else {
             emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver);
@@ -313,18 +332,18 @@ public final class PipelineCompiler
 
     // ---- grouped aggregation (single long key) ----
 
-    private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline)
+    private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline, boolean speculate)
     {
         int aggregateCount = pipeline.aggregates().size();
-        Plan.Domain domain = pipeline.groupDomain();
-        if (domain != null) {
-            // Array mode: aggregate arrays indexed directly by (key - min). No hashing, no rehash.
-            out.append("    long gmin = ").append(domain.min()).append("L;\n");
-            out.append("    int grange = (int) (").append(domain.max()).append("L - ").append(domain.min()).append("L + 1);\n");
-            out.append("    boolean[] gused = new boolean[grange]; int groupCount = 0;\n");
+        if (speculate) {
+            // Array structures (sized from the sampled domain) plus a hash table that stays empty unless a key
+            // falls outside the bet and we deopt into it. deopted starts true when we never speculated at all.
+            out.append("    boolean[] gused = new boolean[aSize];\n");
             for (int a = 0; a < aggregateCount; a++) {
-                out.append("    long[] agg").append(a).append(" = new long[grange];\n");
+                out.append("    long[] aAgg").append(a).append(" = new long[aSize];\n");
             }
+            out.append("    int arrayGroupCount = 0; boolean deopted = !speculateArray;\n");
+            emitSingleKeyHashState(out, aggregateCount);
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -343,16 +362,45 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver)
+    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, boolean speculate)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
-        if (pipeline.groupDomain() != null) {
+        if (speculate) {
+            int aggregateCount = aggregates.size();
             out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), resolver)).append(";\n");
-            out.append(indent).append("int goff = (int) (gkey - gmin);\n");
-            out.append(indent).append("if (!gused[goff]) { gused[goff] = true; groupCount++; }\n");
-            for (int a = 0; a < aggregates.size(); a++) {
-                out.append(indent).append("agg").append(a).append("[goff] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+            out.append(indent).append("if (!deopted) {\n");
+            String a1 = indent + "  ";
+            out.append(a1).append("long aoff = gkey - aMin;\n");
+            out.append(a1).append("if (aoff >= 0 && aoff < aSize) {\n");
+            String a2 = a1 + "  ";
+            out.append(a2).append("int ao = (int) aoff;\n");
+            out.append(a2).append("if (!gused[ao]) { gused[ao] = true; arrayGroupCount++; }\n");
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append(a2).append("aAgg").append(a).append("[ao] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
             }
+            out.append(a1).append("}\n");
+            out.append(a1).append("else {\n");
+            // Deopt: migrate every populated array group into the hash table, then handle this row via hash.
+            out.append(a2).append("for (int mo = 0; mo < aSize; mo++) {\n");
+            out.append(a2).append("  if (gused[mo]) {\n");
+            String m = a2 + "    ";
+            out.append(m).append("long hkey = mo + aMin;\n");
+            emitSingleKeyHashFindOrCreate(out, m, aggregateCount);
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append(m).append("agg").append(a).append("[gid] += aAgg").append(a).append("[mo];\n");
+            }
+            out.append(a2).append("  }\n");
+            out.append(a2).append("}\n");
+            out.append(a2).append("deopted = true;\n");
+            out.append(a1).append("}\n");
+            out.append(indent).append("}\n");
+            out.append(indent).append("if (deopted) {\n");
+            out.append(a1).append("long hkey = gkey;\n");
+            emitSingleKeyHashFindOrCreate(out, a1, aggregateCount);
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append(a1).append("agg").append(a).append("[gid] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+            }
+            out.append(indent).append("}\n");
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -404,29 +452,38 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline)
+    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate)
     {
         int aggregateCount = pipeline.aggregates().size();
-        if (pipeline.groupDomain() != null) {
-            // Compact the dense aggregate arrays to the occupied offsets; key = offset + min.
-            out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
-            out.append("    long[] outKey = new long[groupCount];\n");
+        if (speculate) {
+            // If the array bet held, compact it to its occupied offsets; otherwise emit the hash table we
+            // deopted into. Both shapes are key column then aggregate columns.
+            out.append("    if (!deopted) {\n");
+            out.append("      long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
+            out.append("      long[] outKey = new long[arrayGroupCount];\n");
             for (int a = 0; a < aggregateCount; a++) {
-                out.append("    long[] outAgg").append(a).append(" = new long[groupCount];\n");
+                out.append("      long[] outAgg").append(a).append(" = new long[arrayGroupCount];\n");
             }
-            out.append("    int w = 0;\n");
-            out.append("    for (int o = 0; o < grange; o++) {\n");
-            out.append("      if (gused[o]) {\n");
-            out.append("        outKey[w] = o + gmin;\n");
+            out.append("      int w = 0;\n");
+            out.append("      for (int o = 0; o < aSize; o++) {\n");
+            out.append("        if (gused[o]) {\n");
+            out.append("          outKey[w] = o + aMin;\n");
             for (int a = 0; a < aggregateCount; a++) {
-                out.append("        outAgg").append(a).append("[w] = agg").append(a).append("[o];\n");
+                out.append("          outAgg").append(a).append("[w] = aAgg").append(a).append("[o];\n");
             }
-            out.append("        w++;\n");
+            out.append("          w++;\n");
+            out.append("        }\n");
             out.append("      }\n");
-            out.append("    }\n");
-            out.append("    result[0] = outKey;\n");
+            out.append("      result[0] = outKey;\n");
             for (int a = 0; a < aggregateCount; a++) {
-                out.append("    result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
+                out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
+            }
+            out.append("      return new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result);\n");
+            out.append("    }\n");
+            out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
+            out.append("    result[0] = java.util.Arrays.copyOf(keyByGid0, groupCount);\n");
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
             }
             out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
             return;
@@ -440,6 +497,47 @@ public final class PipelineCompiler
             out.append("    result[").append(keyCount + a).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
         }
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
+    }
+
+    /** Single-key open-addressing grouping table (the deopt target for speculative array grouping). */
+    private static void emitSingleKeyHashState(StringBuilder out, int aggregateCount)
+    {
+        out.append("    int cap = 1024;\n");
+        out.append("    long[] htKey0 = new long[cap];\n");
+        out.append("    int[] htGid = new int[cap];\n");
+        out.append("    java.util.Arrays.fill(htGid, -1);\n");
+        out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
+        out.append("    long[] keyByGid0 = new long[16];\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("    long[] agg").append(a).append(" = new long[16];\n");
+        }
+    }
+
+    /** Emit a find-or-create lookup of {@code hkey} in the single-key hash table, leaving {@code int gid} in scope. */
+    private static void emitSingleKeyHashFindOrCreate(StringBuilder out, String indent, int aggregateCount)
+    {
+        out.append(indent).append("int hslot = mix(hkey) & htMask;\n");
+        out.append(indent).append("while (htGid[hslot] != -1 && htKey0[hslot] != hkey) { hslot = (hslot + 1) & htMask; }\n");
+        out.append(indent).append("int gid = htGid[hslot];\n");
+        out.append(indent).append("if (gid == -1) {\n");
+        String b = indent + "  ";
+        out.append(b).append("gid = groupCount++; htGid[hslot] = gid; htKey0[hslot] = hkey;\n");
+        out.append(b).append("if (gid == keyByGid0.length) {\n");
+        out.append(b).append("  int n = keyByGid0.length * 2; keyByGid0 = java.util.Arrays.copyOf(keyByGid0, n);\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
+        }
+        out.append(b).append("}\n");
+        out.append(b).append("keyByGid0[gid] = hkey;\n");
+        out.append(b).append("if (groupCount > htFill) {\n");
+        out.append(b).append("  int ncap = cap * 2; long[] nKey0 = new long[ncap]; int[] nGid = new int[ncap];\n");
+        out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
+        out.append(b).append("  for (int s = 0; s < cap; s++) { if (htGid[s] != -1) {\n");
+        out.append(b).append("    int ns = mix(htKey0[s]) & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
+        out.append(b).append("    nKey0[ns] = htKey0[s]; nGid[ns] = htGid[s]; } }\n");
+        out.append(b).append("  htKey0 = nKey0; htGid = nGid; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
+        out.append(b).append("}\n");
+        out.append(indent).append("}\n");
     }
 
     // ---- helpers ----

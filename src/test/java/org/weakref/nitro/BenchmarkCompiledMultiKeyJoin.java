@@ -106,7 +106,6 @@ public class BenchmarkCompiledMultiKeyJoin
                 new int[] {0, 1},
                 List.of(),
                 List.of(new Plan.Col(5)),
-                null,
                 List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
         compiled = PipelineCompiler.compile(plan);
 

@@ -66,7 +66,6 @@ public class BenchmarkCompiledGroupBy
     private long[] v;
     private List<TableOperator.Page> pages;
     private CompiledPipeline compiled;
-    private CompiledPipeline compiledArray;
 
     @Setup
     public void setup()
@@ -96,6 +95,8 @@ public class BenchmarkCompiledGroupBy
                     Mask.all(len)));
         }
 
+        // One adaptive plan: a single-key scan group samples the key domain at runtime, speculates array mode
+        // when it looks dense and bounded, and deopts to a hash table otherwise -- no declared domain.
         Plan.Pipeline plan = new Plan.Pipeline(
                 2,
                 List.of(),
@@ -103,33 +104,9 @@ public class BenchmarkCompiledGroupBy
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
         compiled = PipelineCompiler.compile(plan);
 
-        // Same query, but the group key domain [0, groups-1] is declared dense -> array-mode grouping, no hashing.
-        Plan.Pipeline arrayPlan = new Plan.Pipeline(
-                2,
-                null,
-                null,
-                List.of(),
-                List.of(new Plan.Col(0)),
-                new Plan.Domain(0, groups - 1),
-                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
-        compiledArray = PipelineCompiler.compile(arrayPlan);
-
-        long interp = interpreted();
-        if (jitCompiled() != interp || jitArrayGroup() != interp) {
-            throw new IllegalStateException("mismatch: hash=" + jitCompiled() + " array=" + jitArrayGroup() + " interpreted=" + interp);
+        if (jitCompiled() != interpreted()) {
+            throw new IllegalStateException("mismatch: jit=" + jitCompiled() + " interpreted=" + interpreted());
         }
-    }
-
-    @Benchmark
-    public long jitArrayGroup()
-    {
-        CompiledPipeline.Result result = compiledArray.execute(new long[][][] {{k, v}}, new int[] {ROWS});
-        long checksum = 0;
-        long[] sums = result.columns()[1];
-        for (int g = 0; g < result.rowCount(); g++) {
-            checksum += sums[g];
-        }
-        return checksum;
     }
 
     @Benchmark
