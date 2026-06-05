@@ -327,7 +327,7 @@ public class TestJitPipeline
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
-        assertThat(result.types()[0]).isEqualTo(ColumnType.STRING);
+        assertThat(result.types()[0]).isEqualTo(Types.STRING);
         long[] keyIds = result.columns()[0];
         long[] sums = result.columns()[1];
         for (int g = 0; g < result.rowCount(); g++) {
@@ -513,7 +513,7 @@ public class TestJitPipeline
         }
 
         CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
-        assertThat(result.types()[1]).isEqualTo(ColumnType.DOUBLE);
+        assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
         long[] keys = result.columns()[0];
         long[] bits = result.columns()[1];
         for (int g = 0; g < result.rowCount(); g++) {
@@ -555,8 +555,8 @@ public class TestJitPipeline
         CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(sumCount.size());
         // Result columns: 0=k, 1=sum (LONG), 2=count (LONG), 3=avg (DOUBLE).
-        assertThat(result.types()[3]).isEqualTo(ColumnType.DOUBLE);
-        assertThat(result.types()[1]).isEqualTo(ColumnType.LONG);
+        assertThat(result.types()[3]).isEqualTo(Types.DOUBLE);
+        assertThat(result.types()[1]).isEqualTo(Types.LONG);
         long[] keys = result.columns()[0];
         long[] sums = result.columns()[1];
         long[] counts = result.columns()[2];

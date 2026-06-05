@@ -40,9 +40,9 @@ public final class AggregateLibrary
         }
 
         /** Logical type of the finalized output. */
-        default ColumnType outputType()
+        default Type outputType()
         {
-            return ColumnType.LONG;
+            return Types.LONG;
         }
 
         /** Emit {@code cell = identity} for each state cell of a freshly created group. */
@@ -72,9 +72,9 @@ public final class AggregateLibrary
                 return 2;   // [0] = sum, [1] = count
             }
 
-            @Override public ColumnType outputType()
+            @Override public Type outputType()
             {
-                return ColumnType.DOUBLE;
+                return Types.DOUBLE;
             }
 
             @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
@@ -109,9 +109,9 @@ public final class AggregateLibrary
                 return 3;
             }
 
-            @Override public ColumnType outputType()
+            @Override public Type outputType()
             {
-                return ColumnType.DOUBLE;
+                return Types.DOUBLE;
             }
 
             @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)

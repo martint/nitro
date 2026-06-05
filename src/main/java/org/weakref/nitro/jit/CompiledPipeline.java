@@ -44,9 +44,10 @@ public interface CompiledPipeline
 
     /**
      * Result columns are the group-key columns then the aggregate columns. Each column is a {@code long[]};
-     * {@code types[c]} gives its logical type (a {@code DOUBLE} column stores {@code doubleToRawLongBits}).
+     * {@code types[c]} is its {@link Type} (which knows how to decode the slot -- e.g. a {@code double} stores
+     * {@code doubleToRawLongBits}, a string stores its dictionary id).
      */
-    record Result(int rowCount, long[][] columns, ColumnType[] types)
+    record Result(int rowCount, long[][] columns, Type[] types)
     {
         /** All-{@code long} columns. */
         public Result(int rowCount, long[][] columns)
@@ -54,10 +55,10 @@ public interface CompiledPipeline
             this(rowCount, columns, allLong(columns.length));
         }
 
-        private static ColumnType[] allLong(int count)
+        private static Type[] allLong(int count)
         {
-            ColumnType[] types = new ColumnType[count];
-            java.util.Arrays.fill(types, ColumnType.LONG);
+            Type[] types = new Type[count];
+            java.util.Arrays.fill(types, Types.LONG);
             return types;
         }
     }
