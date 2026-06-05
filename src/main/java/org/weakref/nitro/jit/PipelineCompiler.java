@@ -136,8 +136,19 @@ public final class PipelineCompiler
         // A single-key scan group can speculate array mode: estimate the key domain from a sample, bet on a
         // direct-indexed array, and deopt to a hash table if a later key falls outside the bet.
         boolean speculate = grouped && pipeline.groupKeys().size() == 1;
+
+        // Group-on-id: when the single group key is a dictionary column, group on its dense id (so array mode
+        // applies even when the dictionary's values are sparse) and reconstruct the value at finalize.
+        int dictKeyColumn = -1;
+        if (speculate && pipeline.groupKeys().getFirst() instanceof Plan.Col col
+                && encodingOf(encodings, 0, col.index()) == ColumnEncoding.DICTIONARY) {
+            dictKeyColumn = col.index();
+        }
+        int dictKey = dictKeyColumn;
+        IntFunction<String> groupKeyResolver = index -> index == dictKey ? "cIds" + index + "[i]" : scanAccess(index, encodingOf(encodings, 0, index), "i");
+
         if (speculate) {
-            IntFunction<String> sampleResolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "s");
+            IntFunction<String> sampleResolver = index -> index == dictKey ? "cIds" + index + "[s]" : scanAccess(index, encodingOf(encodings, 0, index), "s");
             emitGroupSampleProlog(out, pipeline.groupKeys().getFirst(), sampleResolver);
         }
         if (grouped) {
@@ -147,10 +158,10 @@ public final class PipelineCompiler
             emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, resolver, grouped, speculate);
+        emitRowBody(out, "      ", pipeline, resolver, groupKeyResolver, grouped, speculate);
         out.append("    }\n");
         if (grouped) {
-            emitGroupedResult(out, pipeline, speculate);
+            emitGroupedResult(out, pipeline, speculate, dictKeyColumn);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates().size());
@@ -277,7 +288,7 @@ public final class PipelineCompiler
             out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
             indent += "  ";
         }
-        emitRowBody(out, indent, pipeline, resolver, grouped, false);
+        emitRowBody(out, indent, pipeline, resolver, resolver, grouped, false);
         for (int k = 0; k < joinCount; k++) {
             indent = indent.substring(2);
             out.append(indent).append("}\n");
@@ -285,7 +296,7 @@ public final class PipelineCompiler
         out.append("    }\n");
 
         if (grouped) {
-            emitGroupedResult(out, pipeline, false);
+            emitGroupedResult(out, pipeline, false, -1);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates().size());
@@ -408,7 +419,7 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, boolean grouped, boolean speculate)
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, boolean grouped, boolean speculate)
     {
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
@@ -419,7 +430,7 @@ public final class PipelineCompiler
             bodyIndent = indent + "  ";
         }
         if (grouped) {
-            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver, speculate);
+            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver, groupKeyResolver, speculate);
         }
         else {
             emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver);
@@ -487,12 +498,12 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, boolean speculate)
+    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, boolean speculate)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         if (speculate) {
             int aggregateCount = aggregates.size();
-            out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), resolver)).append(";\n");
+            out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), groupKeyResolver)).append(";\n");
             out.append(indent).append("if (!deopted) {\n");
             String a1 = indent + "  ";
             out.append(a1).append("long aoff = gkey - aMin;\n");
@@ -535,7 +546,7 @@ public final class PipelineCompiler
         }
         int keyCount = pipeline.groupKeys().size();
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("long gk").append(kx).append(" = ").append(expr(pipeline.groupKeys().get(kx), resolver)).append(";\n");
+            out.append(indent).append("long gk").append(kx).append(" = ").append(expr(pipeline.groupKeys().get(kx), groupKeyResolver)).append(";\n");
         }
         out.append(indent).append("int gslot = mix(").append(hashFold("gk", "", keyCount)).append(") & htMask;\n");
         out.append(indent).append("while (htGid[gslot] != -1 && !(").append(keyCompare("gslot", keyCount)).append(")) { gslot = (gslot + 1) & htMask; }\n");
@@ -584,7 +595,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate)
+    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate, int reconstructDictColumn)
     {
         int aggregateCount = pipeline.aggregates().size();
         if (speculate) {
@@ -599,7 +610,7 @@ public final class PipelineCompiler
             out.append("      int w = 0;\n");
             out.append("      for (int o = 0; o < aSize; o++) {\n");
             out.append("        if (gused[o]) {\n");
-            out.append("          outKey[w] = o + aMin;\n");
+            out.append("          outKey[w] = ").append(reconstructKey(reconstructDictColumn, "o + aMin")).append(";\n");
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("          outAgg").append(a).append("[w] = aAgg").append(a).append("[o];\n");
             }
@@ -613,7 +624,7 @@ public final class PipelineCompiler
             out.append("      return new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result);\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
-            out.append("    result[0] = java.util.Arrays.copyOf(keyByGid0, groupCount);\n");
+            emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
             }
@@ -623,12 +634,31 @@ public final class PipelineCompiler
         int keyCount = pipeline.groupKeys().size();
         out.append("    long[][] result = new long[").append(keyCount + aggregateCount).append("][];\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append("    result[").append(kx).append("] = java.util.Arrays.copyOf(keyByGid").append(kx).append(", groupCount);\n");
+            emitKeyResultColumn(out, "    ", kx, kx, kx == 0 ? reconstructDictColumn : -1, "groupCount");
         }
         for (int a = 0; a < aggregateCount; a++) {
             out.append("    result[").append(keyCount + a).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
         }
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
+    }
+
+    /** Reconstruct a group key for output: identity for a plain key, or a dictionary lookup for a group-on-id key. */
+    private static String reconstructKey(int dictColumn, String keyExpr)
+    {
+        return dictColumn < 0 ? "(" + keyExpr + ")" : "cDict" + dictColumn + "[(int) (" + keyExpr + ")]";
+    }
+
+    /** Emit one key result column, copying the stored keys or reconstructing dictionary values for a group-on-id key. */
+    private static void emitKeyResultColumn(StringBuilder out, String indent, int resultIndex, int keyIndex, int reconstructDictColumn, String count)
+    {
+        if (reconstructDictColumn < 0) {
+            out.append(indent).append("result[").append(resultIndex).append("] = java.util.Arrays.copyOf(keyByGid").append(keyIndex).append(", ").append(count).append(");\n");
+            return;
+        }
+        out.append(indent).append("long[] outKey").append(keyIndex).append(" = new long[").append(count).append("];\n");
+        out.append(indent).append("for (int g = 0; g < ").append(count).append("; g++) { outKey").append(keyIndex)
+                .append("[g] = cDict").append(reconstructDictColumn).append("[(int) keyByGid").append(keyIndex).append("[g]]; }\n");
+        out.append(indent).append("result[").append(resultIndex).append("] = outKey").append(keyIndex).append(";\n");
     }
 
     /** Single-key open-addressing grouping table (the deopt target for speculative array grouping). */
