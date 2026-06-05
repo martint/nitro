@@ -209,6 +209,55 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesJoinWithStringBuildColumnFilter()
+    {
+        // SELECT sum(v) FROM fact JOIN dim ON fact.k = dim.k WHERE dim.s IN ('keep', 'also')
+        // -- a string filter (predicate-over-dictionary) on a dimension (build) column.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                  // probe: 0=k, 1=v
+                new Plan.Build(2, 0),               // build: 0=k, 1=s
+                0,
+                List.of(new Plan.StringMatch(3, List.of("keep", "also"), false)),   // dim.s combined index 3
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        byte[][] dictionary = {
+                "drop".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "keep".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "also".getBytes(java.nio.charset.StandardCharsets.UTF_8)};
+        int dimRows = 60;
+        long[] dimKey = new long[dimRows];
+        int[] dimString = new int[dimRows];
+        for (int d = 0; d < dimRows; d++) {
+            dimKey[d] = d;
+            dimString[d] = d % 3;                    // 0=drop, 1=keep, 2=also
+        }
+        int factRows = 100_000;
+        long[] factKey = new long[factRows];
+        long[] v = new long[factRows];
+        long expected = 0;
+        for (int i = 0; i < factRows; i++) {
+            factKey[i] = i % dimRows;
+            v[i] = (i % 25) + 1;
+            if (dimString[(int) factKey[i]] != 0) {   // s IN ('keep','also')
+                expected += v[i];
+            }
+        }
+
+        ColumnEncoding[][] encodings = {
+                {ColumnEncoding.FLAT, ColumnEncoding.FLAT},
+                {ColumnEncoding.FLAT, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {
+                {new Column.FlatColumn(factKey), new Column.FlatColumn(v)},
+                {new Column.FlatColumn(dimKey), new Column.StringColumn(dimString, dictionary)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {factRows, dimRows});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
     void compilesJoinWithStringBuildColumnGroupKey()
     {
         // SELECT s, sum(v) FROM fact JOIN dim ON fact.k = dim.k GROUP BY s -- s is a STRING column on the build

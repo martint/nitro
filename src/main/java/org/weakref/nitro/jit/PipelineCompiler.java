@@ -182,18 +182,18 @@ public final class PipelineCompiler
         return false;
     }
 
-    /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, constant) plus its null mask. */
-    private record ColumnVars(String flat, String ids, String dict, String constant, String nulls) {}
+    /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, string dictionary, constant) plus its null mask. */
+    private record ColumnVars(String flat, String ids, String dict, String stringDict, String constant, String nulls) {}
 
     private static ColumnVars probeVars(int column)
     {
-        return new ColumnVars("p" + column, "pIds" + column, "pDict" + column, "pConst" + column, "pN" + column);
+        return new ColumnVars("p" + column, "pIds" + column, "pDict" + column, "pStr" + column, "pConst" + column, "pN" + column);
     }
 
     private static ColumnVars buildVars(int build, int local)
     {
         String suffix = build + "_" + local;
-        return new ColumnVars("b" + suffix, "bIds" + suffix, "bDict" + suffix, "bConst" + suffix, "bN" + suffix);
+        return new ColumnVars("b" + suffix, "bIds" + suffix, "bDict" + suffix, "bStr" + suffix, "bConst" + suffix, "bN" + suffix);
     }
 
     /** Access expression for a join column at {@code row}: flat index, dictionary indirection, hoisted constant, or string id. */
@@ -219,7 +219,11 @@ public final class PipelineCompiler
         };
         switch (encoding) {
             case FLAT -> out.append("    long[] ").append(vars.flat()).append(" = ((").append(type).append("FlatColumn) ").append(source).append(").values();\n");
-            case STRING -> out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("StringColumn) ").append(source).append(").ids();\n");
+            case STRING -> {
+                out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("StringColumn) ").append(source).append(").ids();\n");
+                // The dictionary is needed for string filters (predicate-over-dictionary); a cheap array reference.
+                out.append("    byte[][] ").append(vars.stringDict()).append(" = ((").append(type).append("StringColumn) ").append(source).append(").dictionary();\n");
+            }
             case DICTIONARY -> {
                 out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("DictionaryColumn) ").append(source).append(").ids();\n");
                 out.append("    long[] ").append(vars.dict()).append(" = ((").append(type).append("DictionaryColumn) ").append(source).append(").dictionary();\n");
@@ -442,7 +446,7 @@ public final class PipelineCompiler
             collectStringMatches(filter, stringMatches);
         }
         for (Plan.StringMatch match : stringMatches) {
-            emitStringMaskPrelude(out, match);
+            emitStringMaskPrelude(out, match, "cStr" + match.column());
         }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
@@ -557,7 +561,7 @@ public final class PipelineCompiler
     }
 
     /** Build the id mask for a string filter once, by testing each dictionary entry against the literal set. */
-    private static void emitStringMaskPrelude(StringBuilder out, Plan.StringMatch match)
+    private static void emitStringMaskPrelude(StringBuilder out, Plan.StringMatch match, String dictionaryVar)
     {
         int column = match.column();
         List<String> values = match.values();
@@ -565,9 +569,9 @@ public final class PipelineCompiler
             out.append("    byte[] sLit").append(column).append("_").append(v).append(" = ")
                     .append(javaStringLiteral(values.get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
         }
-        out.append("    boolean[] sMask").append(column).append(" = new boolean[cStr").append(column).append(".length];\n");
-        out.append("    for (int e = 0; e < cStr").append(column).append(".length; e++) {\n");
-        out.append("      byte[] sv = cStr").append(column).append("[e];\n");
+        out.append("    boolean[] sMask").append(column).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
+        out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
+        out.append("      byte[] sv = ").append(dictionaryVar).append("[e];\n");
         StringBuilder member = new StringBuilder();
         for (int v = 0; v < values.size(); v++) {
             member.append(member.length() == 0 ? "" : " || ").append("java.util.Arrays.equals(sv, sLit").append(column).append("_").append(v).append(")");
@@ -674,6 +678,18 @@ public final class PipelineCompiler
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, combinedIndex), combinedNullable(pipeline, nullable, combinedIndex), "build" + k + "[" + column + "]", buildVars(k, column));
             }
             emitBuildStructures(out, k, join.build().keyColumns());
+        }
+
+        // Predicate-over-dictionary for string filters, evaluated once per dictionary entry into an id mask. The
+        // filtered column may be on the probe or any build side; resolve its combined index to the right dictionary.
+        List<Plan.StringMatch> stringMatches = new ArrayList<>();
+        for (Plan.Condition filter : pipeline.filters()) {
+            collectStringMatches(filter, stringMatches);
+        }
+        for (Plan.StringMatch match : stringMatches) {
+            int column = match.column();
+            ColumnVars vars = column < probeColumns ? probeVars(column) : buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]);
+            emitStringMaskPrelude(out, match, vars.stringDict());
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
