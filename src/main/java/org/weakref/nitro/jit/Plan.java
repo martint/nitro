@@ -168,14 +168,30 @@ public final class Plan
         }
     }
 
+    /** One ORDER BY key: a result column index and direction. */
+    public record SortKey(int column, boolean descending) {}
+
+    /**
+     * Post-aggregation ORDER BY / LIMIT applied to the pipeline's result columns. {@code limit < 0} means no
+     * limit. Sort keys index the result columns (group keys first, then aggregates).
+     */
+    public record Ordering(List<SortKey> keys, int limit)
+    {
+        public Ordering
+        {
+            keys = List.copyOf(keys);
+        }
+    }
+
     /**
      * A push pipeline. Scans {@code columnCount} probe columns; inner-joins each of {@code joins} in order
      * (combined columns address probe {@code [0,columnCount)} then each build's columns appended in turn);
-     * keeps rows passing every filter; groups by {@code groupKeys} (empty = global aggregation); and computes
-     * {@code aggregates}. For a single group key in a scan pipeline the compiler speculates array-mode grouping
-     * and deopts to a hash table at runtime; the structure is chosen from the data, not declared in the plan.
+     * keeps rows passing every filter; groups by {@code groupKeys} (empty = global aggregation); computes
+     * {@code aggregates}; and optionally applies {@code ordering} (ORDER BY / LIMIT) to the result. For a single
+     * group key in a scan pipeline the compiler speculates array-mode grouping and deopts to a hash table at
+     * runtime; the structure is chosen from the data, not declared in the plan.
      */
-    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Ordering ordering)
     {
         public Pipeline
         {
@@ -185,22 +201,34 @@ public final class Plan
             aggregates = List.copyOf(aggregates);
         }
 
+        /** Convenience: no ordering. */
+        public Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        {
+            this(columnCount, joins, filters, groupKeys, aggregates, null);
+        }
+
         /** Convenience for a single-key single-join pipeline. */
         public Pipeline(int columnCount, Build build, int probeKeyColumn, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, List.of(new Join(build, probeKeyColumn)), filters, groupKeys, aggregates);
+            this(columnCount, List.of(new Join(build, probeKeyColumn)), filters, groupKeys, aggregates, null);
         }
 
         /** Convenience for a composite-key single-join pipeline. */
         public Pipeline(int columnCount, Build build, int[] probeKeyColumns, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, List.of(new Join(build, probeKeyColumns)), filters, groupKeys, aggregates);
+            this(columnCount, List.of(new Join(build, probeKeyColumns)), filters, groupKeys, aggregates, null);
         }
 
         /** Convenience for a single-input pipeline (no join). */
         public Pipeline(int columnCount, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, List.of(), filters, groupKeys, aggregates);
+            this(columnCount, List.of(), filters, groupKeys, aggregates, null);
+        }
+
+        /** Same pipeline with an ORDER BY / LIMIT applied to its result. */
+        public Pipeline withOrdering(Ordering ordering)
+        {
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, ordering);
         }
     }
 }

@@ -118,8 +118,44 @@ public final class PipelineCompiler
         else {
             emitScanBody(out, pipeline, encodings);
         }
-        out.append("  }\n}\n");
+        out.append("  }\n");
+        emitApplyOrdering(out, pipeline.ordering());
+        out.append("}\n");
         return out.toString();
+    }
+
+    /**
+     * Post-aggregation ORDER BY / LIMIT applied to the materialized result. Identity when no ordering; otherwise
+     * sorts a row-index permutation by the sort keys and gathers (optionally truncated to the limit). A full
+     * sort for now; a bounded top-N heap is the perf refinement.
+     */
+    private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering)
+    {
+        out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyOrdering(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        if (ordering == null) {
+            out.append("    return result;\n  }\n");
+            return;
+        }
+        out.append("    int n = result.rowCount(); long[][] cols = result.columns();\n");
+        out.append("    Integer[] order = new Integer[n];\n");
+        out.append("    for (int i = 0; i < n; i++) { order[i] = i; }\n");
+        out.append("    java.util.Arrays.sort(order, (a, b) -> {\n");
+        out.append("      int c;\n");
+        for (Plan.SortKey key : ordering.keys()) {
+            out.append("      c = Long.compare(cols[").append(key.column()).append("][a], cols[").append(key.column()).append("][b]);");
+            if (key.descending()) {
+                out.append(" c = -c;");
+            }
+            out.append(" if (c != 0) { return c; }\n");
+        }
+        out.append("      return 0;\n");
+        out.append("    });\n");
+        String limit = ordering.limit() < 0 ? "n" : "Math.min(" + ordering.limit() + ", n)";
+        out.append("    int outN = ").append(limit).append(";\n");
+        out.append("    long[][] sorted = new long[cols.length][outN];\n");
+        out.append("    for (int w = 0; w < outN; w++) { int s = order[w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted);\n");
+        out.append("  }\n");
     }
 
     // ---- single-input scan -> filter -> aggregate ----
@@ -463,7 +499,7 @@ public final class PipelineCompiler
         for (int a = 0; a < aggregateCount; a++) {
             out.append("    result[").append(a).append("] = new long[] { a").append(a).append(" };\n");
         }
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(1, result);\n");
+        out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result));\n");
     }
 
     // ---- grouped aggregation (single long key) ----
@@ -621,14 +657,14 @@ public final class PipelineCompiler
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
             }
-            out.append("      return new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result);\n");
+            out.append("      return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result));\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
             }
-            out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
+            out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result));\n");
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -639,7 +675,7 @@ public final class PipelineCompiler
         for (int a = 0; a < aggregateCount; a++) {
             out.append("    result[").append(keyCount + a).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
         }
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
+        out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result));\n");
     }
 
     /** Reconstruct a group key for output: identity for a plain key, or a dictionary lookup for a group-on-id key. */

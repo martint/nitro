@@ -248,6 +248,45 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesOrderByLimit()
+    {
+        // SELECT k, sum(v) GROUP BY k ORDER BY sum(v) DESC, k ASC LIMIT 10
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))))
+                .withOrdering(new Plan.Ordering(
+                        List.of(new Plan.SortKey(1, true), new Plan.SortKey(0, false)),
+                        10));
+
+        int rows = 200_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> sums = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 137;
+            v[i] = (i % 100) + 1;
+            sums.merge(k[i], v[i], Long::sum);
+        }
+        // Reference top-10 by sum desc, then key asc.
+        List<long[]> expected = new java.util.ArrayList<>();
+        sums.forEach((key, sum) -> expected.add(new long[] {key, sum}));
+        expected.sort((a, b) -> a[1] != b[1] ? Long.compare(b[1], a[1]) : Long.compare(a[0], b[0]));
+
+        System.out.println("=== generated order-by source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(10);
+        long[] outKeys = result.columns()[0];
+        long[] outSums = result.columns()[1];
+        for (int r = 0; r < 10; r++) {
+            assertThat(outKeys[r]).as("key at rank %d", r).isEqualTo(expected.get(r)[0]);
+            assertThat(outSums[r]).as("sum at rank %d", r).isEqualTo(expected.get(r)[1]);
+        }
+    }
+
+    @Test
     void compilesScalarFunctionsAndCase()
     {
         // SELECT k, sum(CASE WHEN v < 0 THEN -v ELSE v END), sum(v / 2), max(abs(v)) GROUP BY k
