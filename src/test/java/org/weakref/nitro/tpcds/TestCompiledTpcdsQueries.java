@@ -211,6 +211,92 @@ public class TestCompiledTpcdsQueries
                 TpcdsParquetSupport.query07(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
+    @Test
+    void query26()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // i_item_id, avg(cs_quantity), avg(cs_list_price), avg(cs_coupon_amt), avg(cs_sales_price)
+        // FROM catalog_sales JOIN date_dim JOIN item JOIN customer_demographics JOIN promotion
+        // WHERE d_year=2000 AND cd_gender='M' AND cd_marital_status='S' AND cd_education_status='College'
+        //   AND (p_channel_email='N' OR p_channel_event='N')  GROUP BY i_item_id  ORDER BY i_item_id LIMIT 100
+        QueryLowering query = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_promo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_list_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_coupon_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "cs_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("customer_demographics", "cs_bill_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, true))
+                .join("promotion", "cs_promo_sk", "p_promo_sk",
+                        new QueryLowering.Column("p_promo_sk"),
+                        new QueryLowering.Column("p_channel_email", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("p_channel_event", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.StringMatch(query.position("cd_gender"), List.of("M"), false),
+                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
+                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false),
+                        new Plan.Or(List.of(
+                                new Plan.StringMatch(query.position("p_channel_email"), List.of("N"), false),
+                                new Plan.StringMatch(query.position("p_channel_event"), List.of("N"), false))))
+                .groupBy("i_item_id")
+                .aggregate("avg", "cs_quantity")
+                .aggregate("avg", "cs_list_price")
+                .aggregate("avg", "cs_coupon_amt")
+                .aggregate("avg", "cs_sales_price")
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        assertCompiledMatchesHarness(tables, query, 0, 2, 1,
+                TpcdsParquetSupport.query26(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query96()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // SELECT count(*) FROM store_sales JOIN time_dim JOIN household_demographics JOIN store
+        // WHERE t_hour=20 AND t_minute>29 AND hd_dep_count=7 AND s_store_name='ese'
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_time_sk"),
+                        new QueryLowering.Column("ss_hdemo_sk"),
+                        new QueryLowering.Column("ss_store_sk"))
+                .join("time_dim", "ss_sold_time_sk", "t_time_sk",
+                        new QueryLowering.Column("t_time_sk"),
+                        new QueryLowering.Column("t_hour"),
+                        new QueryLowering.Column("t_minute"))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_dep_count"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false));
+        query.where(
+                        new Plan.Predicate("=", query.column("t_hour"), new Plan.Lit(20)),
+                        new Plan.Predicate(">", query.column("t_minute"), new Plan.Lit(29)),
+                        new Plan.Predicate("=", query.column("hd_dep_count"), new Plan.Lit(7)),
+                        new Plan.StringMatch(query.position("s_store_name"), List.of("ese"), false))
+                .count();
+
+        assertCompiledMatchesHarness(tables, query, -1, 0, 0,
+                TpcdsParquetSupport.query96(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
     /**
      * Run {@code query} lowered + compiled + bridged, and assert its rows equal the harness operator chain's,
      * in order. {@code stringResultColumn} is the index of a dictionary-string result column to reconstruct (-1
