@@ -13,6 +13,13 @@
  */
 package org.weakref.nitro.jit;
 
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Utf8Traits;
+import org.weakref.nitro.data.Vector;
+
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BinaryOperator;
@@ -30,20 +37,29 @@ public final class Types
     public static final Type LONG = new SimpleType(
             "long",
             (a, b) -> "Long.compare(" + a + ", " + b + ")",
-            slot -> slot);
+            slot -> slot,
+            (slots, count, dictionary) -> new I64Vector(Arrays.copyOf(slots, count)));
 
     /** Double, stored as {@link Double#doubleToRawLongBits}. */
     public static final Type DOUBLE = new SimpleType(
             "double",
             (a, b) -> "Double.compare(Double.longBitsToDouble(" + a + "), Double.longBitsToDouble(" + b + "))",
-            slot -> "Double.longBitsToDouble(" + slot + ")");
+            slot -> "Double.longBitsToDouble(" + slot + ")",
+            (slots, count, dictionary) -> {
+                double[] values = new double[count];
+                for (int i = 0; i < count; i++) {
+                    values[i] = Double.longBitsToDouble(slots[i]);
+                }
+                return new F64Vector(values);
+            });
 
     /** Dictionary string id; the slot holds the id and the consumer reconstructs the string from the dictionary. */
     // NOTE: comparison is by id, not lexicographic -- a sorted-dictionary or boundary string compare is the follow-up.
     public static final Type STRING = new SimpleType(
             "string",
             (a, b) -> "Long.compare(" + a + ", " + b + ")",
-            slot -> slot);
+            slot -> slot,
+            Types::reconstructString);
 
     private static final Map<String, Type> REGISTRY = new ConcurrentHashMap<>();
 
@@ -69,7 +85,28 @@ public final class Types
         return type;
     }
 
-    private record SimpleType(String name, BinaryOperator<String> compareFn, UnaryOperator<String> decodeFn)
+    /** Reconstructs a result column into an engine {@link Vector}; the runtime counterpart of {@link Type#decode}. */
+    @FunctionalInterface
+    private interface Reconstructor
+    {
+        Vector toVector(long[] slots, int count, byte[][] dictionary);
+    }
+
+    private static BinaryVector reconstructString(long[] slots, int count, byte[][] dictionary)
+    {
+        int bytes = 0;
+        for (int i = 0; i < count; i++) {
+            bytes += dictionary[(int) slots[i]].length;
+        }
+        BinaryVector vector = new BinaryVector(count, bytes);
+        for (int i = 0; i < count; i++) {
+            vector.setBytes(i, dictionary[(int) slots[i]]);
+        }
+        vector.addTrait(Utf8Traits.UTF8_STRING);
+        return vector;
+    }
+
+    private record SimpleType(String name, BinaryOperator<String> compareFn, UnaryOperator<String> decodeFn, Reconstructor reconstructFn)
             implements Type
     {
         @Override
@@ -82,6 +119,12 @@ public final class Types
         public String decode(String slot)
         {
             return decodeFn.apply(slot);
+        }
+
+        @Override
+        public Vector toVector(long[] slots, int count, byte[][] dictionary)
+        {
+            return reconstructFn.toVector(slots, count, dictionary);
         }
     }
 }
