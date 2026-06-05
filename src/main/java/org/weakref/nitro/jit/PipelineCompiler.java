@@ -141,17 +141,38 @@ public final class PipelineCompiler
             emitScanBody(out, pipeline, encodings, nullable);
         }
         out.append("  }\n");
-        emitApplyHaving(out, pipeline.having());
-        emitApplyOrdering(out, pipeline.ordering());
+        List<ColumnType> resultTypes = outputColumnTypes(pipeline);
+        emitApplyHaving(out, pipeline.having(), resultTypes);
+        emitApplyOrdering(out, pipeline.ordering(), resultTypes);
         out.append("}\n");
         return out.toString();
+    }
+
+    /** Logical types of the result columns: the group-key columns (LONG) then each aggregate's output type. */
+    private static List<ColumnType> outputColumnTypes(Plan.Pipeline pipeline)
+    {
+        List<ColumnType> types = new ArrayList<>();
+        for (int k = 0; k < pipeline.groupKeys().size(); k++) {
+            types.add(ColumnType.LONG);
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            types.add(aggregator(aggregate).outputType());
+        }
+        return types;
+    }
+
+    /** Read a result column at {@code row}, decoding a DOUBLE column from its bits. */
+    private static String resultColumnAccess(int column, List<ColumnType> types, String row)
+    {
+        String raw = "cols[" + column + "][" + row + "]";
+        return types.get(column) == ColumnType.DOUBLE ? "Double.longBitsToDouble(" + raw + ")" : raw;
     }
 
     /**
      * Post-aggregation HAVING applied to the materialized result. Identity when no HAVING; otherwise keeps the
      * rows whose condition (over result columns: group keys then aggregates) holds and compacts.
      */
-    private static void emitApplyHaving(StringBuilder out, Plan.Condition having)
+    private static void emitApplyHaving(StringBuilder out, Plan.Condition having, List<ColumnType> types)
     {
         out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyHaving(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
         if (having == null) {
@@ -161,7 +182,7 @@ public final class PipelineCompiler
         out.append("    int n = result.rowCount(); long[][] cols = result.columns();\n");
         out.append("    int[] keep = new int[n]; int w = 0;\n");
         out.append("    for (int r = 0; r < n; r++) {\n");
-        out.append("      if (").append(condition(having, index -> "cols[" + index + "][r]")).append(") { keep[w++] = r; }\n");
+        out.append("      if (").append(condition(having, index -> resultColumnAccess(index, types, "r"))).append(") { keep[w++] = r; }\n");
         out.append("    }\n");
         out.append("    long[][] kept = new long[cols.length][w];\n");
         out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
@@ -174,7 +195,7 @@ public final class PipelineCompiler
      * sorts a row-index permutation by the sort keys and gathers (optionally truncated to the limit). A full
      * sort for now; a bounded top-N heap is the perf refinement.
      */
-    private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering)
+    private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<ColumnType> types)
     {
         out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyOrdering(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
         if (ordering == null) {
@@ -187,7 +208,10 @@ public final class PipelineCompiler
         out.append("    java.util.Arrays.sort(order, (a, b) -> {\n");
         out.append("      int c;\n");
         for (Plan.SortKey key : ordering.keys()) {
-            out.append("      c = Long.compare(cols[").append(key.column()).append("][a], cols[").append(key.column()).append("][b]);");
+            String compare = types.get(key.column()) == ColumnType.DOUBLE
+                    ? "Double.compare(" + resultColumnAccess(key.column(), types, "a") + ", " + resultColumnAccess(key.column(), types, "b") + ")"
+                    : "Long.compare(cols[" + key.column() + "][a], cols[" + key.column() + "][b])";
+            out.append("      c = ").append(compare).append(";");
             if (key.descending()) {
                 out.append(" c = -c;");
             }

@@ -249,6 +249,51 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesOrderByDoubleColumn()
+    {
+        // SELECT k, avg(v) GROUP BY k HAVING avg(v) > 0 ORDER BY avg(v) ASC LIMIT 5 -- sort/filter on a DOUBLE
+        // column must decode the bits, not compare raw longs (v has negatives so averages are signed).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("avg", new Plan.Col(1))))
+                .withHaving(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(0)))
+                .withOrdering(new Plan.Ordering(List.of(new Plan.SortKey(1, false)), 5));
+
+        int rows = 60_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, long[]> sumCount = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 80;
+            v[i] = (i % 21) - 10;        // -10..10, signed
+            long[] acc = sumCount.computeIfAbsent(k[i], ignored -> new long[2]);
+            acc[0] += v[i];
+            acc[1]++;
+        }
+        List<double[]> expected = new java.util.ArrayList<>();
+        sumCount.forEach((key, sc) -> {
+            double avg = (double) sc[0] / sc[1];
+            if (avg > 0) {
+                expected.add(new double[] {key, avg});
+            }
+        });
+        expected.sort((a, b) -> Double.compare(a[1], b[1]));   // avg ASC
+        List<double[]> top5 = expected.size() > 5 ? expected.subList(0, 5) : expected;
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(top5.size());
+        long[] keys = result.columns()[0];
+        long[] avgBits = result.columns()[1];
+        for (int r = 0; r < top5.size(); r++) {
+            assertThat((double) keys[r]).as("key at rank %d", r).isEqualTo(top5.get(r)[0]);
+            assertThat(Double.longBitsToDouble(avgBits[r])).as("avg at rank %d", r).isEqualTo(top5.get(r)[1], within(1e-9));
+            assertThat(Double.longBitsToDouble(avgBits[r])).isGreaterThan(0.0);
+        }
+    }
+
+    @Test
     void compilesNullAwareFilterAndAggregates()
     {
         // SELECT k, sum(m), count(m), count(*) FROM t WHERE f >= 0 GROUP BY k
