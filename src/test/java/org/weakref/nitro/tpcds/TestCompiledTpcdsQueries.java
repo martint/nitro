@@ -80,7 +80,7 @@ public class TestCompiledTpcdsQueries
                         100));
 
         // Result column 2 is the i_category STRING key, reconstructed from the item input's dictionary.
-        assertCompiledMatchesHarness(tables, query, 2,
+        assertCompiledMatchesHarness(tables, query, 2, 2, 3,
                 TpcdsParquetSupport.query42(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
@@ -117,7 +117,7 @@ public class TestCompiledTpcdsQueries
                         new Plan.SortKey(1, false)),  // i_brand_id
                         100));
 
-        assertCompiledMatchesHarness(tables, query, 2,
+        assertCompiledMatchesHarness(tables, query, 2, 2, 3,
                 TpcdsParquetSupport.query52(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
@@ -153,21 +153,75 @@ public class TestCompiledTpcdsQueries
                         new Plan.SortKey(0, false)),  // i_brand_id
                         100));
 
-        assertCompiledMatchesHarness(tables, query, 1,
+        assertCompiledMatchesHarness(tables, query, 1, 2, 3,
                 TpcdsParquetSupport.query55(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query07()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // i_item_id, avg(ss_quantity), avg(ss_list_price), avg(ss_coupon_amt), avg(ss_sales_price)
+        // FROM store_sales JOIN date_dim JOIN item JOIN customer_demographics JOIN promotion
+        // WHERE d_year=2000 AND cd_gender='M' AND cd_marital_status='S' AND cd_education_status='College'
+        //   AND (p_channel_email='N' OR p_channel_event='N')
+        // GROUP BY i_item_id ORDER BY i_item_id LIMIT 100
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk"),
+                        new QueryLowering.Column("ss_item_sk"),
+                        new QueryLowering.Column("ss_cdemo_sk"),
+                        new QueryLowering.Column("ss_promo_sk"),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_list_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("customer_demographics", "ss_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, false))
+                .join("promotion", "ss_promo_sk", "p_promo_sk",
+                        new QueryLowering.Column("p_promo_sk"),
+                        new QueryLowering.Column("p_channel_email", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("p_channel_event", ColumnEncoding.STRING, false));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.StringMatch(query.position("cd_gender"), List.of("M"), false),
+                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
+                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false),
+                        new Plan.Or(List.of(
+                                new Plan.StringMatch(query.position("p_channel_email"), List.of("N"), false),
+                                new Plan.StringMatch(query.position("p_channel_event"), List.of("N"), false))))
+                .groupBy("i_item_id")
+                .aggregate("avg", "ss_quantity")
+                .aggregate("avg", "ss_list_price")
+                .aggregate("avg", "ss_coupon_amt")
+                .aggregate("avg", "ss_sales_price")
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));   // i_item_id
+
+        assertCompiledMatchesHarness(tables, query, 0, 2, 1,
+                TpcdsParquetSupport.query07(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     /**
      * Run {@code query} lowered + compiled + bridged, and assert its rows equal the harness operator chain's,
      * in order. {@code stringResultColumn} is the index of a dictionary-string result column to reconstruct (-1
-     * if none); its dictionary is taken from the last input (the item build side, column 3).
+     * if none); its dictionary is taken from input {@code dictInput}, column {@code dictColumn}.
      */
-    private static void assertCompiledMatchesHarness(TpcdsParquetTables tables, QueryLowering query, int stringResultColumn, Operator harness)
+    private static void assertCompiledMatchesHarness(TpcdsParquetTables tables, QueryLowering query, int stringResultColumn, int dictInput, int dictColumn, Operator harness)
     {
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
         if (stringResultColumn >= 0) {
-            dictionaries[stringResultColumn] = ((Column.StringColumn) run.inputs()[run.inputs().length - 1][3]).dictionary();
+            dictionaries[stringResultColumn] = ((Column.StringColumn) run.inputs()[dictInput][dictColumn]).dictionary();
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
 
@@ -177,14 +231,22 @@ public class TestCompiledTpcdsQueries
         assertThat(actual).containsExactlyElementsOf(expected);
     }
 
-    /** Coerce values to a representation-independent form: any number to {@code long}, raw bytes to a UTF-8 string. */
+    /**
+     * Coerce values to a representation-independent form for comparison: integral numbers (byte/short/int/long)
+     * to {@code long}, floating-point to {@code double} (kept exact, not truncated), and raw bytes to a UTF-8
+     * string. This makes the compiled result (e.g. an {@code I64} key vs the harness's {@code I32}) comparable
+     * without losing an aggregate's fractional value.
+     */
     private static List<Row> normalize(List<Row> rows)
     {
         List<Row> normalized = new ArrayList<>(rows.size());
         for (Row row : rows) {
             Object[] values = row.values().clone();
             for (int i = 0; i < values.length; i++) {
-                if (values[i] instanceof Number number) {
+                if (values[i] instanceof Double || values[i] instanceof Float) {
+                    values[i] = ((Number) values[i]).doubleValue();
+                }
+                else if (values[i] instanceof Number number) {
                     values[i] = number.longValue();
                 }
                 else if (values[i] instanceof byte[] bytes) {
