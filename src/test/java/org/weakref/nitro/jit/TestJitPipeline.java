@@ -92,6 +92,59 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesJoinWithStringBuildColumnGroupKey()
+    {
+        // SELECT s, sum(v) FROM fact JOIN dim ON fact.k = dim.k GROUP BY s -- s is a STRING column on the build
+        // (dimension) side used as the group key; the join path must honor build-column encodings.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                  // probe: 0=k, 1=v
+                new Plan.Build(2, 0),               // build: 0=k (key), 1=s
+                0,                                  // probe key column
+                List.of(),
+                List.of(new Plan.Col(3)),           // group by build column s (combined index 3)
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int dictSize = 6;
+        byte[][] dictionary = new byte[dictSize][];
+        for (int d = 0; d < dictSize; d++) {
+            dictionary[d] = ("dept-" + d).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int dimRows = 200;
+        long[] dimKey = new long[dimRows];
+        int[] dimCategory = new int[dimRows];
+        for (int d = 0; d < dimRows; d++) {
+            dimKey[d] = d;
+            dimCategory[d] = d % dictSize;
+        }
+        int factRows = 100_000;
+        long[] factKey = new long[factRows];
+        long[] v = new long[factRows];
+        Map<Integer, Long> reference = new HashMap<>();   // category id -> sum(v)
+        for (int i = 0; i < factRows; i++) {
+            factKey[i] = i % dimRows;
+            v[i] = (i % 40) + 1;
+            reference.merge(dimCategory[(int) factKey[i]], v[i], Long::sum);
+        }
+
+        ColumnEncoding[][] encodings = {
+                {ColumnEncoding.FLAT, ColumnEncoding.FLAT},
+                {ColumnEncoding.FLAT, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {
+                {new Column.FlatColumn(factKey), new Column.FlatColumn(v)},
+                {new Column.FlatColumn(dimKey), new Column.StringColumn(dimCategory, dictionary)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {factRows, dimRows});
+
+        assertThat(result.types()[0]).isEqualTo(Types.STRING);
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keyIds = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for category %d", keyIds[g]).isEqualTo(reference.get((int) keyIds[g]));
+        }
+    }
+
+    @Test
     void compilesAndComputesGroupedAggregate()
     {
         // SELECT k, sum(v), count(*) WHERE v > 0 GROUP BY k

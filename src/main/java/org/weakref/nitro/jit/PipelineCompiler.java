@@ -123,6 +123,69 @@ public final class PipelineCompiler
                 && column < nullable[input].length && nullable[input][column];
     }
 
+    /**
+     * Encoding of a column addressed in the combined space (probe columns first, then each build's columns).
+     * Resolves the combined index back to its (input, local) coordinates so build-side columns keep their own
+     * encoding.
+     */
+    private static ColumnEncoding combinedEncoding(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int combined)
+    {
+        int probeColumns = pipeline.columnCount();
+        if (combined < probeColumns) {
+            return encodingOf(encodings, 0, combined);
+        }
+        int offset = probeColumns;
+        List<Plan.Join> joins = pipeline.joins();
+        for (int k = 0; k < joins.size(); k++) {
+            int count = joins.get(k).build().columnCount();
+            if (combined < offset + count) {
+                return encodingOf(encodings, k + 1, combined - offset);
+            }
+            offset += count;
+        }
+        return ColumnEncoding.FLAT;
+    }
+
+    /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, constant). */
+    private record ColumnVars(String flat, String ids, String dict, String constant) {}
+
+    private static ColumnVars probeVars(int column)
+    {
+        return new ColumnVars("p" + column, "pIds" + column, "pDict" + column, "pConst" + column);
+    }
+
+    private static ColumnVars buildVars(int build, int local)
+    {
+        String suffix = build + "_" + local;
+        return new ColumnVars("b" + suffix, "bIds" + suffix, "bDict" + suffix, "bConst" + suffix);
+    }
+
+    /** Access expression for a join column at {@code row}: flat index, dictionary indirection, hoisted constant, or string id. */
+    private static String joinAccess(ColumnEncoding encoding, ColumnVars vars, String row)
+    {
+        return switch (encoding) {
+            case FLAT -> vars.flat() + "[" + row + "]";
+            case STRING -> vars.ids() + "[" + row + "]";   // the dense id is the value the loop works on
+            case DICTIONARY -> vars.dict() + "[" + vars.ids() + "[" + row + "]]";
+            case CONSTANT -> vars.constant();
+        };
+    }
+
+    /** Load a join column from its input array into the encoding-appropriate generated variable(s). */
+    private static void emitJoinColumnLoad(StringBuilder out, ColumnEncoding encoding, String source, ColumnVars vars)
+    {
+        String type = "org.weakref.nitro.jit.Column.";
+        switch (encoding) {
+            case FLAT -> out.append("    long[] ").append(vars.flat()).append(" = ((").append(type).append("FlatColumn) ").append(source).append(").values();\n");
+            case STRING -> out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("StringColumn) ").append(source).append(").ids();\n");
+            case DICTIONARY -> {
+                out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("DictionaryColumn) ").append(source).append(").ids();\n");
+                out.append("    long[] ").append(vars.dict()).append(" = ((").append(type).append("DictionaryColumn) ").append(source).append(").dictionary();\n");
+            }
+            case CONSTANT -> out.append("    long ").append(vars.constant()).append(" = ((").append(type).append("ConstantColumn) ").append(source).append(").value();\n");
+        }
+    }
+
     private static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
     {
         StringBuilder out = new StringBuilder();
@@ -138,7 +201,7 @@ public final class PipelineCompiler
         List<Type> resultTypes = outputColumnTypes(pipeline, encodings);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
         if (!pipeline.joins().isEmpty()) {
-            emitJoinBody(out, pipeline, resultTypes);
+            emitJoinBody(out, pipeline, encodings, resultTypes);
         }
         else {
             emitScanBody(out, pipeline, encodings, nullable, resultTypes);
@@ -158,7 +221,7 @@ public final class PipelineCompiler
     {
         List<Type> types = new ArrayList<>();
         for (Plan.Expr groupKey : pipeline.groupKeys()) {
-            boolean string = groupKey instanceof Plan.Col col && encodingOf(encodings, 0, col.index()) == ColumnEncoding.STRING;
+            boolean string = groupKey instanceof Plan.Col col && combinedEncoding(pipeline, encodings, col.index()) == ColumnEncoding.STRING;
             types.add(string ? Types.STRING : Types.LONG);
         }
         for (Plan.Aggregate aggregate : pipeline.aggregates()) {
@@ -402,7 +465,7 @@ public final class PipelineCompiler
 
     // ---- scan(probe) inner-join builds -> filter -> aggregate ----
 
-    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, List<Type> resultTypes)
+    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Type> resultTypes)
     {
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
@@ -444,15 +507,16 @@ public final class PipelineCompiler
 
         IntFunction<String> resolver = index -> {
             if (index < probeColumns) {
-                return "p" + index + "[i]";
+                return joinAccess(combinedEncoding(pipeline, encodings, index), probeVars(index), "i");
             }
             int build = buildOf(joins, buildOffset, index);
-            return "b" + build + "_" + (index - buildOffset[build]) + "[buildRow" + build + "]";
+            int local = index - buildOffset[build];
+            return joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, local), "buildRow" + build);
         };
 
         out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
         for (int column : probeReferenced) {
-            out.append("    long[] p").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) probe[").append(column).append("]).values();\n");
+            emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), "probe[" + column + "]", probeVars(column));
         }
         for (int k = 0; k < joinCount; k++) {
             Plan.Join join = joins.get(k);
@@ -462,7 +526,7 @@ public final class PipelineCompiler
             }
             out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = inputs[").append(k + 1).append("]; int build").append(k).append("Rows = rowCounts[").append(k + 1).append("];\n");
             for (int column : buildReferenced.get(k)) {
-                out.append("    long[] b").append(k).append("_").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) build").append(k).append("[").append(column).append("]).values();\n");
+                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, buildOffset[k] + column), "build" + k + "[" + column + "]", buildVars(k, column));
             }
             emitBuildStructures(out, k, join.build().keyColumns());
         }
