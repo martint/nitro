@@ -294,6 +294,59 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesStringFilterOverDictionary()
+    {
+        // SELECT k, sum(v) FROM t WHERE s IN ('CA','TX') GROUP BY k -- s is a dictionary string column,
+        // filtered by predicate-over-dictionary; some s are null (excluded by the IN).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.StringMatch(2, List.of("CA", "TX"), false)),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        byte[][] dictionary = {
+                "CA".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "NY".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "TX".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "WA".getBytes(java.nio.charset.StandardCharsets.UTF_8)};
+        int rows = 120_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        int[] ids = new int[rows];
+        boolean[] sNull = new boolean[rows];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 40;
+            v[i] = (i % 50) + 1;
+            ids[i] = i % 4;              // 0=CA,1=NY,2=TX,3=WA
+            sNull[i] = (i % 11 == 0);
+            boolean keep = !sNull[i] && (ids[i] == 0 || ids[i] == 2);   // s IN ('CA','TX')
+            if (keep) {
+                reference.merge(k[i], v[i], Long::sum);
+            }
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.FLAT, ColumnEncoding.STRING}};
+        boolean[][] nullable = {{false, false, true}};
+        System.out.println("=== generated string-filter source ===\n" + PipelineCompiler.render(pipeline, encodings, nullable));
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings, nullable);
+        Column[][] inputs = {{
+                new Column.FlatColumn(k),
+                new Column.FlatColumn(v),
+                new Column.StringColumn(ids, dictionary, sNull)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for k %d", keys[g]).isEqualTo(reference.get(keys[g]));
+        }
+    }
+
+    @Test
     void compilesCoalesce()
     {
         // SELECT k, sum(COALESCE(m, 0)) GROUP BY k -- a null measure contributes 0 (returns/credits pattern).

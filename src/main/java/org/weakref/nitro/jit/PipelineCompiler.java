@@ -238,6 +238,14 @@ public final class PipelineCompiler
         for (int column : referenced) {
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
+        // Predicate-over-dictionary: evaluate each string filter once per dictionary entry into an id mask.
+        List<Plan.StringMatch> stringMatches = new ArrayList<>();
+        for (Plan.Condition filter : pipeline.filters()) {
+            collectStringMatches(filter, stringMatches);
+        }
+        for (Plan.StringMatch match : stringMatches) {
+            emitStringMaskPrelude(out, match);
+        }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         boolean grouped = !pipeline.groupKeys().isEmpty();
@@ -299,16 +307,24 @@ public final class PipelineCompiler
                     out.append("    boolean cNconst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).isNull();\n");
                 }
             }
+            case STRING -> {
+                out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).ids();\n");
+                out.append("    byte[][] cStr").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).dictionary();\n");
+                if (nullable) {
+                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).nulls();\n");
+                }
+            }
         }
     }
 
-    /** Access expression for a scan column at row {@code row}: flat index, dictionary indirection, or hoisted constant. */
+    /** Access expression for a scan column at row {@code row}: flat index, dictionary indirection, hoisted constant, or string id. */
     private static String scanAccess(int column, ColumnEncoding encoding, String row)
     {
         return switch (encoding) {
             case FLAT -> "c" + column + "[" + row + "]";
             case DICTIONARY -> "cDict" + column + "[cIds" + column + "[" + row + "]]";
             case CONSTANT -> "cConst" + column;
+            case STRING -> "cIds" + column + "[" + row + "]";   // the dense id is the value the loop works on
         };
     }
 
@@ -319,9 +335,53 @@ public final class PipelineCompiler
             return "false";
         }
         return switch (encoding) {
-            case FLAT, DICTIONARY -> "cN" + column + "[" + row + "]";
+            case FLAT, DICTIONARY, STRING -> "cN" + column + "[" + row + "]";
             case CONSTANT -> "cNconst" + column;
         };
+    }
+
+    private static void collectStringMatches(Plan.Condition condition, List<Plan.StringMatch> into)
+    {
+        if (condition instanceof Plan.StringMatch match) {
+            into.add(match);
+        }
+        else if (condition instanceof Plan.And and) {
+            and.conditions().forEach(child -> collectStringMatches(child, into));
+        }
+        else if (condition instanceof Plan.Or or) {
+            or.conditions().forEach(child -> collectStringMatches(child, into));
+        }
+        else if (condition instanceof Plan.Not not) {
+            collectStringMatches(not.condition(), into);
+        }
+        // Plan.Predicate contains no string matches.
+    }
+
+    /** Build the id mask for a string filter once, by testing each dictionary entry against the literal set. */
+    private static void emitStringMaskPrelude(StringBuilder out, Plan.StringMatch match)
+    {
+        int column = match.column();
+        List<String> values = match.values();
+        for (int v = 0; v < values.size(); v++) {
+            out.append("    byte[] sLit").append(column).append("_").append(v).append(" = ")
+                    .append(javaStringLiteral(values.get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
+        }
+        out.append("    boolean[] sMask").append(column).append(" = new boolean[cStr").append(column).append(".length];\n");
+        out.append("    for (int e = 0; e < cStr").append(column).append(".length; e++) {\n");
+        out.append("      byte[] sv = cStr").append(column).append("[e];\n");
+        StringBuilder member = new StringBuilder();
+        for (int v = 0; v < values.size(); v++) {
+            member.append(member.length() == 0 ? "" : " || ").append("java.util.Arrays.equals(sv, sLit").append(column).append("_").append(v).append(")");
+        }
+        String matches = values.isEmpty() ? "false" : member.toString();
+        out.append("      sMask").append(column).append("[e] = ").append(match.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+        out.append("    }\n");
+    }
+
+    /** Render a Java double-quoted string literal, escaping backslashes and quotes. */
+    private static String javaStringLiteral(String value)
+    {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     /** Sample the first rows to estimate the single group key's domain and decide whether to speculate array mode. */
@@ -1023,6 +1083,7 @@ public final class PipelineCompiler
             case Plan.And and -> and.conditions().forEach(child -> collectConditionColumns(child, into));
             case Plan.Or or -> or.conditions().forEach(child -> collectConditionColumns(child, into));
             case Plan.Not not -> collectConditionColumns(not.condition(), into);
+            case Plan.StringMatch match -> into.add(match.column());
         }
     }
 
@@ -1042,6 +1103,7 @@ public final class PipelineCompiler
             case Plan.Or or -> or.conditions().isEmpty() ? "false"
                     : "(" + or.conditions().stream().map(child -> condition(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
             case Plan.Not not -> "(!" + condition(not.condition(), resolver, nullResolver) + ")";
+            case Plan.StringMatch ignored -> throw new UnsupportedOperationException("StringMatch is only supported in WHERE filters");
         };
     }
 
@@ -1212,6 +1274,11 @@ public final class PipelineCompiler
             case Plan.Not not -> {
                 return conditionFalse(not.condition(), resolver, nullResolver);
             }
+            case Plan.StringMatch match -> {
+                String guard = notNullGuard(nullResolver.apply(match.column()));
+                String lookup = "sMask" + match.column() + "[" + resolver.apply(match.column()) + "]";
+                return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
+            }
         }
     }
 
@@ -1240,6 +1307,11 @@ public final class PipelineCompiler
             }
             case Plan.Not not -> {
                 return conditionTrue(not.condition(), resolver, nullResolver);
+            }
+            case Plan.StringMatch match -> {
+                String guard = notNullGuard(nullResolver.apply(match.column()));
+                String lookup = "!sMask" + match.column() + "[" + resolver.apply(match.column()) + "]";
+                return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
             }
         }
     }

@@ -21,5 +21,7 @@ public enum ColumnEncoding
 {
     FLAT,
     DICTIONARY,
-    CONSTANT
+    CONSTANT,
+    /** Dictionary-encoded string (a {@link Column.StringColumn}); the loop works on ids, predicates over the dictionary. */
+    STRING
 }

@@ -53,4 +53,18 @@ public sealed interface Column
             this(value, false);
         }
     }
+
+    /**
+     * Dictionary-encoded string column: row {@code i} is the UTF-8 bytes {@code dictionary[ids[i]]} (null when
+     * {@code nulls != null && nulls[i]}). The compiled loop works on the dense {@code ids}; string predicates are
+     * evaluated once per dictionary entry into an id-indexed mask (predicate-over-dictionary).
+     */
+    record StringColumn(int[] ids, byte[][] dictionary, boolean[] nulls)
+            implements Column
+    {
+        public StringColumn(int[] ids, byte[][] dictionary)
+        {
+            this(ids, dictionary, null);
+        }
+    }
 }

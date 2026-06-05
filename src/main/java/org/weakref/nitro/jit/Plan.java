@@ -96,8 +96,22 @@ public final class Plan
      * {@link Predicate}s; {@code BETWEEN lo AND hi} to {@link And} of {@code >=} and {@code <=}.
      */
     public sealed interface Condition
-            permits Predicate, And, Or, Not
+            permits Predicate, And, Or, Not, StringMatch
     {}
+
+    /**
+     * Set membership on a dictionary-encoded string column: {@code column IN (values...)}, or its negation
+     * ({@code NOT IN} / {@code <>} for a single value). Compiled as predicate-over-dictionary -- the match is
+     * evaluated once per dictionary entry into an id mask, then each row is a mask lookup.
+     */
+    public record StringMatch(int column, List<String> values, boolean negated)
+            implements Condition
+    {
+        public StringMatch
+        {
+            values = List.copyOf(values);
+        }
+    }
 
     /** Comparison: {@code left op right}, op in {@code < <= > >= == !=}. */
     public record Predicate(String op, Expr left, Expr right)
