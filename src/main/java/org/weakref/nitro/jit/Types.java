@@ -53,8 +53,12 @@ public final class Types
                 return new F64Vector(values);
             });
 
-    /** Dictionary string id; the slot holds the id and the consumer reconstructs the string from the dictionary. */
-    // NOTE: comparison is by id, not lexicographic -- a sorted-dictionary or boundary string compare is the follow-up.
+    /**
+     * Dictionary string id; the slot holds the id and the consumer reconstructs the string from the dictionary.
+     * Comparison is by id, which equals value (lexicographic) order under the engine's <em>ordered dictionary</em>
+     * contract: a string column's dictionary is sorted (UTF-8 byte / code-point order), so ORDER BY on the string
+     * is a fast integer compare.
+     */
     public static final Type STRING = new SimpleType(
             "string",
             (a, b) -> "Long.compare(" + a + ", " + b + ")",

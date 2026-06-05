@@ -289,13 +289,44 @@ public final class CompiledQuerySupport
             boolean nullable = specs.get(c).nullable();
             boolean[] nullMask = nullable ? java.util.Arrays.copyOf(nulls[c], size) : null;
             if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
-                columns[c] = new org.weakref.nitro.jit.Column.StringColumn(java.util.Arrays.copyOf(ids[c], size), dictionaries.get(c).toArray(new byte[0][]), nullMask);
+                columns[c] = orderedStringColumn(ids[c], dictionaries.get(c), size, nullMask);
             }
             else {
                 columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
             }
         }
         return new DrainedInput(columns, size);
+    }
+
+    /**
+     * Build a string column with an <em>ordered</em> dictionary: entries sorted by unsigned bytes (UTF-8 byte
+     * order = code-point order) and ids remapped to that order. With a lexicographically-ordered dictionary, the
+     * engine's id comparison is value comparison, so ORDER BY on the string is correct while the sort stays a fast
+     * integer compare. This is the encoding contract {@code Types.STRING} relies on.
+     */
+    private static org.weakref.nitro.jit.Column.StringColumn orderedStringColumn(int[] ids, List<byte[]> dictionary, int size, boolean[] nullMask)
+    {
+        int entries = dictionary.size();
+        if (entries == 0) {
+            return new org.weakref.nitro.jit.Column.StringColumn(java.util.Arrays.copyOf(ids, size), new byte[0][], nullMask);
+        }
+        Integer[] order = new Integer[entries];
+        for (int i = 0; i < entries; i++) {
+            order[i] = i;
+        }
+        java.util.Arrays.sort(order, (a, b) -> java.util.Arrays.compareUnsigned(dictionary.get(a), dictionary.get(b)));
+        int[] remap = new int[entries];        // old id -> position in sorted order
+        byte[][] sorted = new byte[entries][];
+        for (int newId = 0; newId < entries; newId++) {
+            int oldId = order[newId];
+            remap[oldId] = newId;
+            sorted[newId] = dictionary.get(oldId);
+        }
+        int[] remapped = new int[size];
+        for (int r = 0; r < size; r++) {
+            remapped[r] = remap[ids[r]];
+        }
+        return new org.weakref.nitro.jit.Column.StringColumn(remapped, sorted, nullMask);
     }
 
     /** Bytes of a string value at {@code position}, whether the scan returned it flat or dictionary-encoded. */
