@@ -15,7 +15,9 @@ package org.weakref.nitro.jit;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -54,5 +56,47 @@ public class TestJitPipeline
         assertThat(result.rowCount()).isEqualTo(1);
         assertThat(result.columns()[0][0]).isEqualTo(expectedSum);
         assertThat(result.columns()[1][0]).isEqualTo(expectedCount);
+    }
+
+    @Test
+    void compilesAndComputesGroupedAggregate()
+    {
+        // SELECT k, sum(v), count(*) WHERE v > 0 GROUP BY k
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(0))),
+                List.of(new Plan.Col(0)),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Col(1)),
+                        new Plan.Aggregate("count", null)));
+
+        int rows = 200_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // key -> {sum, count}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 5000;        // 5000 distinct groups
+            v[i] = (i % 11) - 2;    // includes negatives -> filtered
+            if (v[i] > 0) {
+                long[] acc = reference.computeIfAbsent(k[i], ignored -> new long[2]);
+                acc[0] += v[i];
+                acc[1]++;
+            }
+        }
+
+        System.out.println("=== generated grouped source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][] {k, v}, rows);
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        long[] counts = result.columns()[2];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = reference.get(keys[g]);
+            assertThat(expected).as("group %d", keys[g]).isNotNull();
+            assertThat(sums[g]).as("sum for group %d", keys[g]).isEqualTo(expected[0]);
+            assertThat(counts[g]).as("count for group %d", keys[g]).isEqualTo(expected[1]);
+        }
     }
 }

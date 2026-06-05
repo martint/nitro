@@ -49,11 +49,8 @@ public final class PipelineCompiler
 
     public static CompiledPipeline compile(Plan.Pipeline pipeline)
     {
-        if (!pipeline.groupKeys().isEmpty()) {
-            throw new UnsupportedOperationException("grouped aggregation not yet supported by the prototype compiler");
-        }
         String simpleName = "Pipeline_" + COUNTER.incrementAndGet();
-        String source = generateGlobalAggregate(pipeline, simpleName);
+        String source = render(pipeline, simpleName);
         try {
             Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
             return (CompiledPipeline) compiled.getDeclaredConstructor().newInstance();
@@ -66,7 +63,17 @@ public final class PipelineCompiler
     /** Exposed for inspection/tests: the Java source that would be compiled. */
     public static String render(Plan.Pipeline pipeline)
     {
-        return generateGlobalAggregate(pipeline, "Pipeline_preview");
+        return render(pipeline, "Pipeline_preview");
+    }
+
+    private static String render(Plan.Pipeline pipeline, String simpleName)
+    {
+        return switch (pipeline.groupKeys().size()) {
+            case 0 -> generateGlobalAggregate(pipeline, simpleName);
+            case 1 -> generateGroupedAggregate(pipeline, simpleName);
+            default -> throw new UnsupportedOperationException(
+                    "multi-key grouping not yet supported (same shape, composite hash)");
+        };
     }
 
     private static String generateGlobalAggregate(Plan.Pipeline pipeline, String simpleName)
@@ -122,6 +129,106 @@ public final class PipelineCompiler
             out.append("    result[").append(a).append("] = new long[] { a").append(a).append(" };\n");
         }
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(1, result);\n");
+        out.append("  }\n}\n");
+        return out.toString();
+    }
+
+    private static String generateGroupedAggregate(Plan.Pipeline pipeline, String simpleName)
+    {
+        Plan.Expr groupKey = pipeline.groupKeys().getFirst();
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+
+        TreeSet<Integer> referenced = new TreeSet<>();
+        collectColumns(groupKey, referenced);
+        for (Plan.Predicate predicate : pipeline.filters()) {
+            collectColumns(predicate.left(), referenced);
+            collectColumns(predicate.right(), referenced);
+        }
+        for (Plan.Aggregate aggregate : aggregates) {
+            if (aggregate.input() != null) {
+                collectColumns(aggregate.input(), referenced);
+            }
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("package ").append(PACKAGE).append(";\n");
+        out.append("public final class ").append(simpleName)
+                .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
+        // Murmur3 64-bit finalizer for key hashing.
+        out.append("  private static int mix(long key) {\n");
+        out.append("    long h = key; h ^= h >>> 33; h *= 0xff51afd7ed558ccdL; h ^= h >>> 33;");
+        out.append(" h *= 0xc4ceb9fe1a85ec53L; h ^= h >>> 33; return (int) h;\n  }\n");
+        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][] columns, int rowCount) {\n");
+        for (int column : referenced) {
+            out.append("    long[] c").append(column).append(" = columns[").append(column).append("];\n");
+        }
+        // Open-addressing key -> dense group-id table; aggregate arrays indexed by the dense group id so a
+        // rehash only moves the key table, never the accumulators.
+        out.append("    int cap = 1024;\n");
+        out.append("    long[] htKey = new long[cap];\n");
+        out.append("    int[] htGid = new int[cap];\n");
+        out.append("    java.util.Arrays.fill(htGid, -1);\n");
+        out.append("    int htMask = cap - 1;\n");
+        out.append("    int htFill = (int) (cap * 0.75f);\n");
+        out.append("    int groupCount = 0;\n");
+        out.append("    long[] keyByGid = new long[16];\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("    long[] agg").append(a).append(" = new long[16];\n");
+        }
+        out.append("    for (int i = 0; i < rowCount; i++) {\n");
+        String indent = "      ";
+        if (!pipeline.filters().isEmpty()) {
+            String condition = pipeline.filters().stream()
+                    .map(p -> "(" + expr(p.left()) + " " + p.op() + " " + expr(p.right()) + ")")
+                    .collect(joining(" && "));
+            out.append(indent).append("if (").append(condition).append(") {\n");
+            indent = "        ";
+        }
+        out.append(indent).append("long key = ").append(expr(groupKey)).append(";\n");
+        out.append(indent).append("int slot = mix(key) & htMask;\n");
+        out.append(indent).append("while (htGid[slot] != -1 && htKey[slot] != key) { slot = (slot + 1) & htMask; }\n");
+        out.append(indent).append("int gid = htGid[slot];\n");
+        out.append(indent).append("if (gid == -1) {\n");
+        String b = indent + "  ";
+        out.append(b).append("gid = groupCount++;\n");
+        out.append(b).append("htKey[slot] = key; htGid[slot] = gid;\n");
+        out.append(b).append("if (gid == keyByGid.length) {\n");
+        out.append(b).append("  int n = keyByGid.length * 2;\n");
+        out.append(b).append("  keyByGid = java.util.Arrays.copyOf(keyByGid, n);\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
+        }
+        out.append(b).append("}\n");
+        out.append(b).append("keyByGid[gid] = key;\n");
+        out.append(b).append("if (groupCount > htFill) {\n");
+        // Rehash the key table (group ids and accumulators are unaffected).
+        out.append(b).append("  int ncap = cap * 2; long[] nKey = new long[ncap]; int[] nGid = new int[ncap];\n");
+        out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
+        out.append(b).append("  for (int s = 0; s < cap; s++) { if (htGid[s] != -1) {\n");
+        out.append(b).append("    int ns = mix(htKey[s]) & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
+        out.append(b).append("    nKey[ns] = htKey[s]; nGid[ns] = htGid[s]; } }\n");
+        out.append(b).append("  htKey = nKey; htGid = nGid; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
+        out.append(b).append("}\n");
+        out.append(indent).append("}\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            Plan.Aggregate aggregate = aggregates.get(a);
+            String increment = switch (aggregate.fn()) {
+                case "sum" -> expr(aggregate.input());
+                case "count" -> "1L";
+                default -> throw new UnsupportedOperationException("aggregate: " + aggregate.fn());
+            };
+            out.append(indent).append("agg").append(a).append("[gid] += ").append(increment).append(";\n");
+        }
+        if (!pipeline.filters().isEmpty()) {
+            out.append("      }\n");
+        }
+        out.append("    }\n");
+        out.append("    long[][] result = new long[").append(1 + aggregates.size()).append("][];\n");
+        out.append("    result[0] = java.util.Arrays.copyOf(keyByGid, groupCount);\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
+        }
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
         out.append("  }\n}\n");
         return out.toString();
     }
