@@ -92,6 +92,27 @@ public final class CompiledQuerySupport
     }
 
     /**
+     * The same join + group shape as {@link #load} but without the year predicate, so the dimension is the
+     * full {@code date_dim}. Used for the end-to-end three-way comparison (Nitro compiled vs Nitro interpreted
+     * vs Trino) where all three read Parquet and do identical work, with no filter anywhere.
+     */
+    public static Loaded loadUnfiltered(Allocator allocator, TpcdsParquetTables tables)
+    {
+        long[][] sales = drain(scan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity"));
+        long[][] dates = drain(scan(allocator, tables, "date_dim", "d_date_sk"));
+        return new Loaded(sales[0], sales[1], sales[2], dates[0]);
+    }
+
+    /** Interpreted operator tree reading Parquet directly (scan -> HashJoin -> GroupedAggregation), no filter. */
+    public static Operator interpretedFromParquet(Allocator allocator, TpcdsParquetTables tables)
+    {
+        Operator sales = scan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity");
+        Operator dates = scan(allocator, tables, "date_dim", "d_date_sk");
+        Operator joined = new HashJoinOperator(allocator, sales, 0, dates, 0);
+        return new GroupedAggregationOperator(allocator, List.of(1), List.of(new Sum(2)), joined);
+    }
+
+    /**
      * The compiled-pipeline plan: probe store_sales [0=ss_sold_date_sk, 1=ss_item_sk, 2=ss_quantity], inner
      * join date_dim [3=d_date_sk] on column 0, group by ss_item_sk, sum ss_quantity.
      */

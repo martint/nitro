@@ -375,6 +375,46 @@ public final class TrinoTpcdsParquetSupport
         return executePipelinePlan(query42Plan(tables), query42OutputTypes(tables));
     }
 
+    /**
+     * Star-schema probe shape used to benchmark the data-centric compiler prototype against an equivalent
+     * Trino operator tree: {@code store_sales JOIN date_dim ON ss_sold_date_sk = d_date_sk GROUP BY
+     * ss_item_sk, sum(ss_quantity)}. Same logical operator sequence the prototype fuses (scan -> hash join ->
+     * hash aggregation), reading the same Parquet.
+     */
+    public MaterializedResult storeSalesQuantityByItem(TpcdsParquetTables tables)
+    {
+        List<String> factColumns = List.of("ss_sold_date_sk", "ss_item_sk", "ss_quantity");
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
+        List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk"));
+        List<Type> projectedTypes = List.of(factTypes.get(1), BIGINT);
+        List<Type> outputTypes = List.of(factTypes.get(1), BIGINT);
+        PipelinePlan plan = new PipelinePlan(
+                new FilesPipelineSource(tables.tableFiles("store_sales"), factColumns, "ssq.scan.store_sales"),
+                List.of(
+                        namedHashJoinStep("ssq.join.date_dim", new HashJoinSpec(90_0, factTypes, List.of(0), relationPlan(
+                                tables,
+                                "date_dim",
+                                List.of("d_date_sk"),
+                                Optional.empty(),
+                                List.of(field(0, dateTypes.get(0))),
+                                List.of(dateTypes.get(0)),
+                                "ssq.scan.date_dim",
+                                "ssq.sink.date_dim"), List.of(dateTypes.get(0)), List.of(0))),
+                        // sum(ss_quantity) coerces the integer measure to bigint, exactly as Trino's planner does.
+                        namedFactoryStep("ssq.project", filterAndProjectFactory(
+                                90_1,
+                                Optional.empty(),
+                                List.of(field(1, factTypes.get(1)), cast(field(2, factTypes.get(2)), factTypes.get(2), BIGINT)),
+                                projectedTypes)),
+                        namedFactoryStep("ssq.group.final", hashAggregationFactory(
+                                90_2,
+                                List.of(factTypes.get(1)),
+                                List.of(0),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty())))),
+                "ssq.sink");
+        return executePipelinePlan(plan, outputTypes);
+    }
+
     public MaterializedResult query43(TpcdsParquetTables tables)
     {
         return executePipelinePlan(query43Plan(tables), query43OutputTypes(tables));
