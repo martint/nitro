@@ -160,6 +160,78 @@ public final class CompiledQuerySupport
     }
 
     /**
+     * Zero-copy streaming {@link org.weakref.nitro.jit.StreamingPipeline.Source}: when a batch is the dense full
+     * range ({@code mask.all()}) and a column is a non-null {@code I64} vector, its backing {@code long[]} is
+     * wrapped directly with no copy; otherwise the column is copied (widened {@code I32}, gathered sparse mask, or
+     * null-zeroed). To stay safe against the scan's pooled/recycled vectors, the current batch is held open while
+     * the compiled routine processes it and closed only on the next {@code advance()}.
+     */
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetColumnarSource(Allocator allocator, TpcdsParquetTables tables, String table, String... columns)
+    {
+        int width = columns.length;
+        Operator operator = scan(allocator, tables, table, columns);
+        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        {
+            private Batch open;   // current batch, kept alive until the next advance()
+            private org.weakref.nitro.jit.Column[] current;
+            private int currentRows;
+
+            @Override
+            public boolean advance()
+            {
+                if (open != null) {
+                    open.close();
+                    open = null;
+                }
+                while (operator.hasNext()) {
+                    Batch batch = operator.next();
+                    Mask mask = batch.borrowMask();
+                    int count = mask.count();
+                    if (count == 0) {
+                        batch.close();
+                        continue;
+                    }
+                    boolean dense = mask.all();
+                    org.weakref.nitro.jit.Column[] cols = new org.weakref.nitro.jit.Column[width];
+                    for (int c = 0; c < width; c++) {
+                        Vector values = batch.output(c).borrow(Stream.VALUES);
+                        Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
+                        if (dense && nulls == null && values instanceof I64Vector i64) {
+                            cols[c] = new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
+                        }
+                        else {
+                            long[] copy = new long[count];
+                            for (int index = 0; index < count; index++) {
+                                int position = mask.position(index);
+                                copy[index] = nulls != null && isNull(nulls, position) ? 0 : longValue(values, position);
+                            }
+                            cols[c] = new org.weakref.nitro.jit.Column.FlatColumn(copy);
+                        }
+                    }
+                    current = cols;
+                    currentRows = count;
+                    open = batch;   // defer close to the next advance()
+                    return true;
+                }
+                operator.close();
+                return false;
+            }
+
+            @Override
+            public int rows()
+            {
+                return currentRows;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] columns()
+            {
+                return current;
+            }
+        };
+    }
+
+    /**
      * A {@link org.weakref.nitro.jit.StreamingPipeline.Source} over {@code table}'s {@code columns}, scanned from
      * Parquet one batch at a time and exposed as flat {@code long} columns (value-only; the same per-position read
      * the eager loader uses). The compiled streaming routine folds each batch without the whole table ever being

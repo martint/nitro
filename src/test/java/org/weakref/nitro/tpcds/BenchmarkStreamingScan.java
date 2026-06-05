@@ -98,4 +98,10 @@ public class BenchmarkStreamingScan
     {
         return streaming.execute(CompiledQuerySupport.parquetFlatSource(allocator, tables, TABLE, COLUMNS));
     }
+
+    @Benchmark
+    public Object streamingZeroCopy()
+    {
+        return streaming.execute(CompiledQuerySupport.parquetColumnarSource(allocator, tables, TABLE, COLUMNS));
+    }
 }
