@@ -294,6 +294,43 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesCoalesce()
+    {
+        // SELECT k, sum(COALESCE(m, 0)) GROUP BY k -- a null measure contributes 0 (returns/credits pattern).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Coalesce(new Plan.Col(1), new Plan.Lit(0)))));
+
+        int rows = 80_000;
+        long[] k = new long[rows];
+        long[] m = new long[rows];
+        boolean[] mNull = new boolean[rows];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 60;
+            mNull[i] = (i % 4 == 0);
+            m[i] = (i % 100) + 1;
+            long contribution = mNull[i] ? 0 : m[i];   // COALESCE(m, 0)
+            reference.merge(k[i], contribution, Long::sum);
+        }
+
+        boolean[][] nullable = {{false, true}};
+        System.out.println("=== generated coalesce source ===\n" + PipelineCompiler.render(pipeline, null, nullable));
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        Column[][] inputs = {{new Column.FlatColumn(k), new Column.FlatColumn(m, mNull)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum(coalesce(m,0)) for k %d", keys[g]).isEqualTo(reference.get(keys[g]));
+        }
+    }
+
+    @Test
     void compilesNullAwareFilterAndAggregates()
     {
         // SELECT k, sum(m), count(m), count(*) FROM t WHERE f >= 0 GROUP BY k

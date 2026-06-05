@@ -27,7 +27,7 @@ public final class Plan
 
     /** Scalar expression over input columns. */
     public sealed interface Expr
-            permits Col, Lit, Bin, Call, Case
+            permits Col, Lit, Bin, Call, Case, Coalesce
     {}
 
     /** Reference to input column {@code index}. */
@@ -74,6 +74,21 @@ public final class Plan
 
         /** One {@code WHEN condition THEN value} arm of a {@link Case}. */
         public record Branch(Condition condition, Expr value) {}
+    }
+
+    /** {@code COALESCE(a, b, ...)}: the first non-null argument, or null if all are null. */
+    public record Coalesce(List<Expr> arguments)
+            implements Expr
+    {
+        public Coalesce
+        {
+            arguments = List.copyOf(arguments);
+        }
+
+        public Coalesce(Expr... arguments)
+        {
+            this(List.of(arguments));
+        }
     }
 
     /**

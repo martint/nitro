@@ -53,6 +53,8 @@ public final class PipelineCompiler
     private static final int DENSITY_FACTOR = 8;
     // Rows sampled to estimate a streaming group key's domain before speculating array-mode grouping.
     private static final int SAMPLE_SIZE = 4096;
+    // Null resolver for non-null contexts (group keys, join inputs): nothing is ever null.
+    private static final IntFunction<String> NEVER_NULL = index -> "false";
 
     private PipelineCompiler() {}
 
@@ -597,7 +599,7 @@ public final class PipelineCompiler
     private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         AggregateLibrary.AggregateCompiler aggregator = aggregator(aggregate);
-        String inputExpr = input(aggregate, resolver);
+        String inputExpr = input(aggregate, resolver, nullResolver);
         String guard = aggregate.input() == null ? "false" : nullExpr(aggregate.input(), resolver, nullResolver);
         if (guard.equals("false")) {
             aggregator.emitUpdate(out, indent, cells, inputExpr);
@@ -906,9 +908,9 @@ public final class PipelineCompiler
     }
 
     /** Rendered input expression for an aggregate, or {@code null} for a nullary aggregate such as {@code count}. */
-    private static String input(Plan.Aggregate aggregate, IntFunction<String> resolver)
+    private static String input(Plan.Aggregate aggregate, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
-        return aggregate.input() == null ? null : expr(aggregate.input(), resolver);
+        return aggregate.input() == null ? null : expr(aggregate.input(), resolver, nullResolver);
     }
 
     /** Total number of {@code long} state cells across all aggregates. */
@@ -1005,6 +1007,9 @@ public final class PipelineCompiler
             }
             collectColumns(kase.defaultValue(), into);
         }
+        else if (expr instanceof Plan.Coalesce coalesce) {
+            coalesce.arguments().forEach(argument -> collectColumns(argument, into));
+        }
         // Plan.Lit references no columns.
     }
 
@@ -1022,38 +1027,73 @@ public final class PipelineCompiler
     }
 
     /** Render a boolean condition tree as a Java expression. */
+    /** Null-unaware boolean rendering (for contexts whose operands are non-null: HAVING result columns, CASE whens). */
     private static String condition(Plan.Condition condition, IntFunction<String> resolver)
     {
+        return condition(condition, resolver, NEVER_NULL);
+    }
+
+    private static String condition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
         return switch (condition) {
-            case Plan.Predicate predicate -> "(" + expr(predicate.left(), resolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver) + ")";
+            case Plan.Predicate predicate -> "(" + expr(predicate.left(), resolver, nullResolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver, nullResolver) + ")";
             case Plan.And and -> and.conditions().isEmpty() ? "true"
-                    : "(" + and.conditions().stream().map(child -> condition(child, resolver)).collect(joining(" && ")) + ")";
+                    : "(" + and.conditions().stream().map(child -> condition(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
             case Plan.Or or -> or.conditions().isEmpty() ? "false"
-                    : "(" + or.conditions().stream().map(child -> condition(child, resolver)).collect(joining(" || ")) + ")";
-            case Plan.Not not -> "(!" + condition(not.condition(), resolver) + ")";
+                    : "(" + or.conditions().stream().map(child -> condition(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
+            case Plan.Not not -> "(!" + condition(not.condition(), resolver, nullResolver) + ")";
         };
     }
 
     private static String expr(Plan.Expr expr, IntFunction<String> resolver)
     {
+        return expr(expr, resolver, NEVER_NULL);
+    }
+
+    private static String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
         return switch (expr) {
             case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
-            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver), expr(bin.right(), resolver)));
-            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver)).toList());
-            case Plan.Case kase -> caseExpression(kase, resolver);
+            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver), expr(bin.right(), resolver, nullResolver)));
+            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver)).toList());
+            case Plan.Case kase -> caseExpression(kase, resolver, nullResolver);
+            case Plan.Coalesce coalesce -> coalesceExpression(coalesce, resolver, nullResolver);
         };
     }
 
     /** Render a CASE as a right-nested conditional, falling through to the default value. */
-    private static String caseExpression(Plan.Case kase, IntFunction<String> resolver)
+    private static String caseExpression(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         StringBuilder out = new StringBuilder();
         for (Plan.Case.Branch branch : kase.branches()) {
-            out.append("(").append(condition(branch.condition(), resolver)).append(" ? ").append(expr(branch.value(), resolver)).append(" : ");
+            out.append("(").append(condition(branch.condition(), resolver, nullResolver)).append(" ? ").append(expr(branch.value(), resolver, nullResolver)).append(" : ");
         }
-        out.append(expr(kase.defaultValue(), resolver));
+        out.append(expr(kase.defaultValue(), resolver, nullResolver));
         out.append(")".repeat(kase.branches().size()));
+        return out.toString();
+    }
+
+    /** Render COALESCE as a right-nested conditional returning the first non-null argument. */
+    private static String coalesceExpression(Plan.Coalesce coalesce, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        List<Plan.Expr> arguments = coalesce.arguments();
+        // The fallback is the first argument that is never null (it always wins if reached), or the last one.
+        int fallback = arguments.size() - 1;
+        for (int a = 0; a < arguments.size(); a++) {
+            if (nullExpr(arguments.get(a), resolver, nullResolver).equals("false")) {
+                fallback = a;
+                break;
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        for (int a = 0; a < fallback; a++) {
+            out.append("(").append(nullExpr(arguments.get(a), resolver, nullResolver)).append(" ? ");
+        }
+        out.append(expr(arguments.get(fallback), resolver, nullResolver));
+        for (int a = fallback - 1; a >= 0; a--) {
+            out.append(" : ").append(expr(arguments.get(a), resolver, nullResolver)).append(")");
+        }
         return out.toString();
     }
 
@@ -1074,7 +1114,29 @@ public final class PipelineCompiler
                 yield nulls;
             }
             case Plan.Case kase -> caseNull(kase, resolver, nullResolver);
+            case Plan.Coalesce coalesce -> {
+                // COALESCE is null only when every argument is null.
+                String allNull = "true";
+                for (Plan.Expr argument : coalesce.arguments()) {
+                    allNull = andNull(allNull, nullExpr(argument, resolver, nullResolver));
+                }
+                yield allNull;
+            }
         };
+    }
+
+    private static String andNull(String left, String right)
+    {
+        if (left.equals("false") || right.equals("false")) {
+            return "false";
+        }
+        if (left.equals("true")) {
+            return right;
+        }
+        if (right.equals("true")) {
+            return left;
+        }
+        return "(" + left + " && " + right + ")";
     }
 
     /** Null-ness of a CASE: the null-ness of whichever branch value is selected (when-conditions assumed non-null). */
@@ -1132,7 +1194,7 @@ public final class PipelineCompiler
                 String guard = andGuards(
                         notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
                         notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
-                String comparison = "(" + expr(predicate.left(), resolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver) + ")";
+                String comparison = "(" + expr(predicate.left(), resolver, nullResolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver, nullResolver) + ")";
                 return guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
             }
             case Plan.And and -> {
@@ -1161,7 +1223,7 @@ public final class PipelineCompiler
                 String guard = andGuards(
                         notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
                         notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
-                String negated = "!(" + expr(predicate.left(), resolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver) + ")";
+                String negated = "!(" + expr(predicate.left(), resolver, nullResolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver, nullResolver) + ")";
                 return guard.isEmpty() ? negated : "(" + guard + " && " + negated + ")";
             }
             case Plan.And and -> {
