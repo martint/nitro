@@ -67,6 +67,7 @@ public class BenchmarkCompiledJoin
     private List<TableOperator.Page> factPages;
     private List<TableOperator.Page> dimPages;
     private CompiledPipeline compiled;
+    private CompiledPipeline compiledArray;
 
     @Setup
     public void setup()
@@ -97,9 +98,34 @@ public class BenchmarkCompiledJoin
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
         compiled = PipelineCompiler.compile(plan);
 
-        if (jitCompiled() != interpreted()) {
-            throw new IllegalStateException("mismatch: jit=" + jitCompiled() + " interpreted=" + interpreted());
+        // Same query, but the join build keys (dimension PKs) are dense -> array-mode lookup, no hashing.
+        Plan.Pipeline arrayPlan = new Plan.Pipeline(
+                2,
+                new Plan.Build(2, 0, true),
+                0,
+                List.of(),
+                List.of(new Plan.Col(3)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+        compiledArray = PipelineCompiler.compile(arrayPlan);
+
+        long interp = interpreted();
+        if (jitCompiled() != interp || jitArrayJoin() != interp) {
+            throw new IllegalStateException("mismatch: hash=" + jitCompiled() + " array=" + jitArrayJoin() + " interpreted=" + interp);
         }
+    }
+
+    @Benchmark
+    public long jitArrayJoin()
+    {
+        CompiledPipeline.Result result = compiledArray.execute(
+                new long[][][] {{fk, measure}, {dkey, dattr}},
+                new int[] {FACT_ROWS, DIM_ROWS});
+        long checksum = 0;
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            checksum += sums[g];
+        }
+        return checksum;
     }
 
     private static List<TableOperator.Page> pages(long[] c0, long[] c1)

@@ -143,5 +143,23 @@ public class TestJitPipeline
         for (int g = 0; g < result.rowCount(); g++) {
             assertThat(sums[g]).as("sum for attr %d", keys[g]).isEqualTo(reference.get(keys[g]));
         }
+
+        // Array-mode (dense keys): same query, direct-indexed join. Must produce identical results.
+        Plan.Pipeline arrayPlan = new Plan.Pipeline(
+                2,
+                new Plan.Build(2, 0, true),
+                0,
+                List.of(),
+                List.of(new Plan.Col(3)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+        System.out.println("=== generated array-mode join source ===\n" + PipelineCompiler.render(arrayPlan));
+        CompiledPipeline.Result arrayResult = PipelineCompiler.compile(arrayPlan)
+                .execute(new long[][][] {{fk, measure}, {dkey, dattr}}, new int[] {fact, dim});
+        assertThat(arrayResult.rowCount()).isEqualTo(reference.size());
+        long[] aKeys = arrayResult.columns()[0];
+        long[] aSums = arrayResult.columns()[1];
+        for (int g = 0; g < arrayResult.rowCount(); g++) {
+            assertThat(aSums[g]).as("array sum for attr %d", aKeys[g]).isEqualTo(reference.get(aKeys[g]));
+        }
     }
 }

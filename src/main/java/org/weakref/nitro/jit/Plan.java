@@ -55,10 +55,18 @@ public final class Plan
 
     /**
      * Build (inner/dimension) side of an inner hash join. {@code columnCount} build columns, joined on
-     * {@code keyColumn}. Build keys are assumed unique (the TPC-DS fact-to-dimension-PK case).
+     * {@code keyColumn}. Build keys are assumed unique (the TPC-DS fact-to-dimension-PK case). When
+     * {@code denseKeys} is set, the compiler emits direct array-mode lookup (Velox kArray-style: index by
+     * {@code key - min}, no hashing) instead of a hash table — the right specialization for dense surrogate
+     * keys, and the kind of choice a production engine would make at runtime with a deopt guard.
      */
-    public record Build(int columnCount, int keyColumn)
-    {}
+    public record Build(int columnCount, int keyColumn, boolean denseKeys)
+    {
+        public Build(int columnCount, int keyColumn)
+        {
+            this(columnCount, keyColumn, false);
+        }
+    }
 
     /**
      * A push pipeline. Scans {@code columnCount} probe columns; if {@code build} is non-null, inner-joins it

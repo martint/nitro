@@ -76,7 +76,9 @@ public final class PipelineCompiler
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
-        if (!pipeline.groupKeys().isEmpty() || pipeline.build() != null) {
+        boolean needsMix = !pipeline.groupKeys().isEmpty()
+                || (pipeline.build() != null && !pipeline.build().denseKeys());
+        if (needsMix) {
             emitMix(out);
         }
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][][] inputs, int[] rowCounts) {\n");
@@ -147,16 +149,30 @@ public final class PipelineCompiler
         for (int column : buildReferenced) {
             out.append("    long[] b").append(column).append(" = build[").append(column).append("];\n");
         }
-        // Build an open-addressing key -> build-row table (build keys assumed unique).
-        out.append("    int jcap = 16; while (jcap * 0.75f < buildRows) { jcap <<= 1; }\n");
-        out.append("    long[] jKey = new long[jcap]; int[] jRow = new int[jcap];\n");
-        out.append("    java.util.Arrays.fill(jRow, -1); int jMask = jcap - 1;\n");
-        out.append("    for (int r = 0; r < buildRows; r++) {\n");
-        out.append("      long key = b").append(build.keyColumn()).append("[r];\n");
-        out.append("      int slot = mix(key) & jMask;\n");
-        out.append("      while (jRow[slot] != -1 && jKey[slot] != key) { slot = (slot + 1) & jMask; }\n");
-        out.append("      jKey[slot] = key; jRow[slot] = r;\n");
-        out.append("    }\n");
+        String buildKey = "b" + build.keyColumn();
+        boolean dense = build.denseKeys();
+        if (dense) {
+            // Array mode: index a build-row array directly by (key - min) -- no hashing, no probe loop.
+            out.append("    long minKey = Long.MAX_VALUE, maxKey = Long.MIN_VALUE;\n");
+            out.append("    for (int r = 0; r < buildRows; r++) { long key = ").append(buildKey)
+                    .append("[r]; if (key < minKey) { minKey = key; } if (key > maxKey) { maxKey = key; } }\n");
+            out.append("    int range = buildRows == 0 ? 1 : (int) (maxKey - minKey + 1);\n");
+            out.append("    int[] buildRowByKey = new int[range]; java.util.Arrays.fill(buildRowByKey, -1);\n");
+            out.append("    for (int r = 0; r < buildRows; r++) { buildRowByKey[(int) (").append(buildKey)
+                    .append("[r] - minKey)] = r; }\n");
+        }
+        else {
+            // Open-addressing key -> build-row hash table (build keys assumed unique).
+            out.append("    int jcap = 16; while (jcap * 0.75f < buildRows) { jcap <<= 1; }\n");
+            out.append("    long[] jKey = new long[jcap]; int[] jRow = new int[jcap];\n");
+            out.append("    java.util.Arrays.fill(jRow, -1); int jMask = jcap - 1;\n");
+            out.append("    for (int r = 0; r < buildRows; r++) {\n");
+            out.append("      long key = ").append(buildKey).append("[r];\n");
+            out.append("      int slot = mix(key) & jMask;\n");
+            out.append("      while (jRow[slot] != -1 && jKey[slot] != key) { slot = (slot + 1) & jMask; }\n");
+            out.append("      jKey[slot] = key; jRow[slot] = r;\n");
+            out.append("    }\n");
+        }
 
         IntFunction<String> resolver = index -> index < probeColumns
                 ? "p" + index + "[i]"
@@ -168,11 +184,17 @@ public final class PipelineCompiler
         else {
             emitGlobalState(out, pipeline.aggregates().size());
         }
+        String probeKey = "p" + pipeline.probeKeyColumn();
         out.append("    for (int i = 0; i < probeRows; i++) {\n");
-        out.append("      long jk = p").append(pipeline.probeKeyColumn()).append("[i];\n");
-        out.append("      int js = mix(jk) & jMask;\n");
-        out.append("      while (jRow[js] != -1 && jKey[js] != jk) { js = (js + 1) & jMask; }\n");
-        out.append("      int buildRow = jRow[js];\n");
+        out.append("      long jk = ").append(probeKey).append("[i];\n");
+        if (dense) {
+            out.append("      int buildRow = (jk >= minKey && jk <= maxKey) ? buildRowByKey[(int) (jk - minKey)] : -1;\n");
+        }
+        else {
+            out.append("      int js = mix(jk) & jMask;\n");
+            out.append("      while (jRow[js] != -1 && jKey[js] != jk) { js = (js + 1) & jMask; }\n");
+            out.append("      int buildRow = jRow[js];\n");
+        }
         out.append("      if (buildRow != -1) {\n");
         emitRowBody(out, "        ", pipeline, resolver, grouped);
         out.append("      }\n");
