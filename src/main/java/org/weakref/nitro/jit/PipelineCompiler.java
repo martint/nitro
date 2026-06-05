@@ -119,7 +119,7 @@ public final class PipelineCompiler
             emitGroupedState(out, pipeline, speculate);
         }
         else {
-            emitGlobalState(out, pipeline.aggregates().size());
+            emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
         emitRowBody(out, "      ", pipeline, resolver, grouped, speculate);
@@ -219,7 +219,7 @@ public final class PipelineCompiler
             emitGroupedState(out, pipeline, false);
         }
         else {
-            emitGlobalState(out, pipeline.aggregates().size());
+            emitGlobalState(out, pipeline.aggregates());
         }
 
         out.append("    for (int i = 0; i < probeRows; i++) {\n");
@@ -383,17 +383,18 @@ public final class PipelineCompiler
 
     // ---- global aggregation ----
 
-    private static void emitGlobalState(StringBuilder out, int aggregateCount)
+    private static void emitGlobalState(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
-        for (int a = 0; a < aggregateCount; a++) {
-            out.append("    long a").append(a).append(" = 0L;\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("    long a").append(a).append(" = ").append(aggregator(aggregates.get(a)).identity()).append(";\n");
         }
     }
 
     private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver)
     {
         for (int a = 0; a < aggregates.size(); a++) {
-            out.append(indent).append("a").append(a).append(" += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+            String state = "a" + a;
+            out.append(indent).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
         }
     }
 
@@ -450,9 +451,12 @@ public final class PipelineCompiler
             out.append(a1).append("if (aoff >= 0 && aoff < aSize) {\n");
             String a2 = a1 + "  ";
             out.append(a2).append("int ao = (int) aoff;\n");
-            out.append(a2).append("if (!gused[ao]) { gused[ao] = true; arrayGroupCount++; }\n");
+            out.append(a2).append("if (!gused[ao]) { gused[ao] = true; arrayGroupCount++;\n");
+            emitStateIdentity(out, a2 + "  ", aggregates, "aAgg", "ao");
+            out.append(a2).append("}\n");
             for (int a = 0; a < aggregateCount; a++) {
-                out.append(a2).append("aAgg").append(a).append("[ao] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+                String state = "aAgg" + a + "[ao]";
+                out.append(a2).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
             }
             out.append(a1).append("}\n");
             out.append(a1).append("else {\n");
@@ -461,9 +465,10 @@ public final class PipelineCompiler
             out.append(a2).append("  if (gused[mo]) {\n");
             String m = a2 + "    ";
             out.append(m).append("long hkey = mo + aMin;\n");
-            emitSingleKeyHashFindOrCreate(out, m, aggregateCount);
+            emitSingleKeyHashFindOrCreate(out, m, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                out.append(m).append("agg").append(a).append("[gid] += aAgg").append(a).append("[mo];\n");
+                String state = "agg" + a + "[gid]";
+                out.append(m).append(state).append(" = ").append(aggregator(aggregates.get(a)).merge(state, "aAgg" + a + "[mo]")).append(";\n");
             }
             out.append(a2).append("  }\n");
             out.append(a2).append("}\n");
@@ -472,9 +477,10 @@ public final class PipelineCompiler
             out.append(indent).append("}\n");
             out.append(indent).append("if (deopted) {\n");
             out.append(a1).append("long hkey = gkey;\n");
-            emitSingleKeyHashFindOrCreate(out, a1, aggregateCount);
+            emitSingleKeyHashFindOrCreate(out, a1, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                out.append(a1).append("agg").append(a).append("[gid] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+                String state = "agg" + a + "[gid]";
+                out.append(a1).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
             }
             out.append(indent).append("}\n");
             return;
@@ -504,6 +510,7 @@ public final class PipelineCompiler
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("keyByGid").append(kx).append("[gid] = gk").append(kx).append(";\n");
         }
+        emitStateIdentity(out, b, aggregates, "agg", "gid");
         out.append(b).append("if (groupCount > htFill) {\n");
         out.append(b).append("  int ncap = cap * 2;\n");
         for (int kx = 0; kx < keyCount; kx++) {
@@ -524,7 +531,8 @@ public final class PipelineCompiler
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            out.append(indent).append("agg").append(a).append("[gid] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+            String state = "agg" + a + "[gid]";
+            out.append(indent).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
         }
     }
 
@@ -590,7 +598,7 @@ public final class PipelineCompiler
     }
 
     /** Emit a find-or-create lookup of {@code hkey} in the single-key hash table, leaving {@code int gid} in scope. */
-    private static void emitSingleKeyHashFindOrCreate(StringBuilder out, String indent, int aggregateCount)
+    private static void emitSingleKeyHashFindOrCreate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates)
     {
         out.append(indent).append("int hslot = mix(hkey) & htMask;\n");
         out.append(indent).append("while (htGid[hslot] != -1 && htKey0[hslot] != hkey) { hslot = (hslot + 1) & htMask; }\n");
@@ -600,11 +608,12 @@ public final class PipelineCompiler
         out.append(b).append("gid = groupCount++; htGid[hslot] = gid; htKey0[hslot] = hkey;\n");
         out.append(b).append("if (gid == keyByGid0.length) {\n");
         out.append(b).append("  int n = keyByGid0.length * 2; keyByGid0 = java.util.Arrays.copyOf(keyByGid0, n);\n");
-        for (int a = 0; a < aggregateCount; a++) {
+        for (int a = 0; a < aggregates.size(); a++) {
             out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
         }
         out.append(b).append("}\n");
         out.append(b).append("keyByGid0[gid] = hkey;\n");
+        emitStateIdentity(out, b, aggregates, "agg", "gid");
         out.append(b).append("if (groupCount > htFill) {\n");
         out.append(b).append("  int ncap = cap * 2; long[] nKey0 = new long[ncap]; int[] nGid = new int[ncap];\n");
         out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
@@ -652,13 +661,23 @@ public final class PipelineCompiler
         out.append(" h *= 0xc4ceb9fe1a85ec53L; h ^= h >>> 33; return (int) h;\n  }\n");
     }
 
-    private static String increment(Plan.Aggregate aggregate, IntFunction<String> resolver)
+    private static AggregateLibrary.AggregateCompiler aggregator(Plan.Aggregate aggregate)
     {
-        return switch (aggregate.fn()) {
-            case "sum" -> expr(aggregate.input(), resolver);
-            case "count" -> "1L";
-            default -> throw new UnsupportedOperationException("aggregate: " + aggregate.fn());
-        };
+        return AggregateLibrary.get(aggregate.fn());
+    }
+
+    /** Rendered input expression for an aggregate, or {@code null} for a nullary aggregate such as {@code count}. */
+    private static String input(Plan.Aggregate aggregate, IntFunction<String> resolver)
+    {
+        return aggregate.input() == null ? null : expr(aggregate.input(), resolver);
+    }
+
+    /** Identity assignments for every aggregate's state cell at array index {@code index} in arrays named {@code prefix<a>}. */
+    private static void emitStateIdentity(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, String prefix, String index)
+    {
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append(indent).append(prefix).append(a).append("[").append(index).append("] = ").append(aggregator(aggregates.get(a)).identity()).append(";\n");
+        }
     }
 
     private static TreeSet<Integer> referencedColumns(Plan.Pipeline pipeline)

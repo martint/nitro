@@ -248,6 +248,50 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesAndComputesMinMaxGroupedAggregate()
+    {
+        // SELECT k, min(v), max(v), sum(v) GROUP BY k -- min/max are registered in AggregateLibrary with no
+        // compiler changes. The deopt scenario exercises their identity and merge fragments.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(
+                        new Plan.Aggregate("min", new Plan.Col(1)),
+                        new Plan.Aggregate("max", new Plan.Col(1)),
+                        new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int rows = 200_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        // Narrow first, then wide: forces the speculative array group to deopt mid-stream into the hash table.
+        Map<Long, long[]> reference = new HashMap<>();   // k -> {min, max, sum}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i < 4096 ? i % 30 : i % 4000;
+            v[i] = ((i * 2654435761L) % 1000) - 500;     // spread of positives and negatives
+            long[] acc = reference.computeIfAbsent(k[i], ignored -> new long[] {Long.MAX_VALUE, Long.MIN_VALUE, 0});
+            acc[0] = Math.min(acc[0], v[i]);
+            acc[1] = Math.max(acc[1], v[i]);
+            acc[2] += v[i];
+        }
+
+        System.out.println("=== generated min/max source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] mins = result.columns()[1];
+        long[] maxs = result.columns()[2];
+        long[] sums = result.columns()[3];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = reference.get(keys[g]);
+            assertThat(mins[g]).as("min for k %d", keys[g]).isEqualTo(expected[0]);
+            assertThat(maxs[g]).as("max for k %d", keys[g]).isEqualTo(expected[1]);
+            assertThat(sums[g]).as("sum for k %d", keys[g]).isEqualTo(expected[2]);
+        }
+    }
+
+    @Test
     void compilesAndComputesBooleanFilterTree()
     {
         // SELECT k, sum(v) WHERE (k IN (1, 3, 5) OR k BETWEEN 10 AND 12) AND NOT (v == 0) GROUP BY k
