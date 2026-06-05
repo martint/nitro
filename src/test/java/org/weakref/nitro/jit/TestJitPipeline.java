@@ -209,6 +209,53 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesLikeAndSubstringFilters()
+    {
+        // SELECT count(*) WHERE s LIKE 'AB%' AND substring(t,1,3) <> 'XYZ'  -- predicate-over-dictionary on
+        // two string columns: a LIKE pattern and a substring-IN test.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(
+                        new Plan.LikeMatch(0, "AB%", false),
+                        new Plan.SubstringMatch(1, 1, 3, List.of("XYZ"), true)),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        String[] sVocab = {"ABC", "ABX", "AXX", "ABBB", "ZZAB", "AB"};
+        String[] tVocab = {"XYZ123", "XYAB", "XYZ", "PQR", "XY"};
+        byte[][] sDict = new byte[sVocab.length][];
+        for (int d = 0; d < sVocab.length; d++) {
+            sDict[d] = sVocab[d].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        byte[][] tDict = new byte[tVocab.length][];
+        for (int d = 0; d < tVocab.length; d++) {
+            tDict[d] = tVocab[d].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int rows = 70_000;
+        int[] sIds = new int[rows];
+        int[] tIds = new int[rows];
+        long expected = 0;
+        for (int i = 0; i < rows; i++) {
+            sIds[i] = i % sVocab.length;
+            tIds[i] = i % tVocab.length;
+            String s = sVocab[sIds[i]];
+            String t = tVocab[tIds[i]];
+            String prefix = t.substring(0, Math.min(3, t.length()));
+            if (s.startsWith("AB") && !prefix.equals("XYZ")) {   // LIKE 'AB%' AND substring(t,1,3) <> 'XYZ'
+                expected++;
+            }
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline.Result result = compiled.execute(
+                new Column[][] {{new Column.StringColumn(sIds, sDict), new Column.StringColumn(tIds, tDict)}}, new int[] {rows});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+        assertThat(expected).isGreaterThan(0);
+    }
+
+    @Test
     void compilesJoinWithStringBuildColumnFilter()
     {
         // SELECT sum(v) FROM fact JOIN dim ON fact.k = dim.k WHERE dim.s IN ('keep', 'also')

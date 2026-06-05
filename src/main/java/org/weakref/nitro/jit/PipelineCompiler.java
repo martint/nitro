@@ -453,12 +453,12 @@ public final class PipelineCompiler
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
         // Predicate-over-dictionary: evaluate each string filter once per dictionary entry into an id mask.
-        List<Plan.StringMatch> stringMatches = new ArrayList<>();
+        List<Plan.Condition> stringMatches = new ArrayList<>();
         for (Plan.Condition filter : pipeline.filters()) {
             collectStringMatches(filter, stringMatches);
         }
-        for (Plan.StringMatch match : stringMatches) {
-            emitStringMaskPrelude(out, match, "cStr" + match.column());
+        for (Plan.Condition match : stringMatches) {
+            emitStringMaskPrelude(out, match, "cStr" + stringMatchColumn(match));
         }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
@@ -556,10 +556,11 @@ public final class PipelineCompiler
         };
     }
 
-    private static void collectStringMatches(Plan.Condition condition, List<Plan.StringMatch> into)
+    /** Collect every predicate-over-dictionary leaf (exact, LIKE, substring) reachable through and/or/not. */
+    private static void collectStringMatches(Plan.Condition condition, List<Plan.Condition> into)
     {
-        if (condition instanceof Plan.StringMatch match) {
-            into.add(match);
+        if (condition instanceof Plan.StringMatch || condition instanceof Plan.LikeMatch || condition instanceof Plan.SubstringMatch) {
+            into.add(condition);
         }
         else if (condition instanceof Plan.And and) {
             and.conditions().forEach(child -> collectStringMatches(child, into));
@@ -573,24 +574,62 @@ public final class PipelineCompiler
         // Plan.Predicate contains no string matches.
     }
 
-    /** Build the id mask for a string filter once, by testing each dictionary entry against the literal set. */
-    private static void emitStringMaskPrelude(StringBuilder out, Plan.StringMatch match, String dictionaryVar)
+    /** The dictionary-string column a predicate-over-dictionary leaf tests. */
+    private static int stringMatchColumn(Plan.Condition condition)
     {
-        int column = match.column();
-        List<String> values = match.values();
+        return switch (condition) {
+            case Plan.StringMatch match -> match.column();
+            case Plan.LikeMatch match -> match.column();
+            case Plan.SubstringMatch match -> match.column();
+            default -> throw new IllegalArgumentException("not a string match: " + condition);
+        };
+    }
+
+    /** Build the id mask for a predicate-over-dictionary leaf once, by testing each dictionary entry. */
+    private static void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, String dictionaryVar)
+    {
+        if (match instanceof Plan.LikeMatch like) {
+            int column = like.column();
+            out.append("    java.util.regex.Pattern sLikePat").append(column).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
+                    .append(javaStringLiteral(like.pattern())).append(");\n");
+            out.append("    boolean[] sMask").append(column).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
+            out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
+            String matches = "sLikePat" + column + ".matcher(new String(" + dictionaryVar + "[e], java.nio.charset.StandardCharsets.UTF_8)).matches()";
+            out.append("      sMask").append(column).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+            out.append("    }\n");
+            return;
+        }
+        int column;
+        List<String> values;
+        boolean negated;
+        String entry;   // the dictionary entry's bytes to test (possibly a substring)
+        if (match instanceof Plan.SubstringMatch substring) {
+            column = substring.column();
+            values = substring.values();
+            negated = substring.negated();
+            entry = "org.weakref.nitro.function.scalar.builtin.Utf8Support.substring(" + dictionaryVar + "[e], 0, " + dictionaryVar + "[e].length, "
+                    + (long) substring.start() + "L, " + (long) substring.length() + "L)";
+        }
+        else {
+            Plan.StringMatch exact = (Plan.StringMatch) match;
+            column = exact.column();
+            values = exact.values();
+            negated = exact.negated();
+            entry = dictionaryVar + "[e]";
+        }
         for (int v = 0; v < values.size(); v++) {
             out.append("    byte[] sLit").append(column).append("_").append(v).append(" = ")
                     .append(javaStringLiteral(values.get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
         }
         out.append("    boolean[] sMask").append(column).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
         out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
-        out.append("      byte[] sv = ").append(dictionaryVar).append("[e];\n");
+        out.append("      byte[] sv = ").append(entry).append(";\n");
         StringBuilder member = new StringBuilder();
         for (int v = 0; v < values.size(); v++) {
             member.append(member.length() == 0 ? "" : " || ").append("java.util.Arrays.equals(sv, sLit").append(column).append("_").append(v).append(")");
         }
         String matches = values.isEmpty() ? "false" : member.toString();
-        out.append("      sMask").append(column).append("[e] = ").append(match.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+        out.append("      sMask").append(column).append("[e] = ").append(negated ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
         out.append("    }\n");
     }
 
@@ -695,12 +734,12 @@ public final class PipelineCompiler
 
         // Predicate-over-dictionary for string filters, evaluated once per dictionary entry into an id mask. The
         // filtered column may be on the probe or any build side; resolve its combined index to the right dictionary.
-        List<Plan.StringMatch> stringMatches = new ArrayList<>();
+        List<Plan.Condition> stringMatches = new ArrayList<>();
         for (Plan.Condition filter : pipeline.filters()) {
             collectStringMatches(filter, stringMatches);
         }
-        for (Plan.StringMatch match : stringMatches) {
-            int column = match.column();
+        for (Plan.Condition match : stringMatches) {
+            int column = stringMatchColumn(match);
             ColumnVars vars = column < probeColumns ? probeVars(column) : buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]);
             emitStringMaskPrelude(out, match, vars.stringDict());
         }
@@ -1408,6 +1447,8 @@ public final class PipelineCompiler
             case Plan.Or or -> or.conditions().forEach(child -> collectConditionColumns(child, into));
             case Plan.Not not -> collectConditionColumns(not.condition(), into);
             case Plan.StringMatch match -> into.add(match.column());
+            case Plan.LikeMatch match -> into.add(match.column());
+            case Plan.SubstringMatch match -> into.add(match.column());
         }
     }
 
@@ -1437,7 +1478,9 @@ public final class PipelineCompiler
             case Plan.Or or -> or.conditions().isEmpty() ? "false"
                     : "(" + or.conditions().stream().map(child -> condition(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
             case Plan.Not not -> "(!" + condition(not.condition(), resolver, nullResolver) + ")";
-            case Plan.StringMatch ignored -> throw new UnsupportedOperationException("StringMatch is only supported in WHERE filters");
+            case Plan.StringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
+            case Plan.LikeMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
+            case Plan.SubstringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
         };
     }
 
@@ -1609,11 +1652,24 @@ public final class PipelineCompiler
                 return conditionFalse(not.condition(), resolver, nullResolver);
             }
             case Plan.StringMatch match -> {
-                String guard = notNullGuard(nullResolver.apply(match.column()));
-                String lookup = "sMask" + match.column() + "[" + resolver.apply(match.column()) + "]";
-                return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
+                return stringMaskTrue(match, resolver, nullResolver);
+            }
+            case Plan.LikeMatch match -> {
+                return stringMaskTrue(match, resolver, nullResolver);
+            }
+            case Plan.SubstringMatch match -> {
+                return stringMaskTrue(match, resolver, nullResolver);
             }
         }
+    }
+
+    /** A predicate-over-dictionary leaf as SQL TRUE: the row's id is in the mask (and the value is not null). */
+    private static String stringMaskTrue(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        int column = stringMatchColumn(match);
+        String guard = notNullGuard(nullResolver.apply(column));
+        String lookup = "sMask" + column + "[" + resolver.apply(column) + "]";
+        return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
     }
 
     /** Boolean expression that is true when {@code condition} evaluates to SQL FALSE (three-valued logic). */
@@ -1643,11 +1699,24 @@ public final class PipelineCompiler
                 return conditionTrue(not.condition(), resolver, nullResolver);
             }
             case Plan.StringMatch match -> {
-                String guard = notNullGuard(nullResolver.apply(match.column()));
-                String lookup = "!sMask" + match.column() + "[" + resolver.apply(match.column()) + "]";
-                return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
+                return stringMaskFalse(match, resolver, nullResolver);
+            }
+            case Plan.LikeMatch match -> {
+                return stringMaskFalse(match, resolver, nullResolver);
+            }
+            case Plan.SubstringMatch match -> {
+                return stringMaskFalse(match, resolver, nullResolver);
             }
         }
+    }
+
+    /** A predicate-over-dictionary leaf as SQL FALSE: the row's id is not in the mask (and the value is not null). */
+    private static String stringMaskFalse(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        int column = stringMatchColumn(match);
+        String guard = notNullGuard(nullResolver.apply(column));
+        String lookup = "!sMask" + column + "[" + resolver.apply(column) + "]";
+        return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
     }
 
     private static final class InMemoryCompiler

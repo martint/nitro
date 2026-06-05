@@ -96,8 +96,31 @@ public final class Plan
      * {@link Predicate}s; {@code BETWEEN lo AND hi} to {@link And} of {@code >=} and {@code <=}.
      */
     public sealed interface Condition
-            permits Predicate, And, Or, Not, StringMatch
+            permits Predicate, And, Or, Not, StringMatch, LikeMatch, SubstringMatch
     {}
+
+    /**
+     * SQL {@code column LIKE pattern} (or its negation) on a dictionary-encoded string column. {@code %} matches
+     * any run, {@code _} any single character. Compiled as predicate-over-dictionary -- the pattern is matched
+     * once per dictionary entry into an id mask.
+     */
+    public record LikeMatch(int column, String pattern, boolean negated)
+            implements Condition
+    {}
+
+    /**
+     * {@code substring(column, start, length) IN (values...)} (or its negation) on a dictionary-encoded string
+     * column; {@code start} is 1-based (SQL). Compiled as predicate-over-dictionary -- each dictionary entry's
+     * substring is tested into an id mask.
+     */
+    public record SubstringMatch(int column, int start, int length, List<String> values, boolean negated)
+            implements Condition
+    {
+        public SubstringMatch
+        {
+            values = List.copyOf(values);
+        }
+    }
 
     /**
      * Set membership on a dictionary-encoded string column: {@code column IN (values...)}, or its negation

@@ -17,7 +17,7 @@ import org.weakref.nitro.data.BinaryVector;
 
 import static java.lang.Math.toIntExact;
 
-final class Utf8Support
+public final class Utf8Support
 {
     private Utf8Support() {}
 
