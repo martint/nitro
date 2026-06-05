@@ -215,6 +215,109 @@ public final class CompiledQuerySupport
         return result;
     }
 
+    /** Loaded inputs plus the compiled result, so callers can reconstruct string columns from the dictionaries. */
+    public record LoweredResult(CompiledPipeline.Result result, org.weakref.nitro.jit.Column[][] inputs) {}
+
+    /** Load a lowered query's inputs from Parquet (flat and dictionary-string columns, with null masks) and run it. */
+    public static LoweredResult runLowered(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    {
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
+        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        int[] rowCounts = new int[sources.size()];
+        for (int s = 0; s < sources.size(); s++) {
+            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
+            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+            DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+            inputs[s] = loaded.columns;
+            rowCounts[s] = loaded.rows;
+        }
+        return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
+    }
+
+    private record DrainedInput(org.weakref.nitro.jit.Column[] columns, int rows) {}
+
+    /** Drain a scan into one {@link org.weakref.nitro.jit.Column} per spec, preserving nulls; string columns build a dictionary. */
+    private static DrainedInput drainColumns(Operator operator, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        int width = specs.size();
+        long[][] values = new long[width][16];          // flat values
+        int[][] ids = new int[width][16];               // string ids
+        boolean[][] nulls = new boolean[width][16];
+        List<java.util.Map<String, Integer>> dictionaryIndex = new ArrayList<>();
+        List<List<byte[]>> dictionaries = new ArrayList<>();
+        for (int c = 0; c < width; c++) {
+            dictionaryIndex.add(new java.util.LinkedHashMap<>());
+            dictionaries.add(new ArrayList<>());
+        }
+        int size = 0;
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    Mask mask = batch.borrowMask();
+                    int count = mask.count();
+                    if (size + count > nulls[0].length) {
+                        int capacity = Math.max(nulls[0].length * 2, size + count);
+                        for (int c = 0; c < width; c++) {
+                            values[c] = java.util.Arrays.copyOf(values[c], capacity);
+                            ids[c] = java.util.Arrays.copyOf(ids[c], capacity);
+                            nulls[c] = java.util.Arrays.copyOf(nulls[c], capacity);
+                        }
+                    }
+                    for (int c = 0; c < width; c++) {
+                        boolean string = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
+                        Vector valueVector = batch.output(c).borrow(Stream.VALUES);
+                        Vector nullVector = batch.output(c).borrowOrNull(Stream.NULLS);
+                        for (int index = 0; index < count; index++) {
+                            int position = mask.position(index);
+                            boolean isNull = isNull(nullVector, position);
+                            int slot = size + index;
+                            nulls[c][slot] = isNull;
+                            if (string) {
+                                ids[c][slot] = isNull ? 0 : intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(valueVector, position));
+                            }
+                            else {
+                                values[c][slot] = isNull ? 0 : longValue(valueVector, position);
+                            }
+                        }
+                    }
+                    size += count;
+                }
+            }
+        }
+        org.weakref.nitro.jit.Column[] columns = new org.weakref.nitro.jit.Column[width];
+        for (int c = 0; c < width; c++) {
+            boolean nullable = specs.get(c).nullable();
+            boolean[] nullMask = nullable ? java.util.Arrays.copyOf(nulls[c], size) : null;
+            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
+                columns[c] = new org.weakref.nitro.jit.Column.StringColumn(java.util.Arrays.copyOf(ids[c], size), dictionaries.get(c).toArray(new byte[0][]), nullMask);
+            }
+            else {
+                columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
+            }
+        }
+        return new DrainedInput(columns, size);
+    }
+
+    /** Bytes of a string value at {@code position}, whether the scan returned it flat or dictionary-encoded. */
+    private static byte[] stringBytes(Vector vector, int position)
+    {
+        if (vector instanceof org.weakref.nitro.data.BinaryVector binary) {
+            return binary.copyBytes(position);
+        }
+        if (vector instanceof org.weakref.nitro.data.DictionaryVector dictionary) {
+            return stringBytes(dictionary.values(), dictionary.ids()[position]);
+        }
+        throw new IllegalArgumentException("Unsupported string vector: " + vector.getClass().getName());
+    }
+
+    private static int intern(java.util.Map<String, Integer> index, List<byte[]> dictionary, byte[] bytes)
+    {
+        return index.computeIfAbsent(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), key -> {
+            dictionary.add(bytes);
+            return dictionary.size() - 1;
+        });
+    }
+
     private static boolean isNull(Vector nulls, int position)
     {
         return nulls instanceof BooleanVector booleans && booleans.values()[position];

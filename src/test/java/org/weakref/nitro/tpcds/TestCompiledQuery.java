@@ -23,6 +23,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +53,36 @@ public class TestCompiledQuery
         // The same query lowered from column names must match the hand-built plan on the real data.
         Map<Long, Long> lowered = runLowered(data);
         assertThat(lowered).isEqualTo(compiled);
+    }
+
+    @Test
+    void lowersStringFilterQueryOnRealData()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // SELECT count(*) FROM item WHERE i_category = 'Books' -- lowered by name, string filter over the
+        // dictionary, loaded from real Parquet (dictionary built at load).
+        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("item",
+                new org.weakref.nitro.jit.QueryLowering.Column("i_category", org.weakref.nitro.jit.ColumnEncoding.STRING, true));
+        query.where(new org.weakref.nitro.jit.Plan.StringMatch(query.position("i_category"), List.of("Books"), false)).count();
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
+        long compiledCount = run.result().columns()[0][0];
+
+        // Reference: count non-null 'Books' rows directly from the loaded dictionary column.
+        org.weakref.nitro.jit.Column.StringColumn category = (org.weakref.nitro.jit.Column.StringColumn) run.inputs()[0][0];
+        byte[] books = "Books".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        long reference = 0;
+        for (int i = 0; i < category.ids().length; i++) {
+            boolean isNull = category.nulls() != null && category.nulls()[i];
+            if (!isNull && java.util.Arrays.equals(category.dictionary()[category.ids()[i]], books)) {
+                reference++;
+            }
+        }
+
+        assertThat(reference).as("'Books' items in sf10").isGreaterThan(0);
+        assertThat(compiledCount).isEqualTo(reference);
     }
 
     private static Map<Long, Long> runLowered(CompiledQuerySupport.Loaded data)
