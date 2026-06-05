@@ -218,8 +218,11 @@ public final class CompiledQuerySupport
     /** Loaded inputs plus the compiled result, so callers can reconstruct string columns from the dictionaries. */
     public record LoweredResult(CompiledPipeline.Result result, org.weakref.nitro.jit.Column[][] inputs) {}
 
-    /** Load a lowered query's inputs from Parquet (flat and dictionary-string columns, with null masks) and run it. */
-    public static LoweredResult runLowered(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    /** A lowered query's inputs loaded from Parquet: one {@link org.weakref.nitro.jit.Column}[] per relation, with row counts. */
+    public record LoadedInputs(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {}
+
+    /** Load a lowered query's inputs from Parquet (flat and dictionary-string columns, with null masks). */
+    public static LoadedInputs loadLoweredInputs(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
         org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
@@ -231,7 +234,14 @@ public final class CompiledQuerySupport
             inputs[s] = loaded.columns;
             rowCounts[s] = loaded.rows;
         }
-        return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
+        return new LoadedInputs(inputs, rowCounts);
+    }
+
+    /** Load a lowered query's inputs from Parquet and run it. */
+    public static LoweredResult runLowered(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    {
+        LoadedInputs loaded = loadLoweredInputs(allocator, tables, lowered);
+        return new LoweredResult(lowered.compile().execute(loaded.inputs(), loaded.rowCounts()), loaded.inputs());
     }
 
     private record DrainedInput(org.weakref.nitro.jit.Column[] columns, int rows) {}

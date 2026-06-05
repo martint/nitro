@@ -19,9 +19,6 @@ import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.jit.Column;
-import org.weakref.nitro.jit.ColumnEncoding;
-import org.weakref.nitro.jit.Plan;
-import org.weakref.nitro.jit.QueryLowering;
 import org.weakref.nitro.operator.CompiledOperator;
 import org.weakref.nitro.operator.Operator;
 
@@ -33,321 +30,80 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Ports individual TPC-DS queries to the data-centric compiler and validates each, apples-to-apples, against the
- * Nitro operator-chain harness ({@link TpcdsParquetSupport}) on real sf10 Parquet: the query is lowered by column
- * name, compiled, bridged back into an {@link Operator}, and asserted row-for-row (order included, for top-N
- * queries) identical to the harness chain. Skipped when the dataset is not configured.
+ * Validates the TPC-DS queries ported to the data-centric compiler, apples-to-apples against the Nitro
+ * operator-chain harness ({@link TpcdsParquetSupport}) on real sf10 Parquet: each query (built by
+ * {@link CompiledTpcdsQueries}) is lowered by column name, compiled, bridged back into an {@link Operator}, and
+ * asserted row-for-row (order included, for top-N queries) identical to the harness chain. Skipped when the
+ * dataset is not configured.
  */
 public class TestCompiledTpcdsQueries
 {
     @Test
-    void query42()
+    void query03()
     {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
-
-        // SELECT d_year, i_category_id, i_category, sum(ss_ext_sales_price)
-        // FROM store_sales, date_dim, item
-        // WHERE ss_sold_date_sk = d_date_sk AND ss_item_sk = i_item_sk
-        //   AND i_manager_id = 1 AND d_moy = 11 AND d_year = 2000
-        // GROUP BY d_year, i_category_id, i_category
-        // ORDER BY sum(ss_ext_sales_price) DESC, d_year, i_category_id, i_category
-        // LIMIT 100
-        QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk"),
-                        new QueryLowering.Column("ss_item_sk"),
-                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
-                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_moy"),
-                        new QueryLowering.Column("d_year"))
-                .join("item", "ss_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"),
-                        new QueryLowering.Column("i_manager_id"),
-                        new QueryLowering.Column("i_category_id", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true));
-        query.where(
-                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
-                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
-                        new Plan.Predicate("=", query.column("i_manager_id"), new Plan.Lit(1)))
-                .groupBy("d_year", "i_category_id", "i_category")
-                .aggregate("sum", "ss_ext_sales_price")
-                .orderBy(new Plan.Ordering(List.of(
-                        new Plan.SortKey(3, true),    // sum(ss_ext_sales_price) DESC
-                        new Plan.SortKey(0, false),   // d_year
-                        new Plan.SortKey(1, false),   // i_category_id
-                        new Plan.SortKey(2, false)),  // i_category
-                        100));
-
-        // Result column 2 is the i_category STRING key, reconstructed from the item input's dictionary.
-        assertCompiledMatchesHarness(tables, query, 2, 2, 3,
-                TpcdsParquetSupport.query42(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
-    }
-
-    @Test
-    void query52()
-    {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
-
-        // d_year, i_brand_id, i_brand, sum(ss_ext_sales_price) for d_moy=11, d_year=2000, i_manager_id=1;
-        // top 100 by d_year, sum desc, i_brand_id.
-        QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk"),
-                        new QueryLowering.Column("ss_item_sk"),
-                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
-                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_moy"),
-                        new QueryLowering.Column("d_year"))
-                .join("item", "ss_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"),
-                        new QueryLowering.Column("i_manager_id"),
-                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true));
-        query.where(
-                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
-                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
-                        new Plan.Predicate("=", query.column("i_manager_id"), new Plan.Lit(1)))
-                .groupBy("d_year", "i_brand_id", "i_brand")
-                .aggregate("sum", "ss_ext_sales_price")
-                .orderBy(new Plan.Ordering(List.of(
-                        new Plan.SortKey(0, false),   // d_year
-                        new Plan.SortKey(3, true),    // sum desc
-                        new Plan.SortKey(1, false)),  // i_brand_id
-                        100));
-
-        assertCompiledMatchesHarness(tables, query, 2, 2, 3,
-                TpcdsParquetSupport.query52(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
-    }
-
-    @Test
-    void query55()
-    {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
-
-        // i_brand_id, i_brand, sum(ss_ext_sales_price) for d_moy=11, d_year=1999, i_manager_id=28;
-        // top 100 by sum desc, i_brand_id.
-        QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk"),
-                        new QueryLowering.Column("ss_item_sk"),
-                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
-                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_moy"),
-                        new QueryLowering.Column("d_year"))
-                .join("item", "ss_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"),
-                        new QueryLowering.Column("i_manager_id"),
-                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true));
-        query.where(
-                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
-                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1999)),
-                        new Plan.Predicate("=", query.column("i_manager_id"), new Plan.Lit(28)))
-                .groupBy("i_brand_id", "i_brand")
-                .aggregate("sum", "ss_ext_sales_price")
-                .orderBy(new Plan.Ordering(List.of(
-                        new Plan.SortKey(2, true),    // sum desc
-                        new Plan.SortKey(0, false)),  // i_brand_id
-                        100));
-
-        assertCompiledMatchesHarness(tables, query, 1, 2, 3,
-                TpcdsParquetSupport.query55(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesHarness(CompiledTpcdsQueries.query03(), TpcdsParquetSupport::query03);
     }
 
     @Test
     void query07()
     {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
-
-        // i_item_id, avg(ss_quantity), avg(ss_list_price), avg(ss_coupon_amt), avg(ss_sales_price)
-        // FROM store_sales JOIN date_dim JOIN item JOIN customer_demographics JOIN promotion
-        // WHERE d_year=2000 AND cd_gender='M' AND cd_marital_status='S' AND cd_education_status='College'
-        //   AND (p_channel_email='N' OR p_channel_event='N')
-        // GROUP BY i_item_id ORDER BY i_item_id LIMIT 100
-        QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk"),
-                        new QueryLowering.Column("ss_item_sk"),
-                        new QueryLowering.Column("ss_cdemo_sk"),
-                        new QueryLowering.Column("ss_promo_sk"),
-                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("ss_list_price", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
-                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_year"))
-                .join("item", "ss_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"),
-                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
-                .join("customer_demographics", "ss_cdemo_sk", "cd_demo_sk",
-                        new QueryLowering.Column("cd_demo_sk"),
-                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, false),
-                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, false),
-                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, false))
-                .join("promotion", "ss_promo_sk", "p_promo_sk",
-                        new QueryLowering.Column("p_promo_sk"),
-                        new QueryLowering.Column("p_channel_email", ColumnEncoding.STRING, false),
-                        new QueryLowering.Column("p_channel_event", ColumnEncoding.STRING, false));
-        query.where(
-                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
-                        new Plan.StringMatch(query.position("cd_gender"), List.of("M"), false),
-                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
-                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false),
-                        new Plan.Or(List.of(
-                                new Plan.StringMatch(query.position("p_channel_email"), List.of("N"), false),
-                                new Plan.StringMatch(query.position("p_channel_event"), List.of("N"), false))))
-                .groupBy("i_item_id")
-                .aggregate("avg", "ss_quantity")
-                .aggregate("avg", "ss_list_price")
-                .aggregate("avg", "ss_coupon_amt")
-                .aggregate("avg", "ss_sales_price")
-                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));   // i_item_id
-
-        assertCompiledMatchesHarness(tables, query, 0, 2, 1,
-                TpcdsParquetSupport.query07(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
-    }
-
-    @Test
-    void query03()
-    {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
-
-        // d_year, i_brand_id, i_brand, sum(ss_ext_sales_price) for d_moy=11, i_manufact_id=128;
-        // top 100 by d_year, sum desc, i_brand_id.
-        QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
-                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_moy"),
-                        new QueryLowering.Column("d_year"))
-                .join("item", "ss_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"),
-                        new QueryLowering.Column("i_manufact_id"),
-                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true));
-        query.where(
-                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
-                        new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(128)))
-                .groupBy("d_year", "i_brand_id", "i_brand")
-                .aggregate("sum", "ss_ext_sales_price")
-                .orderBy(new Plan.Ordering(List.of(
-                        new Plan.SortKey(0, false),   // d_year
-                        new Plan.SortKey(3, true),    // sum desc
-                        new Plan.SortKey(1, false)),  // i_brand_id
-                        100));
-
-        assertCompiledMatchesHarness(tables, query, 2, 2, 3,
-                TpcdsParquetSupport.query03(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesHarness(CompiledTpcdsQueries.query07(), TpcdsParquetSupport::query07);
     }
 
     @Test
     void query26()
     {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+        assertMatchesHarness(CompiledTpcdsQueries.query26(), TpcdsParquetSupport::query26);
+    }
 
-        // i_item_id, avg(cs_quantity), avg(cs_list_price), avg(cs_coupon_amt), avg(cs_sales_price)
-        // FROM catalog_sales JOIN date_dim JOIN item JOIN customer_demographics JOIN promotion
-        // WHERE d_year=2000 AND cd_gender='M' AND cd_marital_status='S' AND cd_education_status='College'
-        //   AND (p_channel_email='N' OR p_channel_event='N')  GROUP BY i_item_id  ORDER BY i_item_id LIMIT 100
-        QueryLowering query = QueryLowering.scan("catalog_sales",
-                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_bill_cdemo_sk", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_promo_sk", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_quantity", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_list_price", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_coupon_amt", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("cs_sales_price", ColumnEncoding.FLAT, true))
-                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
-                        new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_year"))
-                .join("item", "cs_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"),
-                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
-                .join("customer_demographics", "cs_bill_cdemo_sk", "cd_demo_sk",
-                        new QueryLowering.Column("cd_demo_sk"),
-                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, true),
-                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true),
-                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, true))
-                .join("promotion", "cs_promo_sk", "p_promo_sk",
-                        new QueryLowering.Column("p_promo_sk"),
-                        new QueryLowering.Column("p_channel_email", ColumnEncoding.STRING, true),
-                        new QueryLowering.Column("p_channel_event", ColumnEncoding.STRING, true));
-        query.where(
-                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
-                        new Plan.StringMatch(query.position("cd_gender"), List.of("M"), false),
-                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
-                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false),
-                        new Plan.Or(List.of(
-                                new Plan.StringMatch(query.position("p_channel_email"), List.of("N"), false),
-                                new Plan.StringMatch(query.position("p_channel_event"), List.of("N"), false))))
-                .groupBy("i_item_id")
-                .aggregate("avg", "cs_quantity")
-                .aggregate("avg", "cs_list_price")
-                .aggregate("avg", "cs_coupon_amt")
-                .aggregate("avg", "cs_sales_price")
-                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+    @Test
+    void query42()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query42(), TpcdsParquetSupport::query42);
+    }
 
-        assertCompiledMatchesHarness(tables, query, 0, 2, 1,
-                TpcdsParquetSupport.query26(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    @Test
+    void query52()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query52(), TpcdsParquetSupport::query52);
+    }
+
+    @Test
+    void query55()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query55(), TpcdsParquetSupport::query55);
     }
 
     @Test
     void query96()
     {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+        assertMatchesHarness(CompiledTpcdsQueries.query96(), TpcdsParquetSupport::query96);
+    }
 
-        // SELECT count(*) FROM store_sales JOIN time_dim JOIN household_demographics JOIN store
-        // WHERE t_hour=20 AND t_minute>29 AND hd_dep_count=7 AND s_store_name='ese'
-        QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_time_sk"),
-                        new QueryLowering.Column("ss_hdemo_sk"),
-                        new QueryLowering.Column("ss_store_sk"))
-                .join("time_dim", "ss_sold_time_sk", "t_time_sk",
-                        new QueryLowering.Column("t_time_sk"),
-                        new QueryLowering.Column("t_hour"),
-                        new QueryLowering.Column("t_minute"))
-                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
-                        new QueryLowering.Column("hd_demo_sk"),
-                        new QueryLowering.Column("hd_dep_count"))
-                .join("store", "ss_store_sk", "s_store_sk",
-                        new QueryLowering.Column("s_store_sk"),
-                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false));
-        query.where(
-                        new Plan.Predicate("=", query.column("t_hour"), new Plan.Lit(20)),
-                        new Plan.Predicate(">", query.column("t_minute"), new Plan.Lit(29)),
-                        new Plan.Predicate("=", query.column("hd_dep_count"), new Plan.Lit(7)),
-                        new Plan.StringMatch(query.position("s_store_name"), List.of("ese"), false))
-                .count();
-
-        assertCompiledMatchesHarness(tables, query, -1, 0, 0,
-                TpcdsParquetSupport.query96(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    /** A harness operator chain built from a fresh allocator + the shared primitive registry over the given tables. */
+    private interface HarnessChain
+    {
+        Operator build(Allocator allocator, org.weakref.nitro.operator.evaluator.PrimitiveRegistry registry, TpcdsParquetTables tables);
     }
 
     /**
-     * Run {@code query} lowered + compiled + bridged, and assert its rows equal the harness operator chain's,
-     * in order. {@code stringResultColumn} is the index of a dictionary-string result column to reconstruct (-1
-     * if none); its dictionary is taken from input {@code dictInput}, column {@code dictColumn}.
+     * Lower + compile + bridge {@code ported}, and assert its rows equal the harness operator chain's, in order
+     * (for top-N queries). The bridge reconstructs a dictionary-string result column from its source input.
      */
-    private static void assertCompiledMatchesHarness(TpcdsParquetTables tables, QueryLowering query, int stringResultColumn, int dictInput, int dictColumn, Operator harness)
+    private static void assertMatchesHarness(CompiledTpcdsQueries.Ported ported, HarnessChain harness)
     {
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
-        if (stringResultColumn >= 0) {
-            dictionaries[stringResultColumn] = ((Column.StringColumn) run.inputs()[dictInput][dictColumn]).dictionary();
+        if (ported.stringResultColumn() >= 0) {
+            dictionaries[ported.stringResultColumn()] = ((Column.StringColumn) run.inputs()[ported.dictInput()][ported.dictColumn()]).dictionary();
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
 
-        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harness));
+        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
         assertThat(expected).isNotEmpty();
         assertThat(actual).containsExactlyElementsOf(expected);
