@@ -20,6 +20,7 @@ import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
+import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -35,10 +36,10 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Apples-to-apples benchmark of the data-centric compiler against the Nitro and Trino operator-chain harnesses
- * (their {@code BenchmarkQueries}), using the same framework and the same per-invocation read of sf10 Parquet.
- * Each invocation scans the inputs into columns and runs the compiled routine -- the compiled engine's full
- * "from Parquet to result" cost, including the materialization it currently requires (no streaming scan yet).
- * Java compilation is a one-time cost (a query plan), so it happens once in {@link #setup}.
+ * (their {@code BenchmarkQueries}), using the same framework and the same per-invocation read of sf10 Parquet --
+ * no preloading. {@link #full} is the compiled engine's whole "from Parquet to result" cost; {@link #loadOnly}
+ * scans the inputs into columns without running the compiled routine, so {@code full - loadOnly} isolates the
+ * compute. The one-time Java compile is amortized in {@link #setup}, like a query plan.
  */
 @State(Scope.Thread)
 @Fork(1)
@@ -49,6 +50,9 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
+    @Param({"03", "07", "26", "42", "52", "55", "96"})
+    public String query;
+
     private Allocator allocator;
     private TpcdsParquetTables tables;
     private final Map<String, QueryLowering.Lowered> lowered = new LinkedHashMap<>();
@@ -81,50 +85,15 @@ public class BenchmarkCompiledQueries
     }
 
     @Benchmark
-    public Object query03()
+    public Object full()
     {
-        return run("03");
+        CompiledQuerySupport.LoadedInputs inputs = CompiledQuerySupport.loadLoweredInputs(allocator, tables, lowered.get(query));
+        return compiled.get(query).execute(inputs.inputs(), inputs.rowCounts());
     }
 
     @Benchmark
-    public Object query07()
+    public Object loadOnly()
     {
-        return run("07");
-    }
-
-    @Benchmark
-    public Object query26()
-    {
-        return run("26");
-    }
-
-    @Benchmark
-    public Object query42()
-    {
-        return run("42");
-    }
-
-    @Benchmark
-    public Object query52()
-    {
-        return run("52");
-    }
-
-    @Benchmark
-    public Object query55()
-    {
-        return run("55");
-    }
-
-    @Benchmark
-    public Object query96()
-    {
-        return run("96");
-    }
-
-    private Object run(String name)
-    {
-        CompiledQuerySupport.LoadedInputs inputs = CompiledQuerySupport.loadLoweredInputs(allocator, tables, lowered.get(name));
-        return compiled.get(name).execute(inputs.inputs(), inputs.rowCounts());
+        return CompiledQuerySupport.loadLoweredInputs(allocator, tables, lowered.get(query));
     }
 }
