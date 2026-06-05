@@ -294,6 +294,70 @@ public class TestJitPipeline
     }
 
     @Test
+    void lowersStarQueryByName()
+    {
+        // store_sales JOIN date_dim ON ss_sold_date_sk = d_date_sk WHERE d_year = 2001
+        // GROUP BY ss_item_sk, sum(ss_quantity) ORDER BY ss_item_sk LIMIT 10 -- expressed by column name.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk"),
+                        new QueryLowering.Column("ss_item_sk"),
+                        new QueryLowering.Column("ss_quantity"))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"));
+        query.where(new Plan.Predicate("==", query.column("d_year"), new Plan.Lit(2001)))
+                .groupBy("ss_item_sk")
+                .aggregate("sum", "ss_quantity")
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 10));
+        QueryLowering.Lowered lowered = query.lower();
+
+        // The hand-built positional equivalent (probe [0,1,2], build [3=d_date_sk, 4=d_year]).
+        Plan.Pipeline hand = new Plan.Pipeline(
+                3,
+                new Plan.Build(2, 0),
+                0,
+                List.of(new Plan.Predicate("==", new Plan.Col(4), new Plan.Lit(2001))),
+                List.of(new Plan.Col(1)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))))
+                .withOrdering(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 10));
+
+        // The lowering resolved the names to the same positions the hand plan uses.
+        assertThat(query.position("ss_item_sk")).isEqualTo(1);
+        assertThat(query.position("ss_quantity")).isEqualTo(2);
+        assertThat(query.position("d_year")).isEqualTo(4);
+
+        int dim = 2000;
+        int year2001 = 700;
+        long[] dKey = new long[dim];
+        long[] dYear = new long[dim];
+        for (int d = 0; d < dim; d++) {
+            dKey[d] = d;
+            dYear[d] = d < year2001 ? 2001 : 2000;
+        }
+        int fact = 400_000;
+        long[] fk = new long[fact];
+        long[] item = new long[fact];
+        long[] qty = new long[fact];
+        for (int i = 0; i < fact; i++) {
+            fk[i] = i % dim;
+            item[i] = i % 300;
+            qty[i] = (i % 20) + 1;
+        }
+        long[][][] inputs = {{fk, item, qty}, {dKey, dYear}};
+        int[] counts = {fact, dim};
+
+        CompiledPipeline.Result loweredResult = lowered.compile().execute(inputs, counts);
+        CompiledPipeline.Result handResult = PipelineCompiler.compile(hand).execute(inputs, counts);
+
+        // Same plan, same data -> identical results.
+        assertThat(loweredResult.rowCount()).isEqualTo(handResult.rowCount());
+        for (int g = 0; g < handResult.rowCount(); g++) {
+            assertThat(loweredResult.columns()[0][g]).isEqualTo(handResult.columns()[0][g]);
+            assertThat(loweredResult.columns()[1][g]).isEqualTo(handResult.columns()[1][g]);
+        }
+    }
+
+    @Test
     void compilesGroupByString()
     {
         // SELECT s, sum(v) GROUP BY s -- s is a dictionary string column; grouping is on the dense id and the

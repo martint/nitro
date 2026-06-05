@@ -48,6 +48,32 @@ public class TestCompiledQuery
 
         assertThat(compiled).isEqualTo(interpreted);
         assertThat(compiled).isNotEmpty();
+
+        // The same query lowered from column names must match the hand-built plan on the real data.
+        Map<Long, Long> lowered = runLowered(data);
+        assertThat(lowered).isEqualTo(compiled);
+    }
+
+    private static Map<Long, Long> runLowered(CompiledQuerySupport.Loaded data)
+    {
+        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sold_date_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity"))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"))
+                .groupBy("ss_item_sk")
+                .aggregate("sum", "ss_quantity");
+        org.weakref.nitro.jit.CompiledPipeline.Result result = query.lower().compile().execute(
+                new long[][][] {{data.soldDateSk(), data.itemSk(), data.quantity()}, {data.dateSk()}},
+                new int[] {data.storeSalesRows(), data.dateDimRows()});
+        Map<Long, Long> map = new HashMap<>();
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            map.put(keys[g], sums[g]);
+        }
+        return map;
     }
 
     private static Map<Long, Long> runInterpreted(CompiledQuerySupport.Loaded data)
