@@ -365,7 +365,7 @@ public final class PipelineCompiler
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
             String condition = pipeline.filters().stream()
-                    .map(p -> "(" + expr(p.left(), resolver) + " " + p.op() + " " + expr(p.right(), resolver) + ")")
+                    .map(c -> condition(c, resolver))
                     .collect(joining(" && "));
             out.append(indent).append("if (").append(condition).append(") {\n");
             bodyIndent = indent + "  ";
@@ -664,9 +664,8 @@ public final class PipelineCompiler
     private static TreeSet<Integer> referencedColumns(Plan.Pipeline pipeline)
     {
         TreeSet<Integer> referenced = new TreeSet<>();
-        for (Plan.Predicate predicate : pipeline.filters()) {
-            collectColumns(predicate.left(), referenced);
-            collectColumns(predicate.right(), referenced);
+        for (Plan.Condition filter : pipeline.filters()) {
+            collectConditionColumns(filter, referenced);
         }
         for (Plan.Expr groupKey : pipeline.groupKeys()) {
             collectColumns(groupKey, referenced);
@@ -689,6 +688,32 @@ public final class PipelineCompiler
             collectColumns(bin.right(), into);
         }
         // Plan.Lit references no columns.
+    }
+
+    private static void collectConditionColumns(Plan.Condition condition, TreeSet<Integer> into)
+    {
+        switch (condition) {
+            case Plan.Predicate predicate -> {
+                collectColumns(predicate.left(), into);
+                collectColumns(predicate.right(), into);
+            }
+            case Plan.And and -> and.conditions().forEach(child -> collectConditionColumns(child, into));
+            case Plan.Or or -> or.conditions().forEach(child -> collectConditionColumns(child, into));
+            case Plan.Not not -> collectConditionColumns(not.condition(), into);
+        }
+    }
+
+    /** Render a boolean condition tree as a Java expression. */
+    private static String condition(Plan.Condition condition, IntFunction<String> resolver)
+    {
+        return switch (condition) {
+            case Plan.Predicate predicate -> "(" + expr(predicate.left(), resolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver) + ")";
+            case Plan.And and -> and.conditions().isEmpty() ? "true"
+                    : "(" + and.conditions().stream().map(child -> condition(child, resolver)).collect(joining(" && ")) + ")";
+            case Plan.Or or -> or.conditions().isEmpty() ? "false"
+                    : "(" + or.conditions().stream().map(child -> condition(child, resolver)).collect(joining(" || ")) + ")";
+            case Plan.Not not -> "(!" + condition(not.condition(), resolver) + ")";
+        };
     }
 
     private static String expr(Plan.Expr expr, IntFunction<String> resolver)

@@ -45,8 +45,52 @@ public final class Plan
             implements Expr
     {}
 
-    /** Conjunct predicate: {@code left op right}, op in {@code < <= > >= == !=}. */
+    /**
+     * Boolean condition over input columns. {@code IN (a, b, ...)} desugars to {@link Or} of equality
+     * {@link Predicate}s; {@code BETWEEN lo AND hi} to {@link And} of {@code >=} and {@code <=}.
+     */
+    public sealed interface Condition
+            permits Predicate, And, Or, Not
+    {}
+
+    /** Comparison: {@code left op right}, op in {@code < <= > >= == !=}. */
     public record Predicate(String op, Expr left, Expr right)
+            implements Condition
+    {}
+
+    /** Conjunction; an empty list is {@code true}. */
+    public record And(List<Condition> conditions)
+            implements Condition
+    {
+        public And
+        {
+            conditions = List.copyOf(conditions);
+        }
+
+        public And(Condition... conditions)
+        {
+            this(List.of(conditions));
+        }
+    }
+
+    /** Disjunction; an empty list is {@code false}. */
+    public record Or(List<Condition> conditions)
+            implements Condition
+    {
+        public Or
+        {
+            conditions = List.copyOf(conditions);
+        }
+
+        public Or(Condition... conditions)
+        {
+            this(List.of(conditions));
+        }
+    }
+
+    /** Negation. */
+    public record Not(Condition condition)
+            implements Condition
     {}
 
     /** Aggregate: fn in {@code sum count}; {@code input} is null for {@code count}. */
@@ -100,7 +144,7 @@ public final class Plan
      * {@code aggregates}. For a single group key in a scan pipeline the compiler speculates array-mode grouping
      * and deopts to a hash table at runtime; the structure is chosen from the data, not declared in the plan.
      */
-    public record Pipeline(int columnCount, List<Join> joins, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
     {
         public Pipeline
         {
@@ -111,19 +155,19 @@ public final class Plan
         }
 
         /** Convenience for a single-key single-join pipeline. */
-        public Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        public Pipeline(int columnCount, Build build, int probeKeyColumn, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
             this(columnCount, List.of(new Join(build, probeKeyColumn)), filters, groupKeys, aggregates);
         }
 
         /** Convenience for a composite-key single-join pipeline. */
-        public Pipeline(int columnCount, Build build, int[] probeKeyColumns, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        public Pipeline(int columnCount, Build build, int[] probeKeyColumns, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
             this(columnCount, List.of(new Join(build, probeKeyColumns)), filters, groupKeys, aggregates);
         }
 
         /** Convenience for a single-input pipeline (no join). */
-        public Pipeline(int columnCount, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        public Pipeline(int columnCount, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
             this(columnCount, List.of(), filters, groupKeys, aggregates);
         }

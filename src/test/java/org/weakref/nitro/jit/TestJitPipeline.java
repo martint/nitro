@@ -248,6 +248,49 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesAndComputesBooleanFilterTree()
+    {
+        // SELECT k, sum(v) WHERE (k IN (1, 3, 5) OR k BETWEEN 10 AND 12) AND NOT (v == 0) GROUP BY k
+        Plan.Condition inList = new Plan.Or(
+                new Plan.Predicate("==", new Plan.Col(0), new Plan.Lit(1)),
+                new Plan.Predicate("==", new Plan.Col(0), new Plan.Lit(3)),
+                new Plan.Predicate("==", new Plan.Col(0), new Plan.Lit(5)));
+        Plan.Condition between = new Plan.And(
+                new Plan.Predicate(">=", new Plan.Col(0), new Plan.Lit(10)),
+                new Plan.Predicate("<=", new Plan.Col(0), new Plan.Lit(12)));
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(
+                        new Plan.Or(inList, between),
+                        new Plan.Not(new Plan.Predicate("==", new Plan.Col(1), new Plan.Lit(0)))),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int rows = 100_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 20;
+            v[i] = (i % 5) - 2;       // includes 0 -> excluded by NOT (v == 0)
+            boolean keep = (k[i] == 1 || k[i] == 3 || k[i] == 5 || (k[i] >= 10 && k[i] <= 12)) && v[i] != 0;
+            if (keep) {
+                reference.merge(k[i], v[i], Long::sum);
+            }
+        }
+
+        System.out.println("=== generated boolean-filter source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for k %d", keys[g]).isEqualTo(reference.get(keys[g]));
+        }
+    }
+
+    @Test
     void compilesAndComputesTwoJoinStarGroupedAggregate()
     {
         // fact(fk_a, fk_b, measure) JOIN dimA(da_key, da_attr) ON fk_a=da_key JOIN dimB(db_key, db_attr) ON
