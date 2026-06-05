@@ -79,17 +79,100 @@ public class TestCompiledTpcdsQueries
                         new Plan.SortKey(2, false)),  // i_category
                         100));
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
-        // Result column 2 is the i_category STRING key; reconstruct it from the item input's dictionary.
-        byte[][][] dictionaries = new byte[4][][];
-        dictionaries[2] = ((Column.StringColumn) run.inputs()[2][3]).dictionary();
-        Operator compiled = new CompiledOperator(run.result(), dictionaries);
+        // Result column 2 is the i_category STRING key, reconstructed from the item input's dictionary.
+        assertCompiledMatchesHarness(tables, query, 2,
+                TpcdsParquetSupport.query42(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
 
-        Operator harness = TpcdsParquetSupport.query42(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+    @Test
+    void query52()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // d_year, i_brand_id, i_brand, sum(ss_ext_sales_price) for d_moy=11, d_year=2000, i_manager_id=1;
+        // top 100 by d_year, sum desc, i_brand_id.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk"),
+                        new QueryLowering.Column("ss_item_sk"),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manager_id"),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.Predicate("=", query.column("i_manager_id"), new Plan.Lit(1)))
+                .groupBy("d_year", "i_brand_id", "i_brand")
+                .aggregate("sum", "ss_ext_sales_price")
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false),   // d_year
+                        new Plan.SortKey(3, true),    // sum desc
+                        new Plan.SortKey(1, false)),  // i_brand_id
+                        100));
+
+        assertCompiledMatchesHarness(tables, query, 2,
+                TpcdsParquetSupport.query52(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query55()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // i_brand_id, i_brand, sum(ss_ext_sales_price) for d_moy=11, d_year=1999, i_manager_id=28;
+        // top 100 by sum desc, i_brand_id.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk"),
+                        new QueryLowering.Column("ss_item_sk"),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manager_id"),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1999)),
+                        new Plan.Predicate("=", query.column("i_manager_id"), new Plan.Lit(28)))
+                .groupBy("i_brand_id", "i_brand")
+                .aggregate("sum", "ss_ext_sales_price")
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(2, true),    // sum desc
+                        new Plan.SortKey(0, false)),  // i_brand_id
+                        100));
+
+        assertCompiledMatchesHarness(tables, query, 1,
+                TpcdsParquetSupport.query55(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    /**
+     * Run {@code query} lowered + compiled + bridged, and assert its rows equal the harness operator chain's,
+     * in order. {@code stringResultColumn} is the index of a dictionary-string result column to reconstruct (-1
+     * if none); its dictionary is taken from the last input (the item build side, column 3).
+     */
+    private static void assertCompiledMatchesHarness(TpcdsParquetTables tables, QueryLowering query, int stringResultColumn, Operator harness)
+    {
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
+        byte[][][] dictionaries = new byte[run.result().columns().length][][];
+        if (stringResultColumn >= 0) {
+            dictionaries[stringResultColumn] = ((Column.StringColumn) run.inputs()[run.inputs().length - 1][3]).dictionary();
+        }
+        Operator compiled = new CompiledOperator(run.result(), dictionaries);
 
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harness));
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
-
         assertThat(expected).isNotEmpty();
         assertThat(actual).containsExactlyElementsOf(expected);
     }
