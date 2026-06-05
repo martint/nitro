@@ -1092,10 +1092,20 @@ public final class PipelineCompiler
         return condition(condition, resolver, NEVER_NULL);
     }
 
+    /** Map a SQL comparison operator to its Java equivalent ({@code =} -> {@code ==}, {@code <>} -> {@code !=}). */
+    private static String comparison(String sqlOperator)
+    {
+        return switch (sqlOperator) {
+            case "=" -> "==";
+            case "<>" -> "!=";
+            default -> sqlOperator;
+        };
+    }
+
     private static String condition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return switch (condition) {
-            case Plan.Predicate predicate -> "(" + expr(predicate.left(), resolver, nullResolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+            case Plan.Predicate predicate -> "(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
             case Plan.And and -> and.conditions().isEmpty() ? "true"
                     : "(" + and.conditions().stream().map(child -> condition(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
             case Plan.Or or -> or.conditions().isEmpty() ? "false"
@@ -1254,7 +1264,7 @@ public final class PipelineCompiler
                 String guard = andGuards(
                         notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
                         notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
-                String comparison = "(" + expr(predicate.left(), resolver, nullResolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+                String comparison = "(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
                 return guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
             }
             case Plan.And and -> {
@@ -1288,7 +1298,7 @@ public final class PipelineCompiler
                 String guard = andGuards(
                         notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
                         notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
-                String negated = "!(" + expr(predicate.left(), resolver, nullResolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+                String negated = "!(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
                 return guard.isEmpty() ? negated : "(" + guard + " && " + negated + ")";
             }
             case Plan.And and -> {

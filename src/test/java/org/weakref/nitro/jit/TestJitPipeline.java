@@ -25,6 +25,38 @@ import static org.assertj.core.api.Assertions.within;
 public class TestJitPipeline
 {
     @Test
+    void compilesEqualityPredicates()
+    {
+        // SELECT count(*) WHERE a = 7 AND b <> 3 -- SQL '=' and '<>' must lower to Java '==' and '!='.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(
+                        new Plan.Predicate("=", new Plan.Col(0), new Plan.Lit(7)),
+                        new Plan.Predicate("<>", new Plan.Col(1), new Plan.Lit(3))),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        int rows = 100_000;
+        long[] a = new long[rows];
+        long[] b = new long[rows];
+        long expectedCount = 0;
+        for (int i = 0; i < rows; i++) {
+            a[i] = i % 10;
+            b[i] = i % 5;
+            if (a[i] == 7 && b[i] != 3) {
+                expectedCount++;
+            }
+        }
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline.Result result = compiled.execute(new long[][][] {{a, b}}, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expectedCount);
+        assertThat(expectedCount).isGreaterThan(0);
+    }
+
+    @Test
     void compilesAndComputesGlobalAggregate()
     {
         // SELECT sum(a*b), count(*) WHERE a > 500
