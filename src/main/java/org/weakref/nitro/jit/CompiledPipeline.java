@@ -21,12 +21,26 @@ public interface CompiledPipeline
 {
     /**
      * @param inputs one input per relation: {@code inputs[0]} is the probe/scan input, {@code inputs[1]} the
-     *               join build side (if any). Each input is one {@code long[]} per column.
+     *               join build side (if any). Each input is one {@link Column} per column, whose encoding must
+     *               match what the pipeline was compiled for.
      * @param rowCounts row count per input, parallel to {@code inputs}
      * @return the result; {@code columns} are the group-key columns followed by the aggregate columns, each of
      *         length {@link Result#rowCount} (1 for a global aggregation)
      */
-    Result execute(long[][][] inputs, int[] rowCounts);
+    Result execute(Column[][] inputs, int[] rowCounts);
+
+    /** Convenience for all-flat inputs: wraps each {@code long[]} as a {@link Column.FlatColumn}. */
+    default Result execute(long[][][] inputs, int[] rowCounts)
+    {
+        Column[][] wrapped = new Column[inputs.length][];
+        for (int source = 0; source < inputs.length; source++) {
+            wrapped[source] = new Column[inputs[source].length];
+            for (int column = 0; column < inputs[source].length; column++) {
+                wrapped[source][column] = new Column.FlatColumn(inputs[source][column]);
+            }
+        }
+        return execute(wrapped, rowCounts);
+    }
 
     record Result(int rowCount, long[][] columns) {}
 }

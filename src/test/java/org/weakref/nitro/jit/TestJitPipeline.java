@@ -248,6 +248,61 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesAndComputesEncodedColumns()
+    {
+        // SELECT k, sum(v), count(*) GROUP BY k, with k dictionary-encoded and v a constant column.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Col(1)),
+                        new Plan.Aggregate("count", null)));
+
+        int rows = 100_000;
+        int dictSize = 50;
+        long[] dictionary = new long[dictSize];
+        for (int d = 0; d < dictSize; d++) {
+            dictionary[d] = 1000 + d * 7L;          // sparse-valued dictionary
+        }
+        int[] ids = new int[rows];
+        long constant = 5;
+        long[] flatKey = new long[rows];
+        long[] flatValue = new long[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // value -> {sum, count}
+        for (int i = 0; i < rows; i++) {
+            ids[i] = i % dictSize;
+            flatKey[i] = dictionary[ids[i]];
+            flatValue[i] = constant;
+            long[] acc = reference.computeIfAbsent(flatKey[i], ignored -> new long[2]);
+            acc[0] += constant;
+            acc[1]++;
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.DICTIONARY, ColumnEncoding.CONSTANT}};
+        System.out.println("=== generated encoded source ===\n" + PipelineCompiler.render(pipeline, encodings));
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {{new Column.DictionaryColumn(ids, dictionary), new Column.ConstantColumn(constant)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        long[] counts = result.columns()[2];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = reference.get(keys[g]);
+            assertThat(expected).as("group %d", keys[g]).isNotNull();
+            assertThat(sums[g]).as("sum for group %d", keys[g]).isEqualTo(expected[0]);
+            assertThat(counts[g]).as("count for group %d", keys[g]).isEqualTo(expected[1]);
+        }
+
+        // The flat-input plan over decoded columns must produce the identical grouping.
+        CompiledPipeline.Result flat = PipelineCompiler.compile(pipeline).execute(new long[][][] {{flatKey, flatValue}}, new int[] {rows});
+        assertThat(flat.rowCount()).isEqualTo(result.rowCount());
+    }
+
+    @Test
     void compilesAndComputesMinMaxGroupedAggregate()
     {
         // SELECT k, min(v), max(v), sum(v) GROUP BY k -- min/max are registered in AggregateLibrary with no

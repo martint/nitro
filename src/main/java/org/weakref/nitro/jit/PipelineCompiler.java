@@ -58,8 +58,18 @@ public final class PipelineCompiler
 
     public static CompiledPipeline compile(Plan.Pipeline pipeline)
     {
+        return compile(pipeline, null);
+    }
+
+    /**
+     * Compile {@code pipeline} for inputs with the given physical encodings. {@code encodings[input][column]}
+     * declares each scan column's {@link ColumnEncoding}; {@code null} (or any unlisted column) means
+     * {@link ColumnEncoding#FLAT}. Build (join) inputs are read as flat.
+     */
+    public static CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    {
         String simpleName = "Pipeline_" + COUNTER.incrementAndGet();
-        String source = render(pipeline, simpleName);
+        String source = render(pipeline, encodings, simpleName);
         try {
             Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
             return (CompiledPipeline) compiled.getDeclaredConstructor().newInstance();
@@ -72,10 +82,24 @@ public final class PipelineCompiler
     /** Exposed for inspection/tests: the Java source that would be compiled. */
     public static String render(Plan.Pipeline pipeline)
     {
-        return render(pipeline, "Pipeline_preview");
+        return render(pipeline, null, "Pipeline_preview");
     }
 
-    private static String render(Plan.Pipeline pipeline, String simpleName)
+    public static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    {
+        return render(pipeline, encodings, "Pipeline_preview");
+    }
+
+    private static ColumnEncoding encodingOf(ColumnEncoding[][] encodings, int input, int column)
+    {
+        if (encodings == null || input >= encodings.length || encodings[input] == null
+                || column >= encodings[input].length || encodings[input][column] == null) {
+            return ColumnEncoding.FLAT;
+        }
+        return encodings[input][column];
+    }
+
+    private static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, String simpleName)
     {
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
@@ -87,12 +111,12 @@ public final class PipelineCompiler
         if (needsMix) {
             emitMix(out);
         }
-        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][][] inputs, int[] rowCounts) {\n");
+        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
         if (!pipeline.joins().isEmpty()) {
             emitJoinBody(out, pipeline);
         }
         else {
-            emitScanBody(out, pipeline);
+            emitScanBody(out, pipeline, encodings);
         }
         out.append("  }\n}\n");
         return out.toString();
@@ -100,20 +124,21 @@ public final class PipelineCompiler
 
     // ---- single-input scan -> filter -> aggregate ----
 
-    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline)
+    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
-        out.append("    long[][] in = inputs[0]; int rowCount = rowCounts[0];\n");
+        out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         TreeSet<Integer> referenced = referencedColumns(pipeline);
         for (int column : referenced) {
-            out.append("    long[] c").append(column).append(" = in[").append(column).append("];\n");
+            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column));
         }
-        IntFunction<String> resolver = index -> "c" + index + "[i]";
+        IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         boolean grouped = !pipeline.groupKeys().isEmpty();
         // A single-key scan group can speculate array mode: estimate the key domain from a sample, bet on a
         // direct-indexed array, and deopt to a hash table if a later key falls outside the bet.
         boolean speculate = grouped && pipeline.groupKeys().size() == 1;
         if (speculate) {
-            emitGroupSampleProlog(out, pipeline.groupKeys().getFirst());
+            IntFunction<String> sampleResolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "s");
+            emitGroupSampleProlog(out, pipeline.groupKeys().getFirst(), sampleResolver);
         }
         if (grouped) {
             emitGroupedState(out, pipeline, speculate);
@@ -132,10 +157,33 @@ public final class PipelineCompiler
         }
     }
 
-    /** Sample the first rows to estimate the single group key's domain and decide whether to speculate array mode. */
-    private static void emitGroupSampleProlog(StringBuilder out, Plan.Expr groupKey)
+    /** Declare the local(s) for a scan column according to its encoding: flat values, dict ids + dictionary, or a constant. */
+    private static void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding)
     {
-        String sampleKey = expr(groupKey, index -> "c" + index + "[s]");
+        switch (encoding) {
+            case FLAT -> out.append("    long[] c").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).values();\n");
+            case DICTIONARY -> {
+                out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).ids();\n");
+                out.append("    long[] cDict").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).dictionary();\n");
+            }
+            case CONSTANT -> out.append("    long cConst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).value();\n");
+        }
+    }
+
+    /** Access expression for a scan column at row {@code row}: flat index, dictionary indirection, or hoisted constant. */
+    private static String scanAccess(int column, ColumnEncoding encoding, String row)
+    {
+        return switch (encoding) {
+            case FLAT -> "c" + column + "[" + row + "]";
+            case DICTIONARY -> "cDict" + column + "[cIds" + column + "[" + row + "]]";
+            case CONSTANT -> "cConst" + column;
+        };
+    }
+
+    /** Sample the first rows to estimate the single group key's domain and decide whether to speculate array mode. */
+    private static void emitGroupSampleProlog(StringBuilder out, Plan.Expr groupKey, IntFunction<String> sampleResolver)
+    {
+        String sampleKey = expr(groupKey, sampleResolver);
         out.append("    int sampleCount = Math.min(rowCount, ").append(SAMPLE_SIZE).append(");\n");
         out.append("    long sMin = Long.MAX_VALUE, sMax = Long.MIN_VALUE;\n");
         out.append("    for (int s = 0; s < sampleCount; s++) { long kk = ").append(sampleKey)
@@ -197,9 +245,9 @@ public final class PipelineCompiler
             return "b" + build + "_" + (index - buildOffset[build]) + "[buildRow" + build + "]";
         };
 
-        out.append("    long[][] probe = inputs[0]; int probeRows = rowCounts[0];\n");
+        out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
         for (int column : probeReferenced) {
-            out.append("    long[] p").append(column).append(" = probe[").append(column).append("];\n");
+            out.append("    long[] p").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) probe[").append(column).append("]).values();\n");
         }
         for (int k = 0; k < joinCount; k++) {
             Plan.Join join = joins.get(k);
@@ -207,9 +255,9 @@ public final class PipelineCompiler
             if (join.probeKeyColumns().length != keyCount) {
                 throw new IllegalArgumentException("join " + k + " key count mismatch: probe " + join.probeKeyColumns().length + " vs build " + keyCount);
             }
-            out.append("    long[][] build").append(k).append(" = inputs[").append(k + 1).append("]; int build").append(k).append("Rows = rowCounts[").append(k + 1).append("];\n");
+            out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = inputs[").append(k + 1).append("]; int build").append(k).append("Rows = rowCounts[").append(k + 1).append("];\n");
             for (int column : buildReferenced.get(k)) {
-                out.append("    long[] b").append(k).append("_").append(column).append(" = build").append(k).append("[").append(column).append("];\n");
+                out.append("    long[] b").append(k).append("_").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) build").append(k).append("[").append(column).append("]).values();\n");
             }
             emitBuildStructures(out, k, join.build().keyColumns());
         }
