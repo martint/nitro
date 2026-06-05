@@ -16,22 +16,41 @@ package org.weakref.nitro.jit;
 /**
  * A physically-encoded input column handed to a {@link CompiledPipeline}. The encoding is a property of the
  * data, not the plan; the compiler generates an accessor specialized to each column's declared
- * {@link ColumnEncoding}, so encoded columns are read in place rather than decoded at the boundary.
+ * {@link ColumnEncoding}, so encoded columns are read in place rather than decoded at the boundary. A column
+ * declared nullable carries a per-row {@code nulls} mask ({@code nulls[i] == true} marks a SQL null).
  */
 public sealed interface Column
 {
-    /** Flat column: value at row {@code i} is {@code values[i]}. */
-    record FlatColumn(long[] values)
+    /** Flat column: value at row {@code i} is {@code values[i]}, null when {@code nulls != null && nulls[i]}. */
+    record FlatColumn(long[] values, boolean[] nulls)
             implements Column
-    {}
+    {
+        public FlatColumn(long[] values)
+        {
+            this(values, null);
+        }
+    }
 
-    /** Dictionary column: value at row {@code i} is {@code dictionary[ids[i]]}; ids are dense {@code [0, dictionary.length)}. */
-    record DictionaryColumn(int[] ids, long[] dictionary)
+    /**
+     * Dictionary column: value at row {@code i} is {@code dictionary[ids[i]]}; ids are dense
+     * {@code [0, dictionary.length)}. Null when {@code nulls != null && nulls[i]}.
+     */
+    record DictionaryColumn(int[] ids, long[] dictionary, boolean[] nulls)
             implements Column
-    {}
+    {
+        public DictionaryColumn(int[] ids, long[] dictionary)
+        {
+            this(ids, dictionary, null);
+        }
+    }
 
-    /** Constant column (single-run RLE): every row holds {@code value}. */
-    record ConstantColumn(long value)
+    /** Constant column (single-run RLE): every row holds {@code value}, or is null when {@code isNull}. */
+    record ConstantColumn(long value, boolean isNull)
             implements Column
-    {}
+    {
+        public ConstantColumn(long value)
+        {
+            this(value, false);
+        }
+    }
 }

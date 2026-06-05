@@ -68,8 +68,19 @@ public final class PipelineCompiler
      */
     public static CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
+        return compile(pipeline, encodings, null);
+    }
+
+    /**
+     * Compile with declared per-scan-column nullability. {@code nullable[input][column]} true means the column
+     * may carry SQL nulls (its {@link Column} supplies a {@code nulls} mask and the generated code is
+     * null-aware); false (the default for any unlisted column) takes the branch-free null-free fast path.
+     * Group keys and join keys are assumed non-null.
+     */
+    public static CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
         String simpleName = "Pipeline_" + COUNTER.incrementAndGet();
-        String source = render(pipeline, encodings, simpleName);
+        String source = render(pipeline, encodings, nullable, simpleName);
         try {
             Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
             return (CompiledPipeline) compiled.getDeclaredConstructor().newInstance();
@@ -82,12 +93,17 @@ public final class PipelineCompiler
     /** Exposed for inspection/tests: the Java source that would be compiled. */
     public static String render(Plan.Pipeline pipeline)
     {
-        return render(pipeline, null, "Pipeline_preview");
+        return render(pipeline, null, null, "Pipeline_preview");
     }
 
     public static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
-        return render(pipeline, encodings, "Pipeline_preview");
+        return render(pipeline, encodings, null, "Pipeline_preview");
+    }
+
+    public static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        return render(pipeline, encodings, nullable, "Pipeline_preview");
     }
 
     private static ColumnEncoding encodingOf(ColumnEncoding[][] encodings, int input, int column)
@@ -99,7 +115,13 @@ public final class PipelineCompiler
         return encodings[input][column];
     }
 
-    private static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, String simpleName)
+    private static boolean nullableOf(boolean[][] nullable, int input, int column)
+    {
+        return nullable != null && input < nullable.length && nullable[input] != null
+                && column < nullable[input].length && nullable[input][column];
+    }
+
+    private static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
     {
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
@@ -116,7 +138,7 @@ public final class PipelineCompiler
             emitJoinBody(out, pipeline);
         }
         else {
-            emitScanBody(out, pipeline, encodings);
+            emitScanBody(out, pipeline, encodings, nullable);
         }
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having());
@@ -183,14 +205,15 @@ public final class PipelineCompiler
 
     // ---- single-input scan -> filter -> aggregate ----
 
-    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         TreeSet<Integer> referenced = referencedColumns(pipeline);
         for (int column : referenced) {
-            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column));
+            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
+        IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         boolean grouped = !pipeline.groupKeys().isEmpty();
         // A single-key scan group can speculate array mode: estimate the key domain from a sample, bet on a
         // direct-indexed array, and deopt to a hash table if a later key falls outside the bet.
@@ -217,7 +240,7 @@ public final class PipelineCompiler
             emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, resolver, groupKeyResolver, grouped, speculate);
+        emitRowBody(out, "      ", pipeline, resolver, groupKeyResolver, nullResolver, grouped, speculate);
         out.append("    }\n");
         if (grouped) {
             emitGroupedResult(out, pipeline, speculate, dictKeyColumn);
@@ -227,16 +250,29 @@ public final class PipelineCompiler
         }
     }
 
-    /** Declare the local(s) for a scan column according to its encoding: flat values, dict ids + dictionary, or a constant. */
-    private static void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding)
+    /** Declare the local(s) for a scan column according to its encoding: flat values, dict ids + dictionary, or a constant; plus a null mask when nullable. */
+    private static void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding, boolean nullable)
     {
         switch (encoding) {
-            case FLAT -> out.append("    long[] c").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).values();\n");
+            case FLAT -> {
+                out.append("    long[] c").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).values();\n");
+                if (nullable) {
+                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).nulls();\n");
+                }
+            }
             case DICTIONARY -> {
                 out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).ids();\n");
                 out.append("    long[] cDict").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).dictionary();\n");
+                if (nullable) {
+                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).nulls();\n");
+                }
             }
-            case CONSTANT -> out.append("    long cConst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).value();\n");
+            case CONSTANT -> {
+                out.append("    long cConst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).value();\n");
+                if (nullable) {
+                    out.append("    boolean cNconst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).isNull();\n");
+                }
+            }
         }
     }
 
@@ -247,6 +283,18 @@ public final class PipelineCompiler
             case FLAT -> "c" + column + "[" + row + "]";
             case DICTIONARY -> "cDict" + column + "[cIds" + column + "[" + row + "]]";
             case CONSTANT -> "cConst" + column;
+        };
+    }
+
+    /** Is-null expression for a scan column at row {@code row}; {@code "false"} (the fast path) when not nullable. */
+    private static String nullAccess(int column, ColumnEncoding encoding, boolean nullable, String row)
+    {
+        if (!nullable) {
+            return "false";
+        }
+        return switch (encoding) {
+            case FLAT, DICTIONARY -> "cN" + column + "[" + row + "]";
+            case CONSTANT -> "cNconst" + column;
         };
     }
 
@@ -347,7 +395,8 @@ public final class PipelineCompiler
             out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
             indent += "  ";
         }
-        emitRowBody(out, indent, pipeline, resolver, resolver, grouped, false);
+        // Join inputs are read as non-null (the null-free fast path), so the null resolver is always false.
+        emitRowBody(out, indent, pipeline, resolver, resolver, index -> "false", grouped, false);
         for (int k = 0; k < joinCount; k++) {
             indent = indent.substring(2);
             out.append(indent).append("}\n");
@@ -478,21 +527,22 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, boolean grouped, boolean speculate)
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean grouped, boolean speculate)
     {
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
+            // A row passes WHERE only when the condition is TRUE (not FALSE, not NULL) -- three-valued logic.
             String condition = pipeline.filters().stream()
-                    .map(c -> condition(c, resolver))
+                    .map(c -> conditionTrue(c, resolver, nullResolver))
                     .collect(joining(" && "));
             out.append(indent).append("if (").append(condition).append(") {\n");
             bodyIndent = indent + "  ";
         }
         if (grouped) {
-            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver, groupKeyResolver, speculate);
+            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver, groupKeyResolver, nullResolver, speculate);
         }
         else {
-            emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver);
+            emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver);
         }
         if (!pipeline.filters().isEmpty()) {
             out.append(indent).append("}\n");
@@ -512,11 +562,26 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver)
+    private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         for (int a = 0; a < aggregates.size(); a++) {
-            aggregator(aggregates.get(a)).emitUpdate(out, indent, cells(aggregates, a, "a", null), input(aggregates.get(a), resolver));
+            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "a", null), resolver, nullResolver);
         }
+    }
+
+    /** Fold one row into an aggregate's cells, skipping the row when the aggregate's input is null (so nulls are ignored). */
+    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        AggregateLibrary.AggregateCompiler aggregator = aggregator(aggregate);
+        String inputExpr = input(aggregate, resolver);
+        String guard = aggregate.input() == null ? "false" : nullExpr(aggregate.input(), resolver, nullResolver);
+        if (guard.equals("false")) {
+            aggregator.emitUpdate(out, indent, cells, inputExpr);
+            return;
+        }
+        out.append(indent).append("if (!(").append(guard).append(")) {\n");
+        aggregator.emitUpdate(out, indent + "  ", cells, inputExpr);
+        out.append(indent).append("}\n");
     }
 
     private static void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates)
@@ -563,7 +628,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, boolean speculate)
+    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean speculate)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         if (speculate) {
@@ -579,7 +644,7 @@ public final class PipelineCompiler
             emitStateIdentity(out, a2 + "  ", aggregates, "aAgg", "ao");
             out.append(a2).append("}\n");
             for (int a = 0; a < aggregateCount; a++) {
-                aggregator(aggregates.get(a)).emitUpdate(out, a2, cells(aggregates, a, "aAgg", "ao"), input(aggregates.get(a), resolver));
+                emitAggregateUpdate(out, a2, aggregates.get(a), cells(aggregates, a, "aAgg", "ao"), resolver, nullResolver);
             }
             out.append(a1).append("}\n");
             out.append(a1).append("else {\n");
@@ -601,7 +666,7 @@ public final class PipelineCompiler
             out.append(a1).append("long hkey = gkey;\n");
             emitSingleKeyHashFindOrCreate(out, a1, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                aggregator(aggregates.get(a)).emitUpdate(out, a1, cells(aggregates, a, "agg", "gid"), input(aggregates.get(a), resolver));
+                emitAggregateUpdate(out, a1, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver);
             }
             out.append(indent).append("}\n");
             return;
@@ -652,7 +717,7 @@ public final class PipelineCompiler
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            aggregator(aggregates.get(a)).emitUpdate(out, indent, cells(aggregates, a, "agg", "gid"), input(aggregates.get(a), resolver));
+            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver);
         }
     }
 
@@ -966,6 +1031,131 @@ public final class PipelineCompiler
         out.append(expr(kase.defaultValue(), resolver));
         out.append(")".repeat(kase.branches().size()));
         return out.toString();
+    }
+
+    // ---- three-valued (null-aware) expression and condition rendering ----
+
+    /** Boolean expression that is true when {@code expr} evaluates to SQL null. {@code "false"} on the fast path. */
+    private static String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        return switch (expr) {
+            case Plan.Col col -> nullResolver.apply(col.index());
+            case Plan.Lit ignored -> "false";
+            case Plan.Bin bin -> orNull(nullExpr(bin.left(), resolver, nullResolver), nullExpr(bin.right(), resolver, nullResolver));
+            case Plan.Call call -> {
+                String nulls = "false";
+                for (Plan.Expr argument : call.arguments()) {
+                    nulls = orNull(nulls, nullExpr(argument, resolver, nullResolver));
+                }
+                yield nulls;
+            }
+            case Plan.Case kase -> caseNull(kase, resolver, nullResolver);
+        };
+    }
+
+    /** Null-ness of a CASE: the null-ness of whichever branch value is selected (when-conditions assumed non-null). */
+    private static String caseNull(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        boolean anyNull = !nullExpr(kase.defaultValue(), resolver, nullResolver).equals("false");
+        for (Plan.Case.Branch branch : kase.branches()) {
+            anyNull |= !nullExpr(branch.value(), resolver, nullResolver).equals("false");
+        }
+        if (!anyNull) {
+            return "false";
+        }
+        StringBuilder out = new StringBuilder();
+        for (Plan.Case.Branch branch : kase.branches()) {
+            out.append("(").append(condition(branch.condition(), resolver)).append(" ? ").append(nullExpr(branch.value(), resolver, nullResolver)).append(" : ");
+        }
+        out.append(nullExpr(kase.defaultValue(), resolver, nullResolver));
+        out.append(")".repeat(kase.branches().size()));
+        return out.toString();
+    }
+
+    private static String orNull(String left, String right)
+    {
+        if (left.equals("false")) {
+            return right;
+        }
+        if (right.equals("false")) {
+            return left;
+        }
+        return "(" + left + " || " + right + ")";
+    }
+
+    /** {@code !(nullExpr)}, or empty when provably non-null (drops the guard on the fast path). */
+    private static String notNullGuard(String nullExpression)
+    {
+        return nullExpression.equals("false") ? "" : "!(" + nullExpression + ")";
+    }
+
+    private static String andGuards(String left, String right)
+    {
+        if (left.isEmpty()) {
+            return right;
+        }
+        if (right.isEmpty()) {
+            return left;
+        }
+        return left + " && " + right;
+    }
+
+    /** Boolean expression that is true when {@code condition} evaluates to SQL TRUE (three-valued logic). */
+    private static String conditionTrue(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        switch (condition) {
+            case Plan.Predicate predicate -> {
+                String guard = andGuards(
+                        notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
+                        notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
+                String comparison = "(" + expr(predicate.left(), resolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver) + ")";
+                return guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
+            }
+            case Plan.And and -> {
+                if (and.conditions().isEmpty()) {
+                    return "true";
+                }
+                return "(" + and.conditions().stream().map(child -> conditionTrue(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
+            }
+            case Plan.Or or -> {
+                if (or.conditions().isEmpty()) {
+                    return "false";
+                }
+                return "(" + or.conditions().stream().map(child -> conditionTrue(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
+            }
+            case Plan.Not not -> {
+                return conditionFalse(not.condition(), resolver, nullResolver);
+            }
+        }
+    }
+
+    /** Boolean expression that is true when {@code condition} evaluates to SQL FALSE (three-valued logic). */
+    private static String conditionFalse(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        switch (condition) {
+            case Plan.Predicate predicate -> {
+                String guard = andGuards(
+                        notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
+                        notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
+                String negated = "!(" + expr(predicate.left(), resolver) + " " + predicate.op() + " " + expr(predicate.right(), resolver) + ")";
+                return guard.isEmpty() ? negated : "(" + guard + " && " + negated + ")";
+            }
+            case Plan.And and -> {
+                if (and.conditions().isEmpty()) {
+                    return "false";
+                }
+                return "(" + and.conditions().stream().map(child -> conditionFalse(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
+            }
+            case Plan.Or or -> {
+                if (or.conditions().isEmpty()) {
+                    return "true";
+                }
+                return "(" + or.conditions().stream().map(child -> conditionFalse(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
+            }
+            case Plan.Not not -> {
+                return conditionTrue(not.condition(), resolver, nullResolver);
+            }
+        }
     }
 
     private static final class InMemoryCompiler

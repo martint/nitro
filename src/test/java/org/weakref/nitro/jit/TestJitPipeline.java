@@ -249,6 +249,70 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesNullAwareFilterAndAggregates()
+    {
+        // SELECT k, sum(m), count(m), count(*) FROM t WHERE f >= 0 GROUP BY k
+        // f and m are nullable: a null f fails WHERE (three-valued); a null m is skipped by sum/count(m) but
+        // count(*) still counts the row.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Predicate(">=", new Plan.Col(1), new Plan.Lit(0))),
+                List.of(new Plan.Col(0)),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Col(2)),
+                        new Plan.Aggregate("count", new Plan.Col(2)),
+                        new Plan.Aggregate("count", null)));
+
+        int rows = 120_000;
+        long[] k = new long[rows];
+        long[] f = new long[rows];
+        boolean[] fNull = new boolean[rows];
+        long[] m = new long[rows];
+        boolean[] mNull = new boolean[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // k -> {sum(m), count(m), count(*)}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 50;
+            fNull[i] = (i % 7 == 0);
+            f[i] = (i % 5) - 2;          // -2..2
+            mNull[i] = (i % 3 == 0);
+            m[i] = (i % 100) + 1;
+            if (fNull[i] || !(f[i] >= 0)) {
+                continue;                // row excluded by WHERE
+            }
+            long[] acc = reference.computeIfAbsent(k[i], ignored -> new long[3]);
+            acc[2]++;                    // count(*)
+            if (!mNull[i]) {
+                acc[0] += m[i];          // sum(m)
+                acc[1]++;                // count(m)
+            }
+        }
+
+        ColumnEncoding[][] encodings = null;
+        boolean[][] nullable = {{false, true, true}};
+        System.out.println("=== generated null-aware source ===\n" + PipelineCompiler.render(pipeline, encodings, nullable));
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings, nullable);
+        Column[][] inputs = {{
+                new Column.FlatColumn(k),
+                new Column.FlatColumn(f, fNull),
+                new Column.FlatColumn(m, mNull)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sumM = result.columns()[1];
+        long[] countM = result.columns()[2];
+        long[] countAll = result.columns()[3];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = reference.get(keys[g]);
+            assertThat(sumM[g]).as("sum(m) for k %d", keys[g]).isEqualTo(expected[0]);
+            assertThat(countM[g]).as("count(m) for k %d", keys[g]).isEqualTo(expected[1]);
+            assertThat(countAll[g]).as("count(*) for k %d", keys[g]).isEqualTo(expected[2]);
+        }
+    }
+
+    @Test
     void compilesStddevAggregate()
     {
         // SELECT k, stddev(v) GROUP BY k -- 3-cell aggregate, double result; added by registration only.
