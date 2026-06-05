@@ -54,6 +54,15 @@ public final class Plan
     {}
 
     /**
+     * Declared key domain for a dense (single) group key, inclusive {@code [min, max]}. When present, the
+     * compiler emits array-mode grouping (Velox kArray-style: the aggregate arrays are indexed directly by
+     * {@code key - min}, no hashing) instead of an open-addressing table. This represents knowledge a planner
+     * already has for dictionary IDs and small surrogate-key dimensions — the dominant TPC-DS group-by shape.
+     */
+    public record Domain(long min, long max)
+    {}
+
+    /**
      * Build (inner/dimension) side of an inner hash join. {@code columnCount} build columns, joined on
      * {@code keyColumn}. Build keys are assumed unique (the TPC-DS fact-to-dimension-PK case). When
      * {@code denseKeys} is set, the compiler emits direct array-mode lookup (Velox kArray-style: index by
@@ -72,9 +81,10 @@ public final class Plan
      * A push pipeline. Scans {@code columnCount} probe columns; if {@code build} is non-null, inner-joins it
      * on {@code probeKeyColumn = build.keyColumn} (combined columns address probe {@code [0,columnCount)} then
      * build {@code [columnCount, columnCount+build.columnCount)}); keeps rows passing every filter; groups by
-     * {@code groupKeys} (empty = global aggregation); and computes {@code aggregates}.
+     * {@code groupKeys} (empty = global aggregation); and computes {@code aggregates}. When {@code groupDomain}
+     * is non-null the single group key is treated as dense and grouped in array mode.
      */
-    public record Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+    public record Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, Domain groupDomain, List<Aggregate> aggregates)
     {
         public Pipeline
         {
@@ -83,10 +93,16 @@ public final class Plan
             aggregates = List.copyOf(aggregates);
         }
 
+        /** Convenience for a join pipeline with hash-mode (or no) grouping. */
+        public Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        {
+            this(columnCount, build, probeKeyColumn, filters, groupKeys, null, aggregates);
+        }
+
         /** Convenience for a single-input pipeline (no join). */
         public Pipeline(int columnCount, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
         {
-            this(columnCount, null, -1, filters, groupKeys, aggregates);
+            this(columnCount, null, -1, filters, groupKeys, null, aggregates);
         }
     }
 }

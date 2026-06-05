@@ -98,6 +98,30 @@ public class TestJitPipeline
             assertThat(sums[g]).as("sum for group %d", keys[g]).isEqualTo(expected[0]);
             assertThat(counts[g]).as("count for group %d", keys[g]).isEqualTo(expected[1]);
         }
+
+        // Array-mode grouping: declared dense key domain [0, 4999], direct-indexed. Identical results.
+        Plan.Pipeline arrayPlan = new Plan.Pipeline(
+                2,
+                null,
+                -1,
+                List.of(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(0))),
+                List.of(new Plan.Col(0)),
+                new Plan.Domain(0, 4999),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Col(1)),
+                        new Plan.Aggregate("count", null)));
+        System.out.println("=== generated array-mode grouped source ===\n" + PipelineCompiler.render(arrayPlan));
+        CompiledPipeline.Result arrayResult = PipelineCompiler.compile(arrayPlan).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(arrayResult.rowCount()).isEqualTo(reference.size());
+        long[] aKeys = arrayResult.columns()[0];
+        long[] aSums = arrayResult.columns()[1];
+        long[] aCounts = arrayResult.columns()[2];
+        for (int g = 0; g < arrayResult.rowCount(); g++) {
+            long[] expected = reference.get(aKeys[g]);
+            assertThat(expected).as("array group %d", aKeys[g]).isNotNull();
+            assertThat(aSums[g]).as("array sum for group %d", aKeys[g]).isEqualTo(expected[0]);
+            assertThat(aCounts[g]).as("array count for group %d", aKeys[g]).isEqualTo(expected[1]);
+        }
     }
 
     @Test

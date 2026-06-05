@@ -76,7 +76,8 @@ public final class PipelineCompiler
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
-        boolean needsMix = !pipeline.groupKeys().isEmpty()
+        boolean hashGroup = !pipeline.groupKeys().isEmpty() && pipeline.groupDomain() == null;
+        boolean needsMix = hashGroup
                 || (pipeline.build() != null && !pipeline.build().denseKeys());
         if (needsMix) {
             emitMix(out);
@@ -104,7 +105,7 @@ public final class PipelineCompiler
         IntFunction<String> resolver = index -> "c" + index + "[i]";
         boolean grouped = !pipeline.groupKeys().isEmpty();
         if (grouped) {
-            emitGroupedState(out, pipeline.aggregates().size());
+            emitGroupedState(out, pipeline);
         }
         else {
             emitGlobalState(out, pipeline.aggregates().size());
@@ -113,7 +114,7 @@ public final class PipelineCompiler
         emitRowBody(out, "      ", pipeline, resolver, grouped);
         out.append("    }\n");
         if (grouped) {
-            emitGroupedResult(out, pipeline.aggregates().size());
+            emitGroupedResult(out, pipeline);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates().size());
@@ -179,7 +180,7 @@ public final class PipelineCompiler
                 : "b" + (index - probeColumns) + "[buildRow]";
         boolean grouped = !pipeline.groupKeys().isEmpty();
         if (grouped) {
-            emitGroupedState(out, pipeline.aggregates().size());
+            emitGroupedState(out, pipeline);
         }
         else {
             emitGlobalState(out, pipeline.aggregates().size());
@@ -200,7 +201,7 @@ public final class PipelineCompiler
         out.append("      }\n");
         out.append("    }\n");
         if (grouped) {
-            emitGroupedResult(out, pipeline.aggregates().size());
+            emitGroupedResult(out, pipeline);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates().size());
@@ -257,8 +258,20 @@ public final class PipelineCompiler
 
     // ---- grouped aggregation (single long key) ----
 
-    private static void emitGroupedState(StringBuilder out, int aggregateCount)
+    private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline)
     {
+        int aggregateCount = pipeline.aggregates().size();
+        Plan.Domain domain = pipeline.groupDomain();
+        if (domain != null) {
+            // Array mode: aggregate arrays indexed directly by (key - min). No hashing, no rehash.
+            out.append("    long gmin = ").append(domain.min()).append("L;\n");
+            out.append("    int grange = (int) (").append(domain.max()).append("L - ").append(domain.min()).append("L + 1);\n");
+            out.append("    boolean[] gused = new boolean[grange]; int groupCount = 0;\n");
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append("    long[] agg").append(a).append(" = new long[grange];\n");
+            }
+            return;
+        }
         out.append("    int cap = 1024;\n");
         out.append("    long[] htKey = new long[cap]; int[] htGid = new int[cap];\n");
         out.append("    java.util.Arrays.fill(htGid, -1);\n");
@@ -272,6 +285,15 @@ public final class PipelineCompiler
     private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        if (pipeline.groupDomain() != null) {
+            out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), resolver)).append(";\n");
+            out.append(indent).append("int goff = (int) (gkey - gmin);\n");
+            out.append(indent).append("if (!gused[goff]) { gused[goff] = true; groupCount++; }\n");
+            for (int a = 0; a < aggregates.size(); a++) {
+                out.append(indent).append("agg").append(a).append("[goff] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+            }
+            return;
+        }
         out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), resolver)).append(";\n");
         out.append(indent).append("int gslot = mix(gkey) & htMask;\n");
         out.append(indent).append("while (htGid[gslot] != -1 && htKey[gslot] != gkey) { gslot = (gslot + 1) & htMask; }\n");
@@ -300,8 +322,33 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedResult(StringBuilder out, int aggregateCount)
+    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline)
     {
+        int aggregateCount = pipeline.aggregates().size();
+        if (pipeline.groupDomain() != null) {
+            // Compact the dense aggregate arrays to the occupied offsets; key = offset + min.
+            out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
+            out.append("    long[] outKey = new long[groupCount];\n");
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append("    long[] outAgg").append(a).append(" = new long[groupCount];\n");
+            }
+            out.append("    int w = 0;\n");
+            out.append("    for (int o = 0; o < grange; o++) {\n");
+            out.append("      if (gused[o]) {\n");
+            out.append("        outKey[w] = o + gmin;\n");
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append("        outAgg").append(a).append("[w] = agg").append(a).append("[o];\n");
+            }
+            out.append("        w++;\n");
+            out.append("      }\n");
+            out.append("    }\n");
+            out.append("    result[0] = outKey;\n");
+            for (int a = 0; a < aggregateCount; a++) {
+                out.append("    result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
+            }
+            out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
+            return;
+        }
         out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
         out.append("    result[0] = java.util.Arrays.copyOf(keyByGid, groupCount);\n");
         for (int a = 0; a < aggregateCount; a++) {

@@ -66,14 +66,20 @@ public class BenchmarkCompiledGroupBy
     private long[] v;
     private List<TableOperator.Page> pages;
     private CompiledPipeline compiled;
+    private CompiledPipeline compiledArray;
 
     @Setup
     public void setup()
     {
         k = new long[ROWS];
         v = new long[ROWS];
+        long scramble = 0x9E3779B97F4A7C15L;
         for (int i = 0; i < ROWS; i++) {
-            k[i] = i % groups;
+            // Scramble the group key so it arrives in pseudo-random order (fact-scan-like), not a clean
+            // 0..groups-1 cycle. This is the honest stress for array-mode locality.
+            long h = (i * scramble);
+            h ^= h >>> 29;
+            k[i] = Math.floorMod(h, groups);
             v[i] = (i % 100) + 1;
         }
 
@@ -97,9 +103,33 @@ public class BenchmarkCompiledGroupBy
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
         compiled = PipelineCompiler.compile(plan);
 
-        if (jitCompiled() != interpreted()) {
-            throw new IllegalStateException("mismatch: jit=" + jitCompiled() + " interpreted=" + interpreted());
+        // Same query, but the group key domain [0, groups-1] is declared dense -> array-mode grouping, no hashing.
+        Plan.Pipeline arrayPlan = new Plan.Pipeline(
+                2,
+                null,
+                -1,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                new Plan.Domain(0, groups - 1),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+        compiledArray = PipelineCompiler.compile(arrayPlan);
+
+        long interp = interpreted();
+        if (jitCompiled() != interp || jitArrayGroup() != interp) {
+            throw new IllegalStateException("mismatch: hash=" + jitCompiled() + " array=" + jitArrayGroup() + " interpreted=" + interp);
         }
+    }
+
+    @Benchmark
+    public long jitArrayGroup()
+    {
+        CompiledPipeline.Result result = compiledArray.execute(new long[][][] {{k, v}}, new int[] {ROWS});
+        long checksum = 0;
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            checksum += sums[g];
+        }
+        return checksum;
     }
 
     @Benchmark
