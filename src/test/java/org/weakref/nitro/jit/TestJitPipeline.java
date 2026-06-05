@@ -294,6 +294,51 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesGroupByString()
+    {
+        // SELECT s, sum(v) GROUP BY s -- s is a dictionary string column; grouping is on the dense id and the
+        // result column is the id typed STRING, which the consumer reconstructs via the dictionary.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int dictSize = 30;
+        byte[][] dictionary = new byte[dictSize][];
+        for (int d = 0; d < dictSize; d++) {
+            dictionary[d] = ("category-" + d).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int rows = 90_000;
+        int[] ids = new int[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> reference = new HashMap<>();   // id -> sum(v)
+        for (int i = 0; i < rows; i++) {
+            ids[i] = i % dictSize;
+            v[i] = (i % 50) + 1;
+            reference.merge((long) ids[i], v[i], Long::sum);
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.FLAT}};
+        System.out.println("=== generated group-by-string source ===\n" + PipelineCompiler.render(pipeline, encodings));
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {{new Column.StringColumn(ids, dictionary), new Column.FlatColumn(v)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        assertThat(result.types()[0]).isEqualTo(ColumnType.STRING);
+        long[] keyIds = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for id %d", keyIds[g]).isEqualTo(reference.get(keyIds[g]));
+            // The consumer reconstructs the string from the id via the dictionary.
+            String category = new String(dictionary[(int) keyIds[g]], java.nio.charset.StandardCharsets.UTF_8);
+            assertThat(category).startsWith("category-");
+        }
+    }
+
+    @Test
     void compilesStringFilterOverDictionary()
     {
         // SELECT k, sum(v) FROM t WHERE s IN ('CA','TX') GROUP BY k -- s is a dictionary string column,

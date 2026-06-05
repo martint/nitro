@@ -135,27 +135,31 @@ public final class PipelineCompiler
         if (needsMix) {
             emitMix(out);
         }
+        List<ColumnType> resultTypes = outputColumnTypes(pipeline, encodings);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
         if (!pipeline.joins().isEmpty()) {
-            emitJoinBody(out, pipeline);
+            emitJoinBody(out, pipeline, resultTypes);
         }
         else {
-            emitScanBody(out, pipeline, encodings, nullable);
+            emitScanBody(out, pipeline, encodings, nullable, resultTypes);
         }
         out.append("  }\n");
-        List<ColumnType> resultTypes = outputColumnTypes(pipeline);
         emitApplyHaving(out, pipeline.having(), resultTypes);
         emitApplyOrdering(out, pipeline.ordering(), resultTypes);
         out.append("}\n");
         return out.toString();
     }
 
-    /** Logical types of the result columns: the group-key columns (LONG) then each aggregate's output type. */
-    private static List<ColumnType> outputColumnTypes(Plan.Pipeline pipeline)
+    /**
+     * Logical types of the result columns: each group-key column (STRING when it is a string-encoded column,
+     * else LONG) then each aggregate's output type.
+     */
+    private static List<ColumnType> outputColumnTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         List<ColumnType> types = new ArrayList<>();
-        for (int k = 0; k < pipeline.groupKeys().size(); k++) {
-            types.add(ColumnType.LONG);
+        for (Plan.Expr groupKey : pipeline.groupKeys()) {
+            boolean string = groupKey instanceof Plan.Col col && encodingOf(encodings, 0, col.index()) == ColumnEncoding.STRING;
+            types.add(string ? ColumnType.STRING : ColumnType.LONG);
         }
         for (Plan.Aggregate aggregate : pipeline.aggregates()) {
             types.add(aggregator(aggregate).outputType());
@@ -231,7 +235,7 @@ public final class PipelineCompiler
 
     // ---- single-input scan -> filter -> aggregate ----
 
-    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<ColumnType> resultTypes)
     {
         out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         TreeSet<Integer> referenced = referencedColumns(pipeline);
@@ -277,10 +281,10 @@ public final class PipelineCompiler
         emitRowBody(out, "      ", pipeline, resolver, groupKeyResolver, nullResolver, grouped, speculate);
         out.append("    }\n");
         if (grouped) {
-            emitGroupedResult(out, pipeline, speculate, dictKeyColumn);
+            emitGroupedResult(out, pipeline, speculate, dictKeyColumn, resultTypes);
         }
         else {
-            emitGlobalResult(out, pipeline.aggregates());
+            emitGlobalResult(out, pipeline.aggregates(), resultTypes);
         }
     }
 
@@ -401,7 +405,7 @@ public final class PipelineCompiler
 
     // ---- scan(probe) inner-join builds -> filter -> aggregate ----
 
-    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline)
+    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, List<ColumnType> resultTypes)
     {
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
@@ -490,10 +494,10 @@ public final class PipelineCompiler
         out.append("    }\n");
 
         if (grouped) {
-            emitGroupedResult(out, pipeline, false, -1);
+            emitGroupedResult(out, pipeline, false, -1, resultTypes);
         }
         else {
-            emitGlobalResult(out, pipeline.aggregates());
+            emitGlobalResult(out, pipeline.aggregates(), resultTypes);
         }
     }
 
@@ -670,14 +674,14 @@ public final class PipelineCompiler
         out.append(indent).append("}\n");
     }
 
-    private static void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates)
+    private static void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates, List<ColumnType> resultTypes)
     {
         int n = aggregates.size();
         out.append("    long[][] result = new long[").append(n).append("][];\n");
         for (int a = 0; a < n; a++) {
             out.append("    result[").append(a).append("] = new long[] { ").append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "a", null))).append(" };\n");
         }
-        emitResultTypes(out, "    ", 0, aggregates);
+        emitResultTypes(out, "    ", resultTypes);
         out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types)));\n");
     }
 
@@ -807,7 +811,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate, int reconstructDictColumn)
+    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate, int reconstructDictColumn, List<ColumnType> resultTypes)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int aggregateCount = aggregates.size();
@@ -834,13 +838,13 @@ public final class PipelineCompiler
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
             }
-            emitResultTypes(out, "      ", 1, aggregates);
+            emitResultTypes(out, "      ", resultTypes);
             out.append("      return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result, types)));\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
             emitAggregateResultColumns(out, "    ", 1, aggregates);
-            emitResultTypes(out, "    ", 1, aggregates);
+            emitResultTypes(out, "    ", resultTypes);
             out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
             return;
         }
@@ -850,7 +854,7 @@ public final class PipelineCompiler
             emitKeyResultColumn(out, "    ", kx, kx, kx == 0 ? reconstructDictColumn : -1, "groupCount");
         }
         emitAggregateResultColumns(out, "    ", keyCount, aggregates);
-        emitResultTypes(out, "    ", keyCount, aggregates);
+        emitResultTypes(out, "    ", resultTypes);
         out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
     }
 
@@ -1010,15 +1014,12 @@ public final class PipelineCompiler
         return result;
     }
 
-    /** Emit {@code ColumnType[] types} for the result: {@code keyCount} LONG key columns then each aggregate's output type. */
-    private static void emitResultTypes(StringBuilder out, String indent, int keyCount, List<Plan.Aggregate> aggregates)
+    /** Emit the {@code ColumnType[] types} literal for the result columns. */
+    private static void emitResultTypes(StringBuilder out, String indent, List<ColumnType> resultTypes)
     {
         StringBuilder elements = new StringBuilder();
-        for (int k = 0; k < keyCount; k++) {
-            elements.append(elements.length() == 0 ? "" : ", ").append("org.weakref.nitro.jit.ColumnType.LONG");
-        }
-        for (Plan.Aggregate aggregate : aggregates) {
-            elements.append(elements.length() == 0 ? "" : ", ").append("org.weakref.nitro.jit.ColumnType.").append(aggregator(aggregate).outputType().name());
+        for (ColumnType type : resultTypes) {
+            elements.append(elements.length() == 0 ? "" : ", ").append("org.weakref.nitro.jit.ColumnType.").append(type.name());
         }
         out.append(indent).append("org.weakref.nitro.jit.ColumnType[] types = new org.weakref.nitro.jit.ColumnType[] { ").append(elements).append(" };\n");
     }

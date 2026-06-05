@@ -20,5 +20,7 @@ package org.weakref.nitro.jit;
 public enum ColumnType
 {
     LONG,
-    DOUBLE
+    DOUBLE,
+    /** A dictionary string id: the result column holds the id; the consumer reconstructs the string. */
+    STRING
 }
