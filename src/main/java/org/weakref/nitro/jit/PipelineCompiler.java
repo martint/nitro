@@ -119,9 +119,32 @@ public final class PipelineCompiler
             emitScanBody(out, pipeline, encodings);
         }
         out.append("  }\n");
+        emitApplyHaving(out, pipeline.having());
         emitApplyOrdering(out, pipeline.ordering());
         out.append("}\n");
         return out.toString();
+    }
+
+    /**
+     * Post-aggregation HAVING applied to the materialized result. Identity when no HAVING; otherwise keeps the
+     * rows whose condition (over result columns: group keys then aggregates) holds and compacts.
+     */
+    private static void emitApplyHaving(StringBuilder out, Plan.Condition having)
+    {
+        out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyHaving(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        if (having == null) {
+            out.append("    return result;\n  }\n");
+            return;
+        }
+        out.append("    int n = result.rowCount(); long[][] cols = result.columns();\n");
+        out.append("    int[] keep = new int[n]; int w = 0;\n");
+        out.append("    for (int r = 0; r < n; r++) {\n");
+        out.append("      if (").append(condition(having, index -> "cols[" + index + "][r]")).append(") { keep[w++] = r; }\n");
+        out.append("    }\n");
+        out.append("    long[][] kept = new long[cols.length][w];\n");
+        out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(w, kept);\n");
+        out.append("  }\n");
     }
 
     /**
@@ -499,7 +522,7 @@ public final class PipelineCompiler
         for (int a = 0; a < aggregateCount; a++) {
             out.append("    result[").append(a).append("] = new long[] { a").append(a).append(" };\n");
         }
-        out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result));\n");
+        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result)));\n");
     }
 
     // ---- grouped aggregation (single long key) ----
@@ -657,14 +680,14 @@ public final class PipelineCompiler
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
             }
-            out.append("      return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result));\n");
+            out.append("      return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result)));\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
             }
-            out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result));\n");
+            out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result)));\n");
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -675,7 +698,7 @@ public final class PipelineCompiler
         for (int a = 0; a < aggregateCount; a++) {
             out.append("    result[").append(keyCount + a).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
         }
-        out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result));\n");
+        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result)));\n");
     }
 
     /** Reconstruct a group key for output: identity for a plain key, or a dictionary lookup for a group-on-id key. */

@@ -248,6 +248,50 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesHavingAndOrderBy()
+    {
+        // SELECT k, sum(v) GROUP BY k HAVING sum(v) > T ORDER BY k LIMIT 20
+        long threshold = 700_000;
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))))
+                .withHaving(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(threshold)))
+                .withOrdering(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 20));
+
+        int rows = 400_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> sums = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 50;
+            v[i] = (i % 100) + 1;
+            sums.merge(k[i], v[i], Long::sum);
+        }
+        List<long[]> qualifying = new java.util.ArrayList<>();
+        sums.forEach((key, sum) -> {
+            if (sum > threshold) {
+                qualifying.add(new long[] {key, sum});
+            }
+        });
+        qualifying.sort((a, b) -> Long.compare(a[0], b[0]));
+        List<long[]> expected = qualifying.size() > 20 ? qualifying.subList(0, 20) : qualifying;
+
+        System.out.println("=== generated having source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(expected.size());
+        long[] outKeys = result.columns()[0];
+        long[] outSums = result.columns()[1];
+        for (int r = 0; r < expected.size(); r++) {
+            assertThat(outKeys[r]).isEqualTo(expected.get(r)[0]);
+            assertThat(outSums[r]).isEqualTo(expected.get(r)[1]);
+            assertThat(outSums[r]).isGreaterThan(threshold);
+        }
+    }
+
+    @Test
     void compilesOrderByLimit()
     {
         // SELECT k, sum(v) GROUP BY k ORDER BY sum(v) DESC, k ASC LIMIT 10
