@@ -209,6 +209,44 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesMultipleStringFiltersOnOneColumn()
+    {
+        // SELECT count(*) WHERE s <> 'drop' AND s <> 'skip' -- two predicate-over-dictionary masks on the SAME
+        // column (the shape of an OR of per-column branches); masks must be keyed per predicate, not per column.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,
+                List.of(
+                        new Plan.StringMatch(0, List.of("drop"), true),
+                        new Plan.StringMatch(0, List.of("skip"), true)),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        String[] vocabulary = {"drop", "skip", "keep", "take", "hold"};
+        byte[][] dictionary = new byte[vocabulary.length][];
+        for (int d = 0; d < vocabulary.length; d++) {
+            dictionary[d] = vocabulary[d].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int rows = 60_000;
+        int[] ids = new int[rows];
+        long expected = 0;
+        for (int i = 0; i < rows; i++) {
+            ids[i] = i % vocabulary.length;
+            String s = vocabulary[ids[i]];
+            if (!s.equals("drop") && !s.equals("skip")) {
+                expected++;
+            }
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline.Result result = compiled.execute(
+                new Column[][] {{new Column.StringColumn(ids, dictionary)}}, new int[] {rows});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+        assertThat(expected).isGreaterThan(0);
+    }
+
+    @Test
     void compilesLikeAndSubstringFilters()
     {
         // SELECT count(*) WHERE s LIKE 'AB%' AND substring(t,1,3) <> 'XYZ'  -- predicate-over-dictionary on

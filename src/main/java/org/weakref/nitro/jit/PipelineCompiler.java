@@ -28,6 +28,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
@@ -457,8 +458,11 @@ public final class PipelineCompiler
         for (Plan.Condition filter : pipeline.filters()) {
             collectStringMatches(filter, stringMatches);
         }
-        for (Plan.Condition match : stringMatches) {
-            emitStringMaskPrelude(out, match, "cStr" + stringMatchColumn(match));
+        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
+        for (int s = 0; s < stringMatches.size(); s++) {
+            Plan.Condition match = stringMatches.get(s);
+            stringMaskIds.put(match, s);
+            emitStringMaskPrelude(out, match, s, "cStr" + stringMatchColumn(match));
         }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
@@ -490,7 +494,7 @@ public final class PipelineCompiler
             emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, nullable, resolver, groupKeyResolver, nullResolver, grouped, speculate);
+        emitRowBody(out, "      ", pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate);
         out.append("    }\n");
         if (grouped) {
             emitGroupedResult(out, pipeline, nullable, speculate, dictKeyColumn, resultTypes);
@@ -585,26 +589,27 @@ public final class PipelineCompiler
         };
     }
 
-    /** Build the id mask for a predicate-over-dictionary leaf once, by testing each dictionary entry. */
-    private static void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, String dictionaryVar)
+    /**
+     * Build the id mask for a predicate-over-dictionary leaf once, by testing each dictionary entry. {@code id} is
+     * the predicate's unique index in the query (a column may carry several string predicates -- e.g. one per OR
+     * branch -- so masks are keyed per predicate, not per column).
+     */
+    private static void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, int id, String dictionaryVar)
     {
         if (match instanceof Plan.LikeMatch like) {
-            int column = like.column();
-            out.append("    java.util.regex.Pattern sLikePat").append(column).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
+            out.append("    java.util.regex.Pattern sLikePat").append(id).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
                     .append(javaStringLiteral(like.pattern())).append(");\n");
-            out.append("    boolean[] sMask").append(column).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
+            out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
             out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
-            String matches = "sLikePat" + column + ".matcher(new String(" + dictionaryVar + "[e], java.nio.charset.StandardCharsets.UTF_8)).matches()";
-            out.append("      sMask").append(column).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+            String matches = "sLikePat" + id + ".matcher(new String(" + dictionaryVar + "[e], java.nio.charset.StandardCharsets.UTF_8)).matches()";
+            out.append("      sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
             out.append("    }\n");
             return;
         }
-        int column;
         List<String> values;
         boolean negated;
         String entry;   // the dictionary entry's bytes to test (possibly a substring)
         if (match instanceof Plan.SubstringMatch substring) {
-            column = substring.column();
             values = substring.values();
             negated = substring.negated();
             entry = "org.weakref.nitro.function.scalar.builtin.Utf8Support.substring(" + dictionaryVar + "[e], 0, " + dictionaryVar + "[e].length, "
@@ -612,24 +617,23 @@ public final class PipelineCompiler
         }
         else {
             Plan.StringMatch exact = (Plan.StringMatch) match;
-            column = exact.column();
             values = exact.values();
             negated = exact.negated();
             entry = dictionaryVar + "[e]";
         }
         for (int v = 0; v < values.size(); v++) {
-            out.append("    byte[] sLit").append(column).append("_").append(v).append(" = ")
+            out.append("    byte[] sLit").append(id).append("_").append(v).append(" = ")
                     .append(javaStringLiteral(values.get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
         }
-        out.append("    boolean[] sMask").append(column).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
+        out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
         out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
         out.append("      byte[] sv = ").append(entry).append(";\n");
         StringBuilder member = new StringBuilder();
         for (int v = 0; v < values.size(); v++) {
-            member.append(member.length() == 0 ? "" : " || ").append("java.util.Arrays.equals(sv, sLit").append(column).append("_").append(v).append(")");
+            member.append(member.length() == 0 ? "" : " || ").append("java.util.Arrays.equals(sv, sLit").append(id).append("_").append(v).append(")");
         }
         String matches = values.isEmpty() ? "false" : member.toString();
-        out.append("      sMask").append(column).append("[e] = ").append(negated ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+        out.append("      sMask").append(id).append("[e] = ").append(negated ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
         out.append("    }\n");
     }
 
@@ -738,10 +742,13 @@ public final class PipelineCompiler
         for (Plan.Condition filter : pipeline.filters()) {
             collectStringMatches(filter, stringMatches);
         }
-        for (Plan.Condition match : stringMatches) {
+        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
+        for (int s = 0; s < stringMatches.size(); s++) {
+            Plan.Condition match = stringMatches.get(s);
+            stringMaskIds.put(match, s);
             int column = stringMatchColumn(match);
             ColumnVars vars = column < probeColumns ? probeVars(column) : buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]);
-            emitStringMaskPrelude(out, match, vars.stringDict());
+            emitStringMaskPrelude(out, match, s, vars.stringDict());
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
@@ -760,7 +767,7 @@ public final class PipelineCompiler
             indent += "  ";
         }
         // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
-        emitRowBody(out, indent, pipeline, nullable, resolver, resolver, nullResolver, grouped, false);
+        emitRowBody(out, indent, pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
         for (int k = 0; k < joinCount; k++) {
             indent = indent.substring(2);
             out.append(indent).append("}\n");
@@ -907,13 +914,13 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean grouped, boolean speculate)
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
     {
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
             // A row passes WHERE only when the condition is TRUE (not FALSE, not NULL) -- three-valued logic.
             String condition = pipeline.filters().stream()
-                    .map(c -> conditionTrue(c, resolver, nullResolver))
+                    .map(c -> conditionTrue(c, resolver, nullResolver, stringMaskIds))
                     .collect(joining(" && "));
             out.append(indent).append("if (").append(condition).append(") {\n");
             bodyIndent = indent + "  ";
@@ -1626,7 +1633,7 @@ public final class PipelineCompiler
     }
 
     /** Boolean expression that is true when {@code condition} evaluates to SQL TRUE (three-valued logic). */
-    private static String conditionTrue(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String conditionTrue(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         switch (condition) {
             case Plan.Predicate predicate -> {
@@ -1640,40 +1647,40 @@ public final class PipelineCompiler
                 if (and.conditions().isEmpty()) {
                     return "true";
                 }
-                return "(" + and.conditions().stream().map(child -> conditionTrue(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
+                return "(" + and.conditions().stream().map(child -> conditionTrue(child, resolver, nullResolver, stringMaskIds)).collect(joining(" && ")) + ")";
             }
             case Plan.Or or -> {
                 if (or.conditions().isEmpty()) {
                     return "false";
                 }
-                return "(" + or.conditions().stream().map(child -> conditionTrue(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
+                return "(" + or.conditions().stream().map(child -> conditionTrue(child, resolver, nullResolver, stringMaskIds)).collect(joining(" || ")) + ")";
             }
             case Plan.Not not -> {
-                return conditionFalse(not.condition(), resolver, nullResolver);
+                return conditionFalse(not.condition(), resolver, nullResolver, stringMaskIds);
             }
             case Plan.StringMatch match -> {
-                return stringMaskTrue(match, resolver, nullResolver);
+                return stringMaskTrue(match, resolver, nullResolver, stringMaskIds);
             }
             case Plan.LikeMatch match -> {
-                return stringMaskTrue(match, resolver, nullResolver);
+                return stringMaskTrue(match, resolver, nullResolver, stringMaskIds);
             }
             case Plan.SubstringMatch match -> {
-                return stringMaskTrue(match, resolver, nullResolver);
+                return stringMaskTrue(match, resolver, nullResolver, stringMaskIds);
             }
         }
     }
 
     /** A predicate-over-dictionary leaf as SQL TRUE: the row's id is in the mask (and the value is not null). */
-    private static String stringMaskTrue(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String stringMaskTrue(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         int column = stringMatchColumn(match);
         String guard = notNullGuard(nullResolver.apply(column));
-        String lookup = "sMask" + column + "[" + resolver.apply(column) + "]";
+        String lookup = "sMask" + stringMaskIds.get(match) + "[" + resolver.apply(column) + "]";
         return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
     }
 
     /** Boolean expression that is true when {@code condition} evaluates to SQL FALSE (three-valued logic). */
-    private static String conditionFalse(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String conditionFalse(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         switch (condition) {
             case Plan.Predicate predicate -> {
@@ -1687,35 +1694,35 @@ public final class PipelineCompiler
                 if (and.conditions().isEmpty()) {
                     return "false";
                 }
-                return "(" + and.conditions().stream().map(child -> conditionFalse(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
+                return "(" + and.conditions().stream().map(child -> conditionFalse(child, resolver, nullResolver, stringMaskIds)).collect(joining(" || ")) + ")";
             }
             case Plan.Or or -> {
                 if (or.conditions().isEmpty()) {
                     return "true";
                 }
-                return "(" + or.conditions().stream().map(child -> conditionFalse(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
+                return "(" + or.conditions().stream().map(child -> conditionFalse(child, resolver, nullResolver, stringMaskIds)).collect(joining(" && ")) + ")";
             }
             case Plan.Not not -> {
-                return conditionTrue(not.condition(), resolver, nullResolver);
+                return conditionTrue(not.condition(), resolver, nullResolver, stringMaskIds);
             }
             case Plan.StringMatch match -> {
-                return stringMaskFalse(match, resolver, nullResolver);
+                return stringMaskFalse(match, resolver, nullResolver, stringMaskIds);
             }
             case Plan.LikeMatch match -> {
-                return stringMaskFalse(match, resolver, nullResolver);
+                return stringMaskFalse(match, resolver, nullResolver, stringMaskIds);
             }
             case Plan.SubstringMatch match -> {
-                return stringMaskFalse(match, resolver, nullResolver);
+                return stringMaskFalse(match, resolver, nullResolver, stringMaskIds);
             }
         }
     }
 
     /** A predicate-over-dictionary leaf as SQL FALSE: the row's id is not in the mask (and the value is not null). */
-    private static String stringMaskFalse(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String stringMaskFalse(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         int column = stringMatchColumn(match);
         String guard = notNullGuard(nullResolver.apply(column));
-        String lookup = "!sMask" + column + "[" + resolver.apply(column) + "]";
+        String lookup = "!sMask" + stringMaskIds.get(match) + "[" + resolver.apply(column) + "]";
         return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
     }
 
