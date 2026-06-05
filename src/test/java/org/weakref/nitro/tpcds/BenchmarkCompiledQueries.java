@@ -28,6 +28,7 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.QueryLowering;
 
 import java.util.LinkedHashMap;
@@ -57,6 +58,7 @@ public class BenchmarkCompiledQueries
     private TpcdsParquetTables tables;
     private final Map<String, QueryLowering.Lowered> lowered = new LinkedHashMap<>();
     private final Map<String, CompiledPipeline> compiled = new LinkedHashMap<>();
+    private final Map<String, org.weakref.nitro.jit.StreamingPipeline> streaming = new LinkedHashMap<>();
 
     @Setup
     public void setup()
@@ -76,6 +78,7 @@ public class BenchmarkCompiledQueries
         QueryLowering.Lowered plan = ported.query().lower();
         lowered.put(name, plan);
         compiled.put(name, plan.compile());   // one-time, like building a query plan
+        streaming.put(name, PipelineCompiler.compileStreaming(plan.pipeline(), plan.encodings(), plan.nullable()));
     }
 
     @Setup(Level.Invocation)
@@ -95,5 +98,11 @@ public class BenchmarkCompiledQueries
     public Object loadOnly()
     {
         return CompiledQuerySupport.loadLoweredInputs(allocator, tables, lowered.get(query));
+    }
+
+    @Benchmark
+    public Object streaming()
+    {
+        return CompiledQuerySupport.runStreamingLowered(allocator, tables, lowered.get(query), streaming.get(query));
     }
 }
