@@ -45,10 +45,18 @@ public interface CompiledPipeline
     /**
      * Result columns are the group-key columns then the aggregate columns. Each column is a {@code long[]};
      * {@code types[c]} is its {@link Type} (which knows how to decode the slot -- e.g. a {@code double} stores
-     * {@code doubleToRawLongBits}, a string stores its dictionary id).
+     * {@code doubleToRawLongBits}, a string stores its dictionary id). {@code nulls}, when present,
+     * is the per-column null mask: {@code nulls[c][row]} marks a null (e.g. a null group key); {@code nulls} or an
+     * individual {@code nulls[c]} may be {@code null} when that column has no nulls.
      */
-    record Result(int rowCount, long[][] columns, Type[] types)
+    record Result(int rowCount, long[][] columns, Type[] types, boolean[][] nulls)
     {
+        /** No-null columns, with explicit types. */
+        public Result(int rowCount, long[][] columns, Type[] types)
+        {
+            this(rowCount, columns, types, null);
+        }
+
         /** All-{@code long} columns. */
         public Result(int rowCount, long[][] columns)
         {

@@ -82,4 +82,47 @@ public class TestCompiledOperatorBridge
 
         assertThat(operator(new CompiledOperator(result, dictionaries))).matches(expected);
     }
+
+    @Test
+    void bridgesNullGroupKey()
+    {
+        // SELECT k, sum(v) GROUP BY k -- k is a nullable column; null keys form one distinct group, output as null.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int rows = 60_000;
+        long[] k = new long[rows];
+        boolean[] kNull = new boolean[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> reference = new HashMap<>();   // non-null key -> sum(v)
+        long nullSum = 0;
+        for (int i = 0; i < rows; i++) {
+            v[i] = (i % 30) + 1;
+            if (i % 7 == 0) {
+                kNull[i] = true;
+                nullSum += v[i];
+            }
+            else {
+                k[i] = i % 13;
+                reference.merge(k[i], v[i], Long::sum);
+            }
+        }
+
+        boolean[][] nullable = {{true, false}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        Column[][] inputs = {{new Column.FlatColumn(k, kNull), new Column.FlatColumn(v)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+
+        List<Row> expected = new ArrayList<>();
+        for (Map.Entry<Long, Long> entry : reference.entrySet()) {
+            expected.add(Row.row(entry.getKey(), entry.getValue()));
+        }
+        expected.add(Row.row(null, nullSum));   // the null group surfaces as a null key
+
+        assertThat(nullSum).isGreaterThan(0);
+        assertThat(operator(new CompiledOperator(result))).matches(expected);
+    }
 }

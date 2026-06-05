@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.jit.CompiledPipeline;
@@ -31,6 +32,7 @@ public final class CompiledOperator
 {
     private final int rowCount;
     private final Vector[] columns;
+    private final BooleanVector[] nulls;
 
     private boolean produced;
 
@@ -50,9 +52,14 @@ public final class CompiledOperator
         this.rowCount = result.rowCount();
         long[][] values = result.columns();
         Type[] types = result.types();
+        boolean[][] columnNulls = result.nulls();
         this.columns = new Vector[values.length];
+        this.nulls = new BooleanVector[values.length];
         for (int column = 0; column < values.length; column++) {
             columns[column] = types[column].toVector(values[column], rowCount, dictionaries[column]);
+            if (columnNulls != null && columnNulls[column] != null) {
+                nulls[column] = new BooleanVector(columnNulls[column]);
+            }
         }
     }
 
@@ -74,7 +81,9 @@ public final class CompiledOperator
         produced = true;
         Output[] outputs = new Output[columns.length];
         for (int column = 0; column < columns.length; column++) {
-            outputs[column] = Output.of(Streams.ofValues(columns[column]));
+            outputs[column] = nulls[column] == null
+                    ? Output.of(Streams.ofValues(columns[column]))
+                    : Output.of(Streams.ofValuesAndNulls(columns[column], nulls[column]));
         }
         return new Batch(Mask.all(rowCount), outputs);
     }

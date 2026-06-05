@@ -146,18 +146,54 @@ public final class PipelineCompiler
         return ColumnEncoding.FLAT;
     }
 
-    /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, constant). */
-    private record ColumnVars(String flat, String ids, String dict, String constant) {}
+    /** Whether a combined-space column is nullable; resolves the index back to its (input, local) coordinates. */
+    private static boolean combinedNullable(Plan.Pipeline pipeline, boolean[][] nullable, int combined)
+    {
+        int probeColumns = pipeline.columnCount();
+        if (combined < probeColumns) {
+            return nullableOf(nullable, 0, combined);
+        }
+        int offset = probeColumns;
+        List<Plan.Join> joins = pipeline.joins();
+        for (int k = 0; k < joins.size(); k++) {
+            int count = joins.get(k).build().columnCount();
+            if (combined < offset + count) {
+                return nullableOf(nullable, k + 1, combined - offset);
+            }
+            offset += count;
+        }
+        return false;
+    }
+
+    /** Whether group key {@code kx} is a nullable column (so the grouping must treat null as its own group). */
+    private static boolean keyNullable(Plan.Pipeline pipeline, boolean[][] nullable, int kx)
+    {
+        Plan.Expr key = pipeline.groupKeys().get(kx);
+        return key instanceof Plan.Col col && combinedNullable(pipeline, nullable, col.index());
+    }
+
+    private static boolean anyGroupKeyNullable(Plan.Pipeline pipeline, boolean[][] nullable)
+    {
+        for (int kx = 0; kx < pipeline.groupKeys().size(); kx++) {
+            if (keyNullable(pipeline, nullable, kx)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, constant) plus its null mask. */
+    private record ColumnVars(String flat, String ids, String dict, String constant, String nulls) {}
 
     private static ColumnVars probeVars(int column)
     {
-        return new ColumnVars("p" + column, "pIds" + column, "pDict" + column, "pConst" + column);
+        return new ColumnVars("p" + column, "pIds" + column, "pDict" + column, "pConst" + column, "pN" + column);
     }
 
     private static ColumnVars buildVars(int build, int local)
     {
         String suffix = build + "_" + local;
-        return new ColumnVars("b" + suffix, "bIds" + suffix, "bDict" + suffix, "bConst" + suffix);
+        return new ColumnVars("b" + suffix, "bIds" + suffix, "bDict" + suffix, "bConst" + suffix, "bN" + suffix);
     }
 
     /** Access expression for a join column at {@code row}: flat index, dictionary indirection, hoisted constant, or string id. */
@@ -171,10 +207,16 @@ public final class PipelineCompiler
         };
     }
 
-    /** Load a join column from its input array into the encoding-appropriate generated variable(s). */
-    private static void emitJoinColumnLoad(StringBuilder out, ColumnEncoding encoding, String source, ColumnVars vars)
+    /** Load a join column from its input array into the encoding-appropriate generated variable(s), with its null mask when nullable. */
+    private static void emitJoinColumnLoad(StringBuilder out, ColumnEncoding encoding, boolean nullable, String source, ColumnVars vars)
     {
         String type = "org.weakref.nitro.jit.Column.";
+        String columnType = switch (encoding) {
+            case FLAT -> "FlatColumn";
+            case STRING -> "StringColumn";
+            case DICTIONARY -> "DictionaryColumn";
+            case CONSTANT -> "ConstantColumn";
+        };
         switch (encoding) {
             case FLAT -> out.append("    long[] ").append(vars.flat()).append(" = ((").append(type).append("FlatColumn) ").append(source).append(").values();\n");
             case STRING -> out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("StringColumn) ").append(source).append(").ids();\n");
@@ -184,6 +226,23 @@ public final class PipelineCompiler
             }
             case CONSTANT -> out.append("    long ").append(vars.constant()).append(" = ((").append(type).append("ConstantColumn) ").append(source).append(").value();\n");
         }
+        if (nullable) {
+            if (encoding == ColumnEncoding.CONSTANT) {
+                out.append("    boolean ").append(vars.nulls()).append(" = ((").append(type).append("ConstantColumn) ").append(source).append(").isNull();\n");
+            }
+            else {
+                out.append("    boolean[] ").append(vars.nulls()).append(" = ((").append(type).append(columnType).append(") ").append(source).append(").nulls();\n");
+            }
+        }
+    }
+
+    /** Is-null expression for a join column at {@code row}; {@code "false"} (fast path) when not nullable. */
+    private static String joinNullAccess(ColumnEncoding encoding, boolean nullable, ColumnVars vars, String row)
+    {
+        if (!nullable) {
+            return "false";
+        }
+        return encoding == ColumnEncoding.CONSTANT ? vars.nulls() : vars.nulls() + "[" + row + "]";
     }
 
     private static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
@@ -201,7 +260,7 @@ public final class PipelineCompiler
         List<Type> resultTypes = outputColumnTypes(pipeline, encodings);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
         if (!pipeline.joins().isEmpty()) {
-            emitJoinBody(out, pipeline, encodings, resultTypes);
+            emitJoinBody(out, pipeline, encodings, nullable, resultTypes);
         }
         else {
             emitScanBody(out, pipeline, encodings, nullable, resultTypes);
@@ -254,7 +313,9 @@ public final class PipelineCompiler
         out.append("    }\n");
         out.append("    long[][] kept = new long[cols.length][w];\n");
         out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(w, kept, result.types());\n");
+        out.append("    int outN = w;\n");
+        emitGatherNulls(out, "keep[g]");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(w, kept, result.types(), outNulls);\n");
         out.append("  }\n");
     }
 
@@ -289,8 +350,25 @@ public final class PipelineCompiler
         out.append("    int outN = ").append(limit).append(";\n");
         out.append("    long[][] sorted = new long[cols.length][outN];\n");
         out.append("    for (int w = 0; w < outN; w++) { int s = order[w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types());\n");
+        emitGatherNulls(out, "order[g]");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types(), outNulls);\n");
         out.append("  }\n");
+    }
+
+    /** Gather the result's per-column null masks through a row permutation ({@code sourceRow}, in terms of output index {@code g}, maps to the source row). Leaves {@code boolean[][] outNulls} (length {@code outN}) in scope. */
+    private static void emitGatherNulls(StringBuilder out, String sourceRow)
+    {
+        out.append("    boolean[][] srcNulls = result.nulls();\n");
+        out.append("    boolean[][] outNulls = null;\n");
+        out.append("    if (srcNulls != null) {\n");
+        out.append("      outNulls = new boolean[cols.length][];\n");
+        out.append("      for (int c = 0; c < cols.length; c++) {\n");
+        out.append("        if (srcNulls[c] != null) {\n");
+        out.append("          outNulls[c] = new boolean[outN];\n");
+        out.append("          for (int g = 0; g < outN; g++) { outNulls[c][g] = srcNulls[c][").append(sourceRow).append("]; }\n");
+        out.append("        }\n");
+        out.append("      }\n");
+        out.append("    }\n");
     }
 
     // ---- single-input scan -> filter -> aggregate ----
@@ -314,8 +392,9 @@ public final class PipelineCompiler
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         boolean grouped = !pipeline.groupKeys().isEmpty();
         // A single-key scan group can speculate array mode: estimate the key domain from a sample, bet on a
-        // direct-indexed array, and deopt to a hash table if a later key falls outside the bet.
-        boolean speculate = grouped && pipeline.groupKeys().size() == 1;
+        // direct-indexed array, and deopt to a hash table if a later key falls outside the bet. A nullable key
+        // routes through the null-aware hash path instead (array mode has no slot for a null group).
+        boolean speculate = grouped && pipeline.groupKeys().size() == 1 && !anyGroupKeyNullable(pipeline, nullable);
 
         // Group-on-id: when the single group key is a dictionary column, group on its dense id (so array mode
         // applies even when the dictionary's values are sparse) and reconstruct the value at finalize.
@@ -332,16 +411,16 @@ public final class PipelineCompiler
             emitGroupSampleProlog(out, pipeline.groupKeys().getFirst(), sampleResolver);
         }
         if (grouped) {
-            emitGroupedState(out, pipeline, speculate);
+            emitGroupedState(out, pipeline, nullable, speculate);
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, resolver, groupKeyResolver, nullResolver, grouped, speculate);
+        emitRowBody(out, "      ", pipeline, nullable, resolver, groupKeyResolver, nullResolver, grouped, speculate);
         out.append("    }\n");
         if (grouped) {
-            emitGroupedResult(out, pipeline, speculate, dictKeyColumn, resultTypes);
+            emitGroupedResult(out, pipeline, nullable, speculate, dictKeyColumn, resultTypes);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates(), resultTypes);
@@ -465,7 +544,7 @@ public final class PipelineCompiler
 
     // ---- scan(probe) inner-join builds -> filter -> aggregate ----
 
-    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Type> resultTypes)
+    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
@@ -514,9 +593,18 @@ public final class PipelineCompiler
             return joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, local), "buildRow" + build);
         };
 
+        IntFunction<String> nullResolver = index -> {
+            if (index < probeColumns) {
+                return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), probeVars(index), "i");
+            }
+            int build = buildOf(joins, buildOffset, index);
+            int local = index - buildOffset[build];
+            return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, local), "buildRow" + build);
+        };
+
         out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
         for (int column : probeReferenced) {
-            emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), "probe[" + column + "]", probeVars(column));
+            emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
         }
         for (int k = 0; k < joinCount; k++) {
             Plan.Join join = joins.get(k);
@@ -526,14 +614,15 @@ public final class PipelineCompiler
             }
             out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = inputs[").append(k + 1).append("]; int build").append(k).append("Rows = rowCounts[").append(k + 1).append("];\n");
             for (int column : buildReferenced.get(k)) {
-                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, buildOffset[k] + column), "build" + k + "[" + column + "]", buildVars(k, column));
+                int combinedIndex = buildOffset[k] + column;
+                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, combinedIndex), combinedNullable(pipeline, nullable, combinedIndex), "build" + k + "[" + column + "]", buildVars(k, column));
             }
             emitBuildStructures(out, k, join.build().keyColumns());
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
         if (grouped) {
-            emitGroupedState(out, pipeline, false);
+            emitGroupedState(out, pipeline, nullable, false);
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
@@ -546,8 +635,8 @@ public final class PipelineCompiler
             out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
             indent += "  ";
         }
-        // Join inputs are read as non-null (the null-free fast path), so the null resolver is always false.
-        emitRowBody(out, indent, pipeline, resolver, resolver, index -> "false", grouped, false);
+        // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
+        emitRowBody(out, indent, pipeline, nullable, resolver, resolver, nullResolver, grouped, false);
         for (int k = 0; k < joinCount; k++) {
             indent = indent.substring(2);
             out.append(indent).append("}\n");
@@ -555,7 +644,7 @@ public final class PipelineCompiler
         out.append("    }\n");
 
         if (grouped) {
-            emitGroupedResult(out, pipeline, false, -1, resultTypes);
+            emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);
         }
         else {
             emitGlobalResult(out, pipeline.aggregates(), resultTypes);
@@ -678,7 +767,7 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean grouped, boolean speculate)
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean grouped, boolean speculate)
     {
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
@@ -690,7 +779,7 @@ public final class PipelineCompiler
             bodyIndent = indent + "  ";
         }
         if (grouped) {
-            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver, groupKeyResolver, nullResolver, speculate);
+            emitGroupedAccumulate(out, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, speculate);
         }
         else {
             emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver);
@@ -748,7 +837,7 @@ public final class PipelineCompiler
 
     // ---- grouped aggregation (single long key) ----
 
-    private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline, boolean speculate)
+    private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int total = cellCount(aggregates);
@@ -767,19 +856,25 @@ public final class PipelineCompiler
         out.append("    int cap = 1024;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append("    long[] htKey").append(kx).append(" = new long[cap];\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append("    boolean[] htKeyN").append(kx).append(" = new boolean[cap];\n");
+            }
         }
         out.append("    int[] htGid = new int[cap];\n");
         out.append("    java.util.Arrays.fill(htGid, -1);\n");
         out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append("    boolean[] nullByGid").append(kx).append(" = new boolean[16];\n");
+            }
         }
         for (int c = 0; c < total; c++) {
             out.append("    long[] agg").append(c).append(" = new long[16];\n");
         }
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean speculate)
+    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean speculate)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         if (speculate) {
@@ -824,21 +919,37 @@ public final class PipelineCompiler
         }
         int keyCount = pipeline.groupKeys().size();
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("long gk").append(kx).append(" = ").append(expr(pipeline.groupKeys().get(kx), groupKeyResolver)).append(";\n");
+            String value = expr(pipeline.groupKeys().get(kx), groupKeyResolver);
+            if (keyNullable(pipeline, nullable, kx)) {
+                int colIndex = ((Plan.Col) pipeline.groupKeys().get(kx)).index();
+                // A null key is canonicalized to value 0 so all nulls land in one group; the null flag keeps it
+                // distinct from a real 0.
+                out.append(indent).append("boolean gkN").append(kx).append(" = ").append(nullResolver.apply(colIndex)).append(";\n");
+                out.append(indent).append("long gk").append(kx).append(" = gkN").append(kx).append(" ? 0L : (").append(value).append(");\n");
+            }
+            else {
+                out.append(indent).append("long gk").append(kx).append(" = ").append(value).append(";\n");
+            }
         }
         out.append(indent).append("int gslot = mix(").append(hashFold("gk", "", keyCount)).append(") & htMask;\n");
-        out.append(indent).append("while (htGid[gslot] != -1 && !(").append(keyCompare("gslot", keyCount)).append(")) { gslot = (gslot + 1) & htMask; }\n");
+        out.append(indent).append("while (htGid[gslot] != -1 && !(").append(keyCompare("gslot", keyCount, pipeline, nullable)).append(")) { gslot = (gslot + 1) & htMask; }\n");
         out.append(indent).append("int gid = htGid[gslot];\n");
         out.append(indent).append("if (gid == -1) {\n");
         String b = indent + "  ";
         out.append(b).append("gid = groupCount++; htGid[gslot] = gid;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("htKey").append(kx).append("[gslot] = gk").append(kx).append(";\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append(b).append("htKeyN").append(kx).append("[gslot] = gkN").append(kx).append(";\n");
+            }
         }
         out.append(b).append("if (gid == keyByGid0.length) {\n");
         out.append(b).append("  int n = keyByGid0.length * 2;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append(b).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
+            }
         }
         for (int c = 0; c < cellCount(aggregates); c++) {
             out.append(b).append("  agg").append(c).append(" = java.util.Arrays.copyOf(agg").append(c).append(", n);\n");
@@ -846,12 +957,18 @@ public final class PipelineCompiler
         out.append(b).append("}\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("keyByGid").append(kx).append("[gid] = gk").append(kx).append(";\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append(b).append("nullByGid").append(kx).append("[gid] = gkN").append(kx).append(";\n");
+            }
         }
         emitStateIdentity(out, b, aggregates, "agg", "gid");
         out.append(b).append("if (groupCount > htFill) {\n");
         out.append(b).append("  int ncap = cap * 2;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("  long[] nKey").append(kx).append(" = new long[ncap];\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append(b).append("  boolean[] nKeyN").append(kx).append(" = new boolean[ncap];\n");
+            }
         }
         out.append(b).append("  int[] nGid = new int[ncap];\n");
         out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
@@ -859,10 +976,16 @@ public final class PipelineCompiler
         out.append(b).append("    int ns = mix(").append(hashFold("htKey", "[s]", keyCount)).append(") & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("    nKey").append(kx).append("[ns] = htKey").append(kx).append("[s];\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append(b).append("    nKeyN").append(kx).append("[ns] = htKeyN").append(kx).append("[s];\n");
+            }
         }
         out.append(b).append("    nGid[ns] = htGid[s]; } }\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("  htKey").append(kx).append(" = nKey").append(kx).append(";\n");
+            if (keyNullable(pipeline, nullable, kx)) {
+                out.append(b).append("  htKeyN").append(kx).append(" = nKeyN").append(kx).append(";\n");
+            }
         }
         out.append(b).append("  htGid = nGid; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
         out.append(b).append("}\n");
@@ -872,7 +995,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate, int reconstructDictColumn, List<Type> resultTypes)
+    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate, int reconstructDictColumn, List<Type> resultTypes)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int aggregateCount = aggregates.size();
@@ -916,6 +1039,16 @@ public final class PipelineCompiler
         }
         emitAggregateResultColumns(out, "    ", keyCount, aggregates);
         emitResultTypes(out, "    ", resultTypes);
+        if (anyGroupKeyNullable(pipeline, nullable)) {
+            out.append("    boolean[][] resultNulls = new boolean[").append(keyCount + aggregateCount).append("][];\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                if (keyNullable(pipeline, nullable, kx)) {
+                    out.append("    resultNulls[").append(kx).append("] = java.util.Arrays.copyOf(nullByGid").append(kx).append(", groupCount);\n");
+                }
+            }
+            out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls)));\n");
+            return;
+        }
         out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
     }
 
@@ -1008,7 +1141,7 @@ public final class PipelineCompiler
     }
 
     /** Conjunction {@code htKey0[slot] == gk0 && ...} comparing every stored key component to the probe. */
-    private static String keyCompare(String slot, int keyCount)
+    private static String keyCompare(String slot, int keyCount, Plan.Pipeline pipeline, boolean[][] nullable)
     {
         StringBuilder compare = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
@@ -1016,6 +1149,9 @@ public final class PipelineCompiler
                 compare.append(" && ");
             }
             compare.append("htKey").append(kx).append("[").append(slot).append("] == gk").append(kx);
+            if (keyNullable(pipeline, nullable, kx)) {
+                compare.append(" && htKeyN").append(kx).append("[").append(slot).append("] == gkN").append(kx);
+            }
         }
         return compare.toString();
     }
