@@ -47,6 +47,12 @@ public final class ScalarLibrary
         register("abs", arguments -> "Math.abs(" + arguments.get(0) + ")");
         register("least", arguments -> "Math.min(" + arguments.get(0) + ", " + arguments.get(1) + ")");
         register("greatest", arguments -> "Math.max(" + arguments.get(0) + ", " + arguments.get(1) + ")");
+        // Fixed-point (decimal) arithmetic on scaled longs. Names and semantics mirror the interpreted built-ins
+        // so a compiled stage and the operator tree agree to the cent: multiply_i64 is a long product; the
+        // rescaling round-half-up divide is computed in BigInteger via a runtime helper.
+        register("multiply_i64", infix("*"));
+        register("divide_scale_round_i64", arguments ->
+                "org.weakref.nitro.jit.DecimalMath.roundScaledDivide(" + arguments.get(0) + ", " + arguments.get(1) + ", " + arguments.get(2) + ")");
     }
 
     private ScalarLibrary() {}

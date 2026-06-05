@@ -92,6 +92,39 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesDecimalArithmetic()
+    {
+        // SELECT sum(p * q), sum(divide_scale_round_i64(p, q, 100)) -- decimal product and rescaling divide,
+        // matching the interpreted built-ins' semantics (scaled longs).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Call("multiply_i64", List.of(new Plan.Col(0), new Plan.Col(1)))),
+                        new Plan.Aggregate("sum", new Plan.Call("divide_scale_round_i64",
+                                List.of(new Plan.Col(0), new Plan.Col(1), new Plan.Lit(100))))));
+
+        int rows = 10_000;
+        long[] p = new long[rows];
+        long[] q = new long[rows];
+        long expectedProduct = 0;
+        long expectedScaled = 0;
+        for (int i = 0; i < rows; i++) {
+            p[i] = (i % 997) + 1;
+            q[i] = (i % 13) + 1;
+            expectedProduct += p[i] * q[i];
+            expectedScaled += org.weakref.nitro.jit.DecimalMath.roundScaledDivide(p[i], q[i], 100);
+        }
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline.Result result = compiled.execute(new long[][][] {{p, q}}, new int[] {rows});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expectedProduct);
+        assertThat(result.columns()[1][0]).isEqualTo(expectedScaled);
+    }
+
+    @Test
     void compilesJoinWithNullProbeKey()
     {
         // SELECT sum(v) FROM fact JOIN dim ON fact.k = dim.k -- some fact.k are null. A null key must match
