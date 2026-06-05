@@ -268,6 +268,7 @@ public final class PipelineCompiler
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having(), resultTypes);
         emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+        emitApplyProjection(out, pipeline.projections(), resultTypes);
         out.append("}\n");
         return out.toString();
     }
@@ -369,6 +370,61 @@ public final class PipelineCompiler
         out.append("        }\n");
         out.append("      }\n");
         out.append("    }\n");
+    }
+
+    /**
+     * Final SELECT projection over the result columns (group keys then aggregates), applied after HAVING and
+     * ORDER BY / LIMIT. Identity when there are no projections; otherwise each projection -- a column reference
+     * (select / reorder) or a computation over the columns -- becomes one output column. Input columns are
+     * decoded by their type, the expression evaluated, and the result re-encoded into its slot. A plain column
+     * reference carries the source column's null mask through; computed projections are produced non-null.
+     */
+    private static void emitApplyProjection(StringBuilder out, List<Plan.Expr> projections, List<Type> inputTypes)
+    {
+        out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyProjection(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        if (projections.isEmpty()) {
+            out.append("    return result;\n  }\n");
+            return;
+        }
+        int outCount = projections.size();
+        out.append("    int n = result.rowCount(); long[][] cols = result.columns(); boolean[][] inNulls = result.nulls();\n");
+        out.append("    long[][] proj = new long[").append(outCount).append("][n];\n");
+        out.append("    boolean[][] projNulls = null;\n");
+        IntFunction<String> decode = i -> inputTypes.get(i).decode("cols[" + i + "][r]");
+        List<Type> outputTypes = new ArrayList<>();
+        for (int p = 0; p < outCount; p++) {
+            Plan.Expr projection = projections.get(p);
+            Type type = projectionType(projection, inputTypes);
+            outputTypes.add(type);
+            out.append("    for (int r = 0; r < n; r++) { proj[").append(p).append("][r] = ")
+                    .append(encodeSlot(type, expr(projection, decode))).append("; }\n");
+            if (projection instanceof Plan.Col col) {
+                out.append("    if (inNulls != null && inNulls[").append(col.index()).append("] != null) { if (projNulls == null) { projNulls = new boolean[")
+                        .append(outCount).append("][]; } projNulls[").append(p).append("] = inNulls[").append(col.index()).append("]; }\n");
+            }
+        }
+        emitResultTypes(out, "    ", outputTypes);
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(n, proj, types, projNulls);\n");
+        out.append("  }\n");
+    }
+
+    /** Inferred type of a projection expression: a column reference keeps its source type; arithmetic is DOUBLE when any operand is DOUBLE, else LONG. */
+    private static Type projectionType(Plan.Expr expr, List<Type> inputTypes)
+    {
+        return switch (expr) {
+            case Plan.Col col -> inputTypes.get(col.index());
+            case Plan.Lit ignored -> Types.LONG;
+            case Plan.Bin bin -> projectionType(bin.left(), inputTypes) == Types.DOUBLE || projectionType(bin.right(), inputTypes) == Types.DOUBLE ? Types.DOUBLE : Types.LONG;
+            case Plan.Call call -> call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
+            case Plan.Coalesce coalesce -> coalesce.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
+            case Plan.Case caseExpr -> projectionType(caseExpr.defaultValue(), inputTypes);
+        };
+    }
+
+    /** Encode a decoded projection value back into its long result slot, per the output type. */
+    private static String encodeSlot(Type type, String value)
+    {
+        return type == Types.DOUBLE ? "Double.doubleToRawLongBits(" + value + ")" : value;
     }
 
     // ---- single-input scan -> filter -> aggregate ----
@@ -848,7 +904,7 @@ public final class PipelineCompiler
             out.append("    result[").append(a).append("] = new long[] { ").append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "a", null))).append(" };\n");
         }
         emitResultTypes(out, "    ", resultTypes);
-        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types)));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types))));\n");
     }
 
     // ---- grouped aggregation (single long key) ----
@@ -1039,13 +1095,13 @@ public final class PipelineCompiler
                 out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
             }
             emitResultTypes(out, "      ", resultTypes);
-            out.append("      return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result, types)));\n");
+            out.append("      return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result, types))));\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
             emitAggregateResultColumns(out, "    ", 1, aggregates);
             emitResultTypes(out, "    ", resultTypes);
-            out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types))));\n");
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -1062,10 +1118,10 @@ public final class PipelineCompiler
                     out.append("    resultNulls[").append(kx).append("] = java.util.Arrays.copyOf(nullByGid").append(kx).append(", groupCount);\n");
                 }
             }
-            out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls)));\n");
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");
             return;
         }
-        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types))));\n");
     }
 
     /** Finalize each aggregate's cells into one result column (over {@code groupCount} groups in {@code agg<cell>}). */

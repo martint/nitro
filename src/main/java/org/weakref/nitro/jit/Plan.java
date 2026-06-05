@@ -220,7 +220,7 @@ public final class Plan
      * group key in a scan pipeline the compiler speculates array-mode grouping and deopts to a hash table at
      * runtime; the structure is chosen from the data, not declared in the plan.
      */
-    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering)
+    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections)
     {
         public Pipeline
         {
@@ -228,6 +228,13 @@ public final class Plan
             filters = List.copyOf(filters);
             groupKeys = List.copyOf(groupKeys);
             aggregates = List.copyOf(aggregates);
+            projections = List.copyOf(projections);
+        }
+
+        /** Convenience: no final projection (output is the group-key columns then the aggregate columns). */
+        public Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering)
+        {
+            this(columnCount, joins, filters, groupKeys, aggregates, having, ordering, List.of());
         }
 
         /** Convenience: no HAVING / ordering. */
@@ -257,13 +264,23 @@ public final class Plan
         /** Same pipeline with a HAVING filter (a condition over the result columns: group keys then aggregates). */
         public Pipeline withHaving(Condition having)
         {
-            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering);
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections);
         }
 
         /** Same pipeline with an ORDER BY / LIMIT applied to its result. */
         public Pipeline withOrdering(Ordering ordering)
         {
-            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering);
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections);
+        }
+
+        /**
+         * Same pipeline with a final SELECT projection over the result columns (group keys then aggregates),
+         * applied after HAVING and ORDER BY / LIMIT. Each expression is a {@link Col} (select / reorder) or a
+         * computation over those columns; the output columns become exactly these projections.
+         */
+        public Pipeline withProjections(List<Expr> projections)
+        {
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections);
         }
     }
 }

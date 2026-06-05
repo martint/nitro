@@ -92,6 +92,45 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesFinalProjection()
+    {
+        // SELECT sum(v) AS total, k, sum(v) * 2 AS doubled FROM t GROUP BY k -- a final projection that reorders
+        // the result columns and computes over them.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))))
+                .withProjections(List.of(
+                        new Plan.Col(1),                                              // sum
+                        new Plan.Col(0),                                              // key
+                        new Plan.Bin("*", new Plan.Col(1), new Plan.Lit(2))));        // sum * 2
+
+        int rows = 80_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 20;
+            v[i] = (i % 17) + 1;
+            reference.merge(k[i], v[i], Long::sum);
+        }
+
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline.Result result = compiled.execute(new long[][][] {{k, v}}, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] outTotal = result.columns()[0];
+        long[] outKey = result.columns()[1];
+        long[] outDoubled = result.columns()[2];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long expectedTotal = reference.get(outKey[g]);
+            assertThat(outTotal[g]).isEqualTo(expectedTotal);
+            assertThat(outDoubled[g]).isEqualTo(expectedTotal * 2);
+        }
+    }
+
+    @Test
     void compilesDecimalArithmetic()
     {
         // SELECT sum(p * q), sum(divide_scale_round_i64(p, q, 100)) -- decimal product and rescaling divide,
