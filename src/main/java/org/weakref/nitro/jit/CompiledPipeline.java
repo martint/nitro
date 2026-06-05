@@ -42,5 +42,23 @@ public interface CompiledPipeline
         return execute(wrapped, rowCounts);
     }
 
-    record Result(int rowCount, long[][] columns) {}
+    /**
+     * Result columns are the group-key columns then the aggregate columns. Each column is a {@code long[]};
+     * {@code types[c]} gives its logical type (a {@code DOUBLE} column stores {@code doubleToRawLongBits}).
+     */
+    record Result(int rowCount, long[][] columns, ColumnType[] types)
+    {
+        /** All-{@code long} columns. */
+        public Result(int rowCount, long[][] columns)
+        {
+            this(rowCount, columns, allLong(columns.length));
+        }
+
+        private static ColumnType[] allLong(int count)
+        {
+            ColumnType[] types = new ColumnType[count];
+            java.util.Arrays.fill(types, ColumnType.LONG);
+            return types;
+        }
+    }
 }

@@ -13,78 +13,137 @@
  */
 package org.weakref.nitro.jit;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Registry of aggregate code generators. An aggregate contributes the three code fragments of a distributive
- * aggregation — {@code identity} (the empty-group state), {@code update} (fold one input value into the state),
- * and {@code merge} (combine two partial states) — as Java expressions over caller-supplied state and input
- * lvalues. The compiler owns all the storage machinery (global accumulators, the grouping hash table, the
- * speculative array, and the deopt migration) and simply asks each aggregate to emit these fragments at the
- * right points. New aggregates are added by {@link #register registering} a generator; the compiler needs no
- * per-aggregate {@code switch}.
+ * Registry of aggregate code generators. An aggregate is described by the fragments of a distributive
+ * aggregation over {@link #cells} {@code long} state cells: {@code identity} (empty-group state),
+ * {@code update} (fold one input value), {@code merge} (combine two partial states), and {@code result}
+ * (finalize the cells to one output value of {@link #outputType}). The compiler owns all the storage machinery
+ * (global accumulators, the grouping hash table, the speculative array, and the deopt migration) and asks each
+ * aggregate to emit these fragments at the right points; it knows no aggregate by name. New aggregates are
+ * added by {@link #register registering} a generator.
  * <p>
- * Each generator here keeps a single {@code long} state cell, which is also its output. Multi-cell aggregates
- * (e.g. {@code avg} as sum + count) and non-{@code long} outputs (e.g. {@code double}) are the planned
- * extension: the generator would declare a cell count and a {@code finalize} fragment, and the compiler would
- * widen the result columns accordingly.
+ * Cells are passed as Java lvalue strings (e.g. {@code "agg0[gid]"}). A {@code DOUBLE}-typed result returns the
+ * {@code doubleToRawLongBits} of its value, stored in the {@code long} result column.
  */
 public final class AggregateLibrary
 {
-    /** Emits the code fragments for one distributive aggregate over a single {@code long} state cell. */
     public interface AggregateCompiler
     {
-        /** The state value for a freshly created (empty) group. */
-        String identity();
+        /** Number of {@code long} state cells. */
+        default int cells()
+        {
+            return 1;
+        }
 
-        /** New state value folding {@code input} into {@code state}; {@code input} is null for nullary aggregates. */
-        String update(String state, String input);
+        /** Logical type of the finalized output. */
+        default ColumnType outputType()
+        {
+            return ColumnType.LONG;
+        }
 
-        /** New state value combining two partial states {@code left} and {@code right}. */
-        String merge(String left, String right);
+        /** Emit {@code cell = identity} for each state cell of a freshly created group. */
+        void emitIdentity(StringBuilder out, String indent, List<String> cells);
+
+        /** Emit the fold of {@code input} into {@code cells}; {@code input} is null for nullary aggregates. */
+        void emitUpdate(StringBuilder out, String indent, List<String> cells, String input);
+
+        /** Emit the combine of partial state {@code other} into {@code cells}. */
+        void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other);
+
+        /** The output value expression (a {@code long}; for {@code DOUBLE} output, its {@code doubleToRawLongBits}). */
+        String result(List<String> cells);
     }
 
     private static final Map<String, AggregateCompiler> REGISTRY = new ConcurrentHashMap<>();
 
     static {
-        // sum / count are additive: identity 0, fold and merge both add.
-        register("sum", new AggregateCompiler()
+        register("sum", additive(null));
+        register("count", additive("1L"));
+        register("min", extreme("Math.min", "Long.MAX_VALUE"));
+        register("max", extreme("Math.max", "Long.MIN_VALUE"));
+        register("avg", new AggregateCompiler()
         {
-            @Override public String identity()
+            @Override public int cells()
             {
-                return "0L";
+                return 2;   // [0] = sum, [1] = count
             }
 
-            @Override public String update(String state, String input)
+            @Override public ColumnType outputType()
             {
-                return "(" + state + " + " + input + ")";
+                return ColumnType.DOUBLE;
             }
 
-            @Override public String merge(String left, String right)
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
             {
-                return "(" + left + " + " + right + ")";
+                out.append(indent).append(cells.get(0)).append(" = 0L;\n");
+                out.append(indent).append(cells.get(1)).append(" = 0L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(input).append(";\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + 1L;\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(other.get(0)).append(";\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(other.get(1)).append(";\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return "Double.doubleToRawLongBits(" + cells.get(1) + " == 0L ? 0.0 : (double) " + cells.get(0) + " / (double) " + cells.get(1) + ")";
             }
         });
-        register("count", new AggregateCompiler()
+        // Sample standard deviation: cells [count, sum, sum of squares]. Long state can overflow on large
+        // inputs (the production path would keep the moments in double or 128-bit) -- adequate for the prototype.
+        register("stddev", new AggregateCompiler()
         {
-            @Override public String identity()
+            @Override public int cells()
             {
-                return "0L";
+                return 3;
             }
 
-            @Override public String update(String state, String input)
+            @Override public ColumnType outputType()
             {
-                return "(" + state + " + 1L)";
+                return ColumnType.DOUBLE;
             }
 
-            @Override public String merge(String left, String right)
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
             {
-                return "(" + left + " + " + right + ")";
+                out.append(indent).append(cells.get(0)).append(" = 0L;\n");
+                out.append(indent).append(cells.get(1)).append(" = 0L;\n");
+                out.append(indent).append(cells.get(2)).append(" = 0L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + 1L;\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(input).append(";\n");
+                out.append(indent).append(cells.get(2)).append(" = ").append(cells.get(2)).append(" + ").append(input).append(" * ").append(input).append(";\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(other.get(0)).append(";\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(other.get(1)).append(";\n");
+                out.append(indent).append(cells.get(2)).append(" = ").append(cells.get(2)).append(" + ").append(other.get(2)).append(";\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                String n = "(double) " + cells.get(0);
+                String sum = "(double) " + cells.get(1);
+                String sumSquares = "(double) " + cells.get(2);
+                String variance = "((" + sumSquares + " - " + sum + " * " + sum + " / " + n + ") / (double) (" + cells.get(0) + " - 1L))";
+                return "Double.doubleToRawLongBits(" + cells.get(0) + " < 2L ? 0.0 : Math.sqrt(" + variance + "))";
             }
         });
-        register("min", extreme("Math.min"));
-        register("max", extreme("Math.max"));
     }
 
     private AggregateLibrary() {}
@@ -103,25 +162,57 @@ public final class AggregateLibrary
         return compiler;
     }
 
-    /** min/max share a shape: identity is the absorbing element of the other side, fold and merge are the same reduction. */
-    private static AggregateCompiler extreme(String reduction)
+    /** Single additive cell: identity 0, fold/merge add. {@code foldValue} null means "add the input" (sum). */
+    private static AggregateCompiler additive(String foldValue)
     {
-        String identity = reduction.equals("Math.min") ? "Long.MAX_VALUE" : "Long.MIN_VALUE";
         return new AggregateCompiler()
         {
-            @Override public String identity()
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
             {
-                return identity;
+                out.append(indent).append(cells.get(0)).append(" = 0L;\n");
             }
 
-            @Override public String update(String state, String input)
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
             {
-                return reduction + "(" + state + ", " + input + ")";
+                String added = foldValue != null ? foldValue : input;
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(added).append(";\n");
             }
 
-            @Override public String merge(String left, String right)
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
             {
-                return reduction + "(" + left + ", " + right + ")";
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(other.get(0)).append(";\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return cells.get(0);
+            }
+        };
+    }
+
+    /** Single cell reduced by {@code reduction} (Math.min/Math.max) with the given absorbing {@code identity}. */
+    private static AggregateCompiler extreme(String reduction, String identity)
+    {
+        return new AggregateCompiler()
+        {
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(identity).append(";\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(reduction).append("(").append(cells.get(0)).append(", ").append(input).append(");\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(reduction).append("(").append(cells.get(0)).append(", ").append(other.get(0)).append(");\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return cells.get(0);
             }
         };
     }

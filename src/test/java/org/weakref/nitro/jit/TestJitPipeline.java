@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 public class TestJitPipeline
 {
@@ -244,6 +245,84 @@ public class TestJitPipeline
         long[] sSums = sparseResult.columns()[1];
         for (int g = 0; g < sparseResult.rowCount(); g++) {
             assertThat(sSums[g]).as("sparse sum for attr %d", sKeys[g]).isEqualTo(sparseReference.get(sKeys[g]));
+        }
+    }
+
+    @Test
+    void compilesStddevAggregate()
+    {
+        // SELECT k, stddev(v) GROUP BY k -- 3-cell aggregate, double result; added by registration only.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("stddev", new Plan.Col(1))));
+
+        int rows = 60_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, List<Long>> groups = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 40;
+            v[i] = (i % 17);
+            groups.computeIfAbsent(k[i], ignored -> new java.util.ArrayList<>()).add(v[i]);
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.types()[1]).isEqualTo(ColumnType.DOUBLE);
+        long[] keys = result.columns()[0];
+        long[] bits = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            List<Long> values = groups.get(keys[g]);
+            double mean = values.stream().mapToLong(Long::longValue).average().orElse(0);
+            double ss = values.stream().mapToDouble(x -> (x - mean) * (x - mean)).sum();
+            double expected = values.size() < 2 ? 0.0 : Math.sqrt(ss / (values.size() - 1));
+            assertThat(Double.longBitsToDouble(bits[g])).as("stddev for k %d", keys[g]).isEqualTo(expected, within(1e-6));
+        }
+    }
+
+    @Test
+    void compilesAvgWithDoubleResult()
+    {
+        // SELECT k, sum(v), count(*), avg(v) GROUP BY k -- avg is a 2-cell aggregate with a double result.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(
+                        new Plan.Aggregate("sum", new Plan.Col(1)),
+                        new Plan.Aggregate("count", null),
+                        new Plan.Aggregate("avg", new Plan.Col(1))));
+
+        int rows = 100_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, long[]> sumCount = new HashMap<>();   // k -> {sum, count}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 137;
+            v[i] = (i % 50) + 1;
+            long[] acc = sumCount.computeIfAbsent(k[i], ignored -> new long[2]);
+            acc[0] += v[i];
+            acc[1]++;
+        }
+
+        System.out.println("=== generated avg source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(sumCount.size());
+        // Result columns: 0=k, 1=sum (LONG), 2=count (LONG), 3=avg (DOUBLE).
+        assertThat(result.types()[3]).isEqualTo(ColumnType.DOUBLE);
+        assertThat(result.types()[1]).isEqualTo(ColumnType.LONG);
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        long[] counts = result.columns()[2];
+        long[] avgBits = result.columns()[3];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = sumCount.get(keys[g]);
+            assertThat(sums[g]).isEqualTo(expected[0]);
+            assertThat(counts[g]).isEqualTo(expected[1]);
+            double avg = Double.longBitsToDouble(avgBits[g]);
+            assertThat(avg).as("avg for k %d", keys[g]).isEqualTo((double) expected[0] / expected[1], within(1e-9));
         }
     }
 

@@ -143,7 +143,7 @@ public final class PipelineCompiler
         out.append("    }\n");
         out.append("    long[][] kept = new long[cols.length][w];\n");
         out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(w, kept);\n");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(w, kept, result.types());\n");
         out.append("  }\n");
     }
 
@@ -177,7 +177,7 @@ public final class PipelineCompiler
         out.append("    int outN = ").append(limit).append(";\n");
         out.append("    long[][] sorted = new long[cols.length][outN];\n");
         out.append("    for (int w = 0; w < outN; w++) { int s = order[w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted);\n");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types());\n");
         out.append("  }\n");
     }
 
@@ -223,7 +223,7 @@ public final class PipelineCompiler
             emitGroupedResult(out, pipeline, speculate, dictKeyColumn);
         }
         else {
-            emitGlobalResult(out, pipeline.aggregates().size());
+            emitGlobalResult(out, pipeline.aggregates());
         }
     }
 
@@ -358,7 +358,7 @@ public final class PipelineCompiler
             emitGroupedResult(out, pipeline, false, -1);
         }
         else {
-            emitGlobalResult(out, pipeline.aggregates().size());
+            emitGlobalResult(out, pipeline.aggregates());
         }
     }
 
@@ -503,42 +503,48 @@ public final class PipelineCompiler
 
     private static void emitGlobalState(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
+        int total = cellCount(aggregates);
+        for (int c = 0; c < total; c++) {
+            out.append("    long a").append(c).append(" = 0L;\n");
+        }
         for (int a = 0; a < aggregates.size(); a++) {
-            out.append("    long a").append(a).append(" = ").append(aggregator(aggregates.get(a)).identity()).append(";\n");
+            aggregator(aggregates.get(a)).emitIdentity(out, "    ", cells(aggregates, a, "a", null));
         }
     }
 
     private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver)
     {
         for (int a = 0; a < aggregates.size(); a++) {
-            String state = "a" + a;
-            out.append(indent).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
+            aggregator(aggregates.get(a)).emitUpdate(out, indent, cells(aggregates, a, "a", null), input(aggregates.get(a), resolver));
         }
     }
 
-    private static void emitGlobalResult(StringBuilder out, int aggregateCount)
+    private static void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
-        out.append("    long[][] result = new long[").append(aggregateCount).append("][];\n");
-        for (int a = 0; a < aggregateCount; a++) {
-            out.append("    result[").append(a).append("] = new long[] { a").append(a).append(" };\n");
+        int n = aggregates.size();
+        out.append("    long[][] result = new long[").append(n).append("][];\n");
+        for (int a = 0; a < n; a++) {
+            out.append("    result[").append(a).append("] = new long[] { ").append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "a", null))).append(" };\n");
         }
-        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result)));\n");
+        emitResultTypes(out, "    ", 0, aggregates);
+        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types)));\n");
     }
 
     // ---- grouped aggregation (single long key) ----
 
     private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline, boolean speculate)
     {
-        int aggregateCount = pipeline.aggregates().size();
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        int total = cellCount(aggregates);
         if (speculate) {
             // Array structures (sized from the sampled domain) plus a hash table that stays empty unless a key
             // falls outside the bet and we deopt into it. deopted starts true when we never speculated at all.
             out.append("    boolean[] gused = new boolean[aSize];\n");
-            for (int a = 0; a < aggregateCount; a++) {
-                out.append("    long[] aAgg").append(a).append(" = new long[aSize];\n");
+            for (int c = 0; c < total; c++) {
+                out.append("    long[] aAgg").append(c).append(" = new long[aSize];\n");
             }
             out.append("    int arrayGroupCount = 0; boolean deopted = !speculateArray;\n");
-            emitSingleKeyHashState(out, aggregateCount);
+            emitSingleKeyHashState(out, aggregates);
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -552,8 +558,8 @@ public final class PipelineCompiler
         for (int kx = 0; kx < keyCount; kx++) {
             out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
         }
-        for (int a = 0; a < aggregateCount; a++) {
-            out.append("    long[] agg").append(a).append(" = new long[16];\n");
+        for (int c = 0; c < total; c++) {
+            out.append("    long[] agg").append(c).append(" = new long[16];\n");
         }
     }
 
@@ -573,8 +579,7 @@ public final class PipelineCompiler
             emitStateIdentity(out, a2 + "  ", aggregates, "aAgg", "ao");
             out.append(a2).append("}\n");
             for (int a = 0; a < aggregateCount; a++) {
-                String state = "aAgg" + a + "[ao]";
-                out.append(a2).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
+                aggregator(aggregates.get(a)).emitUpdate(out, a2, cells(aggregates, a, "aAgg", "ao"), input(aggregates.get(a), resolver));
             }
             out.append(a1).append("}\n");
             out.append(a1).append("else {\n");
@@ -585,8 +590,7 @@ public final class PipelineCompiler
             out.append(m).append("long hkey = mo + aMin;\n");
             emitSingleKeyHashFindOrCreate(out, m, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                String state = "agg" + a + "[gid]";
-                out.append(m).append(state).append(" = ").append(aggregator(aggregates.get(a)).merge(state, "aAgg" + a + "[mo]")).append(";\n");
+                aggregator(aggregates.get(a)).emitMerge(out, m, cells(aggregates, a, "agg", "gid"), cells(aggregates, a, "aAgg", "mo"));
             }
             out.append(a2).append("  }\n");
             out.append(a2).append("}\n");
@@ -597,8 +601,7 @@ public final class PipelineCompiler
             out.append(a1).append("long hkey = gkey;\n");
             emitSingleKeyHashFindOrCreate(out, a1, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                String state = "agg" + a + "[gid]";
-                out.append(a1).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
+                aggregator(aggregates.get(a)).emitUpdate(out, a1, cells(aggregates, a, "agg", "gid"), input(aggregates.get(a), resolver));
             }
             out.append(indent).append("}\n");
             return;
@@ -621,8 +624,8 @@ public final class PipelineCompiler
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
         }
-        for (int a = 0; a < aggregates.size(); a++) {
-            out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
+        for (int c = 0; c < cellCount(aggregates); c++) {
+            out.append(b).append("  agg").append(c).append(" = java.util.Arrays.copyOf(agg").append(c).append(", n);\n");
         }
         out.append(b).append("}\n");
         for (int kx = 0; kx < keyCount; kx++) {
@@ -649,17 +652,17 @@ public final class PipelineCompiler
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            String state = "agg" + a + "[gid]";
-            out.append(indent).append(state).append(" = ").append(aggregator(aggregates.get(a)).update(state, input(aggregates.get(a), resolver))).append(";\n");
+            aggregator(aggregates.get(a)).emitUpdate(out, indent, cells(aggregates, a, "agg", "gid"), input(aggregates.get(a), resolver));
         }
     }
 
     private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean speculate, int reconstructDictColumn)
     {
-        int aggregateCount = pipeline.aggregates().size();
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        int aggregateCount = aggregates.size();
         if (speculate) {
             // If the array bet held, compact it to its occupied offsets; otherwise emit the hash table we
-            // deopted into. Both shapes are key column then aggregate columns.
+            // deopted into. Both shapes are key column then aggregate columns; aggregates are finalized here.
             out.append("    if (!deopted) {\n");
             out.append("      long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             out.append("      long[] outKey = new long[arrayGroupCount];\n");
@@ -671,7 +674,7 @@ public final class PipelineCompiler
             out.append("        if (gused[o]) {\n");
             out.append("          outKey[w] = ").append(reconstructKey(reconstructDictColumn, "o + aMin")).append(";\n");
             for (int a = 0; a < aggregateCount; a++) {
-                out.append("          outAgg").append(a).append("[w] = aAgg").append(a).append("[o];\n");
+                out.append("          outAgg").append(a).append("[w] = ").append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "aAgg", "o"))).append(";\n");
             }
             out.append("          w++;\n");
             out.append("        }\n");
@@ -680,14 +683,14 @@ public final class PipelineCompiler
             for (int a = 0; a < aggregateCount; a++) {
                 out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
             }
-            out.append("      return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result)));\n");
+            emitResultTypes(out, "      ", 1, aggregates);
+            out.append("      return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result, types)));\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
-            for (int a = 0; a < aggregateCount; a++) {
-                out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
-            }
-            out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result)));\n");
+            emitAggregateResultColumns(out, "    ", 1, aggregates);
+            emitResultTypes(out, "    ", 1, aggregates);
+            out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -695,10 +698,20 @@ public final class PipelineCompiler
         for (int kx = 0; kx < keyCount; kx++) {
             emitKeyResultColumn(out, "    ", kx, kx, kx == 0 ? reconstructDictColumn : -1, "groupCount");
         }
-        for (int a = 0; a < aggregateCount; a++) {
-            out.append("    result[").append(keyCount + a).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
+        emitAggregateResultColumns(out, "    ", keyCount, aggregates);
+        emitResultTypes(out, "    ", keyCount, aggregates);
+        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types)));\n");
+    }
+
+    /** Finalize each aggregate's cells into one result column (over {@code groupCount} groups in {@code agg<cell>}). */
+    private static void emitAggregateResultColumns(StringBuilder out, String indent, int firstResultColumn, List<Plan.Aggregate> aggregates)
+    {
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append(indent).append("long[] outAgg").append(a).append(" = new long[groupCount];\n");
+            out.append(indent).append("for (int g = 0; g < groupCount; g++) { outAgg").append(a).append("[g] = ")
+                    .append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "agg", "g"))).append("; }\n");
+            out.append(indent).append("result[").append(firstResultColumn + a).append("] = outAgg").append(a).append(";\n");
         }
-        out.append("    return applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result)));\n");
     }
 
     /** Reconstruct a group key for output: identity for a plain key, or a dictionary lookup for a group-on-id key. */
@@ -721,7 +734,7 @@ public final class PipelineCompiler
     }
 
     /** Single-key open-addressing grouping table (the deopt target for speculative array grouping). */
-    private static void emitSingleKeyHashState(StringBuilder out, int aggregateCount)
+    private static void emitSingleKeyHashState(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
         out.append("    int cap = 1024;\n");
         out.append("    long[] htKey0 = new long[cap];\n");
@@ -729,8 +742,8 @@ public final class PipelineCompiler
         out.append("    java.util.Arrays.fill(htGid, -1);\n");
         out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
         out.append("    long[] keyByGid0 = new long[16];\n");
-        for (int a = 0; a < aggregateCount; a++) {
-            out.append("    long[] agg").append(a).append(" = new long[16];\n");
+        for (int c = 0; c < cellCount(aggregates); c++) {
+            out.append("    long[] agg").append(c).append(" = new long[16];\n");
         }
     }
 
@@ -745,8 +758,8 @@ public final class PipelineCompiler
         out.append(b).append("gid = groupCount++; htGid[hslot] = gid; htKey0[hslot] = hkey;\n");
         out.append(b).append("if (gid == keyByGid0.length) {\n");
         out.append(b).append("  int n = keyByGid0.length * 2; keyByGid0 = java.util.Arrays.copyOf(keyByGid0, n);\n");
-        for (int a = 0; a < aggregates.size(); a++) {
-            out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
+        for (int c = 0; c < cellCount(aggregates); c++) {
+            out.append(b).append("  agg").append(c).append(" = java.util.Arrays.copyOf(agg").append(c).append(", n);\n");
         }
         out.append(b).append("}\n");
         out.append(b).append("keyByGid0[gid] = hkey;\n");
@@ -809,11 +822,61 @@ public final class PipelineCompiler
         return aggregate.input() == null ? null : expr(aggregate.input(), resolver);
     }
 
-    /** Identity assignments for every aggregate's state cell at array index {@code index} in arrays named {@code prefix<a>}. */
+    /** Total number of {@code long} state cells across all aggregates. */
+    private static int cellCount(List<Plan.Aggregate> aggregates)
+    {
+        int total = 0;
+        for (Plan.Aggregate aggregate : aggregates) {
+            total += aggregator(aggregate).cells();
+        }
+        return total;
+    }
+
+    /** The flat cell index at which aggregate {@code index}'s cells begin. */
+    private static int cellBase(List<Plan.Aggregate> aggregates, int index)
+    {
+        int base = 0;
+        for (int a = 0; a < index; a++) {
+            base += aggregator(aggregates.get(a)).cells();
+        }
+        return base;
+    }
+
+    /**
+     * Lvalue strings for aggregate {@code index}'s state cells in storage named {@code prefix<cell>}. When
+     * {@code element} is null the cells are scalars ({@code a3}); otherwise they are array elements
+     * ({@code agg3[gid]}).
+     */
+    private static List<String> cells(List<Plan.Aggregate> aggregates, int index, String prefix, String element)
+    {
+        int base = cellBase(aggregates, index);
+        int n = aggregator(aggregates.get(index)).cells();
+        List<String> result = new ArrayList<>(n);
+        for (int c = 0; c < n; c++) {
+            String name = prefix + (base + c);
+            result.add(element == null ? name : name + "[" + element + "]");
+        }
+        return result;
+    }
+
+    /** Emit {@code ColumnType[] types} for the result: {@code keyCount} LONG key columns then each aggregate's output type. */
+    private static void emitResultTypes(StringBuilder out, String indent, int keyCount, List<Plan.Aggregate> aggregates)
+    {
+        StringBuilder elements = new StringBuilder();
+        for (int k = 0; k < keyCount; k++) {
+            elements.append(elements.length() == 0 ? "" : ", ").append("org.weakref.nitro.jit.ColumnType.LONG");
+        }
+        for (Plan.Aggregate aggregate : aggregates) {
+            elements.append(elements.length() == 0 ? "" : ", ").append("org.weakref.nitro.jit.ColumnType.").append(aggregator(aggregate).outputType().name());
+        }
+        out.append(indent).append("org.weakref.nitro.jit.ColumnType[] types = new org.weakref.nitro.jit.ColumnType[] { ").append(elements).append(" };\n");
+    }
+
+    /** Identity assignment for every aggregate's state cells at array index {@code index} in storage named {@code prefix<cell>}. */
     private static void emitStateIdentity(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, String prefix, String index)
     {
         for (int a = 0; a < aggregates.size(); a++) {
-            out.append(indent).append(prefix).append(a).append("[").append(index).append("] = ").append(aggregator(aggregates.get(a)).identity()).append(";\n");
+            aggregator(aggregates.get(a)).emitIdentity(out, indent, cells(aggregates, a, prefix, index));
         }
     }
 
