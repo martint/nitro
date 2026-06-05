@@ -784,6 +784,16 @@ public final class PipelineCompiler
             collectColumns(bin.left(), into);
             collectColumns(bin.right(), into);
         }
+        else if (expr instanceof Plan.Call call) {
+            call.arguments().forEach(argument -> collectColumns(argument, into));
+        }
+        else if (expr instanceof Plan.Case kase) {
+            for (Plan.Case.Branch branch : kase.branches()) {
+                collectConditionColumns(branch.condition(), into);
+                collectColumns(branch.value(), into);
+            }
+            collectColumns(kase.defaultValue(), into);
+        }
         // Plan.Lit references no columns.
     }
 
@@ -818,8 +828,22 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
-            case Plan.Bin bin -> "(" + expr(bin.left(), resolver) + " " + bin.op() + " " + expr(bin.right(), resolver) + ")";
+            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver), expr(bin.right(), resolver)));
+            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver)).toList());
+            case Plan.Case kase -> caseExpression(kase, resolver);
         };
+    }
+
+    /** Render a CASE as a right-nested conditional, falling through to the default value. */
+    private static String caseExpression(Plan.Case kase, IntFunction<String> resolver)
+    {
+        StringBuilder out = new StringBuilder();
+        for (Plan.Case.Branch branch : kase.branches()) {
+            out.append("(").append(condition(branch.condition(), resolver)).append(" ? ").append(expr(branch.value(), resolver)).append(" : ");
+        }
+        out.append(expr(kase.defaultValue(), resolver));
+        out.append(")".repeat(kase.branches().size()));
+        return out.toString();
     }
 
     private static final class InMemoryCompiler

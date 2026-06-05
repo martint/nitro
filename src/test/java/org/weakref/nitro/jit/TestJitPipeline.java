@@ -248,6 +248,53 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesScalarFunctionsAndCase()
+    {
+        // SELECT k, sum(CASE WHEN v < 0 THEN -v ELSE v END), sum(v / 2), max(abs(v)) GROUP BY k
+        Plan.Expr absViaCase = new Plan.Case(
+                List.of(new Plan.Case.Branch(
+                        new Plan.Predicate("<", new Plan.Col(1), new Plan.Lit(0)),
+                        new Plan.Call("negate", new Plan.Col(1)))),
+                new Plan.Col(1));
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(
+                        new Plan.Aggregate("sum", absViaCase),
+                        new Plan.Aggregate("sum", new Plan.Bin("/", new Plan.Col(1), new Plan.Lit(2))),
+                        new Plan.Aggregate("max", new Plan.Call("abs", new Plan.Col(1)))));
+
+        int rows = 100_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // k -> {sum|v|, sum(v/2), max|v|}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 100;
+            v[i] = (i % 201) - 100;     // negatives and positives
+            long[] acc = reference.computeIfAbsent(k[i], ignored -> new long[] {0, 0, Long.MIN_VALUE});
+            acc[0] += Math.abs(v[i]);
+            acc[1] += v[i] / 2;         // Java long division (truncates toward zero), matching the codegen
+            acc[2] = Math.max(acc[2], Math.abs(v[i]));
+        }
+
+        System.out.println("=== generated scalar/case source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] absSum = result.columns()[1];
+        long[] halfSum = result.columns()[2];
+        long[] maxAbs = result.columns()[3];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] expected = reference.get(keys[g]);
+            assertThat(absSum[g]).as("sum|v| for k %d", keys[g]).isEqualTo(expected[0]);
+            assertThat(halfSum[g]).as("sum(v/2) for k %d", keys[g]).isEqualTo(expected[1]);
+            assertThat(maxAbs[g]).as("max|v| for k %d", keys[g]).isEqualTo(expected[2]);
+        }
+    }
+
+    @Test
     void compilesAndComputesEncodedColumns()
     {
         // SELECT k, sum(v), count(*) GROUP BY k, with k dictionary-encoded and v a constant column.

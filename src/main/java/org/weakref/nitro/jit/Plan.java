@@ -27,7 +27,7 @@ public final class Plan
 
     /** Scalar expression over input columns. */
     public sealed interface Expr
-            permits Col, Lit, Bin
+            permits Col, Lit, Bin, Call, Case
     {}
 
     /** Reference to input column {@code index}. */
@@ -40,10 +40,41 @@ public final class Plan
             implements Expr
     {}
 
-    /** Binary arithmetic: op in {@code + - *}. */
+    /** Binary arithmetic: op in {@code + - * / %}. Sugar for a two-argument {@link Call} on the operator name. */
     public record Bin(String op, Expr left, Expr right)
             implements Expr
     {}
+
+    /** Named scalar function applied to {@code arguments}, resolved through the scalar function library. */
+    public record Call(String name, List<Expr> arguments)
+            implements Expr
+    {
+        public Call
+        {
+            arguments = List.copyOf(arguments);
+        }
+
+        public Call(String name, Expr... arguments)
+        {
+            this(name, List.of(arguments));
+        }
+    }
+
+    /**
+     * {@code CASE WHEN ... THEN ... ELSE defaultValue END}: the first branch whose condition holds yields its
+     * value; otherwise {@code defaultValue}.
+     */
+    public record Case(List<Branch> branches, Expr defaultValue)
+            implements Expr
+    {
+        public Case
+        {
+            branches = List.copyOf(branches);
+        }
+
+        /** One {@code WHEN condition THEN value} arm of a {@link Case}. */
+        public record Branch(Condition condition, Expr value) {}
+    }
 
     /**
      * Boolean condition over input columns. {@code IN (a, b, ...)} desugars to {@link Or} of equality
