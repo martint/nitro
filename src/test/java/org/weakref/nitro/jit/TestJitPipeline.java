@@ -396,6 +396,84 @@ public class TestJitPipeline
     }
 
     @Test
+    void streamsGroupedAggregateInBatches()
+    {
+        // SELECT k, sum(v) WHERE v > 0 GROUP BY k -- computed once eagerly and once by streaming the input in
+        // batches through a StreamingPipeline; the two must agree.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(0))),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int rows = 200_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 5000;
+            v[i] = (i % 11) - 2;
+        }
+
+        Map<Long, Long> eager = groupSums(PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows}));
+
+        int batchSize = 4096;
+        StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
+        CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, k, v));
+        Map<Long, Long> result = groupSums(streamed);
+
+        assertThat(result).isEqualTo(eager);
+        assertThat(result).isNotEmpty();
+        assertThat(rows / batchSize).isGreaterThan(1);   // genuinely multiple batches
+    }
+
+    private static Map<Long, Long> groupSums(CompiledPipeline.Result result)
+    {
+        Map<Long, Long> map = new HashMap<>();
+        for (int g = 0; g < result.rowCount(); g++) {
+            map.put(result.columns()[0][g], result.columns()[1][g]);
+        }
+        return map;
+    }
+
+    /** A streaming source that slices flat {@code long[]} columns into fixed-size batches. */
+    private static StreamingPipeline.Source flatBatches(int batchSize, int rows, long[]... columns)
+    {
+        return new StreamingPipeline.Source()
+        {
+            private int start = -1;
+            private int batchRows;
+
+            @Override
+            public boolean advance()
+            {
+                int next = start < 0 ? 0 : start + batchRows;
+                if (next >= rows) {
+                    return false;
+                }
+                start = next;
+                batchRows = Math.min(batchSize, rows - start);
+                return true;
+            }
+
+            @Override
+            public int rows()
+            {
+                return batchRows;
+            }
+
+            @Override
+            public Column[] columns()
+            {
+                Column[] batch = new Column[columns.length];
+                for (int c = 0; c < columns.length; c++) {
+                    batch[c] = new Column.FlatColumn(java.util.Arrays.copyOfRange(columns[c], start, start + batchRows));
+                }
+                return batch;
+            }
+        };
+    }
+
+    @Test
     void compilesAndComputesGroupedAggregate()
     {
         // SELECT k, sum(v), count(*) WHERE v > 0 GROUP BY k

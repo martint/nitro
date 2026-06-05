@@ -93,6 +93,93 @@ public final class PipelineCompiler
         }
     }
 
+    /**
+     * Compile {@code pipeline} as a {@link StreamingPipeline}: a single scanned input consumed batch-by-batch,
+     * folding into grouping/aggregation state that persists across batches. No joins (yet); array-mode group
+     * speculation is off (the domain is not known up front), so grouping uses the hash path. String group keys
+     * require a dictionary consistent across batches -- a later step; flat keys stream correctly today.
+     */
+    public static StreamingPipeline compileStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        if (!pipeline.joins().isEmpty()) {
+            throw new UnsupportedOperationException("streaming joins are not implemented yet");
+        }
+        String simpleName = "Streaming_" + COUNTER.incrementAndGet();
+        String source = renderStreaming(pipeline, encodings, nullable, simpleName);
+        try {
+            Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
+            return (StreamingPipeline) compiled.getDeclaredConstructor().newInstance();
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to instantiate compiled streaming pipeline:\n" + source, e);
+        }
+    }
+
+    /** Exposed for inspection/tests: the streaming Java source that would be compiled. */
+    public static String renderStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        return renderStreaming(pipeline, encodings, nullable, "Streaming_preview");
+    }
+
+    private static String renderStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
+    {
+        StringBuilder out = new StringBuilder();
+        out.append("package ").append(PACKAGE).append(";\n");
+        out.append("public final class ").append(simpleName)
+                .append(" implements org.weakref.nitro.jit.StreamingPipeline {\n");
+        if (!pipeline.groupKeys().isEmpty()) {
+            emitMix(out);
+        }
+        List<Type> resultTypes = outputColumnTypes(pipeline, encodings);
+        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.StreamingPipeline.Source source) {\n");
+
+        boolean grouped = !pipeline.groupKeys().isEmpty();
+        // State lives across batches: initialize it once, before the batch loop.
+        if (grouped) {
+            emitGroupedState(out, pipeline, nullable, false);
+        }
+        else {
+            emitGlobalState(out, pipeline.aggregates());
+        }
+
+        // Per batch: bind this batch's columns, build any string-filter masks, run the fused row loop.
+        out.append("    while (source.advance()) {\n");
+        out.append("      int rowCount = source.rows();\n");
+        out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
+        for (int column : referencedColumns(pipeline)) {
+            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+        }
+        List<Plan.Condition> stringMatches = new ArrayList<>();
+        for (Plan.Condition filter : pipeline.filters()) {
+            collectStringMatches(filter, stringMatches);
+        }
+        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
+        for (int s = 0; s < stringMatches.size(); s++) {
+            Plan.Condition match = stringMatches.get(s);
+            stringMaskIds.put(match, s);
+            emitStringMaskPrelude(out, match, s, "cStr" + stringMatchColumn(match));
+        }
+        IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
+        IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
+        out.append("      for (int i = 0; i < rowCount; i++) {\n");
+        emitRowBody(out, "        ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+        out.append("      }\n");
+        out.append("    }\n");
+
+        if (grouped) {
+            emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);
+        }
+        else {
+            emitGlobalResult(out, pipeline.aggregates(), resultTypes);
+        }
+        out.append("  }\n");
+        emitApplyHaving(out, pipeline.having(), resultTypes);
+        emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+        emitApplyProjection(out, pipeline.projections(), resultTypes);
+        out.append("}\n");
+        return out.toString();
+    }
+
     /** Exposed for inspection/tests: the Java source that would be compiled. */
     public static String render(Plan.Pipeline pipeline)
     {

@@ -1,0 +1,44 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.jit;
+
+/**
+ * A pipeline compiled to consume its source one batch at a time, folding into aggregation/grouping state that
+ * persists across batches and is finalized at the end. Unlike {@link CompiledPipeline}, which takes the whole
+ * input materialized up front, this streams: the source decodes a batch, the fused routine processes it while it
+ * is hot, and nothing holds the full column. This is the foundation for selection-driven lazy materialization and
+ * runtime-refinement (dynamic) filters, which the {@link Source} will carry. (First increment: a single scanned
+ * input, no joins, hash grouping.)
+ */
+public interface StreamingPipeline
+{
+    /**
+     * A pull-based batch source. The driver advances it; each batch exposes its row count and one
+     * {@link Column} per scanned column, in the order and encoding the pipeline was compiled for. The same
+     * column objects need not persist across batches.
+     */
+    interface Source
+    {
+        /** Advance to the next batch; returns false when the input is exhausted. */
+        boolean advance();
+
+        /** Row count of the current batch. */
+        int rows();
+
+        /** Columns of the current batch (one per scanned column, in compiled order). */
+        Column[] columns();
+    }
+
+    CompiledPipeline.Result execute(Source source);
+}
