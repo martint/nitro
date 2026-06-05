@@ -60,14 +60,17 @@ public class BenchmarkCompiledJoin
 
     private final Allocator allocator = new Allocator();
 
+    private static final long SPARSE_STRIDE = 1_000_000;
+
     private long[] fk;
     private long[] measure;
     private long[] dkey;
     private long[] dattr;
+    private long[] fkSparse;
+    private long[] dkeySparse;
     private List<TableOperator.Page> factPages;
     private List<TableOperator.Page> dimPages;
     private CompiledPipeline compiled;
-    private CompiledPipeline compiledArray;
 
     @Setup
     public void setup()
@@ -85,10 +88,22 @@ public class BenchmarkCompiledJoin
             measure[i] = (i % 50) + 1;
         }
 
+        // A sparse copy of the same join: build keys spread out by SPARSE_STRIDE so the key range far exceeds
+        // the row count. The same compiled plan must fall back to the hash table for this input.
+        dkeySparse = new long[DIM_ROWS];
+        for (int d = 0; d < DIM_ROWS; d++) {
+            dkeySparse[d] = d * SPARSE_STRIDE;
+        }
+        fkSparse = new long[FACT_ROWS];
+        for (int i = 0; i < FACT_ROWS; i++) {
+            fkSparse[i] = dkeySparse[i % DIM_ROWS];
+        }
+
         factPages = pages(fk, measure);
         dimPages = pages(dkey, dattr);
 
         // fact(fk=0, measure=1) JOIN dim(dkey=0, dattr=1) ON fk=dkey; GROUP BY dattr (combined col 3), sum(measure col 1)
+        // One adaptive plan: it measures the build key range at runtime and picks array vs hash from the data.
         Plan.Pipeline plan = new Plan.Pipeline(
                 2,
                 new Plan.Build(2, 0),
@@ -98,27 +113,32 @@ public class BenchmarkCompiledJoin
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
         compiled = PipelineCompiler.compile(plan);
 
-        // Same query, but the join build keys (dimension PKs) are dense -> array-mode lookup, no hashing.
-        Plan.Pipeline arrayPlan = new Plan.Pipeline(
-                2,
-                new Plan.Build(2, 0, true),
-                0,
-                List.of(),
-                List.of(new Plan.Col(3)),
-                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
-        compiledArray = PipelineCompiler.compile(arrayPlan);
-
         long interp = interpreted();
-        if (jitCompiled() != interp || jitArrayJoin() != interp) {
-            throw new IllegalStateException("mismatch: hash=" + jitCompiled() + " array=" + jitArrayJoin() + " interpreted=" + interp);
+        // Dense and sparse inputs map every fact row to the same dimension attribute, so all three agree.
+        if (jitDenseBuild() != interp || jitSparseBuild() != interp) {
+            throw new IllegalStateException("mismatch: dense=" + jitDenseBuild() + " sparse=" + jitSparseBuild() + " interpreted=" + interp);
         }
     }
 
     @Benchmark
-    public long jitArrayJoin()
+    public long jitDenseBuild()
     {
-        CompiledPipeline.Result result = compiledArray.execute(
+        CompiledPipeline.Result result = compiled.execute(
                 new long[][][] {{fk, measure}, {dkey, dattr}},
+                new int[] {FACT_ROWS, DIM_ROWS});
+        long checksum = 0;
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            checksum += sums[g];
+        }
+        return checksum;
+    }
+
+    @Benchmark
+    public long jitSparseBuild()
+    {
+        CompiledPipeline.Result result = compiled.execute(
+                new long[][][] {{fkSparse, measure}, {dkeySparse, dattr}},
                 new int[] {FACT_ROWS, DIM_ROWS});
         long checksum = 0;
         long[] sums = result.columns()[1];
@@ -143,20 +163,6 @@ public class BenchmarkCompiledJoin
                     Mask.all(len)));
         }
         return pages;
-    }
-
-    @Benchmark
-    public long jitCompiled()
-    {
-        CompiledPipeline.Result result = compiled.execute(
-                new long[][][] {{fk, measure}, {dkey, dattr}},
-                new int[] {FACT_ROWS, DIM_ROWS});
-        long checksum = 0;
-        long[] sums = result.columns()[1];
-        for (int g = 0; g < result.rowCount(); g++) {
-            checksum += sums[g];
-        }
-        return checksum;
     }
 
     @Benchmark

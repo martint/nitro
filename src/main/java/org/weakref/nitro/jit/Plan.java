@@ -65,31 +65,22 @@ public final class Plan
     /**
      * Build (inner/dimension) side of an inner hash join. {@code columnCount} build columns, joined on
      * {@code keyColumns} (one or more, paired positionally with the pipeline's probe key columns). Build keys
-     * are assumed unique on the composite (the TPC-DS fact-to-dimension-PK case). When {@code denseKeys} is set
-     * — only valid for a single key — the compiler emits direct array-mode lookup (Velox kArray-style: index by
-     * {@code key - min}, no hashing) instead of a hash table — the right specialization for dense surrogate
-     * keys, and the kind of choice a production engine would make at runtime with a deopt guard.
+     * are assumed unique on the composite (the TPC-DS fact-to-dimension-PK case). For a single key the compiler
+     * emits an adaptive routine that measures the build key range once the build side is materialized and picks
+     * direct array-mode lookup (Velox kArray-style: index by {@code key - min}, no hashing) when the domain is
+     * dense and bounded, falling back to an open-addressing hash table otherwise — the structure choice is made
+     * at runtime from the data, not declared in the plan.
      */
-    public record Build(int columnCount, int[] keyColumns, boolean denseKeys)
+    public record Build(int columnCount, int[] keyColumns)
     {
         public Build
         {
             keyColumns = keyColumns.clone();
         }
 
-        public Build(int columnCount, int[] keyColumns)
-        {
-            this(columnCount, keyColumns, false);
-        }
-
         public Build(int columnCount, int keyColumn)
         {
-            this(columnCount, new int[] {keyColumn}, false);
-        }
-
-        public Build(int columnCount, int keyColumn, boolean denseKeys)
-        {
-            this(columnCount, new int[] {keyColumn}, denseKeys);
+            this(columnCount, new int[] {keyColumn});
         }
     }
 

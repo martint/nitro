@@ -211,22 +211,27 @@ public class TestJitPipeline
             assertThat(sums[g]).as("sum for attr %d", keys[g]).isEqualTo(reference.get(keys[g]));
         }
 
-        // Array-mode (dense keys): same query, direct-indexed join. Must produce identical results.
-        Plan.Pipeline arrayPlan = new Plan.Pipeline(
-                2,
-                new Plan.Build(2, 0, true),
-                0,
-                List.of(),
-                List.of(new Plan.Col(3)),
-                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
-        System.out.println("=== generated array-mode join source ===\n" + PipelineCompiler.render(arrayPlan));
-        CompiledPipeline.Result arrayResult = PipelineCompiler.compile(arrayPlan)
-                .execute(new long[][][] {{fk, measure}, {dkey, dattr}}, new int[] {fact, dim});
-        assertThat(arrayResult.rowCount()).isEqualTo(reference.size());
-        long[] aKeys = arrayResult.columns()[0];
-        long[] aSums = arrayResult.columns()[1];
-        for (int g = 0; g < arrayResult.rowCount(); g++) {
-            assertThat(aSums[g]).as("array sum for attr %d", aKeys[g]).isEqualTo(reference.get(aKeys[g]));
+        // Same adaptive plan, but sparse build keys (range >> rows) force the runtime to fall back to the
+        // hash table instead of the array. Results must be identical.
+        long stride = 1_000_000;
+        long[] sparseKey = new long[dim];
+        for (int d = 0; d < dim; d++) {
+            sparseKey[d] = d * stride;
+        }
+        long[] sparseFk = new long[fact];
+        Map<Long, Long> sparseReference = new HashMap<>();
+        for (int i = 0; i < fact; i++) {
+            int d = i % dim;
+            sparseFk[i] = sparseKey[d];
+            sparseReference.merge(dattr[d], measure[i], Long::sum);
+        }
+        CompiledPipeline.Result sparseResult = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{sparseFk, measure}, {sparseKey, dattr}}, new int[] {fact, dim});
+        assertThat(sparseResult.rowCount()).isEqualTo(sparseReference.size());
+        long[] sKeys = sparseResult.columns()[0];
+        long[] sSums = sparseResult.columns()[1];
+        for (int g = 0; g < sparseResult.rowCount(); g++) {
+            assertThat(sSums[g]).as("sparse sum for attr %d", sKeys[g]).isEqualTo(sparseReference.get(sKeys[g]));
         }
     }
 
