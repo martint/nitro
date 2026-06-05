@@ -19,7 +19,6 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
-import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -31,6 +30,7 @@ import org.weakref.nitro.jit.CompiledPipeline;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
+import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
@@ -42,58 +42,58 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Grouped aggregation, interpreted vs JIT-compiled: {@code SELECT k, sum(v) GROUP BY k} over 16M rows.
- * Sweeps the distinct-group count, since that controls whether the grouping table is cache-resident
- * (where fusion/dispatch removal dominates) or memory-bound (where both pay similarly).
+ * The canonical TPC-DS shape — fact JOIN dimension, GROUP BY a dimension attribute, sum a fact measure —
+ * interpreted (HashJoin -> GroupedAggregation) vs JIT-compiled (one fused build+probe+group routine).
  */
 @State(Scope.Thread)
 @Fork(2)
-@Warmup(iterations = 5, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
+@Warmup(iterations = 4, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
 @Measurement(iterations = 5, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @BenchmarkMode(Mode.AverageTime)
-public class BenchmarkCompiledGroupBy
+public class BenchmarkCompiledJoin
 {
-    private static final int ROWS = 16_000_000;
+    private static final int FACT_ROWS = 16_000_000;
+    private static final int DIM_ROWS = 100_000;
+    private static final int GROUPS = 100;
     private static final int CHUNK = 4096;
-
-    @Param({"1000", "100000", "2000000"})
-    private int groups;
 
     private final Allocator allocator = new Allocator();
 
-    private long[] k;
-    private long[] v;
-    private List<TableOperator.Page> pages;
+    private long[] fk;
+    private long[] measure;
+    private long[] dkey;
+    private long[] dattr;
+    private List<TableOperator.Page> factPages;
+    private List<TableOperator.Page> dimPages;
     private CompiledPipeline compiled;
 
     @Setup
     public void setup()
     {
-        k = new long[ROWS];
-        v = new long[ROWS];
-        for (int i = 0; i < ROWS; i++) {
-            k[i] = i % groups;
-            v[i] = (i % 100) + 1;
+        dkey = new long[DIM_ROWS];
+        dattr = new long[DIM_ROWS];
+        for (int d = 0; d < DIM_ROWS; d++) {
+            dkey[d] = d;
+            dattr[d] = d % GROUPS;
+        }
+        fk = new long[FACT_ROWS];
+        measure = new long[FACT_ROWS];
+        for (int i = 0; i < FACT_ROWS; i++) {
+            fk[i] = i % DIM_ROWS;
+            measure[i] = (i % 50) + 1;
         }
 
-        pages = new ArrayList<>();
-        for (int off = 0; off < ROWS; off += CHUNK) {
-            int len = Math.min(CHUNK, ROWS - off);
-            long[] ck = new long[len];
-            long[] cv = new long[len];
-            System.arraycopy(k, off, ck, 0, len);
-            System.arraycopy(v, off, cv, 0, len);
-            pages.add(new TableOperator.Page(
-                    len,
-                    new Streams[] {Streams.ofValues(new I64Vector(ck)), Streams.ofValues(new I64Vector(cv))},
-                    Mask.all(len)));
-        }
+        factPages = pages(fk, measure);
+        dimPages = pages(dkey, dattr);
 
+        // fact(fk=0, measure=1) JOIN dim(dkey=0, dattr=1) ON fk=dkey; GROUP BY dattr (combined col 3), sum(measure col 1)
         Plan.Pipeline plan = new Plan.Pipeline(
                 2,
+                new Plan.Build(2, 0),
+                0,
                 List.of(),
-                List.of(new Plan.Col(0)),
+                List.of(new Plan.Col(3)),
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
         compiled = PipelineCompiler.compile(plan);
 
@@ -102,10 +102,29 @@ public class BenchmarkCompiledGroupBy
         }
     }
 
+    private static List<TableOperator.Page> pages(long[] c0, long[] c1)
+    {
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int off = 0; off < c0.length; off += CHUNK) {
+            int len = Math.min(CHUNK, c0.length - off);
+            long[] a = new long[len];
+            long[] b = new long[len];
+            System.arraycopy(c0, off, a, 0, len);
+            System.arraycopy(c1, off, b, 0, len);
+            pages.add(new TableOperator.Page(
+                    len,
+                    new Streams[] {Streams.ofValues(new I64Vector(a)), Streams.ofValues(new I64Vector(b))},
+                    Mask.all(len)));
+        }
+        return pages;
+    }
+
     @Benchmark
     public long jitCompiled()
     {
-        CompiledPipeline.Result result = compiled.execute(new long[][][] {{k, v}}, new int[] {ROWS});
+        CompiledPipeline.Result result = compiled.execute(
+                new long[][][] {{fk, measure}, {dkey, dattr}},
+                new int[] {FACT_ROWS, DIM_ROWS});
         long checksum = 0;
         long[] sums = result.columns()[1];
         for (int g = 0; g < result.rowCount(); g++) {
@@ -117,8 +136,10 @@ public class BenchmarkCompiledGroupBy
     @Benchmark
     public long interpreted()
     {
-        Operator source = new TableOperator(2, pages);
-        Operator aggregation = new GroupedAggregationOperator(allocator, List.of(0), List.of(new Sum(1)), source);
+        Operator fact = new TableOperator(2, factPages);
+        Operator joined = new HashJoinOperator(allocator, fact, 0, new TableOperator(2, dimPages), 0);
+        // joined columns: 0=fk, 1=measure, 2=dkey, 3=dattr
+        Operator aggregation = new GroupedAggregationOperator(allocator, List.of(3), List.of(new Sum(1)), joined);
 
         long checksum = 0;
         try (aggregation) {
@@ -138,6 +159,6 @@ public class BenchmarkCompiledGroupBy
     public static void main(String[] args)
             throws Exception
     {
-        Benchmarks.benchmark(BenchmarkCompiledGroupBy.class).run();
+        Benchmarks.benchmark(BenchmarkCompiledJoin.class).run();
     }
 }

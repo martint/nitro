@@ -20,12 +20,13 @@ package org.weakref.nitro.jit;
 public interface CompiledPipeline
 {
     /**
-     * @param columns one {@code long[]} per input column, each at least {@code rowCount} long
-     * @param rowCount number of input rows
-     * @return the result; {@code columns} are the group-key columns followed by the aggregate columns,
-     *         each of length {@link Result#rowCount} (1 for a global aggregation)
+     * @param inputs one input per relation: {@code inputs[0]} is the probe/scan input, {@code inputs[1]} the
+     *               join build side (if any). Each input is one {@code long[]} per column.
+     * @param rowCounts row count per input, parallel to {@code inputs}
+     * @return the result; {@code columns} are the group-key columns followed by the aggregate columns, each of
+     *         length {@link Result#rowCount} (1 for a global aggregation)
      */
-    Result execute(long[][] columns, int rowCount);
+    Result execute(long[][][] inputs, int[] rowCounts);
 
     record Result(int rowCount, long[][] columns) {}
 }

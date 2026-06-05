@@ -54,16 +54,31 @@ public final class Plan
     {}
 
     /**
-     * A push pipeline: scan {@code columnCount} long columns, keep rows passing every filter (in the given
-     * order), group by {@code groupKeys} (empty = global aggregation), and compute {@code aggregates}.
+     * Build (inner/dimension) side of an inner hash join. {@code columnCount} build columns, joined on
+     * {@code keyColumn}. Build keys are assumed unique (the TPC-DS fact-to-dimension-PK case).
      */
-    public record Pipeline(int columnCount, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+    public record Build(int columnCount, int keyColumn)
+    {}
+
+    /**
+     * A push pipeline. Scans {@code columnCount} probe columns; if {@code build} is non-null, inner-joins it
+     * on {@code probeKeyColumn = build.keyColumn} (combined columns address probe {@code [0,columnCount)} then
+     * build {@code [columnCount, columnCount+build.columnCount)}); keeps rows passing every filter; groups by
+     * {@code groupKeys} (empty = global aggregation); and computes {@code aggregates}.
+     */
+    public record Pipeline(int columnCount, Build build, int probeKeyColumn, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
     {
         public Pipeline
         {
             filters = List.copyOf(filters);
             groupKeys = List.copyOf(groupKeys);
             aggregates = List.copyOf(aggregates);
+        }
+
+        /** Convenience for a single-input pipeline (no join). */
+        public Pipeline(int columnCount, List<Predicate> filters, List<Expr> groupKeys, List<Aggregate> aggregates)
+        {
+            this(columnCount, null, -1, filters, groupKeys, aggregates);
         }
     }
 }

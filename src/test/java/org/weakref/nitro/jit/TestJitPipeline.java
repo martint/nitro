@@ -50,7 +50,7 @@ public class TestJitPipeline
         }
 
         CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
-        CompiledPipeline.Result result = compiled.execute(new long[][] {a, b}, rows);
+        CompiledPipeline.Result result = compiled.execute(new long[][][] {{a, b}}, new int[] {rows});
 
         System.out.println("=== generated source ===\n" + PipelineCompiler.render(pipeline));
         assertThat(result.rowCount()).isEqualTo(1);
@@ -86,7 +86,7 @@ public class TestJitPipeline
 
         System.out.println("=== generated grouped source ===\n" + PipelineCompiler.render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][] {k, v}, rows);
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
 
         long[] keys = result.columns()[0];
@@ -97,6 +97,51 @@ public class TestJitPipeline
             assertThat(expected).as("group %d", keys[g]).isNotNull();
             assertThat(sums[g]).as("sum for group %d", keys[g]).isEqualTo(expected[0]);
             assertThat(counts[g]).as("count for group %d", keys[g]).isEqualTo(expected[1]);
+        }
+    }
+
+    @Test
+    void compilesAndComputesJoinGroupedAggregate()
+    {
+        // fact(fk, measure) JOIN dim(dkey, dattr) ON fk=dkey GROUP BY dattr, sum(measure)
+        // combined columns: probe [0=fk, 1=measure], build [2=dkey, 3=dattr]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                new Plan.Build(2, 0),
+                0,
+                List.of(),
+                List.of(new Plan.Col(3)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int dim = 1000;
+        int groups = 20;
+        long[] dkey = new long[dim];
+        long[] dattr = new long[dim];
+        for (int d = 0; d < dim; d++) {
+            dkey[d] = d;
+            dattr[d] = d % groups;
+        }
+        int fact = 500_000;
+        long[] fk = new long[fact];
+        long[] measure = new long[fact];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < fact; i++) {
+            fk[i] = i % dim;
+            measure[i] = (i % 50) + 1;
+            long attr = dattr[(int) fk[i]];
+            reference.merge(attr, measure[i], Long::sum);
+        }
+
+        System.out.println("=== generated join source ===\n" + PipelineCompiler.render(pipeline));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{fk, measure}, {dkey, dattr}}, new int[] {fact, dim});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("sum for attr %d", keys[g]).isEqualTo(reference.get(keys[g]));
         }
     }
 }

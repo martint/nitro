@@ -138,7 +138,7 @@ public class BenchmarkCompiledPipeline
     @Benchmark
     public long jitCompiled()
     {
-        return compiled.execute(new long[][] {a, b}, ROWS).columns()[0][0];
+        return compiled.execute(new long[][][] {{a, b}}, new int[] {ROWS}).columns()[0][0];
     }
 
     @Benchmark

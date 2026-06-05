@@ -31,14 +31,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntFunction;
 
 import static java.util.stream.Collectors.joining;
 
 /**
  * Data-centric query compiler (prototype). Translates a {@link Plan.Pipeline} into a single fused Java
- * routine — one loop over the input rows that filters, projects, and aggregates with no intermediate
+ * routine — one loop that scans, (inner hash) joins, filters, projects, and aggregates with no intermediate
  * materialization and no per-element dispatch — then compiles it in-process and loads it as a
- * {@link CompiledPipeline}. This is the "what a compiler emits" path whose ceiling the PoC measured.
+ * {@link CompiledPipeline}.
  */
 public final class PipelineCompiler
 {
@@ -68,140 +69,202 @@ public final class PipelineCompiler
 
     private static String render(Plan.Pipeline pipeline, String simpleName)
     {
-        return switch (pipeline.groupKeys().size()) {
-            case 0 -> generateGlobalAggregate(pipeline, simpleName);
-            case 1 -> generateGroupedAggregate(pipeline, simpleName);
-            default -> throw new UnsupportedOperationException(
-                    "multi-key grouping not yet supported (same shape, composite hash)");
-        };
-    }
-
-    private static String generateGlobalAggregate(Plan.Pipeline pipeline, String simpleName)
-    {
-        // Columns actually referenced, so we only bind locals we use.
-        TreeSet<Integer> referenced = new TreeSet<>();
-        for (Plan.Predicate predicate : pipeline.filters()) {
-            collectColumns(predicate.left(), referenced);
-            collectColumns(predicate.right(), referenced);
+        if (pipeline.groupKeys().size() > 1) {
+            throw new UnsupportedOperationException("multi-key grouping not yet supported (same shape, composite hash)");
         }
-        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
-            if (aggregate.input() != null) {
-                collectColumns(aggregate.input(), referenced);
-            }
-        }
-
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
-        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][] columns, int rowCount) {\n");
-        for (int column : referenced) {
-            out.append("    long[] c").append(column).append(" = columns[").append(column).append("];\n");
+        if (!pipeline.groupKeys().isEmpty() || pipeline.build() != null) {
+            emitMix(out);
         }
-        for (int a = 0; a < pipeline.aggregates().size(); a++) {
-            out.append("    long a").append(a).append(" = 0L;\n");
+        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][][] inputs, int[] rowCounts) {\n");
+        if (pipeline.build() != null) {
+            emitJoinBody(out, pipeline);
         }
-        out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        String indent = "      ";
-        if (!pipeline.filters().isEmpty()) {
-            String condition = pipeline.filters().stream()
-                    .map(p -> "(" + expr(p.left()) + " " + p.op() + " " + expr(p.right()) + ")")
-                    .collect(joining(" && "));
-            out.append(indent).append("if (").append(condition).append(") {\n");
-            indent = "        ";
+        else {
+            emitScanBody(out, pipeline);
         }
-        List<Plan.Aggregate> aggregates = pipeline.aggregates();
-        for (int a = 0; a < aggregates.size(); a++) {
-            Plan.Aggregate aggregate = aggregates.get(a);
-            String increment = switch (aggregate.fn()) {
-                case "sum" -> expr(aggregate.input());
-                case "count" -> "1L";
-                default -> throw new UnsupportedOperationException("aggregate: " + aggregate.fn());
-            };
-            out.append(indent).append("a").append(a).append(" += ").append(increment).append(";\n");
-        }
-        if (!pipeline.filters().isEmpty()) {
-            out.append("      }\n");
-        }
-        out.append("    }\n");
-        out.append("    long[][] result = new long[").append(aggregates.size()).append("][];\n");
-        for (int a = 0; a < aggregates.size(); a++) {
-            out.append("    result[").append(a).append("] = new long[] { a").append(a).append(" };\n");
-        }
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(1, result);\n");
         out.append("  }\n}\n");
         return out.toString();
     }
 
-    private static String generateGroupedAggregate(Plan.Pipeline pipeline, String simpleName)
-    {
-        Plan.Expr groupKey = pipeline.groupKeys().getFirst();
-        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+    // ---- single-input scan -> filter -> aggregate ----
 
-        TreeSet<Integer> referenced = new TreeSet<>();
-        collectColumns(groupKey, referenced);
-        for (Plan.Predicate predicate : pipeline.filters()) {
-            collectColumns(predicate.left(), referenced);
-            collectColumns(predicate.right(), referenced);
+    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline)
+    {
+        out.append("    long[][] in = inputs[0]; int rowCount = rowCounts[0];\n");
+        TreeSet<Integer> referenced = referencedColumns(pipeline);
+        for (int column : referenced) {
+            out.append("    long[] c").append(column).append(" = in[").append(column).append("];\n");
         }
-        for (Plan.Aggregate aggregate : aggregates) {
-            if (aggregate.input() != null) {
-                collectColumns(aggregate.input(), referenced);
+        IntFunction<String> resolver = index -> "c" + index + "[i]";
+        boolean grouped = !pipeline.groupKeys().isEmpty();
+        if (grouped) {
+            emitGroupedState(out, pipeline.aggregates().size());
+        }
+        else {
+            emitGlobalState(out, pipeline.aggregates().size());
+        }
+        out.append("    for (int i = 0; i < rowCount; i++) {\n");
+        emitRowBody(out, "      ", pipeline, resolver, grouped);
+        out.append("    }\n");
+        if (grouped) {
+            emitGroupedResult(out, pipeline.aggregates().size());
+        }
+        else {
+            emitGlobalResult(out, pipeline.aggregates().size());
+        }
+    }
+
+    // ---- scan(probe) inner-join build -> filter -> aggregate ----
+
+    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline)
+    {
+        Plan.Build build = pipeline.build();
+        int probeColumns = pipeline.columnCount();
+
+        TreeSet<Integer> combined = referencedColumns(pipeline);
+        combined.add(pipeline.probeKeyColumn());
+        TreeSet<Integer> probeReferenced = new TreeSet<>();
+        TreeSet<Integer> buildReferenced = new TreeSet<>();
+        buildReferenced.add(build.keyColumn());
+        for (int column : combined) {
+            if (column < probeColumns) {
+                probeReferenced.add(column);
+            }
+            else {
+                buildReferenced.add(column - probeColumns);
             }
         }
 
-        StringBuilder out = new StringBuilder();
-        out.append("package ").append(PACKAGE).append(";\n");
-        out.append("public final class ").append(simpleName)
-                .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
-        // Murmur3 64-bit finalizer for key hashing.
-        out.append("  private static int mix(long key) {\n");
-        out.append("    long h = key; h ^= h >>> 33; h *= 0xff51afd7ed558ccdL; h ^= h >>> 33;");
-        out.append(" h *= 0xc4ceb9fe1a85ec53L; h ^= h >>> 33; return (int) h;\n  }\n");
-        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(long[][] columns, int rowCount) {\n");
-        for (int column : referenced) {
-            out.append("    long[] c").append(column).append(" = columns[").append(column).append("];\n");
+        out.append("    long[][] probe = inputs[0]; int probeRows = rowCounts[0];\n");
+        out.append("    long[][] build = inputs[1]; int buildRows = rowCounts[1];\n");
+        for (int column : probeReferenced) {
+            out.append("    long[] p").append(column).append(" = probe[").append(column).append("];\n");
         }
-        // Open-addressing key -> dense group-id table; aggregate arrays indexed by the dense group id so a
-        // rehash only moves the key table, never the accumulators.
-        out.append("    int cap = 1024;\n");
-        out.append("    long[] htKey = new long[cap];\n");
-        out.append("    int[] htGid = new int[cap];\n");
-        out.append("    java.util.Arrays.fill(htGid, -1);\n");
-        out.append("    int htMask = cap - 1;\n");
-        out.append("    int htFill = (int) (cap * 0.75f);\n");
-        out.append("    int groupCount = 0;\n");
-        out.append("    long[] keyByGid = new long[16];\n");
-        for (int a = 0; a < aggregates.size(); a++) {
-            out.append("    long[] agg").append(a).append(" = new long[16];\n");
+        for (int column : buildReferenced) {
+            out.append("    long[] b").append(column).append(" = build[").append(column).append("];\n");
         }
-        out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        String indent = "      ";
+        // Build an open-addressing key -> build-row table (build keys assumed unique).
+        out.append("    int jcap = 16; while (jcap * 0.75f < buildRows) { jcap <<= 1; }\n");
+        out.append("    long[] jKey = new long[jcap]; int[] jRow = new int[jcap];\n");
+        out.append("    java.util.Arrays.fill(jRow, -1); int jMask = jcap - 1;\n");
+        out.append("    for (int r = 0; r < buildRows; r++) {\n");
+        out.append("      long key = b").append(build.keyColumn()).append("[r];\n");
+        out.append("      int slot = mix(key) & jMask;\n");
+        out.append("      while (jRow[slot] != -1 && jKey[slot] != key) { slot = (slot + 1) & jMask; }\n");
+        out.append("      jKey[slot] = key; jRow[slot] = r;\n");
+        out.append("    }\n");
+
+        IntFunction<String> resolver = index -> index < probeColumns
+                ? "p" + index + "[i]"
+                : "b" + (index - probeColumns) + "[buildRow]";
+        boolean grouped = !pipeline.groupKeys().isEmpty();
+        if (grouped) {
+            emitGroupedState(out, pipeline.aggregates().size());
+        }
+        else {
+            emitGlobalState(out, pipeline.aggregates().size());
+        }
+        out.append("    for (int i = 0; i < probeRows; i++) {\n");
+        out.append("      long jk = p").append(pipeline.probeKeyColumn()).append("[i];\n");
+        out.append("      int js = mix(jk) & jMask;\n");
+        out.append("      while (jRow[js] != -1 && jKey[js] != jk) { js = (js + 1) & jMask; }\n");
+        out.append("      int buildRow = jRow[js];\n");
+        out.append("      if (buildRow != -1) {\n");
+        emitRowBody(out, "        ", pipeline, resolver, grouped);
+        out.append("      }\n");
+        out.append("    }\n");
+        if (grouped) {
+            emitGroupedResult(out, pipeline.aggregates().size());
+        }
+        else {
+            emitGlobalResult(out, pipeline.aggregates().size());
+        }
+    }
+
+    // ---- shared per-row body: optional filter, then accumulate ----
+
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, boolean grouped)
+    {
+        String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
             String condition = pipeline.filters().stream()
-                    .map(p -> "(" + expr(p.left()) + " " + p.op() + " " + expr(p.right()) + ")")
+                    .map(p -> "(" + expr(p.left(), resolver) + " " + p.op() + " " + expr(p.right(), resolver) + ")")
                     .collect(joining(" && "));
             out.append(indent).append("if (").append(condition).append(") {\n");
-            indent = "        ";
+            bodyIndent = indent + "  ";
         }
-        out.append(indent).append("long key = ").append(expr(groupKey)).append(";\n");
-        out.append(indent).append("int slot = mix(key) & htMask;\n");
-        out.append(indent).append("while (htGid[slot] != -1 && htKey[slot] != key) { slot = (slot + 1) & htMask; }\n");
-        out.append(indent).append("int gid = htGid[slot];\n");
+        if (grouped) {
+            emitGroupedAccumulate(out, bodyIndent, pipeline, resolver);
+        }
+        else {
+            emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver);
+        }
+        if (!pipeline.filters().isEmpty()) {
+            out.append(indent).append("}\n");
+        }
+    }
+
+    // ---- global aggregation ----
+
+    private static void emitGlobalState(StringBuilder out, int aggregateCount)
+    {
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("    long a").append(a).append(" = 0L;\n");
+        }
+    }
+
+    private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver)
+    {
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append(indent).append("a").append(a).append(" += ").append(increment(aggregates.get(a), resolver)).append(";\n");
+        }
+    }
+
+    private static void emitGlobalResult(StringBuilder out, int aggregateCount)
+    {
+        out.append("    long[][] result = new long[").append(aggregateCount).append("][];\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("    result[").append(a).append("] = new long[] { a").append(a).append(" };\n");
+        }
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(1, result);\n");
+    }
+
+    // ---- grouped aggregation (single long key) ----
+
+    private static void emitGroupedState(StringBuilder out, int aggregateCount)
+    {
+        out.append("    int cap = 1024;\n");
+        out.append("    long[] htKey = new long[cap]; int[] htGid = new int[cap];\n");
+        out.append("    java.util.Arrays.fill(htGid, -1);\n");
+        out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
+        out.append("    long[] keyByGid = new long[16];\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("    long[] agg").append(a).append(" = new long[16];\n");
+        }
+    }
+
+    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        out.append(indent).append("long gkey = ").append(expr(pipeline.groupKeys().getFirst(), resolver)).append(";\n");
+        out.append(indent).append("int gslot = mix(gkey) & htMask;\n");
+        out.append(indent).append("while (htGid[gslot] != -1 && htKey[gslot] != gkey) { gslot = (gslot + 1) & htMask; }\n");
+        out.append(indent).append("int gid = htGid[gslot];\n");
         out.append(indent).append("if (gid == -1) {\n");
         String b = indent + "  ";
-        out.append(b).append("gid = groupCount++;\n");
-        out.append(b).append("htKey[slot] = key; htGid[slot] = gid;\n");
+        out.append(b).append("gid = groupCount++; htKey[gslot] = gkey; htGid[gslot] = gid;\n");
         out.append(b).append("if (gid == keyByGid.length) {\n");
-        out.append(b).append("  int n = keyByGid.length * 2;\n");
-        out.append(b).append("  keyByGid = java.util.Arrays.copyOf(keyByGid, n);\n");
+        out.append(b).append("  int n = keyByGid.length * 2; keyByGid = java.util.Arrays.copyOf(keyByGid, n);\n");
         for (int a = 0; a < aggregates.size(); a++) {
             out.append(b).append("  agg").append(a).append(" = java.util.Arrays.copyOf(agg").append(a).append(", n);\n");
         }
         out.append(b).append("}\n");
-        out.append(b).append("keyByGid[gid] = key;\n");
+        out.append(b).append("keyByGid[gid] = gkey;\n");
         out.append(b).append("if (groupCount > htFill) {\n");
-        // Rehash the key table (group ids and accumulators are unaffected).
         out.append(b).append("  int ncap = cap * 2; long[] nKey = new long[ncap]; int[] nGid = new int[ncap];\n");
         out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
         out.append(b).append("  for (int s = 0; s < cap; s++) { if (htGid[s] != -1) {\n");
@@ -211,26 +274,54 @@ public final class PipelineCompiler
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            Plan.Aggregate aggregate = aggregates.get(a);
-            String increment = switch (aggregate.fn()) {
-                case "sum" -> expr(aggregate.input());
-                case "count" -> "1L";
-                default -> throw new UnsupportedOperationException("aggregate: " + aggregate.fn());
-            };
-            out.append(indent).append("agg").append(a).append("[gid] += ").append(increment).append(";\n");
+            out.append(indent).append("agg").append(a).append("[gid] += ").append(increment(aggregates.get(a), resolver)).append(";\n");
         }
-        if (!pipeline.filters().isEmpty()) {
-            out.append("      }\n");
-        }
-        out.append("    }\n");
-        out.append("    long[][] result = new long[").append(1 + aggregates.size()).append("][];\n");
+    }
+
+    private static void emitGroupedResult(StringBuilder out, int aggregateCount)
+    {
+        out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
         out.append("    result[0] = java.util.Arrays.copyOf(keyByGid, groupCount);\n");
-        for (int a = 0; a < aggregates.size(); a++) {
+        for (int a = 0; a < aggregateCount; a++) {
             out.append("    result[").append(a + 1).append("] = java.util.Arrays.copyOf(agg").append(a).append(", groupCount);\n");
         }
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result);\n");
-        out.append("  }\n}\n");
-        return out.toString();
+    }
+
+    // ---- helpers ----
+
+    private static void emitMix(StringBuilder out)
+    {
+        out.append("  private static int mix(long key) {\n");
+        out.append("    long h = key; h ^= h >>> 33; h *= 0xff51afd7ed558ccdL; h ^= h >>> 33;");
+        out.append(" h *= 0xc4ceb9fe1a85ec53L; h ^= h >>> 33; return (int) h;\n  }\n");
+    }
+
+    private static String increment(Plan.Aggregate aggregate, IntFunction<String> resolver)
+    {
+        return switch (aggregate.fn()) {
+            case "sum" -> expr(aggregate.input(), resolver);
+            case "count" -> "1L";
+            default -> throw new UnsupportedOperationException("aggregate: " + aggregate.fn());
+        };
+    }
+
+    private static TreeSet<Integer> referencedColumns(Plan.Pipeline pipeline)
+    {
+        TreeSet<Integer> referenced = new TreeSet<>();
+        for (Plan.Predicate predicate : pipeline.filters()) {
+            collectColumns(predicate.left(), referenced);
+            collectColumns(predicate.right(), referenced);
+        }
+        for (Plan.Expr groupKey : pipeline.groupKeys()) {
+            collectColumns(groupKey, referenced);
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null) {
+                collectColumns(aggregate.input(), referenced);
+            }
+        }
+        return referenced;
     }
 
     private static void collectColumns(Plan.Expr expr, TreeSet<Integer> into)
@@ -245,12 +336,12 @@ public final class PipelineCompiler
         // Plan.Lit references no columns.
     }
 
-    private static String expr(Plan.Expr expr)
+    private static String expr(Plan.Expr expr, IntFunction<String> resolver)
     {
         return switch (expr) {
-            case Plan.Col col -> "c" + col.index() + "[i]";
+            case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
-            case Plan.Bin bin -> "(" + expr(bin.left()) + " " + bin.op() + " " + expr(bin.right()) + ")";
+            case Plan.Bin bin -> "(" + expr(bin.left(), resolver) + " " + bin.op() + " " + expr(bin.right(), resolver) + ")";
         };
     }
 
