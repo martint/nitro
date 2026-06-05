@@ -14,9 +14,11 @@
 package org.weakref.nitro.tpcds;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Row;
 import org.weakref.nitro.jit.CompiledPipeline;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
@@ -83,6 +85,37 @@ public class TestCompiledQuery
 
         assertThat(reference).as("'Books' items in sf10").isGreaterThan(0);
         assertThat(compiledCount).isEqualTo(reference);
+    }
+
+    @Test
+    void bridgedCompiledMatchesInterpretedOperatorRows()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // The lowered store_sales JOIN date_dim, sum(ss_quantity) GROUP BY ss_item_sk query, compiled and then
+        // bridged back into the operator world, must produce the same rows as the interpreted Nitro operator chain
+        // -- compared through the very same harness machinery (OperatorAssertions.toRows) used for operator trees.
+        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sold_date_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity"))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("d_year"));
+        // Same d_year = 2001 predicate the interpreted reference pushes into the date_dim load.
+        query.where(new org.weakref.nitro.jit.Plan.Predicate("=", query.column("d_year"), new org.weakref.nitro.jit.Plan.Lit(2001)))
+                .groupBy("ss_item_sk")
+                .aggregate("sum", "ss_quantity");
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
+        Operator bridged = new org.weakref.nitro.operator.CompiledOperator(run.result());
+
+        List<Row> interpreted = OperatorAssertions.OperatorAssert.toRows(
+                CompiledQuerySupport.interpreted(new Allocator(), CompiledQuerySupport.load(new Allocator(), tables)));
+
+        assertThat(interpreted).isNotEmpty();
+        assertThat(OperatorAssertions.operator(bridged)).matches(interpreted);
     }
 
     private static Map<Long, Long> runLowered(CompiledQuerySupport.Loaded data)
