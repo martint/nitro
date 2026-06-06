@@ -160,10 +160,7 @@ public final class PipelineCompiler
         for (int column : referencedColumns(pipeline)) {
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
-        List<Plan.Condition> stringMatches = new ArrayList<>();
-        for (Plan.Condition filter : pipeline.filters()) {
-            collectStringMatches(filter, stringMatches);
-        }
+        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
         Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
         for (int s = 0; s < stringMatches.size(); s++) {
             Plan.Condition match = stringMatches.get(s);
@@ -557,10 +554,7 @@ public final class PipelineCompiler
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
         // Predicate-over-dictionary: evaluate each string filter once per dictionary entry into an id mask.
-        List<Plan.Condition> stringMatches = new ArrayList<>();
-        for (Plan.Condition filter : pipeline.filters()) {
-            collectStringMatches(filter, stringMatches);
-        }
+        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
         Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
         for (int s = 0; s < stringMatches.size(); s++) {
             Plan.Condition match = stringMatches.get(s);
@@ -679,6 +673,43 @@ public final class PipelineCompiler
             collectStringMatches(not.condition(), into);
         }
         // Plan.Predicate contains no string matches.
+    }
+
+    /** Collect predicate-over-dictionary leaves nested in an expression's CASE conditions (e.g. {@code sum(CASE WHEN s IN (..) THEN ..)}). */
+    private static void collectStringMatchesInExpr(Plan.Expr expr, List<Plan.Condition> into)
+    {
+        switch (expr) {
+            case Plan.Case kase -> {
+                for (Plan.Case.Branch branch : kase.branches()) {
+                    collectStringMatches(branch.condition(), into);
+                    collectStringMatchesInExpr(branch.value(), into);
+                }
+                collectStringMatchesInExpr(kase.defaultValue(), into);
+            }
+            case Plan.Bin bin -> {
+                collectStringMatchesInExpr(bin.left(), into);
+                collectStringMatchesInExpr(bin.right(), into);
+            }
+            case Plan.Call call -> call.arguments().forEach(argument -> collectStringMatchesInExpr(argument, into));
+            case Plan.Coalesce coalesce -> coalesce.arguments().forEach(argument -> collectStringMatchesInExpr(argument, into));
+            case Plan.Col ignored -> {}
+            case Plan.Lit ignored -> {}
+        }
+    }
+
+    /** Collect every predicate-over-dictionary leaf in the pipeline: from WHERE filters and from CASE conditions in aggregate inputs. */
+    private static List<Plan.Condition> collectPipelineStringMatches(Plan.Pipeline pipeline)
+    {
+        List<Plan.Condition> into = new ArrayList<>();
+        for (Plan.Condition filter : pipeline.filters()) {
+            collectStringMatches(filter, into);
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null) {
+                collectStringMatchesInExpr(aggregate.input(), into);
+            }
+        }
+        return into;
     }
 
     /** The dictionary-string column a predicate-over-dictionary leaf tests. */
@@ -852,12 +883,10 @@ public final class PipelineCompiler
             emitBuildStructures(out, k, join.build().keyColumns());
         }
 
-        // Predicate-over-dictionary string-filter masks. Collect + assign a stable id per predicate; build-side
-        // masks build once here (their dictionary is materialized), probe-side masks build per batch (below).
-        List<Plan.Condition> stringMatches = new ArrayList<>();
-        for (Plan.Condition filter : pipeline.filters()) {
-            collectStringMatches(filter, stringMatches);
-        }
+        // Predicate-over-dictionary string masks. Collect + assign a stable id per predicate; build-side masks
+        // build once here (their dictionary is materialized), probe-side masks build per batch (below). Includes
+        // masks for CASE conditions in aggregate inputs (e.g. Q43's day-of-week pivot), not just WHERE filters.
+        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
         Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
         for (int s = 0; s < stringMatches.size(); s++) {
             stringMaskIds.put(stringMatches.get(s), s);
@@ -1068,10 +1097,10 @@ public final class PipelineCompiler
             bodyIndent = indent + "  ";
         }
         if (grouped) {
-            emitGroupedAccumulate(out, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, speculate);
+            emitGroupedAccumulate(out, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
         }
         else {
-            emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver);
+            emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
         }
         if (!pipeline.filters().isEmpty()) {
             out.append(indent).append("}\n");
@@ -1091,19 +1120,19 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "a", null), resolver, nullResolver);
+            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "a", null), resolver, nullResolver, stringMaskIds);
         }
     }
 
     /** Fold one row into an aggregate's cells, skipping the row when the aggregate's input is null (so nulls are ignored). */
-    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         AggregateLibrary.AggregateCompiler aggregator = aggregator(aggregate);
-        String inputExpr = input(aggregate, resolver, nullResolver);
-        String guard = aggregate.input() == null ? "false" : nullExpr(aggregate.input(), resolver, nullResolver);
+        String inputExpr = input(aggregate, resolver, nullResolver, stringMaskIds);
+        String guard = aggregate.input() == null ? "false" : nullExpr(aggregate.input(), resolver, nullResolver, stringMaskIds);
         if (guard.equals("false")) {
             aggregator.emitUpdate(out, indent, cells, inputExpr);
             return;
@@ -1180,7 +1209,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, boolean speculate)
+    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         if (speculate) {
@@ -1196,7 +1225,7 @@ public final class PipelineCompiler
             emitStateIdentity(out, a2 + "  ", aggregates, "aAgg", "ao");
             out.append(a2).append("}\n");
             for (int a = 0; a < aggregateCount; a++) {
-                emitAggregateUpdate(out, a2, aggregates.get(a), cells(aggregates, a, "aAgg", "ao"), resolver, nullResolver);
+                emitAggregateUpdate(out, a2, aggregates.get(a), cells(aggregates, a, "aAgg", "ao"), resolver, nullResolver, stringMaskIds);
             }
             out.append(a1).append("}\n");
             out.append(a1).append("else {\n");
@@ -1218,7 +1247,7 @@ public final class PipelineCompiler
             out.append(a1).append("long hkey = gkey;\n");
             emitSingleKeyHashFindOrCreate(out, a1, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                emitAggregateUpdate(out, a1, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver);
+                emitAggregateUpdate(out, a1, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver, stringMaskIds);
             }
             out.append(indent).append("}\n");
             return;
@@ -1297,7 +1326,7 @@ public final class PipelineCompiler
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver);
+            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver, stringMaskIds);
         }
     }
 
@@ -1483,9 +1512,9 @@ public final class PipelineCompiler
     }
 
     /** Rendered input expression for an aggregate, or {@code null} for a nullary aggregate such as {@code count}. */
-    private static String input(Plan.Aggregate aggregate, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String input(Plan.Aggregate aggregate, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
-        return aggregate.input() == null ? null : expr(aggregate.input(), resolver, nullResolver);
+        return aggregate.input() == null ? null : expr(aggregate.input(), resolver, nullResolver, stringMaskIds);
     }
 
     /** Total number of {@code long} state cells across all aggregates. */
@@ -1640,49 +1669,55 @@ public final class PipelineCompiler
 
     private static String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
+        return expr(expr, resolver, nullResolver, Map.of());
+    }
+
+    private static String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
         return switch (expr) {
             case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
-            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver), expr(bin.right(), resolver, nullResolver)));
-            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver)).toList());
-            case Plan.Case kase -> caseExpression(kase, resolver, nullResolver);
-            case Plan.Coalesce coalesce -> coalesceExpression(coalesce, resolver, nullResolver);
+            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
+            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
+            case Plan.Case kase -> caseExpression(kase, resolver, nullResolver, stringMaskIds);
+            case Plan.Coalesce coalesce -> coalesceExpression(coalesce, resolver, nullResolver, stringMaskIds);
         };
     }
 
     /** Render a CASE as a right-nested conditional, falling through to the default value. */
-    private static String caseExpression(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String caseExpression(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         StringBuilder out = new StringBuilder();
         for (Plan.Case.Branch branch : kase.branches()) {
             // Three-valued WHEN: a branch is taken only when its condition is TRUE -- a NULL operand (e.g. a null
             // column in an arithmetic comparison) yields UNKNOWN, which falls through to the next branch / ELSE.
-            out.append("(").append(conditionTrue(branch.condition(), resolver, nullResolver, Map.of())).append(" ? ").append(expr(branch.value(), resolver, nullResolver)).append(" : ");
+            // The condition may be a predicate-over-dictionary (e.g. a day-of-week pivot), so it needs the mask ids.
+            out.append("(").append(conditionTrue(branch.condition(), resolver, nullResolver, stringMaskIds)).append(" ? ").append(expr(branch.value(), resolver, nullResolver, stringMaskIds)).append(" : ");
         }
-        out.append(expr(kase.defaultValue(), resolver, nullResolver));
+        out.append(expr(kase.defaultValue(), resolver, nullResolver, stringMaskIds));
         out.append(")".repeat(kase.branches().size()));
         return out.toString();
     }
 
     /** Render COALESCE as a right-nested conditional returning the first non-null argument. */
-    private static String coalesceExpression(Plan.Coalesce coalesce, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String coalesceExpression(Plan.Coalesce coalesce, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Expr> arguments = coalesce.arguments();
         // The fallback is the first argument that is never null (it always wins if reached), or the last one.
         int fallback = arguments.size() - 1;
         for (int a = 0; a < arguments.size(); a++) {
-            if (nullExpr(arguments.get(a), resolver, nullResolver).equals("false")) {
+            if (nullExpr(arguments.get(a), resolver, nullResolver, stringMaskIds).equals("false")) {
                 fallback = a;
                 break;
             }
         }
         StringBuilder out = new StringBuilder();
         for (int a = 0; a < fallback; a++) {
-            out.append("(").append(nullExpr(arguments.get(a), resolver, nullResolver)).append(" ? ");
+            out.append("(").append(nullExpr(arguments.get(a), resolver, nullResolver, stringMaskIds)).append(" ? ");
         }
-        out.append(expr(arguments.get(fallback), resolver, nullResolver));
+        out.append(expr(arguments.get(fallback), resolver, nullResolver, stringMaskIds));
         for (int a = fallback - 1; a >= 0; a--) {
-            out.append(" : ").append(expr(arguments.get(a), resolver, nullResolver)).append(")");
+            out.append(" : ").append(expr(arguments.get(a), resolver, nullResolver, stringMaskIds)).append(")");
         }
         return out.toString();
     }
@@ -1692,23 +1727,28 @@ public final class PipelineCompiler
     /** Boolean expression that is true when {@code expr} evaluates to SQL null. {@code "false"} on the fast path. */
     private static String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
+        return nullExpr(expr, resolver, nullResolver, Map.of());
+    }
+
+    private static String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
         return switch (expr) {
             case Plan.Col col -> nullResolver.apply(col.index());
             case Plan.Lit ignored -> "false";
-            case Plan.Bin bin -> orNull(nullExpr(bin.left(), resolver, nullResolver), nullExpr(bin.right(), resolver, nullResolver));
+            case Plan.Bin bin -> orNull(nullExpr(bin.left(), resolver, nullResolver, stringMaskIds), nullExpr(bin.right(), resolver, nullResolver, stringMaskIds));
             case Plan.Call call -> {
                 String nulls = "false";
                 for (Plan.Expr argument : call.arguments()) {
-                    nulls = orNull(nulls, nullExpr(argument, resolver, nullResolver));
+                    nulls = orNull(nulls, nullExpr(argument, resolver, nullResolver, stringMaskIds));
                 }
                 yield nulls;
             }
-            case Plan.Case kase -> caseNull(kase, resolver, nullResolver);
+            case Plan.Case kase -> caseNull(kase, resolver, nullResolver, stringMaskIds);
             case Plan.Coalesce coalesce -> {
                 // COALESCE is null only when every argument is null.
                 String allNull = "true";
                 for (Plan.Expr argument : coalesce.arguments()) {
-                    allNull = andNull(allNull, nullExpr(argument, resolver, nullResolver));
+                    allNull = andNull(allNull, nullExpr(argument, resolver, nullResolver, stringMaskIds));
                 }
                 yield allNull;
             }
@@ -1730,20 +1770,22 @@ public final class PipelineCompiler
     }
 
     /** Null-ness of a CASE: the null-ness of whichever branch value is selected (when-conditions assumed non-null). */
-    private static String caseNull(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private static String caseNull(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
-        boolean anyNull = !nullExpr(kase.defaultValue(), resolver, nullResolver).equals("false");
+        boolean anyNull = !nullExpr(kase.defaultValue(), resolver, nullResolver, stringMaskIds).equals("false");
         for (Plan.Case.Branch branch : kase.branches()) {
-            anyNull |= !nullExpr(branch.value(), resolver, nullResolver).equals("false");
+            anyNull |= !nullExpr(branch.value(), resolver, nullResolver, stringMaskIds).equals("false");
         }
         if (!anyNull) {
             return "false";
         }
         StringBuilder out = new StringBuilder();
         for (Plan.Case.Branch branch : kase.branches()) {
-            out.append("(").append(condition(branch.condition(), resolver)).append(" ? ").append(nullExpr(branch.value(), resolver, nullResolver)).append(" : ");
+            // Selecting which branch's null-ness applies uses the same three-valued WHEN as caseExpression, so the
+            // condition may be a predicate-over-dictionary and needs the mask ids.
+            out.append("(").append(conditionTrue(branch.condition(), resolver, nullResolver, stringMaskIds)).append(" ? ").append(nullExpr(branch.value(), resolver, nullResolver, stringMaskIds)).append(" : ");
         }
-        out.append(nullExpr(kase.defaultValue(), resolver, nullResolver));
+        out.append(nullExpr(kase.defaultValue(), resolver, nullResolver, stringMaskIds));
         out.append(")".repeat(kase.branches().size()));
         return out.toString();
     }

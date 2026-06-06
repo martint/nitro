@@ -855,6 +855,49 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesStringMatchInsideCaseAggregate()
+    {
+        // SELECT k, sum(CASE WHEN s IN ('CA') THEN v ELSE 0 END) GROUP BY k -- s is a dictionary string column and
+        // the CASE condition is a predicate-over-dictionary, so its id mask must be built like a WHERE string filter
+        // (the day-of-week pivot shape). Only rows with s = 'CA' contribute v; the rest contribute 0.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Case(
+                        List.of(new Plan.Case.Branch(new Plan.StringMatch(2, List.of("CA"), false), new Plan.Col(1))),
+                        new Plan.Lit(0)))));
+
+        byte[][] dictionary = {
+                "CA".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "NY".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "TX".getBytes(java.nio.charset.StandardCharsets.UTF_8)};
+        int rows = 90_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        int[] ids = new int[rows];
+        Map<Long, Long> reference = new HashMap<>();   // k -> sum(v where s='CA')
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 7;
+            v[i] = (i % 50) + 1;
+            ids[i] = i % 3;                 // 0 -> CA, else NY/TX
+            reference.merge(k[i], ids[i] == 0 ? v[i] : 0, Long::sum);
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.FLAT, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {{new Column.FlatColumn(k), new Column.FlatColumn(v), new Column.StringColumn(ids, dictionary)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] sums = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).as("CA-only sum for k %d", keys[g]).isEqualTo(reference.get(keys[g]));
+        }
+    }
+
+    @Test
     void compilesStringFilterOverDictionary()
     {
         // SELECT k, sum(v) FROM t WHERE s IN ('CA','TX') GROUP BY k -- s is a dictionary string column,
