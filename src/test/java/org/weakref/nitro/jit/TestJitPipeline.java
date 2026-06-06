@@ -210,6 +210,43 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesRoundingDivide()
+    {
+        // SELECT k, round(sum(v) / count(v)) GROUP BY k -- divide_round_i64 in a projection, the integer-scaled
+        // decimal average (sum/count, half-up) used by the discount-threshold subqueries. Must match the built-in's
+        // sign-aware rounding to the unit.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1)), new Plan.Aggregate("count", new Plan.Col(1))))
+                .withProjections(List.of(new Plan.Col(0),
+                        new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2))));
+
+        int rows = 90_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // k -> {sum, count}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 23;
+            v[i] = (i % 200) - 90;          // mix of negative and positive
+            reference.computeIfAbsent(k[i], ignored -> new long[2]);
+            reference.get(k[i])[0] += v[i];
+            reference.get(k[i])[1]++;
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        long[] keys = result.columns()[0];
+        long[] averages = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] sumCount = reference.get(keys[g]);
+            assertThat(averages[g]).as("rounded average for k %d", keys[g])
+                    .isEqualTo(org.weakref.nitro.jit.DecimalMath.roundDivide(sumCount[0], sumCount[1]));
+        }
+    }
+
+    @Test
     void compilesDecimalArithmetic()
     {
         // SELECT sum(p * q), sum(divide_scale_round_i64(p, q, 100)) -- decimal product and rescaling divide,

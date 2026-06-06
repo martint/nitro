@@ -46,4 +46,20 @@ public final class DecimalMath
         long rounded = quotient.longValueExact();
         return negative ? -rounded : rounded;
     }
+
+    /**
+     * {@code round(numerator / denominator)} with sign-aware half-up rounding, matching the {@code divide_round_i64}
+     * built-in (used for integer-scaled decimal averages, e.g. {@code sum / count}). Returns 0 when the denominator
+     * is 0, mirroring the built-in's divide-by-zero guard.
+     */
+    public static long roundDivide(long numerator, long denominator)
+    {
+        if (denominator == 0) {
+            return 0;
+        }
+        long positiveNumerator = numerator >= 0 ? numerator : -numerator;
+        long positiveDenominator = denominator >= 0 ? denominator : -denominator;
+        long rounded = (positiveNumerator + (positiveDenominator / 2)) / positiveDenominator;
+        return (numerator < 0) ^ (denominator < 0) ? -rounded : rounded;
+    }
 }

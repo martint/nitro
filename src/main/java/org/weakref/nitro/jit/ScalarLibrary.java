@@ -53,6 +53,8 @@ public final class ScalarLibrary
         register("multiply_i64", infix("*"));
         register("divide_scale_round_i64", arguments ->
                 "org.weakref.nitro.jit.DecimalMath.roundScaledDivide(" + arguments.get(0) + ", " + arguments.get(1) + ", " + arguments.get(2) + ")");
+        register("divide_round_i64", arguments ->
+                "org.weakref.nitro.jit.DecimalMath.roundDivide(" + arguments.get(0) + ", " + arguments.get(1) + ")");
     }
 
     private ScalarLibrary() {}
