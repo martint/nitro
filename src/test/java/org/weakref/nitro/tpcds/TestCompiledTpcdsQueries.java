@@ -135,6 +135,40 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void lazyMaterializationMatchesEager()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // A selective single-table scan with two conjuncts on different columns:
+        // SELECT sum(ss_ext_sales_price) FROM store_sales WHERE ss_quantity < 50 AND ss_sales_price > 100.
+        // Run streamed two ways -- an eager source (every column converted for every row) and a selection-driven
+        // lazy source (staged: ss_sales_price converted only for ss_quantity survivors, the measure only for both).
+        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true));
+        query.where(
+                        new org.weakref.nitro.jit.Plan.Predicate("<", query.column("ss_quantity"), new org.weakref.nitro.jit.Plan.Lit(50)),
+                        new org.weakref.nitro.jit.Plan.Predicate(">", query.column("ss_sales_price"), new org.weakref.nitro.jit.Plan.Lit(100)))
+                .aggregate("sum", "ss_ext_sales_price");
+        org.weakref.nitro.jit.QueryLowering.Lowered lowered = query.lower();
+        org.weakref.nitro.jit.StreamingPipeline streaming =
+                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+
+        var probe = lowered.inputs().get(0);
+        org.weakref.nitro.jit.CompiledPipeline.Result eager = streaming.execute(
+                CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, probe.table(), probe.columns()),
+                new org.weakref.nitro.jit.Column[0][], new int[0]);
+        org.weakref.nitro.jit.CompiledPipeline.Result lazy = streaming.execute(
+                CompiledQuerySupport.parquetLazySource(new Allocator(), tables, probe.table(), probe.columns()),
+                new org.weakref.nitro.jit.Column[0][], new int[0]);
+
+        assertThat(lazy.rowCount()).isEqualTo(1).isEqualTo(eager.rowCount());
+        assertThat(lazy.columns()[0][0]).isEqualTo(eager.columns()[0][0]);
+    }
+
+    @Test
     void streamingJoinMatchesEager()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);

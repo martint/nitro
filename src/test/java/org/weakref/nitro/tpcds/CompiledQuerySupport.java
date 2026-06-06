@@ -314,6 +314,101 @@ public final class CompiledQuerySupport
         };
     }
 
+    /**
+     * A selection-driven lazy {@link org.weakref.nitro.jit.StreamingPipeline.Source}: nothing is converted on
+     * {@code advance()}; each {@code materialize(columns, selection, count)} converts only the requested columns,
+     * for only the selected rows. Staged filtering calls it once per conjunct (decoding that conjunct's column for
+     * the rows that survived the earlier ones) and once for the payload -- so a column is converted only for the
+     * rows that reach the stage that needs it. Flat columns only.
+     */
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetLazySource(Allocator allocator, TpcdsParquetTables tables,
+            String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        int width = specs.size();
+        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+        Operator operator = scan(allocator, tables, table, names);
+        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        {
+            private Batch open;   // current batch, kept open so any column can be converted on demand in materialize()
+            private Mask mask;
+            private int currentRows;
+
+            @Override
+            public boolean advance()
+            {
+                if (open != null) {
+                    open.close();
+                    open = null;
+                }
+                while (operator.hasNext()) {
+                    Batch batch = operator.next();
+                    Mask batchMask = batch.borrowMask();
+                    int count = batchMask.count();
+                    if (count == 0) {
+                        batch.close();
+                        continue;
+                    }
+                    mask = batchMask;
+                    currentRows = count;
+                    open = batch;
+                    return true;
+                }
+                operator.close();
+                return false;
+            }
+
+            @Override
+            public int rows()
+            {
+                return currentRows;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] columns()
+            {
+                // Fallback for non-staged callers: convert every column over the whole batch.
+                return materialize(identity(width), identity(currentRows), currentRows);
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+            {
+                org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+                for (int column : columns) {
+                    out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable());
+                }
+                return out;
+            }
+        };
+    }
+
+    private static int[] identity(int count)
+    {
+        int[] identity = new int[count];
+        for (int i = 0; i < count; i++) {
+            identity[i] = i;
+        }
+        return identity;
+    }
+
+    /** Convert column {@code c} of {@code batch} to a flat column of {@code count} rows, row {@code j} being batch position {@code mask.position(selection[j])}. */
+    private static org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask mask, int c, int count, int[] selection, boolean nullable)
+    {
+        Vector vector = batch.output(c).borrow(Stream.VALUES);
+        Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
+        long[] values = new long[count];
+        boolean[] nullMask = nullable ? new boolean[count] : null;
+        for (int j = 0; j < count; j++) {
+            int position = mask.position(selection[j]);
+            boolean isNull = nulls != null && isNull(nulls, position);
+            if (nullMask != null) {
+                nullMask[j] = isNull;
+            }
+            values[j] = isNull ? 0 : longValue(vector, position);
+        }
+        return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+    }
+
     /** Drain a scan into per-column arrays, dropping any row that is null in any selected column. */
     private static long[][] drain(Operator operator)
     {
