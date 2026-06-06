@@ -92,6 +92,47 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesProjectionOfStringColumn()
+    {
+        // SELECT sum(v), s GROUP BY s -- s a dictionary string key; the final projection reorders and keeps the
+        // string column, which must carry its dictionary id and STRING type through (so the consumer can still
+        // reconstruct the value), not be coerced to a number.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))))
+                .withProjections(List.of(new Plan.Col(1), new Plan.Col(0)));   // sum, then the string key
+
+        byte[][] dictionary = {
+                "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "gamma".getBytes(java.nio.charset.StandardCharsets.UTF_8)};
+        int rows = 60_000;
+        int[] ids = new int[rows];
+        long[] v = new long[rows];
+        Map<Long, Long> reference = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            ids[i] = i % 3;
+            v[i] = (i % 13) + 1;
+            reference.merge((long) ids[i], v[i], Long::sum);
+        }
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.FLAT}};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, encodings)
+                .execute(new Column[][] {{new Column.StringColumn(ids, dictionary), new Column.FlatColumn(v)}}, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        assertThat(result.types()[1]).isEqualTo(Types.STRING);          // the projected key stays STRING
+        long[] sums = result.columns()[0];
+        long[] keyIds = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(sums[g]).isEqualTo(reference.get(keyIds[g]));
+            assertThat(new String(dictionary[(int) keyIds[g]], java.nio.charset.StandardCharsets.UTF_8)).isIn("alpha", "beta", "gamma");
+        }
+    }
+
+    @Test
     void compilesFinalProjection()
     {
         // SELECT sum(v) AS total, k, sum(v) * 2 AS doubled FROM t GROUP BY k -- a final projection that reorders

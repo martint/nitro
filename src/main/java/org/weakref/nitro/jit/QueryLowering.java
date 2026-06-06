@@ -98,6 +98,7 @@ public final class QueryLowering
     private final List<Plan.Aggregate> aggregates = new ArrayList<>();
     private Plan.Condition having;
     private Plan.Ordering ordering;
+    private final List<Plan.Expr> projections = new ArrayList<>();
     private int combined;   // next combined position to assign
 
     private QueryLowering() {}
@@ -189,6 +190,16 @@ public final class QueryLowering
         return this;
     }
 
+    /**
+     * Final SELECT projection over the result columns (group keys first, then aggregates, by position), applied
+     * after HAVING and ORDER BY / LIMIT. Use to reorder or drop result columns, or compute over them.
+     */
+    public QueryLowering select(Plan.Expr... projections)
+    {
+        this.projections.addAll(List.of(projections));
+        return this;
+    }
+
     public Lowered lower()
     {
         Plan.Pipeline pipeline = new Plan.Pipeline(
@@ -198,7 +209,8 @@ public final class QueryLowering
                 groupKeys,
                 aggregates,
                 having,
-                ordering);
+                ordering,
+                projections);
         List<Input> inputs = new ArrayList<>();
         inputs.add(probe);
         inputs.addAll(builds);
