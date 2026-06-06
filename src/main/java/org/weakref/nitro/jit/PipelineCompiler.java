@@ -930,7 +930,7 @@ public final class PipelineCompiler
         out.append("    for (int i = 0; i < probeRows; i++) {\n");
         String indent = "      ";
         for (int k = 0; k < joinCount; k++) {
-            emitProbeLookup(out, indent, k, joins.get(k), pipeline, nullable);
+            emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
             out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
             indent += "  ";
         }
@@ -1026,19 +1026,22 @@ public final class PipelineCompiler
     }
 
     /** Per-row lookup for join {@code k}, leaving {@code int buildRow<k>} in scope (-1 = no match). */
-    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, Plan.Pipeline pipeline, boolean[][] nullable)
+    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         int[] probeKeys = join.probeKeyColumns();
         int keyCount = probeKeys.length;
-        // A null probe key matches nothing (SQL: NULL never equals anything) -- short-circuit before the lookup.
+        // The probe key is resolved through the combined resolver, so it may be a fact (probe) column or a column
+        // from an earlier dimension already matched in this nest -- a snowflake join (e.g. fact -> customer ->
+        // customer_address keyed on customer's c_current_addr_sk). A null key matches nothing (SQL three-valued).
         StringBuilder keyNull = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
-            if (combinedNullable(pipeline, nullable, probeKeys[kx])) {
-                keyNull.append(keyNull.length() == 0 ? "" : " || ").append("pN").append(probeKeys[kx]).append("[i]");
+            String isNull = nullResolver.apply(probeKeys[kx]);
+            if (!isNull.equals("false")) {
+                keyNull.append(keyNull.length() == 0 ? "" : " || ").append(isNull);
             }
         }
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("long pk").append(k).append("_").append(kx).append(" = p").append(probeKeys[kx]).append("[i];\n");
+            out.append(indent).append("long pk").append(k).append("_").append(kx).append(" = ").append(resolver.apply(probeKeys[kx])).append(";\n");
         }
         out.append(indent).append("int buildRow").append(k).append(";\n");
         if (keyNull.length() > 0) {

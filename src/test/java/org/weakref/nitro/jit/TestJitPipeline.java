@@ -855,6 +855,50 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesSnowflakeJoin()
+    {
+        // SELECT sum(d2.v) FROM fact JOIN d1 ON fact.k = d1.k JOIN d2 ON d1.fk = d2.k -- the second join keys on a
+        // column from the first dimension (d1.fk), not the fact: a snowflake. The probe key for join 1 must be read
+        // from d1's matched row, not the probe row.
+        Plan.Build d1 = new Plan.Build(2, 0);          // [d1.k, d1.fk]
+        Plan.Build d2 = new Plan.Build(2, 0);          // [d2.k, d2.v]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,                                       // probe: [fact.k]
+                List.of(new Plan.Join(d1, 0), new Plan.Join(d2, 2)),   // join1 keys on combined col 2 = d1.fk
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(4))));  // d2.v
+
+        int dim1 = 100;
+        int dim2 = 10;
+        long[] d1Key = new long[dim1];
+        long[] d1Fk = new long[dim1];
+        for (int i = 0; i < dim1; i++) {
+            d1Key[i] = i;
+            d1Fk[i] = i % dim2;            // each d1 row points at a d2 row
+        }
+        long[] d2Key = new long[dim2];
+        long[] d2Val = new long[dim2];
+        for (int j = 0; j < dim2; j++) {
+            d2Key[j] = j;
+            d2Val[j] = (j + 1) * 7L;
+        }
+        int rows = 60_000;
+        long[] factKey = new long[rows];
+        long expected = 0;
+        for (int i = 0; i < rows; i++) {
+            factKey[i] = i % dim1;
+            expected += d2Val[(int) d1Fk[(int) factKey[i]]];
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+                new long[][][] {{factKey}, {d1Key, d1Fk}, {d2Key, d2Val}}, new int[] {rows, dim1, dim2});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+        assertThat(expected).isGreaterThan(0);
+    }
+
+    @Test
     void compilesStringMatchInsideCaseAggregate()
     {
         // SELECT k, sum(CASE WHEN s IN ('CA') THEN v ELSE 0 END) GROUP BY k -- s is a dictionary string column and
