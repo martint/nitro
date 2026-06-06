@@ -29,8 +29,27 @@ public final class CompiledTpcdsQueries
 {
     private CompiledTpcdsQueries() {}
 
-    /** A ported query: its name-based lowering and where to find a string result column's dictionary. */
-    public record Ported(QueryLowering query, int stringResultColumn, int dictInput, int dictColumn) {}
+    /**
+     * Where a dictionary-string result column's dictionary lives: {@code resultColumn} is the position in the
+     * compiled result; {@code dictInput}/{@code dictColumn} address the loaded {@link QueryLowering.Input} whose
+     * {@code StringColumn} holds the (ordered) dictionary used to reconstruct it.
+     */
+    public record DictRef(int resultColumn, int dictInput, int dictColumn) {}
+
+    /** A ported query: its name-based lowering and where to find each string result column's dictionary. */
+    public record Ported(QueryLowering query, List<DictRef> stringColumns)
+    {
+        public Ported
+        {
+            stringColumns = List.copyOf(stringColumns);
+        }
+
+        /** Convenience for a query with a single (or no, when {@code stringResultColumn < 0}) string result column. */
+        public Ported(QueryLowering query, int stringResultColumn, int dictInput, int dictColumn)
+        {
+            this(query, stringResultColumn < 0 ? List.of() : List.of(new DictRef(stringResultColumn, dictInput, dictColumn)));
+        }
+    }
 
     public static Ported query03()
     {
@@ -179,6 +198,71 @@ public final class CompiledTpcdsQueries
                 .aggregate("sum", "ss_ext_sales_price")
                 .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true), new Plan.SortKey(0, false)), 100));
         return new Ported(query, 1, 2, 3);
+    }
+
+    public static Ported query62()
+    {
+        return shippingDelayBuckets("web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk",
+                "ws_ship_mode_sk", "ws_web_site_sk", "web_site", "web_site_sk", "web_name");
+    }
+
+    public static Ported query99()
+    {
+        return shippingDelayBuckets("catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk",
+                "cs_ship_mode_sk", "cs_call_center_sk", "call_center", "cc_call_center_sk", "cc_name");
+    }
+
+    /**
+     * Q62/Q99 shape: a sales table joined to date_dim (d_month_seq in [1200,1211]), warehouse, ship_mode, and a
+     * third dimension (web_site / call_center); GROUP BY three dimension names; five {@code sum(CASE)} counts
+     * bucketing the shipping delay {@code days = ship_date_sk - sold_date_sk} into 0-30 / 31-60 / 61-90 / 91-120 /
+     * >120; ORDER BY the three names LIMIT 100. The warehouse name is genuinely NULL for one warehouse, so the
+     * string group keys are declared nullable (a null name forms its own group, kept distinct from any real name),
+     * and {@code days} is null when sold_date is null, falling through every bucket's {@code CASE} to 0.
+     */
+    private static Ported shippingDelayBuckets(String salesTable, String shipDate, String soldDate, String warehouseFk,
+            String shipModeFk, String thirdFk, String thirdTable, String thirdKey, String thirdName)
+    {
+        QueryLowering query = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(shipDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(warehouseFk, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(shipModeFk, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(thirdFk, ColumnEncoding.FLAT, true))
+                .join("date_dim", shipDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq"))
+                .join("warehouse", warehouseFk, "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"),
+                        new QueryLowering.Column("w_warehouse_name", ColumnEncoding.STRING, true))
+                .join("ship_mode", shipModeFk, "sm_ship_mode_sk",
+                        new QueryLowering.Column("sm_ship_mode_sk"),
+                        new QueryLowering.Column("sm_type", ColumnEncoding.STRING, true))
+                .join(thirdTable, thirdFk, thirdKey,
+                        new QueryLowering.Column(thirdKey),
+                        new QueryLowering.Column(thirdName, ColumnEncoding.STRING, true));
+        Plan.Expr days = new Plan.Bin("-", query.column(shipDate), query.column(soldDate));
+        query.where(
+                        new Plan.Predicate(">", query.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", query.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("w_warehouse_name", "sm_type", thirdName)
+                .aggregate("sum", bucket(new Plan.Predicate("<", days, new Plan.Lit(31))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(30)), new Plan.Predicate("<", days, new Plan.Lit(61)))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(60)), new Plan.Predicate("<", days, new Plan.Lit(91)))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(90)), new Plan.Predicate("<", days, new Plan.Lit(121)))))
+                .aggregate("sum", bucket(new Plan.Predicate(">", days, new Plan.Lit(120))))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+        return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1), new DictRef(2, 4, 1)));
+    }
+
+    /** {@code CASE WHEN condition THEN 1 ELSE 0 END} -- a 0/1 indicator for one shipping-delay bucket. */
+    private static Plan.Expr bucket(Plan.Condition condition)
+    {
+        return new Plan.Case(List.of(new Plan.Case.Branch(condition, new Plan.Lit(1))), new Plan.Lit(0));
     }
 
     public static Ported query96()

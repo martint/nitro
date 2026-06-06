@@ -164,6 +164,13 @@ public final class QueryLowering
         return this;
     }
 
+    /** Aggregate over a computed expression (e.g. {@code sum(CASE ... END)}), columns referenced by position. */
+    public QueryLowering aggregate(String function, Plan.Expr input)
+    {
+        aggregates.add(new Plan.Aggregate(function, input));
+        return this;
+    }
+
     public QueryLowering count()
     {
         aggregates.add(new Plan.Aggregate("count", null));

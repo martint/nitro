@@ -75,9 +75,21 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query62()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query62(), TpcdsParquetSupport::query62);
+    }
+
+    @Test
     void query96()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query96(), TpcdsParquetSupport::query96);
+    }
+
+    @Test
+    void query99()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query99(), TpcdsParquetSupport::query99);
     }
 
     @Test
@@ -133,8 +145,8 @@ public class TestCompiledTpcdsQueries
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
-        if (ported.stringResultColumn() >= 0) {
-            dictionaries[ported.stringResultColumn()] = ((Column.StringColumn) run.inputs()[ported.dictInput()][ported.dictColumn()]).dictionary();
+        for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
+            dictionaries[ref.resultColumn()] = ((Column.StringColumn) run.inputs()[ref.dictInput()][ref.dictColumn()]).dictionary();
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
 
