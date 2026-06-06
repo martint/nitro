@@ -170,7 +170,7 @@ public final class PipelineCompiler
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         out.append("      for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "        ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+        emitRowBody(out, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
         out.append("      }\n");
         out.append("    }\n");
 
@@ -369,7 +369,8 @@ public final class PipelineCompiler
         if (needsMix) {
             emitMix(out);
         }
-        List<Type> resultTypes = outputColumnTypes(pipeline, encodings);
+        boolean projectionOnly = projectionOnly(pipeline);
+        List<Type> resultTypes = projectionOnly ? projectionOutputTypes(pipeline, encodings) : outputColumnTypes(pipeline, encodings);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
         if (!pipeline.joins().isEmpty()) {
             emitJoinBody(out, pipeline, encodings, nullable, resultTypes);
@@ -380,7 +381,9 @@ public final class PipelineCompiler
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having(), resultTypes);
         emitApplyOrdering(out, pipeline.ordering(), resultTypes);
-        emitApplyProjection(out, pipeline.projections(), resultTypes);
+        // A projection-only pipeline applies its projections inline (they define the output), so there is no
+        // separate post-aggregation projection step.
+        emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
         out.append("}\n");
         return out.toString();
     }
@@ -544,6 +547,110 @@ public final class PipelineCompiler
         return type == Types.DOUBLE ? "Double.doubleToRawLongBits(" + value + ")" : value;
     }
 
+    // ---- projection-only (no GROUP BY, no aggregates): one output row per surviving input row ----
+
+    /** A pipeline that selects/computes columns over its (joined, filtered) rows without aggregating -- a SELECT ... LIMIT shape. */
+    private static boolean projectionOnly(Plan.Pipeline pipeline)
+    {
+        return pipeline.groupKeys().isEmpty() && pipeline.aggregates().isEmpty() && !pipeline.projections().isEmpty();
+    }
+
+    /** Logical types of every combined input column (probe then each build): STRING for a dictionary column, else LONG. */
+    private static List<Type> combinedInputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    {
+        int total = pipeline.columnCount();
+        for (Plan.Join join : pipeline.joins()) {
+            total += join.build().columnCount();
+        }
+        List<Type> types = new ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            types.add(combinedEncoding(pipeline, encodings, i) == ColumnEncoding.STRING ? Types.STRING : Types.LONG);
+        }
+        return types;
+    }
+
+    /** Output types of a projection-only pipeline: each projection's type over the combined input columns. */
+    private static List<Type> projectionOutputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    {
+        List<Type> inputTypes = combinedInputTypes(pipeline, encodings);
+        List<Type> types = new ArrayList<>();
+        for (Plan.Expr projection : pipeline.projections()) {
+            types.add(projectionType(projection, inputTypes));
+        }
+        return types;
+    }
+
+    /** Whether projection {@code p} carries a null mask: a column reference to a nullable source column (computed projections are produced non-null). */
+    private static boolean projectionCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, int p)
+    {
+        return pipeline.projections().get(p) instanceof Plan.Col col && combinedNullable(pipeline, nullable, col.index());
+    }
+
+    /** Declare the growable output arrays (one per projection, plus a null mask per nullable column reference) before the row loop. */
+    private static void emitProjectionState(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable)
+    {
+        int count = pipeline.projections().size();
+        out.append("    int outCap = 1024; int outRow = 0;\n");
+        for (int p = 0; p < count; p++) {
+            out.append("    long[] out").append(p).append(" = new long[outCap];\n");
+            if (projectionCarriesNull(pipeline, nullable, p)) {
+                out.append("    boolean[] outN").append(p).append(" = new boolean[outCap];\n");
+            }
+        }
+    }
+
+    /** Append one surviving row's projected values to the output arrays, growing them when full. */
+    private static void emitProjectionAppend(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings,
+            boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        List<Plan.Expr> projections = pipeline.projections();
+        List<Type> types = projectionOutputTypes(pipeline, encodings);
+        out.append(indent).append("if (outRow == outCap) {\n");
+        out.append(indent).append("  outCap *= 2;\n");
+        for (int p = 0; p < projections.size(); p++) {
+            out.append(indent).append("  out").append(p).append(" = java.util.Arrays.copyOf(out").append(p).append(", outCap);\n");
+            if (projectionCarriesNull(pipeline, nullable, p)) {
+                out.append(indent).append("  outN").append(p).append(" = java.util.Arrays.copyOf(outN").append(p).append(", outCap);\n");
+            }
+        }
+        out.append(indent).append("}\n");
+        for (int p = 0; p < projections.size(); p++) {
+            out.append(indent).append("out").append(p).append("[outRow] = ")
+                    .append(encodeSlot(types.get(p), expr(projections.get(p), resolver, nullResolver, stringMaskIds))).append(";\n");
+            if (projectionCarriesNull(pipeline, nullable, p)) {
+                out.append(indent).append("outN").append(p).append("[outRow] = ")
+                        .append(nullExpr(projections.get(p), resolver, nullResolver, stringMaskIds)).append(";\n");
+            }
+        }
+        out.append(indent).append("outRow++;\n");
+    }
+
+    /** Trim the output arrays and return the materialized result (then ORDER BY / LIMIT); projections were applied inline. */
+    private static void emitProjectionResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        int count = pipeline.projections().size();
+        out.append("    long[][] result = new long[").append(count).append("][];\n");
+        for (int p = 0; p < count; p++) {
+            out.append("    result[").append(p).append("] = java.util.Arrays.copyOf(out").append(p).append(", outRow);\n");
+        }
+        emitResultTypes(out, "    ", resultTypes);
+        boolean anyNull = false;
+        for (int p = 0; p < count; p++) {
+            anyNull |= projectionCarriesNull(pipeline, nullable, p);
+        }
+        if (anyNull) {
+            out.append("    boolean[][] resultNulls = new boolean[").append(count).append("][];\n");
+            for (int p = 0; p < count; p++) {
+                if (projectionCarriesNull(pipeline, nullable, p)) {
+                    out.append("    resultNulls[").append(p).append("] = java.util.Arrays.copyOf(outN").append(p).append(", outRow);\n");
+                }
+            }
+            out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(outRow, result, types, resultNulls));\n");
+            return;
+        }
+        out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(outRow, result, types));\n");
+    }
+
     // ---- single-input scan -> filter -> aggregate ----
 
     private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
@@ -584,16 +691,23 @@ public final class PipelineCompiler
             IntFunction<String> sampleResolver = index -> index == dictKey ? "cIds" + index + "[s]" : scanAccess(index, encodingOf(encodings, 0, index), "s");
             emitGroupSampleProlog(out, pipeline.groupKeys().getFirst(), sampleResolver);
         }
-        if (grouped) {
+        boolean projection = projectionOnly(pipeline);
+        if (projection) {
+            emitProjectionState(out, pipeline, nullable);
+        }
+        else if (grouped) {
             emitGroupedState(out, pipeline, nullable, speculate);
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate);
+        emitRowBody(out, "      ", pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate);
         out.append("    }\n");
-        if (grouped) {
+        if (projection) {
+            emitProjectionResult(out, pipeline, nullable, resultTypes);
+        }
+        else if (grouped) {
             emitGroupedResult(out, pipeline, nullable, speculate, dictKeyColumn, resultTypes);
         }
         else {
@@ -901,7 +1015,11 @@ public final class PipelineCompiler
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
-        if (grouped) {
+        boolean projection = projectionOnly(pipeline);
+        if (projection) {
+            emitProjectionState(out, pipeline, nullable);
+        }
+        else if (grouped) {
             emitGroupedState(out, pipeline, nullable, false);
         }
         else {
@@ -935,7 +1053,7 @@ public final class PipelineCompiler
             indent += "  ";
         }
         // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
-        emitRowBody(out, indent, pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+        emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
         for (int k = 0; k < joinCount; k++) {
             indent = indent.substring(2);
             out.append(indent).append("}\n");
@@ -945,7 +1063,10 @@ public final class PipelineCompiler
             out.append("    }\n");   // close the batch loop
         }
 
-        if (grouped) {
+        if (projection) {
+            emitProjectionResult(out, pipeline, nullable, resultTypes);
+        }
+        else if (grouped) {
             emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);
         }
         else {
@@ -1088,7 +1209,7 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
     {
         String bodyIndent = indent;
         if (!pipeline.filters().isEmpty()) {
@@ -1099,7 +1220,10 @@ public final class PipelineCompiler
             out.append(indent).append("if (").append(condition).append(") {\n");
             bodyIndent = indent + "  ";
         }
-        if (grouped) {
+        if (projectionOnly(pipeline)) {
+            emitProjectionAppend(out, bodyIndent, pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
+        }
+        else if (grouped) {
             emitGroupedAccumulate(out, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
         }
         else {
@@ -1587,6 +1711,13 @@ public final class PipelineCompiler
         for (Plan.Aggregate aggregate : pipeline.aggregates()) {
             if (aggregate.input() != null) {
                 collectColumns(aggregate.input(), referenced);
+            }
+        }
+        // A projection-only pipeline's projections are over the input columns (they define the output), so they
+        // must be loaded too. (For an aggregating pipeline, projections are over result columns -- not inputs.)
+        if (projectionOnly(pipeline)) {
+            for (Plan.Expr projection : pipeline.projections()) {
+                collectColumns(projection, referenced);
             }
         }
         return referenced;

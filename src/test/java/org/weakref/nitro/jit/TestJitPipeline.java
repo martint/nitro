@@ -92,6 +92,47 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesProjectionOnlyPipeline()
+    {
+        // SELECT v, k FROM t WHERE k > 50 ORDER BY v DESC LIMIT 5 -- no GROUP BY and no aggregates: one output row
+        // per surviving input row (a materialize/SELECT shape), then ORDER BY / LIMIT.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Predicate(">", new Plan.Col(0), new Plan.Lit(50))),
+                List.of(),
+                List.of())
+                .withProjections(List.of(new Plan.Col(1), new Plan.Col(0)))
+                .withOrdering(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 5));
+
+        int rows = 40_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 100;
+            v[i] = (i * 7) % 1000;
+        }
+        // Reference: rows with k > 50, top 5 by k descending (column 1 of the projection is k).
+        List<long[]> kept = new java.util.ArrayList<>();
+        for (int i = 0; i < rows; i++) {
+            if (k[i] > 50) {
+                kept.add(new long[] {v[i], k[i]});
+            }
+        }
+        kept.sort((a, b) -> Long.compare(b[1], a[1]));
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        assertThat(result.rowCount()).isEqualTo(5);
+        for (int r = 0; r < 5; r++) {
+            assertThat(result.columns()[1][r]).as("k at rank %d", r).isEqualTo(kept.get(r)[1]);
+        }
+        // Every output row came from a kept (k > 50) input row.
+        for (int r = 0; r < 5; r++) {
+            assertThat(result.columns()[1][r]).isGreaterThan(50);
+        }
+    }
+
+    @Test
     void compilesProjectionOfStringColumn()
     {
         // SELECT sum(v), s GROUP BY s -- s a dictionary string key; the final projection reorders and keeps the
