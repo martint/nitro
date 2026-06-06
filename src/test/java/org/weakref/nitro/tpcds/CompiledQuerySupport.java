@@ -422,6 +422,54 @@ public final class CompiledQuerySupport
         return new LoweredResult(lowered.compile().execute(loaded.inputs(), loaded.rowCounts()), loaded.inputs());
     }
 
+    /**
+     * Run a two-stage (pipeline-breaker) query: execute {@code subquery}, materialize its result into a relation,
+     * and run {@code main} with that relation substituted for the input whose table name is {@code virtualTable}
+     * (all other {@code main} inputs are read from Parquet). This is the decorrelated correlated-subquery shape --
+     * the subquery's aggregate feeds {@code main} as a join build, exactly as the optimizer produces it.
+     */
+    public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
+    {
+        CompiledPipeline.Result subResult = runLowered(allocator, tables, subquery).result();
+        org.weakref.nitro.jit.Column[] materialized = materialize(subResult);
+        int subRows = subResult.rowCount();
+
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
+        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        int[] rowCounts = new int[sources.size()];
+        for (int s = 0; s < sources.size(); s++) {
+            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
+            if (source.table().equals(virtualTable)) {
+                inputs[s] = materialized;
+                rowCounts[s] = subRows;
+            }
+            else {
+                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+                DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+                inputs[s] = loaded.columns;
+                rowCounts[s] = loaded.rows;
+            }
+        }
+        return new LoweredResult(main.compile().execute(inputs, rowCounts), inputs);
+    }
+
+    /** Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s so it can feed a downstream stage as a relation. */
+    private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result)
+    {
+        long[][] columns = result.columns();
+        boolean[][] nulls = result.nulls();
+        org.weakref.nitro.jit.Column[] materialized = new org.weakref.nitro.jit.Column[columns.length];
+        for (int c = 0; c < columns.length; c++) {
+            org.weakref.nitro.jit.Type type = result.types()[c];
+            if (type == org.weakref.nitro.jit.Types.STRING) {
+                throw new UnsupportedOperationException("materializing a string result column across stages is not supported yet");
+            }
+            materialized[c] = new org.weakref.nitro.jit.Column.FlatColumn(columns[c], nulls == null ? null : nulls[c]);
+        }
+        return materialized;
+    }
+
     private record DrainedInput(org.weakref.nitro.jit.Column[] columns, int rows) {}
 
     /** Drain a scan into one {@link org.weakref.nitro.jit.Column} per spec, preserving nulls; string columns build a dictionary. */

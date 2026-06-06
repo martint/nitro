@@ -293,6 +293,71 @@ public final class CompiledTpcdsQueries
         return new Ported(query, List.of(new DictRef(0, 6, 1), new DictRef(1, 6, 2), new DictRef(2, 6, 3)));
     }
 
+    /**
+     * A two-stage (pipeline-breaker) query: a {@code subquery} pipeline whose result feeds the {@code main}
+     * pipeline as a join build (the decorrelated form of a correlated aggregate subquery -- there are no correlated
+     * subqueries at the operator level). {@code virtualTable} is the placeholder table name {@code main} joins to;
+     * the harness substitutes the subquery's result for it rather than reading Parquet.
+     */
+    public record MultiStage(QueryLowering subquery, QueryLowering main, String virtualTable, List<DictRef> stringColumns) {}
+
+    public static MultiStage query92()
+    {
+        return excessDiscountSum("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_discount_amt", 350);
+    }
+
+    public static MultiStage query32()
+    {
+        return excessDiscountSum("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_discount_amt", 977);
+    }
+
+    /**
+     * Q92/Q32 shape, decorrelated: stage A computes, per item, the rounded average discount over a 90-day window;
+     * stage B sums the discounts that exceed 1.3x their item's average (tested fraction-free as 13*avg < 10*discount).
+     * The subquery's per-item averages join stage B as a dimension -- the pipeline-breaker handoff.
+     */
+    private static MultiStage excessDiscountSum(String salesTable, String soldDate, String itemKey, String discount, long manufactId)
+    {
+        QueryLowering subquery = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(itemKey, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(discount, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date"));
+        subquery.where(
+                        new Plan.Predicate(">", subquery.column("d_date"), new Plan.Lit(10_982)),
+                        new Plan.Predicate("<", subquery.column("d_date"), new Plan.Lit(11_074)))
+                .groupBy(itemKey)
+                .aggregate("sum", discount)
+                .aggregate("count", discount)   // count of non-null discounts (CountColumn)
+                // SELECT item, round(sum / count) -- the per-item average, matching divide_round_i64.
+                .select(new Plan.Col(0), new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)));
+
+        QueryLowering main = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(itemKey, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(discount, ColumnEncoding.FLAT, true))
+                .join("item", itemKey, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manufact_id"))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date"))
+                .join("__item_averages__", itemKey, "ia_item",
+                        new QueryLowering.Column("ia_item"),
+                        new QueryLowering.Column("ia_average"));
+        main.where(
+                        new Plan.Predicate("=", main.column("i_manufact_id"), new Plan.Lit(manufactId)),
+                        new Plan.Predicate(">", main.column("d_date"), new Plan.Lit(10_982)),
+                        new Plan.Predicate("<", main.column("d_date"), new Plan.Lit(11_074)),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("ia_average"), new Plan.Lit(13)),
+                                new Plan.Bin("*", main.column(discount), new Plan.Lit(10))))
+                .aggregate("sum", discount);
+        return new MultiStage(subquery, main, "__item_averages__", List.of());
+    }
+
     public static Ported query43()
     {
         // store_sales JOIN date_dim(d_year=2000) JOIN store(s_gmt_offset=-5, stored as the scaled decimal -500);

@@ -63,6 +63,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query32()
+    {
+        assertMultiStageMatchesHarness(CompiledTpcdsQueries.query32(), TpcdsParquetSupport::query32);
+    }
+
+    @Test
     void query42()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query42(), TpcdsParquetSupport::query42);
@@ -96,6 +102,12 @@ public class TestCompiledTpcdsQueries
     void query91()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query91(), TpcdsParquetSupport::query91);
+    }
+
+    @Test
+    void query92()
+    {
+        assertMultiStageMatchesHarness(CompiledTpcdsQueries.query92(), TpcdsParquetSupport::query92);
     }
 
     @Test
@@ -162,8 +174,26 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
+    }
+
+    /** As {@link #assertMatchesHarness}, but for a two-stage (pipeline-breaker) query run via {@code runMultiStage}. */
+    private static void assertMultiStageMatchesHarness(CompiledTpcdsQueries.MultiStage staged, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runMultiStage(
+                new Allocator(), tables, staged.subquery().lower(), staged.main().lower(), staged.virtualTable());
+        assertBridgedRowsMatch(run, staged.stringColumns(), harness, tables);
+    }
+
+    /** Bridge a compiled result back to an operator, reconstruct its dictionary-string columns, and assert it equals the harness chain. */
+    private static void assertBridgedRowsMatch(CompiledQuerySupport.LoweredResult run, List<CompiledTpcdsQueries.DictRef> stringColumns,
+            HarnessChain harness, TpcdsParquetTables tables)
+    {
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
-        for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
+        for (CompiledTpcdsQueries.DictRef ref : stringColumns) {
             dictionaries[ref.resultColumn()] = ((Column.StringColumn) run.inputs()[ref.dictInput()][ref.dictColumn()]).dictionary();
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
