@@ -1089,41 +1089,168 @@ public final class PipelineCompiler
             emitGlobalState(out, pipeline.aggregates());
         }
 
-        // Probe rows: one pass over the materialized probe (eager), or batch-by-batch from the source (streaming).
-        if (streaming) {
-            out.append("    while (source.advance()) {\n");
-            out.append("      org.weakref.nitro.jit.Column[] probe = source.columns(); int probeRows = source.rows();\n");
-        }
-        else {
-            out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
-        }
-        for (int column : probeReferenced) {
-            emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
-        }
-        for (int s = 0; s < stringMatches.size(); s++) {
-            Plan.Condition match = stringMatches.get(s);
-            int column = stringMatchColumn(match);
-            if (column < probeColumns) {
-                emitStringMaskPrelude(out, match, s, probeVars(column).stringDict());
+        // Join-driven late materialization (streaming only): decode just the probe's join keys and filter columns,
+        // run the joins + filters recording each surviving probe row and its matched build rows, then materialize
+        // the probe payload columns (measures, group keys) for only the survivors -- skipping the payload's
+        // conversion for probe rows that fail the joins/filters. Falls back to a single eager pass when not
+        // streaming, projecting, or when there is no deferrable probe payload (e.g. count(*)).
+        TreeSet<Integer> eagerProbe = new TreeSet<>();
+        for (Plan.Join join : joins) {
+            for (int key : join.probeKeyColumns()) {
+                if (key < probeColumns) {
+                    eagerProbe.add(key);
+                }
             }
         }
+        for (Plan.Condition filter : pipeline.filters()) {
+            TreeSet<Integer> filterCols = new TreeSet<>();
+            collectConditionColumns(filter, filterCols);
+            for (int column : filterCols) {
+                if (column < probeColumns) {
+                    eagerProbe.add(column);
+                }
+            }
+        }
+        TreeSet<Integer> payloadProbe = new TreeSet<>();
+        for (int column : accumulateColumns(pipeline)) {
+            if (column < probeColumns) {
+                payloadProbe.add(column);
+            }
+        }
+        boolean lateMaterialize = streaming && !projection && !payloadProbe.isEmpty();
 
-        out.append("    for (int i = 0; i < probeRows; i++) {\n");
-        String indent = "      ";
-        for (int k = 0; k < joinCount; k++) {
-            emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
-            out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
-            indent += "  ";
-        }
-        // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
-        emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
-        for (int k = 0; k < joinCount; k++) {
-            indent = indent.substring(2);
-            out.append(indent).append("}\n");
-        }
-        out.append("    }\n");
-        if (streaming) {
+        if (lateMaterialize) {
+            // In the survivor (accumulate) loop a probe column is read at the compacted index j, and a build column
+            // at the build row recorded for survivor j (bsel<k>[j]) rather than the live join variable.
+            IntFunction<String> lazyResolver = index -> {
+                if (index < probeColumns) {
+                    return joinAccess(combinedEncoding(pipeline, encodings, index), probeVars(index), "j");
+                }
+                int build = buildOf(joins, buildOffset, index);
+                return joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, index - buildOffset[build]), "bsel" + build + "[j]");
+            };
+            IntFunction<String> lazyNullResolver = index -> {
+                if (index < probeColumns) {
+                    return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), probeVars(index), "j");
+                }
+                int build = buildOf(joins, buildOffset, index);
+                return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, index - buildOffset[build]), "bsel" + build + "[j]");
+            };
+            List<Plan.Condition> filterMatches = new ArrayList<>();
+            for (Plan.Condition filter : pipeline.filters()) {
+                collectStringMatches(filter, filterMatches);
+            }
+            List<Plan.Condition> aggregateMatches = new ArrayList<>();
+            for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+                if (aggregate.input() != null) {
+                    collectStringMatchesInExpr(aggregate.input(), aggregateMatches);
+                }
+            }
+            out.append("    while (source.advance()) {\n");
+            out.append("      int probeRows = source.rows();\n");
+            out.append("      int[] selection = new int[probeRows]; int selected = 0;\n");
+            for (int k = 0; k < joinCount; k++) {
+                out.append("      int[] bsel").append(k).append(" = new int[probeRows];\n");
+            }
+            // Phase 1: eager probe columns -> joins + filters -> selection + matched build rows.
+            out.append("      {\n");
+            out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(eagerProbe)).append(");\n");
+            for (int column : eagerProbe) {
+                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
+            }
+            for (Plan.Condition match : filterMatches) {
+                if (stringMatchColumn(match) < probeColumns) {
+                    emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
+                }
+            }
+            out.append("        for (int i = 0; i < probeRows; i++) {\n");
+            String indent = "          ";
+            for (int k = 0; k < joinCount; k++) {
+                emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
+                out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+                indent += "  ";
+            }
+            if (!pipeline.filters().isEmpty()) {
+                String where = pipeline.filters().stream()
+                        .map(c -> conditionTrue(c, resolver, nullResolver, stringMaskIds))
+                        .collect(joining(" && "));
+                out.append(indent).append("if (").append(where).append(") {\n");
+                indent += "  ";
+            }
+            out.append(indent).append("selection[selected] = i;\n");
+            for (int k = 0; k < joinCount; k++) {
+                out.append(indent).append("bsel").append(k).append("[selected] = buildRow").append(k).append(";\n");
+            }
+            out.append(indent).append("selected++;\n");
+            if (!pipeline.filters().isEmpty()) {
+                indent = indent.substring(2);
+                out.append(indent).append("}\n");
+            }
+            for (int k = 0; k < joinCount; k++) {
+                indent = indent.substring(2);
+                out.append(indent).append("}\n");
+            }
+            out.append("        }\n");
+            out.append("      }\n");
+            // Phase 2: payload probe columns materialized for the survivors only, then folded in.
+            out.append("      {\n");
+            out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(payloadProbe)).append(", selection, selected);\n");
+            for (int column : payloadProbe) {
+                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
+            }
+            for (Plan.Condition match : aggregateMatches) {
+                if (stringMatchColumn(match) < probeColumns) {
+                    emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
+                }
+            }
+            out.append("        for (int j = 0; j < selected; j++) {\n");
+            if (grouped) {
+                emitGroupedAccumulate(out, "          ", pipeline, nullable, lazyResolver, lazyResolver, lazyNullResolver, stringMaskIds, false);
+            }
+            else {
+                emitGlobalAccumulate(out, "          ", pipeline.aggregates(), lazyResolver, lazyNullResolver, stringMaskIds);
+            }
+            out.append("        }\n");
+            out.append("      }\n");
             out.append("    }\n");   // close the batch loop
+        }
+        else {
+            // Probe rows: one pass over the materialized probe (eager), or batch-by-batch from the source (streaming).
+            if (streaming) {
+                out.append("    while (source.advance()) {\n");
+                out.append("      org.weakref.nitro.jit.Column[] probe = source.columns(); int probeRows = source.rows();\n");
+            }
+            else {
+                out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
+            }
+            for (int column : probeReferenced) {
+                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
+            }
+            for (int s = 0; s < stringMatches.size(); s++) {
+                Plan.Condition match = stringMatches.get(s);
+                int column = stringMatchColumn(match);
+                if (column < probeColumns) {
+                    emitStringMaskPrelude(out, match, s, probeVars(column).stringDict());
+                }
+            }
+
+            out.append("    for (int i = 0; i < probeRows; i++) {\n");
+            String indent = "      ";
+            for (int k = 0; k < joinCount; k++) {
+                emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
+                out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+                indent += "  ";
+            }
+            // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
+            emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+            for (int k = 0; k < joinCount; k++) {
+                indent = indent.substring(2);
+                out.append(indent).append("}\n");
+            }
+            out.append("    }\n");
+            if (streaming) {
+                out.append("    }\n");   // close the batch loop
+            }
         }
 
         if (projection) {

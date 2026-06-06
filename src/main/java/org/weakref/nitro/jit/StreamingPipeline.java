@@ -58,6 +58,22 @@ public interface StreamingPipeline
             }
             return gathered;
         }
+
+        /**
+         * Materialize the requested {@code columns} over the whole current batch (no selection). Used by
+         * join-driven late materialization for the eager columns -- the probe's join keys and filter columns --
+         * that must be decoded for every row to run the joins and filters; the payload columns are then
+         * materialized via {@link #materialize(int[], int[], int)} for only the surviving rows.
+         */
+        default Column[] materialize(int[] columns)
+        {
+            Column[] full = columns();
+            Column[] out = new Column[full.length];
+            for (int column : columns) {
+                out[column] = full[column];
+            }
+            return out;
+        }
     }
 
     /**
