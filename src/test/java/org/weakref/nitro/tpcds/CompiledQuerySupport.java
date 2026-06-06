@@ -431,7 +431,19 @@ public final class CompiledQuerySupport
     public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
     {
-        CompiledPipeline.Result subResult = runLowered(allocator, tables, subquery).result();
+        return runMultiStage(allocator, tables, subquery, subquery.compile(), main, main.compile(), virtualTable);
+    }
+
+    /**
+     * As {@link #runMultiStage}, but with both stages already compiled -- so a benchmark amortizes the one-time Java
+     * compilation (like a query plan) and measures only the per-invocation Parquet read + execution.
+     */
+    public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered subquery, CompiledPipeline subCompiled,
+            org.weakref.nitro.jit.QueryLowering.Lowered main, CompiledPipeline mainCompiled, String virtualTable)
+    {
+        LoadedInputs subInputs = loadLoweredInputs(allocator, tables, subquery);
+        CompiledPipeline.Result subResult = subCompiled.execute(subInputs.inputs(), subInputs.rowCounts());
         org.weakref.nitro.jit.Column[] materialized = materialize(subResult);
         int subRows = subResult.rowCount();
 
@@ -451,7 +463,7 @@ public final class CompiledQuerySupport
                 rowCounts[s] = loaded.rows;
             }
         }
-        return new LoweredResult(main.compile().execute(inputs, rowCounts), inputs);
+        return new LoweredResult(mainCompiled.execute(inputs, rowCounts), inputs);
     }
 
     /** Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s so it can feed a downstream stage as a relation. */

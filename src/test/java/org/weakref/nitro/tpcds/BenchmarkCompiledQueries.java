@@ -28,7 +28,6 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.jit.CompiledPipeline;
-import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.QueryLowering;
 
 import java.util.LinkedHashMap;
@@ -51,14 +50,18 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"03", "07", "26", "42", "52", "55", "96"})
+    @Param({"03", "07", "15", "26", "42", "43", "52", "55", "62", "91", "96", "99", "32", "34", "73", "92"})
     public String query;
 
     private Allocator allocator;
     private TpcdsParquetTables tables;
     private final Map<String, QueryLowering.Lowered> lowered = new LinkedHashMap<>();
     private final Map<String, CompiledPipeline> compiled = new LinkedHashMap<>();
-    private final Map<String, org.weakref.nitro.jit.StreamingPipeline> streaming = new LinkedHashMap<>();
+    private final Map<String, CompiledTpcdsQueries.MultiStage> multiStage = new LinkedHashMap<>();
+    private final Map<String, QueryLowering.Lowered> multiStageSub = new LinkedHashMap<>();
+    private final Map<String, CompiledPipeline> multiStageSubCompiled = new LinkedHashMap<>();
+    private final Map<String, QueryLowering.Lowered> multiStageMain = new LinkedHashMap<>();
+    private final Map<String, CompiledPipeline> multiStageMainCompiled = new LinkedHashMap<>();
 
     @Setup
     public void setup()
@@ -66,11 +69,20 @@ public class BenchmarkCompiledQueries
         tables = TpcdsParquetTables.requiredActual();
         compile("03", CompiledTpcdsQueries.query03());
         compile("07", CompiledTpcdsQueries.query07());
+        compile("15", CompiledTpcdsQueries.query15());
         compile("26", CompiledTpcdsQueries.query26());
         compile("42", CompiledTpcdsQueries.query42());
+        compile("43", CompiledTpcdsQueries.query43());
         compile("52", CompiledTpcdsQueries.query52());
         compile("55", CompiledTpcdsQueries.query55());
+        compile("62", CompiledTpcdsQueries.query62());
+        compile("91", CompiledTpcdsQueries.query91());
         compile("96", CompiledTpcdsQueries.query96());
+        compile("99", CompiledTpcdsQueries.query99());
+        compileMultiStage("32", CompiledTpcdsQueries.query32());
+        compileMultiStage("34", CompiledTpcdsQueries.query34());
+        compileMultiStage("73", CompiledTpcdsQueries.query73());
+        compileMultiStage("92", CompiledTpcdsQueries.query92());
     }
 
     private void compile(String name, CompiledTpcdsQueries.Ported ported)
@@ -78,7 +90,17 @@ public class BenchmarkCompiledQueries
         QueryLowering.Lowered plan = ported.query().lower();
         lowered.put(name, plan);
         compiled.put(name, plan.compile());   // one-time, like building a query plan
-        streaming.put(name, PipelineCompiler.compileStreaming(plan.pipeline(), plan.encodings(), plan.nullable()));
+    }
+
+    private void compileMultiStage(String name, CompiledTpcdsQueries.MultiStage staged)
+    {
+        multiStage.put(name, staged);
+        QueryLowering.Lowered sub = staged.subquery().lower();
+        QueryLowering.Lowered main = staged.main().lower();
+        multiStageSub.put(name, sub);
+        multiStageMain.put(name, main);
+        multiStageSubCompiled.put(name, sub.compile());
+        multiStageMainCompiled.put(name, main.compile());
     }
 
     @Setup(Level.Invocation)
@@ -90,6 +112,11 @@ public class BenchmarkCompiledQueries
     @Benchmark
     public Object full()
     {
+        if (multiStage.containsKey(query)) {
+            return CompiledQuerySupport.runMultiStage(allocator, tables,
+                    multiStageSub.get(query), multiStageSubCompiled.get(query),
+                    multiStageMain.get(query), multiStageMainCompiled.get(query), multiStage.get(query).virtualTable());
+        }
         CompiledQuerySupport.LoadedInputs inputs = CompiledQuerySupport.loadLoweredInputs(allocator, tables, lowered.get(query));
         return compiled.get(query).execute(inputs.inputs(), inputs.rowCounts());
     }
@@ -97,12 +124,9 @@ public class BenchmarkCompiledQueries
     @Benchmark
     public Object loadOnly()
     {
-        return CompiledQuerySupport.loadLoweredInputs(allocator, tables, lowered.get(query));
-    }
-
-    @Benchmark
-    public Object streaming()
-    {
-        return CompiledQuerySupport.runStreamingLowered(allocator, tables, lowered.get(query), streaming.get(query));
+        // For a multi-stage query the dominant Parquet read is the subquery's fact scan; the main stage's other
+        // input is the (in-memory) materialized subquery result, which has no Parquet table to load.
+        QueryLowering.Lowered plan = multiStage.containsKey(query) ? multiStageSub.get(query) : lowered.get(query);
+        return CompiledQuerySupport.loadLoweredInputs(allocator, tables, plan);
     }
 }
