@@ -135,6 +135,40 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void streamingLazyMatchesEagerForPortedQueries()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // Every single-stage ported query, run through the lazy streaming path (selection-driven / join-driven late
+        // materialization), must produce the same rows as the eager run -- so the lazy path can carry the headline
+        // benchmark without changing answers.
+        java.util.Map<String, CompiledTpcdsQueries.Ported> ported = new java.util.LinkedHashMap<>();
+        ported.put("03", CompiledTpcdsQueries.query03());
+        ported.put("07", CompiledTpcdsQueries.query07());
+        ported.put("15", CompiledTpcdsQueries.query15());
+        ported.put("26", CompiledTpcdsQueries.query26());
+        ported.put("42", CompiledTpcdsQueries.query42());
+        ported.put("43", CompiledTpcdsQueries.query43());
+        ported.put("52", CompiledTpcdsQueries.query52());
+        ported.put("55", CompiledTpcdsQueries.query55());
+        ported.put("62", CompiledTpcdsQueries.query62());
+        ported.put("91", CompiledTpcdsQueries.query91());
+        ported.put("96", CompiledTpcdsQueries.query96());
+        ported.put("99", CompiledTpcdsQueries.query99());
+
+        for (var entry : ported.entrySet()) {
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered = entry.getValue().query().lower();
+            org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(), tables, lowered).result();
+            org.weakref.nitro.jit.StreamingPipeline streaming =
+                    org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+            org.weakref.nitro.jit.CompiledPipeline.Result lazy =
+                    CompiledQuerySupport.runStreamingLowered(new Allocator(), tables, lowered, streaming, true);
+            assertThat(rows(lazy)).as("Q%s streaming-lazy vs eager", entry.getKey()).isEqualTo(rows(eager));
+        }
+    }
+
+    @Test
     void lateMaterializationJoinMatchesEager()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);

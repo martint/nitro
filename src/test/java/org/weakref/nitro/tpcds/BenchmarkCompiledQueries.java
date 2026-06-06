@@ -57,6 +57,7 @@ public class BenchmarkCompiledQueries
     private TpcdsParquetTables tables;
     private final Map<String, QueryLowering.Lowered> lowered = new LinkedHashMap<>();
     private final Map<String, CompiledPipeline> compiled = new LinkedHashMap<>();
+    private final Map<String, org.weakref.nitro.jit.StreamingPipeline> streaming = new LinkedHashMap<>();
     private final Map<String, CompiledTpcdsQueries.MultiStage> multiStage = new LinkedHashMap<>();
     private final Map<String, QueryLowering.Lowered> multiStageSub = new LinkedHashMap<>();
     private final Map<String, CompiledPipeline> multiStageSubCompiled = new LinkedHashMap<>();
@@ -90,6 +91,7 @@ public class BenchmarkCompiledQueries
         QueryLowering.Lowered plan = ported.query().lower();
         lowered.put(name, plan);
         compiled.put(name, plan.compile());   // one-time, like building a query plan
+        streaming.put(name, org.weakref.nitro.jit.PipelineCompiler.compileStreaming(plan.pipeline(), plan.encodings(), plan.nullable()));
     }
 
     private void compileMultiStage(String name, CompiledTpcdsQueries.MultiStage staged)
@@ -128,5 +130,17 @@ public class BenchmarkCompiledQueries
         // input is the (in-memory) materialized subquery result, which has no Parquet table to load.
         QueryLowering.Lowered plan = multiStage.containsKey(query) ? multiStageSub.get(query) : lowered.get(query);
         return CompiledQuerySupport.loadLoweredInputs(allocator, tables, plan);
+    }
+
+    @Benchmark
+    public Object streamingLazy()
+    {
+        // Single-stage queries stream the probe through the lazy source (selection-/join-driven late
+        // materialization). Multi-stage queries are not single-pipeline; they fall back to the eager path so the
+        // parameter stays comparable.
+        if (multiStage.containsKey(query)) {
+            return full();
+        }
+        return CompiledQuerySupport.runStreamingLowered(allocator, tables, lowered.get(query), streaming.get(query), true);
     }
 }
