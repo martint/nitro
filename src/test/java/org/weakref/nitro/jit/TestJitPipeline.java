@@ -131,6 +131,44 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesNullAwareCaseInAggregate()
+    {
+        // SELECT sum(CASE WHEN v > 5 THEN 1 ELSE 0) -- v nullable; a null v makes the WHEN unknown, so the row
+        // falls to ELSE (0), matching SQL three-valued logic rather than reading the null slot as a value.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Case(
+                        List.of(new Plan.Case.Branch(new Plan.Predicate(">", new Plan.Col(0), new Plan.Lit(5)), new Plan.Lit(1))),
+                        new Plan.Lit(0)))));
+
+        int rows = 50_000;
+        long[] v = new long[rows];
+        boolean[] vNull = new boolean[rows];
+        long expected = 0;
+        for (int i = 0; i < rows; i++) {
+            if (i % 4 == 0) {
+                vNull[i] = true;        // null -> CASE else -> 0
+            }
+            else {
+                v[i] = i % 11;          // 0..10
+                if (v[i] > 5) {
+                    expected++;
+                }
+            }
+        }
+
+        boolean[][] nullable = {{true}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        CompiledPipeline.Result result = compiled.execute(
+                new Column[][] {{new Column.FlatColumn(v, vNull)}}, new int[] {rows});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+        assertThat(expected).isGreaterThan(0);
+    }
+
+    @Test
     void compilesDecimalArithmetic()
     {
         // SELECT sum(p * q), sum(divide_scale_round_i64(p, q, 100)) -- decimal product and rescaling divide,

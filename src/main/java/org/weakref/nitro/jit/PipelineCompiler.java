@@ -1650,7 +1650,9 @@ public final class PipelineCompiler
     {
         StringBuilder out = new StringBuilder();
         for (Plan.Case.Branch branch : kase.branches()) {
-            out.append("(").append(condition(branch.condition(), resolver, nullResolver)).append(" ? ").append(expr(branch.value(), resolver, nullResolver)).append(" : ");
+            // Three-valued WHEN: a branch is taken only when its condition is TRUE -- a NULL operand (e.g. a null
+            // column in an arithmetic comparison) yields UNKNOWN, which falls through to the next branch / ELSE.
+            out.append("(").append(conditionTrue(branch.condition(), resolver, nullResolver, Map.of())).append(" ? ").append(expr(branch.value(), resolver, nullResolver)).append(" : ");
         }
         out.append(expr(kase.defaultValue(), resolver, nullResolver));
         out.append(")".repeat(kase.branches().size()));
