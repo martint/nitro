@@ -135,6 +135,37 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void lateMaterializationJoinMatchesEager()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // A selective star query: store_sales JOIN date_dim (d_year = 2001), GROUP BY ss_item_sk, sum measure.
+        // Streamed with a lazy probe source so join-driven late materialization converts ss_item_sk and the
+        // measure only for fact rows that join a surviving date -- byte-identical to the eager run.
+        org.weakref.nitro.jit.QueryLowering joinQuery = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sold_date_sk", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.jit.QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"),
+                        new org.weakref.nitro.jit.QueryLowering.Column("d_year"));
+        joinQuery.where(new org.weakref.nitro.jit.Plan.Predicate("=", joinQuery.column("d_year"), new org.weakref.nitro.jit.Plan.Lit(2001)))
+                .groupBy("ss_item_sk")
+                .aggregate("sum", "ss_ext_sales_price");
+        org.weakref.nitro.jit.QueryLowering.Lowered joinLowered = joinQuery.lower();
+
+        org.weakref.nitro.jit.CompiledPipeline.Result joinEager = CompiledQuerySupport.runLowered(new Allocator(), tables, joinLowered).result();
+        org.weakref.nitro.jit.StreamingPipeline joinStreaming =
+                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(joinLowered.pipeline(), joinLowered.encodings(), joinLowered.nullable());
+        org.weakref.nitro.jit.CompiledPipeline.Result joinLazy =
+                CompiledQuerySupport.runStreamingLowered(new Allocator(), tables, joinLowered, joinStreaming, true);
+
+        assertThat(rows(joinLazy)).isEqualTo(rows(joinEager));
+        assertThat(joinLazy.rowCount()).isGreaterThan(0);
+    }
+
+    @Test
     void lazyMaterializationMatchesEager()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);

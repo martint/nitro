@@ -379,6 +379,12 @@ public final class CompiledQuerySupport
                 }
                 return out;
             }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+            {
+                return materialize(columns, identity(currentRows), currentRows);
+            }
         };
     }
 
@@ -495,6 +501,17 @@ public final class CompiledQuerySupport
     public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, TpcdsParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming)
     {
+        return runStreamingLowered(allocator, tables, lowered, streaming, false);
+    }
+
+    /**
+     * As {@link #runStreamingLowered}, but when {@code lazyProbe} is set the probe (fact) is streamed from a
+     * selection-driven lazy source -- so join-driven late materialization converts the probe's payload columns only
+     * for rows that survive the dimension joins.
+     */
+    public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
+    {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
         int buildCount = sources.size() - 1;
         org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
@@ -507,7 +524,10 @@ public final class CompiledQuerySupport
             buildRowCounts[b] = loaded.rows;
         }
         org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
-        return streaming.execute(parquetFlatSource(allocator, tables, probe.table(), probe.columns()), builds, buildRowCounts);
+        org.weakref.nitro.jit.StreamingPipeline.Source source = lazyProbe
+                ? parquetLazySource(allocator, tables, probe.table(), probe.columns())
+                : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
+        return streaming.execute(source, builds, buildRowCounts);
     }
 
     /** Load a lowered query's inputs from Parquet and run it. */
