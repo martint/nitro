@@ -21,6 +21,52 @@ package org.weakref.nitro.jit;
  */
 public sealed interface Column
 {
+    /**
+     * Gather this column to the first {@code count} positions of {@code selection} -- the row {@code j} of the
+     * result is the source's row {@code selection[j]}. Used by selection-driven lazy materialization: a payload
+     * column is compacted to (only) the rows that survived a pipeline's row-reducing predicates. A constant column
+     * is selection-invariant and returned as is.
+     */
+    static Column gather(Column column, int[] selection, int count)
+    {
+        return switch (column) {
+            case ConstantColumn constant -> constant;
+            case FlatColumn flat -> {
+                long[] values = new long[count];
+                boolean[] nulls = flat.nulls() == null ? null : new boolean[count];
+                for (int j = 0; j < count; j++) {
+                    values[j] = flat.values()[selection[j]];
+                    if (nulls != null) {
+                        nulls[j] = flat.nulls()[selection[j]];
+                    }
+                }
+                yield new FlatColumn(values, nulls);
+            }
+            case DictionaryColumn dictionary -> {
+                int[] ids = new int[count];
+                boolean[] nulls = dictionary.nulls() == null ? null : new boolean[count];
+                for (int j = 0; j < count; j++) {
+                    ids[j] = dictionary.ids()[selection[j]];
+                    if (nulls != null) {
+                        nulls[j] = dictionary.nulls()[selection[j]];
+                    }
+                }
+                yield new DictionaryColumn(ids, dictionary.dictionary(), nulls);
+            }
+            case StringColumn string -> {
+                int[] ids = new int[count];
+                boolean[] nulls = string.nulls() == null ? null : new boolean[count];
+                for (int j = 0; j < count; j++) {
+                    ids[j] = string.ids()[selection[j]];
+                    if (nulls != null) {
+                        nulls[j] = string.nulls()[selection[j]];
+                    }
+                }
+                yield new StringColumn(ids, string.dictionary(), nulls);
+            }
+        };
+    }
+
     /** Flat column: value at row {@code i} is {@code values[i]}, null when {@code nulls != null && nulls[i]}. */
     record FlatColumn(long[] values, boolean[] nulls)
             implements Column

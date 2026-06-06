@@ -38,6 +38,26 @@ public interface StreamingPipeline
 
         /** Columns of the current batch (one per scanned column, in compiled order). */
         Column[] columns();
+
+        /**
+         * Selection-driven lazy materialization: materialize the requested {@code columns} of the current batch,
+         * each gathered to the first {@code count} positions of {@code selection} (so output row {@code j} is the
+         * batch's row {@code selection[j]}); entries for columns not requested are left null. Staged filtering
+         * calls this per conjunct -- decoding only that conjunct's column(s), for only the rows that survived the
+         * earlier conjuncts -- and once more for the payload columns over the final selection.
+         * <p>
+         * The default gathers from {@link #columns()} (correct for any source); a lazy source overrides it to defer
+         * the conversion of each column until it is requested and to convert only the selected rows.
+         */
+        default Column[] materialize(int[] columns, int[] selection, int count)
+        {
+            Column[] full = columns();
+            Column[] gathered = new Column[full.length];
+            for (int column : columns) {
+                gathered[column] = Column.gather(full[column], selection, count);
+            }
+            return gathered;
+        }
     }
 
     /**

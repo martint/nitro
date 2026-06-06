@@ -153,26 +153,89 @@ public final class PipelineCompiler
             emitGlobalState(out, pipeline.aggregates());
         }
 
-        // Per batch: bind this batch's columns, build any string-filter masks, run the fused row loop.
-        out.append("    while (source.advance()) {\n");
-        out.append("      int rowCount = source.rows();\n");
-        out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
-        for (int column : referencedColumns(pipeline)) {
-            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
-        }
+        IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
+        IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
         Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
         for (int s = 0; s < stringMatches.size(); s++) {
-            Plan.Condition match = stringMatches.get(s);
-            stringMaskIds.put(match, s);
-            emitStringMaskPrelude(out, match, s, "cStr" + stringMatchColumn(match));
+            stringMaskIds.put(stringMatches.get(s), s);
         }
-        IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
-        IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
-        out.append("      for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
-        out.append("      }\n");
-        out.append("    }\n");
+
+        // Selection-driven lazy materialization with staged (per-conjunct) filtering: rather than decode every
+        // filter column up front, treat each top-level conjunct as a narrowing stage -- materialize only that
+        // conjunct's column(s) (for the rows still alive), evaluate it, and shrink the selection -- so a later
+        // conjunct's column is converted only for the rows the earlier conjuncts kept. Finally materialize the
+        // payload columns (group keys, measures) for the survivors and fold them in. Conjuncts are reordered
+        // most-selective-first by a static heuristic (AND is commutative, so this is safe) to shrink the selection
+        // as early as possible. No filter -> every row survives, so a single eager pass is cheaper.
+        if (!pipeline.filters().isEmpty()) {
+            List<Plan.Condition> conjuncts = orderBySelectivity(pipeline.filters());
+            out.append("    while (source.advance()) {\n");
+            out.append("      int rowCount = source.rows();\n");
+            out.append("      int[] selection = new int[rowCount]; int selected = rowCount;\n");
+            out.append("      for (int i = 0; i < rowCount; i++) { selection[i] = i; }\n");
+            for (Plan.Condition conjunct : conjuncts) {
+                TreeSet<Integer> columns = new TreeSet<>();
+                collectConditionColumns(conjunct, columns);
+                List<Plan.Condition> matches = new ArrayList<>();
+                collectStringMatches(conjunct, matches);
+                out.append("      {\n");
+                out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
+                for (int column : columns) {
+                    emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+                }
+                for (Plan.Condition match : matches) {
+                    emitStringMaskPrelude(out, match, stringMaskIds.get(match), "cStr" + stringMatchColumn(match));
+                }
+                out.append("        int kept = 0;\n");
+                out.append("        for (int i = 0; i < selected; i++) {\n");
+                out.append("          if (").append(conditionTrue(conjunct, resolver, nullResolver, stringMaskIds)).append(") { selection[kept++] = selection[i]; }\n");
+                out.append("        }\n");
+                out.append("        selected = kept;\n");
+                out.append("      }\n");
+            }
+            // Payload stage: materialize the columns the aggregation reads (group keys, measures) for the survivors.
+            TreeSet<Integer> payloadColumns = accumulateColumns(pipeline);
+            List<Plan.Condition> aggregateMatches = new ArrayList<>();
+            for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+                if (aggregate.input() != null) {
+                    collectStringMatchesInExpr(aggregate.input(), aggregateMatches);
+                }
+            }
+            out.append("      {\n");
+            out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(payloadColumns)).append(", selection, selected);\n");
+            for (int column : payloadColumns) {
+                emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+            }
+            for (Plan.Condition match : aggregateMatches) {
+                emitStringMaskPrelude(out, match, stringMaskIds.get(match), "cStr" + stringMatchColumn(match));
+            }
+            out.append("        for (int i = 0; i < selected; i++) {\n");
+            if (grouped) {
+                emitGroupedAccumulate(out, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
+            }
+            else {
+                emitGlobalAccumulate(out, "          ", pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
+            }
+            out.append("        }\n");
+            out.append("      }\n");
+            out.append("    }\n");
+        }
+        else {
+            out.append("    while (source.advance()) {\n");
+            out.append("      int rowCount = source.rows();\n");
+            out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
+            for (int column : referencedColumns(pipeline)) {
+                emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+            }
+            for (Plan.Condition match : stringMatches) {
+                emitStringMaskPrelude(out, match, stringMaskIds.get(match), "cStr" + stringMatchColumn(match));
+            }
+            out.append("      for (int i = 0; i < rowCount; i++) {\n");
+            emitRowBody(out, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+            out.append("      }\n");
+            out.append("    }\n");
+        }
 
         if (grouped) {
             emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);
@@ -1721,6 +1784,66 @@ public final class PipelineCompiler
             }
         }
         return referenced;
+    }
+
+    /** Columns the aggregation body reads: the group keys and the aggregate inputs (the "payload" of a filtering scan). */
+    private static TreeSet<Integer> accumulateColumns(Plan.Pipeline pipeline)
+    {
+        TreeSet<Integer> columns = new TreeSet<>();
+        for (Plan.Expr groupKey : pipeline.groupKeys()) {
+            collectColumns(groupKey, columns);
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null) {
+                collectColumns(aggregate.input(), columns);
+            }
+        }
+        return columns;
+    }
+
+    /** Order top-level (AND-ed) conjuncts most-selective-first by a static heuristic; AND is commutative so this is safe. */
+    private static List<Plan.Condition> orderBySelectivity(List<Plan.Condition> conjuncts)
+    {
+        List<Plan.Condition> ordered = new ArrayList<>(conjuncts);
+        ordered.sort(java.util.Comparator.comparingInt(PipelineCompiler::selectivityRank));
+        return ordered;
+    }
+
+    /**
+     * Static selectivity estimate (lower = more selective = evaluated earlier). A real cost model needs column
+     * statistics; this orders by predicate shape: equality and single-value membership are assumed most selective,
+     * ranges and pattern matches middling, negations and disjunctions least.
+     */
+    private static int selectivityRank(Plan.Condition condition)
+    {
+        return switch (condition) {
+            case Plan.Predicate predicate -> switch (predicate.op()) {
+                case "=", "==" -> 0;
+                case "<>", "!=" -> 4;
+                default -> 2;   // <, <=, >, >=
+            };
+            case Plan.StringMatch match -> match.negated() ? 4 : (match.values().size() == 1 ? 0 : 1);
+            case Plan.SubstringMatch match -> match.negated() ? 4 : 2;
+            case Plan.LikeMatch match -> match.negated() ? 4 : 3;
+            case Plan.And ignored -> 1;
+            case Plan.Or ignored -> 5;
+            case Plan.Not ignored -> 4;
+        };
+    }
+
+    /** A Java {@code new int[] {...}} literal of the given column indices, for a {@code Source.materialize} call. */
+    private static String intArrayLiteral(Iterable<Integer> values)
+    {
+        StringBuilder literal = new StringBuilder("new int[] {");
+        boolean first = true;
+        for (int value : values) {
+            if (!first) {
+                literal.append(", ");
+            }
+            literal.append(value);
+            first = false;
+        }
+        return literal.append("}").toString();
     }
 
     private static void collectColumns(Plan.Expr expr, TreeSet<Integer> into)
