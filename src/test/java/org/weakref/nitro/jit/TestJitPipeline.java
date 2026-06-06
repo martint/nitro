@@ -1170,6 +1170,47 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesOrderByNullKeyLast()
+    {
+        // SELECT k, sum(v) GROUP BY k ORDER BY k ASC -- k nullable with an actual null group. SQL/operator
+        // semantics put nulls last for ascending; the ORDER BY must consult the key's null mask, not its
+        // canonical 0 value (which would otherwise sort the null group first).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))))
+                .withOrdering(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), -1));
+
+        int rows = 60_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        boolean[] kNull = new boolean[rows];
+        for (int i = 0; i < rows; i++) {
+            v[i] = 1;
+            if (i % 5 == 0) {
+                kNull[i] = true;        // a genuine null group, distinct from key value 0
+            }
+            else {
+                k[i] = (i % 3) + 1;     // non-null keys 1, 2, 3
+            }
+        }
+
+        boolean[][] nullable = {{true, false}};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k, kNull), new Column.FlatColumn(v)}}, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(4);            // keys 1,2,3 + the null group
+        long[] keys = result.columns()[0];
+        assertThat(keys[0]).isEqualTo(1);
+        assertThat(keys[1]).isEqualTo(2);
+        assertThat(keys[2]).isEqualTo(3);
+        // The null group sorts last and is marked null in the result mask (not read as a 0 key).
+        assertThat(result.nulls()[0][3]).isTrue();
+        assertThat(result.nulls()[0][0]).isFalse();
+    }
+
+    @Test
     void compilesScalarFunctionsAndCase()
     {
         // SELECT k, sum(CASE WHEN v < 0 THEN -v ELSE v END), sum(v / 2), max(abs(v)) GROUP BY k

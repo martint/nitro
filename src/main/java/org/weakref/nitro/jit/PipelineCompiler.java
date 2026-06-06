@@ -447,18 +447,23 @@ public final class PipelineCompiler
             out.append("    return result;\n  }\n");
             return;
         }
-        out.append("    int n = result.rowCount(); long[][] cols = result.columns();\n");
+        out.append("    int n = result.rowCount(); long[][] cols = result.columns(); boolean[][] on = result.nulls();\n");
         out.append("    Integer[] order = new Integer[n];\n");
         out.append("    for (int i = 0; i < n; i++) { order[i] = i; }\n");
         out.append("    java.util.Arrays.sort(order, (a, b) -> {\n");
         out.append("      int c;\n");
         for (Plan.SortKey key : ordering.keys()) {
-            String compare = types.get(key.column()).compare("cols[" + key.column() + "][a]", "cols[" + key.column() + "][b]");
-            out.append("      c = ").append(compare).append(";");
+            int col = key.column();
+            String compare = types.get(col).compare("cols[" + col + "][a]", "cols[" + col + "][b]");
+            // Null ordering mirrors the operator path (OperatorOrderingSemantics): a null compares as greater than
+            // any value (so ascending puts nulls last), and the descending flip then yields nulls first for DESC.
+            out.append("      { boolean an = on != null && on[").append(col).append("] != null && on[").append(col).append("][a];")
+                    .append(" boolean bn = on != null && on[").append(col).append("] != null && on[").append(col).append("][b];\n");
+            out.append("        if (an || bn) { c = (an == bn) ? 0 : (an ? 1 : -1); } else { c = ").append(compare).append("; }");
             if (key.descending()) {
                 out.append(" c = -c;");
             }
-            out.append(" if (c != 0) { return c; }\n");
+            out.append(" if (c != 0) { return c; } }\n");
         }
         out.append("      return 0;\n");
         out.append("    });\n");
