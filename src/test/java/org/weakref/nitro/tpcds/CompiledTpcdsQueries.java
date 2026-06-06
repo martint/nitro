@@ -200,6 +200,43 @@ public final class CompiledTpcdsQueries
         return new Ported(query, 1, 2, 3);
     }
 
+    public static Ported query43()
+    {
+        // store_sales JOIN date_dim(d_year=2000) JOIN store(s_gmt_offset=-5, stored as the scaled decimal -500);
+        // GROUP BY s_store_name, s_store_id; one sum(CASE WHEN d_day_name = <day> THEN ss_sales_price ELSE 0) per
+        // day of week; ORDER BY all nine output columns LIMIT 100. The CASE conditions are predicate-over-dictionary
+        // string matches on d_day_name -- the day-of-week pivot.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_day_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("d_year"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_gmt_offset"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_store_id", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.Predicate("=", query.column("s_gmt_offset"), new Plan.Lit(-500)))
+                .groupBy("s_store_name", "s_store_id");
+        for (String day : List.of("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) {
+            query.aggregate("sum", new Plan.Case(
+                    List.of(new Plan.Case.Branch(
+                            new Plan.StringMatch(query.position("d_day_name"), List.of(day), false),
+                            query.column("ss_sales_price"))),
+                    new Plan.Lit(0)));
+        }
+        query.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false), new Plan.SortKey(3, false),
+                new Plan.SortKey(4, false), new Plan.SortKey(5, false), new Plan.SortKey(6, false), new Plan.SortKey(7, false),
+                new Plan.SortKey(8, false)), 100));
+        return new Ported(query, List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 3)));
+    }
+
     public static Ported query62()
     {
         return shippingDelayBuckets("web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk",
