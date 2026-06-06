@@ -200,6 +200,41 @@ public final class CompiledTpcdsQueries
         return new Ported(query, 1, 2, 3);
     }
 
+    public static Ported query15()
+    {
+        // catalog_sales -> customer -> customer_address (snowflake: the second join keys on customer's
+        // c_current_addr_sk, not the fact) -> date_dim (d_qoy=2, d_year=2001). WHERE substr(ca_zip,1,5) IN (..)
+        // OR ca_state IN (CA,WA,GA) OR cs_sales_price > 500 (scaled 50000). GROUP BY ca_zip; sum(cs_sales_price);
+        // ORDER BY ca_zip LIMIT 100.
+        QueryLowering query = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sales_price", ColumnEncoding.FLAT, true))
+                .join("customer", "cs_bill_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_qoy"),
+                        new QueryLowering.Column("d_year"));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_qoy"), new Plan.Lit(2)),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Or(List.of(
+                                new Plan.SubstringMatch(query.position("ca_zip"), 1, 5,
+                                        List.of("85669", "86197", "88274", "83405", "86475", "85392", "85460", "80348", "81792"), false),
+                                new Plan.StringMatch(query.position("ca_state"), List.of("CA", "WA", "GA"), false),
+                                new Plan.Predicate(">", query.column("cs_sales_price"), new Plan.Lit(50_000)))))
+                .groupBy("ca_zip")
+                .aggregate("sum", "cs_sales_price")
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+        return new Ported(query, List.of(new DictRef(0, 2, 1)));
+    }
+
     public static Ported query43()
     {
         // store_sales JOIN date_dim(d_year=2000) JOIN store(s_gmt_offset=-5, stored as the scaled decimal -500);
