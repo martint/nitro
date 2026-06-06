@@ -235,6 +235,64 @@ public final class CompiledTpcdsQueries
         return new Ported(query, List.of(new DictRef(0, 2, 1)));
     }
 
+    public static Ported query91()
+    {
+        // catalog_returns -> date_dim(1998-11) -> customer -> [snowflake] customer_demographics, household_demographics,
+        // customer_address -> call_center. GROUP BY 5 string keys (call-center id/name/manager + customer
+        // marital/education); sum(cr_net_loss); ORDER BY the loss desc then the keys; SELECT only id, name, manager,
+        // loss (the two demographics keys are grouped on but projected away). Exercises a 6-join snowflake, five
+        // dictionary-string group keys across two dimensions, and a post-aggregation projection of string columns.
+        QueryLowering query = QueryLowering.scan("catalog_returns",
+                        new QueryLowering.Column("cr_call_center_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_returning_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_net_loss", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cr_returned_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"),
+                        new QueryLowering.Column("d_moy"))
+                .join("customer", "cr_returning_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true))
+                .join("customer_demographics", "c_current_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, true))
+                .join("household_demographics", "c_current_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_buy_potential", ColumnEncoding.STRING, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_gmt_offset", ColumnEncoding.FLAT, true))
+                .join("call_center", "cr_call_center_sk", "cc_call_center_sk",
+                        new QueryLowering.Column("cc_call_center_sk"),
+                        new QueryLowering.Column("cc_call_center_id", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cc_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cc_manager", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
+                        new Plan.StringMatch(query.position("hd_buy_potential"), List.of("Unknown"), false),
+                        new Plan.Predicate("=", query.column("ca_gmt_offset"), new Plan.Lit(-700)),
+                        new Plan.Or(List.of(
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("M"), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Unknown"), false)),
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("W"), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Advanced Degree"), false)))))
+                .groupBy("cc_call_center_id", "cc_name", "cc_manager", "cd_marital_status", "cd_education_status")
+                .aggregate("sum", "cr_net_loss")
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(5, true), new Plan.SortKey(0, false), new Plan.SortKey(1, false),
+                        new Plan.SortKey(2, false), new Plan.SortKey(3, false), new Plan.SortKey(4, false)), 100))
+                // SELECT id, name, manager, loss -- the two demographics keys are grouped on but not output.
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(5));
+        return new Ported(query, List.of(new DictRef(0, 6, 1), new DictRef(1, 6, 2), new DictRef(2, 6, 3)));
+    }
+
     public static Ported query43()
     {
         // store_sales JOIN date_dim(d_year=2000) JOIN store(s_gmt_offset=-5, stored as the scaled decimal -500);
