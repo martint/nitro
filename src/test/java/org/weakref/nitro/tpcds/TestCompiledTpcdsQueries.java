@@ -105,6 +105,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query73()
+    {
+        assertMultiStageMatchesHarness(CompiledTpcdsQueries.query73(), TpcdsParquetSupport::query73);
+    }
+
+    @Test
     void query91()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query91(), TpcdsParquetSupport::query91);

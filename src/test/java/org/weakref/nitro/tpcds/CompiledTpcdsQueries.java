@@ -422,6 +422,64 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3), new DictRef(3, 1, 4)));
     }
 
+    public static MultiStage query73()
+    {
+        // Same multi-stage shape as Q34 with different filters: store_sales grouped by (ticket, customer), counts
+        // kept in [1,5], then the customer identity joined and ordered by count DESC, last name, ticket.
+        QueryLowering subquery = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_hdemo_sk", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_dom"),
+                        new QueryLowering.Column("d_year"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_county", ColumnEncoding.STRING, false))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_buy_potential", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("hd_vehicle_count"),
+                        new QueryLowering.Column("hd_dep_count"));
+        subquery.where(
+                        new Plan.Predicate(">", subquery.column("d_dom"), new Plan.Lit(0)),
+                        new Plan.Predicate("<", subquery.column("d_dom"), new Plan.Lit(3)),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", subquery.column("d_year"), new Plan.Lit(1999)),
+                                new Plan.Predicate("=", subquery.column("d_year"), new Plan.Lit(2000)),
+                                new Plan.Predicate("=", subquery.column("d_year"), new Plan.Lit(2001)))),
+                        new Plan.StringMatch(subquery.position("s_county"),
+                                List.of("Williamson County", "Franklin Parish", "Bronx County", "Orange County"), false),
+                        new Plan.StringMatch(subquery.position("hd_buy_potential"), List.of(">10000", "Unknown"), false),
+                        new Plan.Predicate(">", subquery.column("hd_vehicle_count"), new Plan.Lit(0)),
+                        new Plan.Predicate("<", subquery.column("hd_vehicle_count"), subquery.column("hd_dep_count")))
+                .groupBy("ss_ticket_number", "ss_customer_sk")
+                .count()
+                .having(new Plan.And(
+                        new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(0)),
+                        new Plan.Predicate("<", new Plan.Col(2), new Plan.Lit(6))));
+
+        QueryLowering main = QueryLowering.scan("__q73_groups__",
+                        new QueryLowering.Column("g_ticket"),
+                        new QueryLowering.Column("g_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_count"))
+                .join("customer", "g_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_salutation", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_preferred_cust_flag", ColumnEncoding.STRING, true));
+        // SELECT last, first, salutation, preferred_flag, ticket, count; ORDER BY count DESC, last, ticket.
+        main.select(new Plan.Col(4), new Plan.Col(5), new Plan.Col(6), new Plan.Col(7), new Plan.Col(0), new Plan.Col(2))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(5, true), new Plan.SortKey(0, false), new Plan.SortKey(4, false)), 100));
+        return new MultiStage(subquery, main, "__q73_groups__",
+                List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3), new DictRef(3, 1, 4)));
+    }
+
     public static Ported query43()
     {
         // store_sales JOIN date_dim(d_year=2000) JOIN store(s_gmt_offset=-5, stored as the scaled decimal -500);
