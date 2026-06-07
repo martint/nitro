@@ -153,7 +153,7 @@ public final class CompiledTpcdsQueries
     private static Ported brandOrCategoryByYear(String idColumn, String nameColumn, long year, List<Plan.SortKey> order)
     {
         QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk"),
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ss_item_sk"),
                         new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
@@ -178,7 +178,7 @@ public final class CompiledTpcdsQueries
     public static Ported query55()
     {
         QueryLowering query = QueryLowering.scan("store_sales",
-                        new QueryLowering.Column("ss_sold_date_sk"),
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ss_item_sk"),
                         new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
