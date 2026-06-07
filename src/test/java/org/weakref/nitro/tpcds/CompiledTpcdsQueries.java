@@ -602,9 +602,9 @@ public final class CompiledTpcdsQueries
                 .join("customer", "d_customer", "c_customer_sk",
                         new QueryLowering.Column("c_customer_sk"),
                         new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false))
-                .join("q01_store_totals", "d_store", "st_store",
+                .leftJoin("q01_store_totals", "d_store", "st_store",
                         new QueryLowering.Column("st_store"),
-                        new QueryLowering.Column("st_average"));   // computed (round(sum/count)) -> never null
+                        new QueryLowering.Column("st_average"));   // left join: a store with no average reads NULL (and is filtered out)
         main.where(
                 new Plan.StringMatch(main.position("s_state"), List.of("TN"), false),
                 new Plan.Predicate("<",

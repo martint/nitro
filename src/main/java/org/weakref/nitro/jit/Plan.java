@@ -207,16 +207,31 @@ public final class Plan
      * positionally against {@code build.keyColumns}. Joins are applied in order; build {@code k}'s columns occupy
      * the combined column space immediately after the probe columns and all earlier builds.
      */
-    public record Join(Build build, int[] probeKeyColumns)
+    /**
+     * A join of the probe to {@code build} on {@code probeKeyColumns} = the build's key columns. When {@code outer},
+     * it is a LEFT join: a probe row with no matching build row is kept, with the build's columns reading as NULL
+     * (the decorrelated form of a scalar/aggregate subquery joined back to its outer query).
+     */
+    public record Join(Build build, int[] probeKeyColumns, boolean outer)
     {
         public Join
         {
             probeKeyColumns = probeKeyColumns.clone();
         }
 
+        public Join(Build build, int[] probeKeyColumns)
+        {
+            this(build, probeKeyColumns, false);
+        }
+
         public Join(Build build, int probeKeyColumn)
         {
             this(build, new int[] {probeKeyColumn});
+        }
+
+        public Join(Build build, int probeKeyColumn, boolean outer)
+        {
+            this(build, new int[] {probeKeyColumn}, outer);
         }
     }
 

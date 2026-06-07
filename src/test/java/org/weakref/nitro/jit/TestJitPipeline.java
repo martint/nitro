@@ -1662,6 +1662,39 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesAndComputesLeftJoinKeepingUnmatchedProbeRows()
+    {
+        // fact(fk, measure) LEFT JOIN dim(key, attr) ON fk = key; dim has keys 0..4, fact has fk 0..9.
+        // combined: probe [0=fk, 1=measure], dim [2=key, 3=attr]. Global sum(measure) + count(attr).
+        // The left join keeps all 10 fact rows (so sum(measure) covers all 10); attr is NULL for the 5 unmatched
+        // rows, so count(attr) -- which the aggregate-input null guard restricts to non-null -- is only 5.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(new Plan.Join(new Plan.Build(2, 0), 0, true)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1)), new Plan.Aggregate("count", new Plan.Col(3))));
+
+        long[] key = {0, 1, 2, 3, 4};
+        long[] attr = {10, 11, 12, 13, 14};
+        long[] fk = new long[10];
+        long[] measure = new long[10];
+        long expectedSum = 0;
+        for (int i = 0; i < 10; i++) {
+            fk[i] = i;
+            measure[i] = i + 1;
+            expectedSum += measure[i];
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{fk, measure}, {key, attr}}, new int[] {10, 5});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).as("sum(measure) over all left-join rows").isEqualTo(expectedSum);
+        assertThat(result.columns()[1][0]).as("count(attr) over matched rows only").isEqualTo(5L);
+    }
+
+    @Test
     void compilesAndComputesMultiKeyJoinGroupedAggregate()
     {
         // fact(fk0, fk1, measure) JOIN dim(dk0, dk1, dattr) ON fk0=dk0 AND fk1=dk1 GROUP BY dattr, sum(measure)

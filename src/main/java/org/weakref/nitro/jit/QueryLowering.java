@@ -117,13 +117,24 @@ public final class QueryLowering
     /** Inner-join {@code table} on {@code probeKey = buildKey}; {@code columns} are the build columns to load (key included). */
     public QueryLowering join(String table, String probeKey, String buildKey, Column... columns)
     {
+        return join(table, probeKey, buildKey, false, columns);
+    }
+
+    /** Left (outer) join: a probe row with no match is kept, with this build's columns reading as NULL. */
+    public QueryLowering leftJoin(String table, String probeKey, String buildKey, Column... columns)
+    {
+        return join(table, probeKey, buildKey, true, columns);
+    }
+
+    private QueryLowering join(String table, String probeKey, String buildKey, boolean outer, Column... columns)
+    {
         Input build = new Input(table, List.of(columns));
         int buildKeyLocal = indexOf(columns, buildKey);
         for (Column column : columns) {
             assign(column.name());
         }
         builds.add(build);
-        joins.add(new Plan.Join(new Plan.Build(columns.length, buildKeyLocal), position(probeKey)));
+        joins.add(new Plan.Join(new Plan.Build(columns.length, buildKeyLocal), position(probeKey), outer));
         return this;
     }
 

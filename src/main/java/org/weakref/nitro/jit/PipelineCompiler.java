@@ -982,6 +982,24 @@ public final class PipelineCompiler
         return conditions.stream().map(c -> conditionTrue(c, resolver, nullResolver, stringMaskIds)).collect(joining(" && "));
     }
 
+    /** Zero literal of a column's Java type (the masked-out value of an unmatched left-join build column). */
+    private static String zeroFor(ColumnEncoding encoding)
+    {
+        return encoding == ColumnEncoding.STRING ? "0" : "0L";
+    }
+
+    /** A left-join build column's value: the masked-out zero when the row had no match ({@code rowVar == -1}), else the access. */
+    private static String outerValue(String rowVar, ColumnEncoding encoding, String access)
+    {
+        return "(" + rowVar + " == -1 ? " + zeroFor(encoding) + " : " + access + ")";
+    }
+
+    /** A left-join build column is NULL when the row had no match, or when the underlying value is null. */
+    private static String outerNull(String rowVar, String nullAccess)
+    {
+        return nullAccess.equals("false") ? "(" + rowVar + " == -1)" : "(" + rowVar + " == -1 || " + nullAccess + ")";
+    }
+
     /**
      * Emit the per-row join probes with each filter interleaved at the level its inputs become available -- probe-only
      * filters before any probe, the rest right after the build that completes them -- so a row that fails is dropped
@@ -1006,9 +1024,12 @@ public final class PipelineCompiler
         }
         for (int k = 0; k < joinCount; k++) {
             emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
-            out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
-            indent += "  ";
-            openBraces++;
+            // An inner join drops a probe row with no match; a left join keeps it (build columns read NULL).
+            if (!joins.get(k).outer()) {
+                out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+                indent += "  ";
+                openBraces++;
+            }
             List<Plan.Condition> atLevel = filtersByLevel.get(k);
             if (atLevel != null) {
                 out.append(indent).append("if (").append(conjunction(atLevel, resolver, nullResolver, stringMaskIds)).append(") {\n");
@@ -1077,7 +1098,9 @@ public final class PipelineCompiler
             }
             int build = buildOf(joins, buildOffset, index);
             int local = index - buildOffset[build];
-            return joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, local), "buildRow" + build);
+            ColumnEncoding encoding = combinedEncoding(pipeline, encodings, index);
+            String access = joinAccess(encoding, buildVars(build, local), "buildRow" + build);
+            return joins.get(build).outer() ? outerValue("buildRow" + build, encoding, access) : access;
         };
 
         IntFunction<String> nullResolver = index -> {
@@ -1086,7 +1109,8 @@ public final class PipelineCompiler
             }
             int build = buildOf(joins, buildOffset, index);
             int local = index - buildOffset[build];
-            return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, local), "buildRow" + build);
+            String nullAccess = joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, local), "buildRow" + build);
+            return joins.get(build).outer() ? outerNull("buildRow" + build, nullAccess) : nullAccess;
         };
 
         // Predicate-over-dictionary string masks: assign a stable id per match up front (the build-side masks are
@@ -1109,9 +1133,12 @@ public final class PipelineCompiler
             IntFunction<String> buildResolver = index -> joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, index - buildOffset[build]), "r");
             IntFunction<String> buildNullResolver = index -> joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, index - buildOffset[build]), "r");
             List<String> pushed = new ArrayList<>();
-            for (Plan.Condition filter : pipeline.filters()) {
-                if (pushableToBuild(filter, start, end)) {
-                    pushed.add(conditionTrue(filter, buildResolver, buildNullResolver, stringMaskIds));
+            // A left join must keep non-matching probe rows, so a filter on its build is NOT a build-side prune.
+            if (!joins.get(k).outer()) {
+                for (Plan.Condition filter : pipeline.filters()) {
+                    if (pushableToBuild(filter, start, end)) {
+                        pushed.add(conditionTrue(filter, buildResolver, buildNullResolver, stringMaskIds));
+                    }
                 }
             }
             buildFilter[k] = pushed.isEmpty() ? null : String.join(" && ", pushed);
@@ -1196,14 +1223,19 @@ public final class PipelineCompiler
                     return joinAccess(combinedEncoding(pipeline, encodings, index), probeVars(index), "j");
                 }
                 int build = buildOf(joins, buildOffset, index);
-                return joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, index - buildOffset[build]), "bsel" + build + "[j]");
+                ColumnEncoding encoding = combinedEncoding(pipeline, encodings, index);
+                String row = "bsel" + build + "[j]";
+                String access = joinAccess(encoding, buildVars(build, index - buildOffset[build]), row);
+                return joins.get(build).outer() ? outerValue(row, encoding, access) : access;
             };
             IntFunction<String> lazyNullResolver = index -> {
                 if (index < probeColumns) {
                     return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), probeVars(index), "j");
                 }
                 int build = buildOf(joins, buildOffset, index);
-                return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, index - buildOffset[build]), "bsel" + build + "[j]");
+                String row = "bsel" + build + "[j]";
+                String nullAccess = joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, index - buildOffset[build]), row);
+                return joins.get(build).outer() ? outerNull(row, nullAccess) : nullAccess;
             };
             List<Plan.Condition> filterMatches = new ArrayList<>();
             for (Plan.Condition filter : pipeline.filters()) {
