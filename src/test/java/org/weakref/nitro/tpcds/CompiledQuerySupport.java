@@ -717,6 +717,26 @@ public final class CompiledQuerySupport
                             fillDenseNumeric(valueVector, nullVector, values[c], nulls[c], size, count);
                             continue;
                         }
+                        if (string && dense && valueVector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector) {
+                            // Dense dictionary-encoded string column: intern each distinct dictionary entry once and
+                            // remap the per-row ids, instead of interning byte-by-byte per row. For a low-cardinality
+                            // dimension column (e.g. cd_gender over ~2M rows) this turns N interns into K (K = distinct
+                            // values) plus N cheap id remaps -- the per-row interning was the dominant build cost.
+                            Vector dictionary = dictionaryVector.values();
+                            int[] dictionaryIds = dictionaryVector.ids();
+                            int dictionarySize = dictionary.length();
+                            int[] localToGlobal = new int[dictionarySize];
+                            for (int entry = 0; entry < dictionarySize; entry++) {
+                                localToGlobal[entry] = intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(dictionary, entry));
+                            }
+                            for (int index = 0; index < count; index++) {
+                                boolean isNull = isNull(nullVector, index);
+                                int slot = size + index;
+                                nulls[c][slot] = isNull;
+                                ids[c][slot] = isNull ? 0 : localToGlobal[dictionaryIds[index]];
+                            }
+                            continue;
+                        }
                         for (int index = 0; index < count; index++) {
                             int position = mask.position(index);
                             boolean isNull = isNull(nullVector, position);
