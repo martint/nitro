@@ -626,7 +626,9 @@ public final class CompiledQuerySupport
     public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
     {
-        return runMultiStage(allocator, tables, subquery, subquery.compile(), main, main.compile(), virtualTable);
+        org.weakref.nitro.jit.StreamingPipeline subStreaming =
+                PipelineCompiler.compileStreaming(subquery.pipeline(), subquery.encodings(), subquery.nullable());
+        return runMultiStage(allocator, tables, subquery, subStreaming, main, main.compile(), virtualTable);
     }
 
     /**
@@ -634,11 +636,13 @@ public final class CompiledQuerySupport
      * compilation (like a query plan) and measures only the per-invocation Parquet read + execution.
      */
     public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered subquery, CompiledPipeline subCompiled,
+            org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.StreamingPipeline subStreaming,
             org.weakref.nitro.jit.QueryLowering.Lowered main, CompiledPipeline mainCompiled, String virtualTable)
     {
-        LoadedInputs subInputs = loadLoweredInputs(allocator, tables, subquery);
-        CompiledPipeline.Result subResult = subCompiled.execute(subInputs.inputs(), subInputs.rowCounts());
+        // The subquery's fact side is read from Parquet, so run it through the lazy streaming path (decode only the
+        // columns/rows that survive its joins and filters) rather than draining every fact column up front. The main
+        // stage's probe is the in-memory subquery result, so it stays eager.
+        CompiledPipeline.Result subResult = runStreamingLowered(allocator, tables, subquery, subStreaming, true);
         org.weakref.nitro.jit.Column[] materialized = materialize(subResult);
         int subRows = subResult.rowCount();
 

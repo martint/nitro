@@ -60,7 +60,7 @@ public class BenchmarkCompiledQueries
     private final Map<String, org.weakref.nitro.jit.StreamingPipeline> streaming = new LinkedHashMap<>();
     private final Map<String, CompiledTpcdsQueries.MultiStage> multiStage = new LinkedHashMap<>();
     private final Map<String, QueryLowering.Lowered> multiStageSub = new LinkedHashMap<>();
-    private final Map<String, CompiledPipeline> multiStageSubCompiled = new LinkedHashMap<>();
+    private final Map<String, org.weakref.nitro.jit.StreamingPipeline> multiStageSubCompiled = new LinkedHashMap<>();
     private final Map<String, QueryLowering.Lowered> multiStageMain = new LinkedHashMap<>();
     private final Map<String, CompiledPipeline> multiStageMainCompiled = new LinkedHashMap<>();
 
@@ -101,7 +101,7 @@ public class BenchmarkCompiledQueries
         QueryLowering.Lowered main = staged.main().lower();
         multiStageSub.put(name, sub);
         multiStageMain.put(name, main);
-        multiStageSubCompiled.put(name, sub.compile());
+        multiStageSubCompiled.put(name, org.weakref.nitro.jit.PipelineCompiler.compileStreaming(sub.pipeline(), sub.encodings(), sub.nullable()));
         multiStageMainCompiled.put(name, main.compile());
     }
 
