@@ -573,6 +573,66 @@ public final class CompiledTpcdsQueries
         return new Composite(stages, main, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1), new DictRef(5, 3, 4)));
     }
 
+    public static Composite query01()
+    {
+        // Customers in TN stores whose store return total exceeds 1.2x the store's average customer return total.
+        // ctr = per-(customer,store) sum of returns (null when that pair has only null amounts); the per-store
+        // average ignores those null totals, so total_return = sum(ctr) and customer_count = count(non-null ctr).
+        QueryLowering thresholds = QueryLowering.scan("q01_ctr_for_totals",
+                        new QueryLowering.Column("ctr_customer"),
+                        new QueryLowering.Column("ctr_store"),
+                        new QueryLowering.Column("ctr_total", ColumnEncoding.FLAT, true))
+                .groupBy("ctr_store")
+                .aggregate("sum", "ctr_total")
+                .aggregate("count", "ctr_total");   // count of non-null ctr (null inputs are guarded out)
+
+        QueryLowering main = QueryLowering.scan("q01_ctr_detail",
+                        new QueryLowering.Column("d_customer"),
+                        new QueryLowering.Column("d_store"),
+                        new QueryLowering.Column("d_total", ColumnEncoding.FLAT, true))
+                .join("store", "d_store", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true))
+                .join("customer", "d_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false))
+                .join("q01_store_totals", "d_store", "st_store",
+                        new QueryLowering.Column("st_store"),
+                        new QueryLowering.Column("st_total", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("st_count"));
+        main.where(
+                new Plan.StringMatch(main.position("s_state"), List.of("TN"), false),
+                new Plan.Predicate("<",
+                        new Plan.Bin("*", main.column("st_total"), new Plan.Lit(6)),
+                        new Plan.Bin("*", new Plan.Bin("*", main.column("st_count"), main.column("d_total")), new Plan.Lit(5))));
+        main.select(main.column("c_customer_id"));
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        List<Stage> stages = List.of(
+                new Stage(query01CustomerStoreReturns(), "q01_ctr_detail"),
+                new Stage(query01CustomerStoreReturns(), "q01_ctr_for_totals"),
+                new Stage(thresholds, "q01_store_totals"));
+        // Output column 0 (c_customer_id) is a dictionary string from main input 2 (customer), column 1.
+        return new Composite(stages, main, List.of(new DictRef(0, 2, 1)));
+    }
+
+    /** Per-(customer,store) return total over year 2000 -- the shared Q1 subtree (assembled per use). */
+    private static QueryLowering query01CustomerStoreReturns()
+    {
+        QueryLowering returns = QueryLowering.scan("store_returns",
+                        new QueryLowering.Column("sr_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_return_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_returned_date_sk", ColumnEncoding.FLAT, true))
+                .join("date_dim", "sr_returned_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"));
+        returns.where(new Plan.Predicate("=", returns.column("d_year"), new Plan.Lit(2000)))
+                .groupBy("sr_customer_sk", "sr_store_sk")
+                .aggregate("sum", "sr_return_amt");
+        return returns;
+    }
+
     /** Store revenue per (store, item) over month_seq 1176..1187 -- the shared Q65 subtree (assembled per use). */
     private static QueryLowering query65StoreItemSales()
     {
