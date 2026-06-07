@@ -90,6 +90,18 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query56()
+    {
+        assertUnionMatchesHarness(CompiledTpcdsQueries.query56(), TpcdsParquetSupport::query56);
+    }
+
+    @Test
+    void query60()
+    {
+        assertUnionMatchesHarness(CompiledTpcdsQueries.query60(), TpcdsParquetSupport::query60);
+    }
+
+    @Test
     void query34()
     {
         assertMultiStageMatchesHarness(CompiledTpcdsQueries.query34(), TpcdsParquetSupport::query34);
@@ -334,7 +346,7 @@ public class TestCompiledTpcdsQueries
             branches.add(branch.lower());
         }
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runUnion(
-                new Allocator(), tables, branches, union.main().lower(), union.virtualTable());
+                new Allocator(), tables, branches, union.main().lower(), union.virtualTable(), union.branchStringColumns());
         assertBridgedRowsMatch(run, union.stringColumns(), harness, tables);
     }
 

@@ -626,6 +626,15 @@ public final class CompiledQuerySupport
     public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, TpcdsParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
     {
+        return streamCapturingBuilds(allocator, tables, lowered, streaming, lazyProbe).result();
+    }
+
+    /** A streamed result together with its materialized build (dimension) inputs, so a string output column can be resolved back to its dictionary. */
+    public record StreamedResult(CompiledPipeline.Result result, org.weakref.nitro.jit.Column[][] builds) {}
+
+    private static StreamedResult streamCapturingBuilds(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
+    {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
         int buildCount = sources.size() - 1;
         org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
@@ -641,7 +650,7 @@ public final class CompiledQuerySupport
         org.weakref.nitro.jit.StreamingPipeline.Source source = lazyProbe
                 ? parquetLazySource(allocator, tables, probe.table(), probe.columns())
                 : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
-        return streaming.execute(source, builds, buildRowCounts);
+        return new StreamedResult(streaming.execute(source, builds, buildRowCounts), builds);
     }
 
     /** Load a lowered query's inputs from Parquet and run it. */
@@ -707,6 +716,19 @@ public final class CompiledQuerySupport
     public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
             List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
     {
+        return runUnion(allocator, tables, branches, main, virtualTable, List.of());
+    }
+
+    /**
+     * As {@link #runUnion}, but {@code branchStringColumns} names the branch-result columns that are dictionary
+     * strings (the union's group key may be a string, e.g. Q56/Q60 group by {@code i_item_id}). Each branch carries
+     * its own (filtered) source dictionary, so the branch string columns are merged into one ordered unified
+     * dictionary during concatenation -- ids consistent across branches, and id order = value order for ORDER BY.
+     */
+    public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
+            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main,
+            String virtualTable, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
+    {
         List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
         int[] counts = new int[branches.size()];
         int width = 0;
@@ -714,10 +736,10 @@ public final class CompiledQuerySupport
             org.weakref.nitro.jit.QueryLowering.Lowered branch = branches.get(i);
             org.weakref.nitro.jit.StreamingPipeline streaming =
                     PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
-            CompiledPipeline.Result result = runStreamingLowered(allocator, tables, branch, streaming, true);
-            org.weakref.nitro.jit.Column[] materialized = materialize(result);
+            StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true);
+            org.weakref.nitro.jit.Column[] materialized = materialize(streamed.result(), streamed.builds(), branchStringColumns);
             parts.add(materialized);
-            counts[i] = result.rowCount();
+            counts[i] = streamed.result().rowCount();
             width = materialized.length;
         }
         int total = 0;
@@ -745,42 +767,109 @@ public final class CompiledQuerySupport
         return new LoweredResult(main.compile().execute(inputs, rowCounts), inputs);
     }
 
-    /** Row-wise concatenation of same-schema flat (numeric) branch results into one {@link org.weakref.nitro.jit.Column}[]. */
+    /** Row-wise concatenation of same-schema branch results into one {@link org.weakref.nitro.jit.Column}[] (numeric and dictionary-string columns). */
     private static org.weakref.nitro.jit.Column[] concatenateColumns(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int width)
     {
         org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
         for (int c = 0; c < width; c++) {
-            long[] values = new long[total];
-            boolean[] nulls = null;
-            int offset = 0;
-            for (int p = 0; p < parts.size(); p++) {
-                org.weakref.nitro.jit.Column.FlatColumn part = (org.weakref.nitro.jit.Column.FlatColumn) parts.get(p)[c];
-                System.arraycopy(part.values(), 0, values, offset, counts[p]);
-                if (part.nulls() != null) {
+            if (parts.get(0)[c] instanceof org.weakref.nitro.jit.Column.StringColumn) {
+                out[c] = concatenateStringColumn(parts, counts, total, c);
+            }
+            else {
+                out[c] = concatenateNumericColumn(parts, counts, total, c);
+            }
+        }
+        return out;
+    }
+
+    private static org.weakref.nitro.jit.Column concatenateNumericColumn(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int c)
+    {
+        long[] values = new long[total];
+        boolean[] nulls = null;
+        int offset = 0;
+        for (int p = 0; p < parts.size(); p++) {
+            org.weakref.nitro.jit.Column.FlatColumn part = (org.weakref.nitro.jit.Column.FlatColumn) parts.get(p)[c];
+            System.arraycopy(part.values(), 0, values, offset, counts[p]);
+            if (part.nulls() != null) {
+                if (nulls == null) {
+                    nulls = new boolean[total];
+                }
+                System.arraycopy(part.nulls(), 0, nulls, offset, counts[p]);
+            }
+            offset += counts[p];
+        }
+        return new org.weakref.nitro.jit.Column.FlatColumn(values, nulls);
+    }
+
+    /**
+     * Concatenate a dictionary-string column across branches into one ordered unified dictionary. Each branch's ids
+     * point into its own (filtered) dictionary, so values are re-interned into a single dictionary and the resulting
+     * ids are re-sorted into byte order -- consistent ids across branches, and id comparison = value comparison.
+     */
+    private static org.weakref.nitro.jit.Column concatenateStringColumn(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int c)
+    {
+        java.util.Map<String, Integer> index = new java.util.LinkedHashMap<>();
+        List<byte[]> dictionary = new ArrayList<>();
+        int[] ids = new int[total];
+        boolean[] nulls = null;
+        int offset = 0;
+        for (int p = 0; p < parts.size(); p++) {
+            org.weakref.nitro.jit.Column.StringColumn part = (org.weakref.nitro.jit.Column.StringColumn) parts.get(p)[c];
+            for (int r = 0; r < counts[p]; r++) {
+                if (part.nulls() != null && part.nulls()[r]) {
                     if (nulls == null) {
                         nulls = new boolean[total];
                     }
-                    System.arraycopy(part.nulls(), 0, nulls, offset, counts[p]);
+                    nulls[offset + r] = true;
+                    continue;
                 }
-                offset += counts[p];
+                ids[offset + r] = intern(index, dictionary, part.dictionary()[part.ids()[r]]);
             }
-            out[c] = new org.weakref.nitro.jit.Column.FlatColumn(values, nulls);
+            offset += counts[p];
         }
-        return out;
+        return orderedStringColumn(ids, dictionary, total, nulls);
     }
 
     /** Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s so it can feed a downstream stage as a relation. */
     private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result)
     {
+        return materialize(result, null, List.of());
+    }
+
+    /**
+     * Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s, resolving each string result column
+     * named in {@code stringColumns} back to a {@link org.weakref.nitro.jit.Column.StringColumn}: the result stores a
+     * string as a dictionary id into one of the stage's build (dimension) inputs, so the id maps back through that
+     * build's dictionary. {@code builds} are the dimension inputs (probe excluded), as captured by the streaming run.
+     */
+    private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result,
+            org.weakref.nitro.jit.Column[][] builds, List<CompiledTpcdsQueries.DictRef> stringColumns)
+    {
         long[][] columns = result.columns();
         boolean[][] nulls = result.nulls();
+        int rowCount = result.rowCount();
+        java.util.Map<Integer, CompiledTpcdsQueries.DictRef> stringByColumn = new java.util.HashMap<>();
+        for (CompiledTpcdsQueries.DictRef ref : stringColumns) {
+            stringByColumn.put(ref.resultColumn(), ref);
+        }
         org.weakref.nitro.jit.Column[] materialized = new org.weakref.nitro.jit.Column[columns.length];
         for (int c = 0; c < columns.length; c++) {
             org.weakref.nitro.jit.Type type = result.types()[c];
             if (type == org.weakref.nitro.jit.Types.STRING) {
-                throw new UnsupportedOperationException("materializing a string result column across stages is not supported yet");
+                CompiledTpcdsQueries.DictRef ref = stringByColumn.get(c);
+                if (ref == null || ref.dictInput() < 1) {
+                    throw new UnsupportedOperationException("string result column " + c + " has no resolvable build-input dictionary");
+                }
+                byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) builds[ref.dictInput() - 1][ref.dictColumn()]).dictionary();
+                int[] ids = new int[rowCount];
+                for (int r = 0; r < rowCount; r++) {
+                    ids[r] = (int) columns[c][r];
+                }
+                materialized[c] = new org.weakref.nitro.jit.Column.StringColumn(ids, dictionary, nulls == null ? null : nulls[c]);
             }
-            materialized[c] = new org.weakref.nitro.jit.Column.FlatColumn(columns[c], nulls == null ? null : nulls[c]);
+            else {
+                materialized[c] = new org.weakref.nitro.jit.Column.FlatColumn(columns[c], nulls == null ? null : nulls[c]);
+            }
         }
         return materialized;
     }
