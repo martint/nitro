@@ -17,6 +17,8 @@ import org.weakref.nitro.jit.ColumnEncoding;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.jit.QueryLowering;
 
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -512,6 +514,69 @@ public final class CompiledTpcdsQueries
                                 new Plan.Bin("*", main.column(discount), new Plan.Lit(10))))
                 .aggregate("sum", discount);
         return new MultiStage(subquery, main, "__item_averages__", List.of());
+    }
+
+    public static MultiStage query37()
+    {
+        return inventorySalesItems("__q37_sales__", "catalog_sales", "cs_item_sk",
+                LocalDate.of(2000, 2, 1), 68_00L, 98_00L, 677L, 940L, 694L, 808L);
+    }
+
+    public static MultiStage query82()
+    {
+        return inventorySalesItems("__q82_sales__", "store_sales", "ss_item_sk",
+                LocalDate.of(2000, 5, 25), 62_00L, 92_00L, 129L, 270L, 821L, 423L);
+    }
+
+    /**
+     * Q37/Q82 shape, decorrelated: {@code SELECT DISTINCT i_item_id, i_item_desc, i_current_price} over items priced
+     * in a range and from one of {@code manufacturerIds}, that were on hand (inv_quantity_on_hand 100..500) during a
+     * 60-day window and were sold ({@code item_sk IN (SELECT item_sk FROM sales)}). The {@code IN} is decorrelated to
+     * a distinct-keys subquery joined as a dimension; the main streams the (huge) inventory fact as its probe.
+     */
+    private static MultiStage inventorySalesItems(String virtualTable, String salesTable, String salesItem,
+            LocalDate start, long minimumPrice, long maximumPrice, long... manufacturerIds)
+    {
+        QueryLowering subquery = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(salesItem, ColumnEncoding.FLAT, true))
+                .groupBy(salesItem)
+                .count();   // DISTINCT item_sk (the count is unused; grouping is the de-duplication)
+
+        QueryLowering main = QueryLowering.scan("inventory",
+                        new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
+                .join("item", "inv_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_manufact_id", ColumnEncoding.FLAT, true))
+                .join("date_dim", "inv_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join(virtualTable, "inv_item_sk", "ds_item_sk",
+                        new QueryLowering.Column("ds_item_sk"),
+                        new QueryLowering.Column("ds_count"));
+        List<Plan.Condition> manufacturers = new ArrayList<>();
+        for (long id : manufacturerIds) {
+            manufacturers.add(new Plan.Predicate("=", main.column("i_manufact_id"), new Plan.Lit(id)));
+        }
+        main.where(
+                        new Plan.Predicate(">=", main.column("inv_quantity_on_hand"), new Plan.Lit(100)),
+                        new Plan.Predicate("<=", main.column("inv_quantity_on_hand"), new Plan.Lit(500)),
+                        new Plan.Predicate(">=", main.column("i_current_price"), new Plan.Lit(minimumPrice)),
+                        new Plan.Predicate("<=", main.column("i_current_price"), new Plan.Lit(maximumPrice)),
+                        new Plan.Predicate(">=", main.column("d_date"), new Plan.Lit(start.toEpochDay())),
+                        new Plan.Predicate("<=", main.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.Or(manufacturers))
+                .groupBy("i_item_id", "i_item_desc", "i_current_price")
+                .count();   // force one row per distinct (id, desc, price); the count is then dropped
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
+        main.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+        // Output columns 0 (i_item_id) and 1 (i_item_desc) are dictionary strings from main input 1 (item), cols 1 and 2.
+        return new MultiStage(subquery, main, virtualTable, List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2)));
     }
 
     public static MultiStage query34()

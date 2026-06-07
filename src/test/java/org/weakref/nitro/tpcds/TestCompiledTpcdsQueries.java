@@ -356,6 +356,29 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, union.stringColumns(), harness, tables);
     }
 
+    /** As {@link #assertMultiStageMatchesHarness}, but the main stage streams its (large) fact probe via {@code runStreamingMultiStage}. */
+    private static void assertStreamingMultiStageMatchesHarness(CompiledTpcdsQueries.MultiStage staged, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingMultiStage(
+                new Allocator(), tables, staged.subquery().lower(), staged.main().lower(), staged.virtualTable());
+        assertBridgedRowsMatch(run, staged.stringColumns(), harness, tables);
+    }
+
+    @Test
+    void query37()
+    {
+        assertStreamingMultiStageMatchesHarness(CompiledTpcdsQueries.query37(), TpcdsParquetSupport::query37);
+    }
+
+    @Test
+    void query82()
+    {
+        assertStreamingMultiStageMatchesHarness(CompiledTpcdsQueries.query82(), TpcdsParquetSupport::query82);
+    }
+
     /** As {@link #assertMatchesHarness}, but for a two-stage (pipeline-breaker) query run via {@code runMultiStage}. */
     private static void assertMultiStageMatchesHarness(CompiledTpcdsQueries.MultiStage staged, HarnessChain harness)
     {

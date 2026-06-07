@@ -709,6 +709,48 @@ public final class CompiledQuerySupport
     }
 
     /**
+     * As {@link #runMultiStage}, but the main stage is STREAMED: its probe (the fact table, e.g. inventory at ~133M
+     * rows) is read batch-by-batch from Parquet rather than drained into memory, and the subquery result is injected
+     * as the build named {@code virtualTable}. This is the decorrelated DISTINCT-then-join shape (Q37/Q82): stage A
+     * computes the set of qualifying keys, stage B streams the fact and joins it as a dimension. The fact is far too
+     * large to materialize, so only a streamed main is viable.
+     */
+    public static LoweredResult runStreamingMultiStage(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
+    {
+        org.weakref.nitro.jit.StreamingPipeline subStreaming =
+                PipelineCompiler.compileStreaming(subquery.pipeline(), subquery.encodings(), subquery.nullable());
+        CompiledPipeline.Result subResult = runStreamingLowered(allocator, tables, subquery, subStreaming, true);
+        org.weakref.nitro.jit.Column[] subMaterialized = materialize(subResult);
+        int subRows = subResult.rowCount();
+
+        org.weakref.nitro.jit.StreamingPipeline mainStreaming =
+                PipelineCompiler.compileStreaming(main.pipeline(), main.encodings(), main.nullable());
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
+        int buildCount = sources.size() - 1;
+        org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
+        int[] buildRowCounts = new int[buildCount];
+        org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[sources.size()][];
+        for (int b = 0; b < buildCount; b++) {
+            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(b + 1);
+            if (source.table().equals(virtualTable)) {
+                builds[b] = subMaterialized;
+                buildRowCounts[b] = subRows;
+            }
+            else {
+                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+                DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+                builds[b] = loaded.columns;
+                buildRowCounts[b] = loaded.rows;
+            }
+            inputsForDictRef[b + 1] = builds[b];
+        }
+        org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
+        org.weakref.nitro.jit.StreamingPipeline.Source source = parquetLazySource(allocator, tables, probe.table(), probe.columns());
+        return new LoweredResult(mainStreaming.execute(source, builds, buildRowCounts), inputsForDictRef);
+    }
+
+    /**
      * Run a UNION ALL: execute each branch sub-pipeline (streamed, like a multi-stage subquery), materialize its
      * result, concatenate the same-schema branch results row-wise into the {@code virtualTable}, and run {@code main}
      * over the concatenation. Branches are computed once each (not replayed); concatenation is the union.
