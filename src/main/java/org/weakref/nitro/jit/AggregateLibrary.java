@@ -70,7 +70,41 @@ public final class AggregateLibrary
     private static final Map<String, AggregateCompiler> REGISTRY = new ConcurrentHashMap<>();
 
     static {
-        register("sum", additive(null));
+        register("sum", new AggregateCompiler()
+        {
+            @Override public int cells()
+            {
+                return 2;   // [0] = sum, [1] = count of non-null inputs (0 -> SQL NULL)
+            }
+
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
+            {
+                out.append(indent).append(cells.get(0)).append(" = 0L;\n");
+                out.append(indent).append(cells.get(1)).append(" = 0L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(input).append(";\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + 1L;\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(other.get(0)).append(";\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(other.get(1)).append(";\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return cells.get(0);
+            }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                return cells.get(1) + " == 0L";   // sum over zero non-null inputs is NULL, not 0 (SQL semantics)
+            }
+        });
         register("count", additive("1L"));
         register("min", extreme("Math.min", "Long.MAX_VALUE"));
         register("max", extreme("Math.max", "Long.MIN_VALUE"));

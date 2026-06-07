@@ -517,6 +517,69 @@ public final class CompiledTpcdsQueries
         return new Ported(query, List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 3)));
     }
 
+    public static Ported query48()
+    {
+        // store_sales JOIN store, customer_demographics, customer_address(ca_country='United States'),
+        // date_dim(d_year=2000); global sum(ss_quantity) over rows passing a 3-disjunct demographics predicate
+        // (marital/education/sales_price) AND a 3-disjunct state/net_profit predicate. Each disjunct mixes a fact
+        // measure with dimension columns, so those ORs stay as WHERE; d_year and ca_country push into their builds.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"))
+                .join("customer_demographics", "ss_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, false))
+                .join("customer_address", "ss_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_country", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, false))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.StringMatch(query.position("ca_country"), List.of("United States"), false),
+                        new Plan.Or(
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("M"), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("4 yr Degree         "), false),
+                                        new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(10_000)),
+                                        new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(15_000))),
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("D"), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("2 yr Degree         "), false),
+                                        new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(5_000)),
+                                        new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(10_000))),
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College             "), false),
+                                        new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(15_000)),
+                                        new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(20_000)))),
+                        new Plan.Or(
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("ca_state"), List.of("CO", "OH", "TX"), false),
+                                        new Plan.Predicate(">=", query.column("ss_net_profit"), new Plan.Lit(0)),
+                                        new Plan.Predicate("<=", query.column("ss_net_profit"), new Plan.Lit(200_000))),
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("ca_state"), List.of("OR", "MN", "KY"), false),
+                                        new Plan.Predicate(">=", query.column("ss_net_profit"), new Plan.Lit(15_000)),
+                                        new Plan.Predicate("<=", query.column("ss_net_profit"), new Plan.Lit(300_000))),
+                                new Plan.And(
+                                        new Plan.StringMatch(query.position("ca_state"), List.of("VA", "CA", "MS"), false),
+                                        new Plan.Predicate(">=", query.column("ss_net_profit"), new Plan.Lit(5_000)),
+                                        new Plan.Predicate("<=", query.column("ss_net_profit"), new Plan.Lit(2_500_000)))))
+                .aggregate("sum", "ss_quantity");
+        return new Ported(query, -1, 0, 0);
+    }
+
     public static Ported query62()
     {
         return shippingDelayBuckets("web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk",

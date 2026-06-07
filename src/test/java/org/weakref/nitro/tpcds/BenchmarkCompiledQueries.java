@@ -50,7 +50,7 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"03", "07", "15", "26", "42", "43", "52", "55", "62", "91", "96", "99", "32", "34", "73", "92"})
+    @Param({"03", "07", "15", "26", "42", "48", "43", "52", "55", "62", "91", "96", "99", "32", "34", "73", "92"})
     public String query;
 
     private Allocator allocator;
@@ -73,6 +73,7 @@ public class BenchmarkCompiledQueries
         compile("15", CompiledTpcdsQueries.query15());
         compile("26", CompiledTpcdsQueries.query26());
         compile("42", CompiledTpcdsQueries.query42());
+        compile("48", CompiledTpcdsQueries.query48());
         compile("43", CompiledTpcdsQueries.query43());
         compile("52", CompiledTpcdsQueries.query52());
         compile("55", CompiledTpcdsQueries.query55());
