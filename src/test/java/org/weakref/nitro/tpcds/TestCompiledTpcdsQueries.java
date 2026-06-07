@@ -84,6 +84,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query33()
+    {
+        assertUnionMatchesHarness(CompiledTpcdsQueries.query33(), TpcdsParquetSupport::query33);
+    }
+
+    @Test
     void query34()
     {
         assertMultiStageMatchesHarness(CompiledTpcdsQueries.query34(), TpcdsParquetSupport::query34);
@@ -315,6 +321,21 @@ public class TestCompiledTpcdsQueries
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
+    }
+
+    /** As {@link #assertMatchesHarness}, but for a UNION ALL query run via {@code runUnion} (branches + final stage). */
+    private static void assertUnionMatchesHarness(CompiledTpcdsQueries.Union union, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        List<org.weakref.nitro.jit.QueryLowering.Lowered> branches = new ArrayList<>();
+        for (org.weakref.nitro.jit.QueryLowering branch : union.branches()) {
+            branches.add(branch.lower());
+        }
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runUnion(
+                new Allocator(), tables, branches, union.main().lower(), union.virtualTable());
+        assertBridgedRowsMatch(run, union.stringColumns(), harness, tables);
     }
 
     /** As {@link #assertMatchesHarness}, but for a two-stage (pipeline-breaker) query run via {@code runMultiStage}. */

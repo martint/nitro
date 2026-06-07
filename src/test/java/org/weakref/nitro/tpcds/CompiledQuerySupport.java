@@ -699,6 +699,76 @@ public final class CompiledQuerySupport
         return new LoweredResult(mainCompiled.execute(inputs, rowCounts), inputs);
     }
 
+    /**
+     * Run a UNION ALL: execute each branch sub-pipeline (streamed, like a multi-stage subquery), materialize its
+     * result, concatenate the same-schema branch results row-wise into the {@code virtualTable}, and run {@code main}
+     * over the concatenation. Branches are computed once each (not replayed); concatenation is the union.
+     */
+    public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
+            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
+    {
+        List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
+        int[] counts = new int[branches.size()];
+        int width = 0;
+        for (int i = 0; i < branches.size(); i++) {
+            org.weakref.nitro.jit.QueryLowering.Lowered branch = branches.get(i);
+            org.weakref.nitro.jit.StreamingPipeline streaming =
+                    PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
+            CompiledPipeline.Result result = runStreamingLowered(allocator, tables, branch, streaming, true);
+            org.weakref.nitro.jit.Column[] materialized = materialize(result);
+            parts.add(materialized);
+            counts[i] = result.rowCount();
+            width = materialized.length;
+        }
+        int total = 0;
+        for (int count : counts) {
+            total += count;
+        }
+        org.weakref.nitro.jit.Column[] union = concatenateColumns(parts, counts, total, width);
+
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
+        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        int[] rowCounts = new int[sources.size()];
+        for (int s = 0; s < sources.size(); s++) {
+            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
+            if (source.table().equals(virtualTable)) {
+                inputs[s] = union;
+                rowCounts[s] = total;
+            }
+            else {
+                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+                DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+                inputs[s] = loaded.columns;
+                rowCounts[s] = loaded.rows;
+            }
+        }
+        return new LoweredResult(main.compile().execute(inputs, rowCounts), inputs);
+    }
+
+    /** Row-wise concatenation of same-schema flat (numeric) branch results into one {@link org.weakref.nitro.jit.Column}[]. */
+    private static org.weakref.nitro.jit.Column[] concatenateColumns(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int width)
+    {
+        org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+        for (int c = 0; c < width; c++) {
+            long[] values = new long[total];
+            boolean[] nulls = null;
+            int offset = 0;
+            for (int p = 0; p < parts.size(); p++) {
+                org.weakref.nitro.jit.Column.FlatColumn part = (org.weakref.nitro.jit.Column.FlatColumn) parts.get(p)[c];
+                System.arraycopy(part.values(), 0, values, offset, counts[p]);
+                if (part.nulls() != null) {
+                    if (nulls == null) {
+                        nulls = new boolean[total];
+                    }
+                    System.arraycopy(part.nulls(), 0, nulls, offset, counts[p]);
+                }
+                offset += counts[p];
+            }
+            out[c] = new org.weakref.nitro.jit.Column.FlatColumn(values, nulls);
+        }
+        return out;
+    }
+
     /** Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s so it can feed a downstream stage as a relation. */
     private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result)
     {

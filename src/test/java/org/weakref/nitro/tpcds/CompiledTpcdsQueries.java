@@ -301,6 +301,60 @@ public final class CompiledTpcdsQueries
      */
     public record MultiStage(QueryLowering subquery, QueryLowering main, String virtualTable, List<DictRef> stringColumns) {}
 
+    /**
+     * A UNION ALL of {@code branches} (each a grouped sub-pipeline producing the same schema) feeding {@code main}
+     * (which scans {@code virtualTable} = the row-wise concatenation of the branch results). The union is a
+     * concatenation of independently-computed branch results -- the optimizer's decorrelated shape -- not a replay.
+     */
+    public record Union(List<QueryLowering> branches, QueryLowering main, String virtualTable, List<DictRef> stringColumns) {}
+
+    /** One channel of the Q33/Q56/Q60 union: channel sales JOIN item(category)/date/customer_address, grouped by manufacturer. */
+    private static QueryLowering unionChannelGroupedSales(String table, String soldDate, String item, String address, String sales)
+    {
+        QueryLowering query = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(address, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(sales, ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_manufact_id"))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"),
+                        new QueryLowering.Column("d_moy"))
+                .join("customer_address", address, "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_gmt_offset"));
+        query.where(
+                        new Plan.StringMatch(query.position("i_category"), List.of("Electronics"), false),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(5)),
+                        new Plan.Predicate("=", query.column("ca_gmt_offset"), new Plan.Lit(-500)))
+                .groupBy("i_manufact_id")
+                .aggregate("sum", sales);
+        return query;
+    }
+
+    public static Union query33()
+    {
+        // UNION ALL of store/catalog/web sales, each grouped by i_manufact_id with sum(ext_sales_price) over
+        // item(category='Electronics') JOIN date_dim(d_year=1998,d_moy=5) JOIN customer_address(gmt_offset=-5);
+        // then a final group by manufacturer summing the per-channel totals, ordered by total, LIMIT 100.
+        List<QueryLowering> branches = List.of(
+                unionChannelGroupedSales("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_addr_sk", "ss_ext_sales_price"),
+                unionChannelGroupedSales("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_addr_sk", "cs_ext_sales_price"),
+                unionChannelGroupedSales("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_addr_sk", "ws_ext_sales_price"));
+        QueryLowering main = QueryLowering.scan("__q33_union__",
+                        new QueryLowering.Column("g_manufact_id"),
+                        new QueryLowering.Column("g_total"))
+                .groupBy("g_manufact_id")
+                .aggregate("sum", "g_total");
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, false)), 100));
+        return new Union(branches, main, "__q33_union__", List.of());
+    }
+
     public static MultiStage query92()
     {
         return excessDiscountSum("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_discount_amt", 350);
