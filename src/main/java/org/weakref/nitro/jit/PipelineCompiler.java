@@ -33,6 +33,20 @@ public final class PipelineCompiler
 {
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
     private static final AtomicInteger COUNTER = new AtomicInteger();
+    // Compiled pipelines are cached by their generated source (a query engine compiles a plan once and executes it
+    // many times). The key renders with a fixed class name so two structurally identical pipelines -- e.g. a subtree
+    // assembled twice in a multi-stage query -- share one compiled, stateless class. A miss mints a uniquely-named
+    // class and compiles it.
+    private static final String CACHE_NAME = "Cached";
+    private static final java.util.concurrent.ConcurrentHashMap<String, Class<?>> CLASS_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static Class<?> cachedClass(String cacheKey, String prefix, java.util.function.Function<String, String> renderWithName)
+    {
+        return CLASS_CACHE.computeIfAbsent(cacheKey, key -> {
+            String simpleName = prefix + COUNTER.incrementAndGet();
+            return InMemoryCompiler.compile(PACKAGE + "." + simpleName, renderWithName.apply(simpleName));
+        });
+    }
 
     // Runtime array-mode guards: use a direct-indexed array when the key domain is no larger than
     // DENSITY_FACTOR x the row count (dense enough) and at most MAX_ARRAY_RANGE entries (bounded memory).
@@ -68,14 +82,13 @@ public final class PipelineCompiler
      */
     public static CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
-        String simpleName = "Pipeline_" + COUNTER.incrementAndGet();
-        String source = render(pipeline, encodings, nullable, simpleName);
+        Class<?> compiled = cachedClass("P|" + render(pipeline, encodings, nullable, CACHE_NAME), "Pipeline_",
+                name -> render(pipeline, encodings, nullable, name));
         try {
-            Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
             return (CompiledPipeline) compiled.getDeclaredConstructor().newInstance();
         }
         catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to instantiate compiled pipeline:\n" + source, e);
+            throw new IllegalStateException("Failed to instantiate compiled pipeline", e);
         }
     }
 
@@ -89,14 +102,13 @@ public final class PipelineCompiler
      */
     public static StreamingPipeline compileStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
-        String simpleName = "Streaming_" + COUNTER.incrementAndGet();
-        String source = renderStreaming(pipeline, encodings, nullable, simpleName);
+        Class<?> compiled = cachedClass("S|" + renderStreaming(pipeline, encodings, nullable, CACHE_NAME), "Streaming_",
+                name -> renderStreaming(pipeline, encodings, nullable, name));
         try {
-            Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
             return (StreamingPipeline) compiled.getDeclaredConstructor().newInstance();
         }
         catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to instantiate compiled streaming pipeline:\n" + source, e);
+            throw new IllegalStateException("Failed to instantiate compiled streaming pipeline", e);
         }
     }
 
