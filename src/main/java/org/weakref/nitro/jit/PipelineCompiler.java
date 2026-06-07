@@ -982,6 +982,43 @@ public final class PipelineCompiler
         return conditions.stream().map(c -> conditionTrue(c, resolver, nullResolver, stringMaskIds)).collect(joining(" && "));
     }
 
+    /**
+     * Emit the per-row join probes with each filter interleaved at the level its inputs become available -- probe-only
+     * filters before any probe, the rest right after the build that completes them -- so a row that fails is dropped
+     * before the remaining probes (matching where the operator/Trino plan applies the filter). Opens one {@code if}
+     * brace per probe and per interleaved filter group; returns the number opened so the caller can close them.
+     */
+    private static int emitProbesWithFilters(StringBuilder out, String baseIndent, Plan.Pipeline pipeline, List<Plan.Join> joins,
+            int[] buildOffset, int probeColumns, int joinCount, IntFunction<String> resolver, IntFunction<String> nullResolver,
+            Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        Map<Integer, List<Plan.Condition>> filtersByLevel = new java.util.LinkedHashMap<>();
+        for (Plan.Condition filter : pipeline.filters()) {
+            filtersByLevel.computeIfAbsent(filterLevel(filter, joins, buildOffset, probeColumns), level -> new ArrayList<>()).add(filter);
+        }
+        String indent = baseIndent;
+        int openBraces = 0;
+        List<Plan.Condition> probeOnly = filtersByLevel.get(-1);
+        if (probeOnly != null) {
+            out.append(indent).append("if (").append(conjunction(probeOnly, resolver, nullResolver, stringMaskIds)).append(") {\n");
+            indent += "  ";
+            openBraces++;
+        }
+        for (int k = 0; k < joinCount; k++) {
+            emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
+            out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+            indent += "  ";
+            openBraces++;
+            List<Plan.Condition> atLevel = filtersByLevel.get(k);
+            if (atLevel != null) {
+                out.append(indent).append("if (").append(conjunction(atLevel, resolver, nullResolver, stringMaskIds)).append(") {\n");
+                indent += "  ";
+                openBraces++;
+            }
+        }
+        return openBraces;
+    }
+
     private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         emitJoinBody(out, pipeline, encodings, nullable, resultTypes, false);
@@ -1195,34 +1232,9 @@ public final class PipelineCompiler
                     emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
                 }
             }
-            // Early-out: place each filter right after the build that completes its inputs (probe-only filters before
-            // any probe), so a row that fails is dropped before the remaining probes -- matching where the operator/
-            // Trino plan applies the filter, rather than re-checking every filter only after all joins succeed.
-            Map<Integer, List<Plan.Condition>> filtersByLevel = new java.util.LinkedHashMap<>();
-            for (Plan.Condition filter : pipeline.filters()) {
-                filtersByLevel.computeIfAbsent(filterLevel(filter, joins, buildOffset, probeColumns), level -> new ArrayList<>()).add(filter);
-            }
             out.append("        for (int i = 0; i < probeRows; i++) {\n");
-            String indent = "          ";
-            int openBraces = 0;
-            List<Plan.Condition> probeOnly = filtersByLevel.get(-1);
-            if (probeOnly != null) {
-                out.append(indent).append("if (").append(conjunction(probeOnly, resolver, nullResolver, stringMaskIds)).append(") {\n");
-                indent += "  ";
-                openBraces++;
-            }
-            for (int k = 0; k < joinCount; k++) {
-                emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
-                out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
-                indent += "  ";
-                openBraces++;
-                List<Plan.Condition> atLevel = filtersByLevel.get(k);
-                if (atLevel != null) {
-                    out.append(indent).append("if (").append(conjunction(atLevel, resolver, nullResolver, stringMaskIds)).append(") {\n");
-                    indent += "  ";
-                    openBraces++;
-                }
-            }
+            int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, resolver, nullResolver, stringMaskIds);
+            String indent = "          " + "  ".repeat(openBraces);
             out.append(indent).append("selection[selected] = i;\n");
             for (int k = 0; k < joinCount; k++) {
                 out.append(indent).append("bsel").append(k).append("[selected] = buildRow").append(k).append(";\n");
@@ -1277,15 +1289,12 @@ public final class PipelineCompiler
             }
 
             out.append("    for (int i = 0; i < probeRows; i++) {\n");
-            String indent = "      ";
-            for (int k = 0; k < joinCount; k++) {
-                emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
-                out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
-                indent += "  ";
-            }
+            // Filters are interleaved with the probes (early-out); the body then runs without re-checking them.
             // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
-            emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
-            for (int k = 0; k < joinCount; k++) {
+            int openBraces = emitProbesWithFilters(out, "      ", pipeline, joins, buildOffset, probeColumns, joinCount, resolver, nullResolver, stringMaskIds);
+            String indent = "      " + "  ".repeat(openBraces);
+            emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false, true);
+            for (int brace = 0; brace < openBraces; brace++) {
                 indent = indent.substring(2);
                 out.append(indent).append("}\n");
             }
@@ -1453,13 +1462,20 @@ public final class PipelineCompiler
 
     private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
     {
+        emitRowBody(out, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, false);
+    }
+
+    /**
+     * Emit one surviving row's body (filter then projection / group / global accumulate). When {@code filtersApplied}
+     * the WHERE was already applied upstream (interleaved with the join probes for early-out), so it is not re-checked.
+     */
+    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied)
+    {
         String bodyIndent = indent;
-        if (!pipeline.filters().isEmpty()) {
+        boolean emitFilter = !filtersApplied && !pipeline.filters().isEmpty();
+        if (emitFilter) {
             // A row passes WHERE only when the condition is TRUE (not FALSE, not NULL) -- three-valued logic.
-            String condition = pipeline.filters().stream()
-                    .map(c -> conditionTrue(c, resolver, nullResolver, stringMaskIds))
-                    .collect(joining(" && "));
-            out.append(indent).append("if (").append(condition).append(") {\n");
+            out.append(indent).append("if (").append(conjunction(pipeline.filters(), resolver, nullResolver, stringMaskIds)).append(") {\n");
             bodyIndent = indent + "  ";
         }
         if (projectionOnly(pipeline)) {
@@ -1471,7 +1487,7 @@ public final class PipelineCompiler
         else {
             emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
         }
-        if (!pipeline.filters().isEmpty()) {
+        if (emitFilter) {
             out.append(indent).append("}\n");
         }
     }
