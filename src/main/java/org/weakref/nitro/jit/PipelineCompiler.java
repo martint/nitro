@@ -1027,6 +1027,24 @@ public final class PipelineCompiler
             return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, local), "buildRow" + build);
         };
 
+        // Filter pushdown: a filter referencing only one build's columns (and numeric -- string-match masks are not
+        // yet built at this point) is enforced while constructing that build, so the join prunes the probe early.
+        String[] buildFilter = new String[joinCount];
+        for (int k = 0; k < joinCount; k++) {
+            int start = buildOffset[k];
+            int end = start + joins.get(k).build().columnCount();
+            int build = k;
+            IntFunction<String> buildResolver = index -> joinAccess(combinedEncoding(pipeline, encodings, index), buildVars(build, index - buildOffset[build]), "r");
+            IntFunction<String> buildNullResolver = index -> joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, index - buildOffset[build]), "r");
+            List<String> pushed = new ArrayList<>();
+            for (Plan.Condition filter : pipeline.filters()) {
+                if (pushableToBuild(filter, start, end)) {
+                    pushed.add(conditionTrue(filter, buildResolver, buildNullResolver, Map.of()));
+                }
+            }
+            buildFilter[k] = pushed.isEmpty() ? null : String.join(" && ", pushed);
+        }
+
         // Builds (dimensions) are materialized once into hash tables: eager from inputs[k+1], streaming from builds[k].
         String buildsArray = streaming ? "builds" : "inputs";
         String buildCounts = streaming ? "buildRowCounts" : "rowCounts";
@@ -1043,7 +1061,7 @@ public final class PipelineCompiler
                 int combinedIndex = buildOffset[k] + column;
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, combinedIndex), combinedNullable(pipeline, nullable, combinedIndex), "build" + k + "[" + column + "]", buildVars(k, column));
             }
-            emitBuildStructures(out, k, join.build().keyColumns());
+            emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k]);
         }
 
         // Predicate-over-dictionary string masks. Collect + assign a stable id per predicate; build-side masks
@@ -1267,10 +1285,17 @@ public final class PipelineCompiler
      * key range and chooses array mode (direct index) or an open-addressing hash table at runtime; a composite
      * key always uses the hash table. The probe loop selects the matching lookup via {@code useArray<k>}.
      */
-    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys)
+    /**
+     * Build the lookup structure for join {@code k}. When {@code buildFilter} is non-null, build rows failing it are
+     * not inserted -- so a probe key matching a filtered-out dimension row gets no match and is pruned before any
+     * downstream nested join, the same early pruning an operator engine gets by filtering the dimension before the
+     * build. (The filter remains in the probe WHERE too; for survivors that is a redundant, always-true re-check.)
+     */
+    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
+        String skip = buildFilter == null ? "" : "if (!(" + buildFilter + ")) { continue; } ";
         if (keyCount == 1) {
             String buildKey = "b" + k + "_" + buildKeys[0];
             out.append("    long minKey").append(k).append(" = Long.MAX_VALUE, maxKey").append(k).append(" = Long.MIN_VALUE;\n");
@@ -1283,9 +1308,9 @@ public final class PipelineCompiler
             out.append("    long[] jKey").append(k).append("_0 = null; int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
             out.append("    if (useArray").append(k).append(") {\n");
             out.append("      int range = (int) keyRange").append(k).append("; buildRowByKey").append(k).append(" = new int[range]; java.util.Arrays.fill(buildRowByKey").append(k).append(", -1);\n");
-            out.append("      for (int r = 0; r < ").append(rows).append("; r++) { buildRowByKey").append(k).append("[(int) (").append(buildKey).append("[r] - minKey").append(k).append(")] = r; }\n");
+            out.append("      for (int r = 0; r < ").append(rows).append("; r++) { ").append(skip).append("buildRowByKey").append(k).append("[(int) (").append(buildKey).append("[r] - minKey").append(k).append(")] = r; }\n");
             out.append("    }\n    else {\n");
-            emitHashBuild(out, "      ", k, buildKeys);
+            emitHashBuild(out, "      ", k, buildKeys, buildFilter);
             out.append("    }\n");
         }
         else {
@@ -1294,13 +1319,13 @@ public final class PipelineCompiler
             }
             out.append("    int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
             out.append("    {\n");
-            emitHashBuild(out, "      ", k, buildKeys);
+            emitHashBuild(out, "      ", k, buildKeys, buildFilter);
             out.append("    }\n");
         }
     }
 
     /** Open-addressing build for join {@code k} (build keys assumed unique), populating the join's slot arrays. */
-    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys)
+    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
@@ -1310,6 +1335,9 @@ public final class PipelineCompiler
         }
         out.append(indent).append("jRow").append(k).append(" = new int[jcap]; java.util.Arrays.fill(jRow").append(k).append(", -1); jMask").append(k).append(" = jcap - 1;\n");
         out.append(indent).append("for (int r = 0; r < ").append(rows).append("; r++) {\n");
+        if (buildFilter != null) {
+            out.append(indent).append("  if (!(").append(buildFilter).append(")) { continue; }\n");
+        }
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(indent).append("  long bk").append(kx).append(" = b").append(k).append("_").append(buildKeys[kx]).append("[r];\n");
         }
@@ -1998,6 +2026,27 @@ public final class PipelineCompiler
             case Plan.LikeMatch match -> into.add(match.column());
             case Plan.SubstringMatch match -> into.add(match.column());
         }
+    }
+
+    /**
+     * Whether {@code filter} can be enforced while building the dimension whose combined columns occupy
+     * {@code [start, end)}: it must reference at least one column, every referenced column must be that build's, and
+     * it must contain no string-match condition (those rely on a predicate-over-dictionary mask not yet built when
+     * the build is constructed).
+     */
+    private static boolean pushableToBuild(Plan.Condition filter, int start, int end)
+    {
+        List<Plan.Condition> stringMatches = new ArrayList<>();
+        collectStringMatches(filter, stringMatches);
+        if (!stringMatches.isEmpty()) {
+            return false;
+        }
+        TreeSet<Integer> columns = new TreeSet<>();
+        collectConditionColumns(filter, columns);
+        if (columns.isEmpty()) {
+            return false;
+        }
+        return columns.first() >= start && columns.last() < end;
     }
 
     /** Render a boolean condition tree as a Java expression. */
