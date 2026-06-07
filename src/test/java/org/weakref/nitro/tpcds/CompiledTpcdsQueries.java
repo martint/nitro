@@ -576,8 +576,11 @@ public final class CompiledTpcdsQueries
     public static Composite query01()
     {
         // Customers in TN stores whose store return total exceeds 1.2x the store's average customer return total.
-        // ctr = per-(customer,store) sum of returns (null when that pair has only null amounts); the per-store
-        // average ignores those null totals, so total_return = sum(ctr) and customer_count = count(non-null ctr).
+        // ctr = per-(customer,store) sum of returns (null when that pair has only null amounts). Like Trino's plan,
+        // the threshold subquery is a per-store AVERAGE (avg of the non-null ctr; avg of a decimal(.,2) rounds to
+        // cents, i.e. divide_round_i64(sum, count)), and the main keeps ctr1.total > 1.2*avg -- which at scale 3 is
+        // exactly 5*total > 6*avg. Stores whose ctr is entirely null have no average (HAVING count > 0); the inner
+        // join then drops their detail rows, matching Trino's left-join-then-null-filter.
         QueryLowering thresholds = QueryLowering.scan("q01_ctr_for_totals",
                         new QueryLowering.Column("ctr_customer"),
                         new QueryLowering.Column("ctr_store"),
@@ -585,6 +588,9 @@ public final class CompiledTpcdsQueries
                 .groupBy("ctr_store")
                 .aggregate("sum", "ctr_total")
                 .aggregate("count", "ctr_total");   // count of non-null ctr (null inputs are guarded out)
+        thresholds.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(0)));
+        // result columns (store=0, sum=1, count=2) -> (store, round(sum / count)) = the per-store average return.
+        thresholds.select(new Plan.Col(0), new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)));
 
         QueryLowering main = QueryLowering.scan("q01_ctr_detail",
                         new QueryLowering.Column("d_customer"),
@@ -598,13 +604,12 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false))
                 .join("q01_store_totals", "d_store", "st_store",
                         new QueryLowering.Column("st_store"),
-                        new QueryLowering.Column("st_total", ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column("st_count"));
+                        new QueryLowering.Column("st_average"));   // computed (round(sum/count)) -> never null
         main.where(
                 new Plan.StringMatch(main.position("s_state"), List.of("TN"), false),
                 new Plan.Predicate("<",
-                        new Plan.Bin("*", main.column("st_total"), new Plan.Lit(6)),
-                        new Plan.Bin("*", new Plan.Bin("*", main.column("st_count"), main.column("d_total")), new Plan.Lit(5))));
+                        new Plan.Bin("*", main.column("st_average"), new Plan.Lit(6)),
+                        new Plan.Bin("*", main.column("d_total"), new Plan.Lit(5))));
         main.select(main.column("c_customer_id"));
         main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
 
