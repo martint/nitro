@@ -160,6 +160,35 @@ public final class CompiledQuerySupport
     }
 
     /**
+     * The runtime physical width (64 or 32 bits) of each numeric column of {@code table}, discovered by peeking the
+     * first non-empty batch of a scan rather than assumed from the SQL/logical type. Under schema evolution the
+     * physical type a file actually carries may differ from what the logical type implies, so the compiled engine
+     * must specialize to the discovered profile (or fall back to an adaptation/widening layer), not to a declared
+     * type. A non-numeric (string/dictionary) column reports 64 and is handled by its STRING encoding instead. This
+     * is the per-file half of the variant profile; encoding (the per-batch half) is discovered separately.
+     */
+    public static int[] discoverNumericWidths(Allocator allocator, TpcdsParquetTables tables, String table, List<String> columns)
+    {
+        int[] widths = new int[columns.size()];
+        java.util.Arrays.fill(widths, 64);
+        Operator operator = scan(allocator, tables, table, columns.toArray(new String[0]));
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    if (batch.borrowMask().count() == 0) {
+                        continue;
+                    }
+                    for (int c = 0; c < columns.size(); c++) {
+                        widths[c] = batch.output(c).borrow(Stream.VALUES) instanceof I32Vector ? 32 : 64;
+                    }
+                    return widths;   // physical type is fixed within a file, so the first non-empty batch suffices
+                }
+            }
+        }
+        return widths;
+    }
+
+    /**
      * Zero-copy streaming {@link org.weakref.nitro.jit.StreamingPipeline.Source}: when a batch is the dense full
      * range ({@code mask.all()}) and a column is a non-null {@code I64} vector, its backing {@code long[]} is
      * wrapped directly with no copy; otherwise the column is copied (widened {@code I32}, gathered sparse mask, or

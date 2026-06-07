@@ -39,6 +39,21 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 public class TestCompiledTpcdsQueries
 {
     @Test
+    void discoversNumericPhysicalWidthsFromData()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        // store_sales: a 64-bit surrogate key + measure, a 32-bit quantity; date_dim: 32-bit d_year. The widths are
+        // read from the actual file, not the logical type -- the foundation for per-file variant specialization.
+        int[] ss = CompiledQuerySupport.discoverNumericWidths(new Allocator(), tables, "store_sales",
+                List.of("ss_item_sk", "ss_ext_sales_price", "ss_quantity"));
+        assertThat(ss).containsExactly(64, 64, 32);
+        int[] dd = CompiledQuerySupport.discoverNumericWidths(new Allocator(), tables, "date_dim", List.of("d_date_sk", "d_year"));
+        assertThat(dd).containsExactly(64, 32);
+    }
+
+    @Test
     void query03()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query03(), TpcdsParquetSupport::query03);
