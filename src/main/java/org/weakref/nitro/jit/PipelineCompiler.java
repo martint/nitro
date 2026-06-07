@@ -1027,8 +1027,18 @@ public final class PipelineCompiler
             return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, local), "buildRow" + build);
         };
 
-        // Filter pushdown: a filter referencing only one build's columns (and numeric -- string-match masks are not
-        // yet built at this point) is enforced while constructing that build, so the join prunes the probe early.
+        // Predicate-over-dictionary string masks: assign a stable id per match up front (the build-side masks are
+        // emitted per dimension below, before that dimension's structures, so a pushed string filter can read them).
+        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
+        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
+        for (int s = 0; s < stringMatches.size(); s++) {
+            stringMaskIds.put(stringMatches.get(s), s);
+        }
+
+        // Filter pushdown: a filter referencing only one build's columns is enforced while constructing that build,
+        // so the join prunes the probe early (the same early pruning an operator engine gets by filtering a
+        // dimension before its build). Includes string-match filters, whose dictionary mask is emitted just before
+        // the build structures below.
         String[] buildFilter = new String[joinCount];
         for (int k = 0; k < joinCount; k++) {
             int start = buildOffset[k];
@@ -1039,7 +1049,7 @@ public final class PipelineCompiler
             List<String> pushed = new ArrayList<>();
             for (Plan.Condition filter : pipeline.filters()) {
                 if (pushableToBuild(filter, start, end)) {
-                    pushed.add(conditionTrue(filter, buildResolver, buildNullResolver, Map.of()));
+                    pushed.add(conditionTrue(filter, buildResolver, buildNullResolver, stringMaskIds));
                 }
             }
             buildFilter[k] = pushed.isEmpty() ? null : String.join(" && ", pushed);
@@ -1061,24 +1071,17 @@ public final class PipelineCompiler
                 int combinedIndex = buildOffset[k] + column;
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, combinedIndex), combinedNullable(pipeline, nullable, combinedIndex), "build" + k + "[" + column + "]", buildVars(k, column));
             }
-            emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k]);
-        }
-
-        // Predicate-over-dictionary string masks. Collect + assign a stable id per predicate; build-side masks
-        // build once here (their dictionary is materialized), probe-side masks build per batch (below). Includes
-        // masks for CASE conditions in aggregate inputs (e.g. Q43's day-of-week pivot), not just WHERE filters.
-        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
-        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
-        for (int s = 0; s < stringMatches.size(); s++) {
-            stringMaskIds.put(stringMatches.get(s), s);
-        }
-        for (int s = 0; s < stringMatches.size(); s++) {
-            Plan.Condition match = stringMatches.get(s);
-            int column = stringMatchColumn(match);
-            if (column >= probeColumns) {
-                int build = buildOf(joins, buildOffset, column);
-                emitStringMaskPrelude(out, match, s, buildVars(build, column - buildOffset[build]).stringDict());
+            // Build-side predicate-over-dictionary masks for this dimension, emitted before its structures so a
+            // pushed string-match filter can read them (their dictionary is now materialized). Includes masks for
+            // CASE conditions in aggregate inputs, not just WHERE filters; probe-side masks build per batch below.
+            for (int s = 0; s < stringMatches.size(); s++) {
+                Plan.Condition match = stringMatches.get(s);
+                int column = stringMatchColumn(match);
+                if (column >= buildOffset[k] && column < buildOffset[k] + join.build().columnCount()) {
+                    emitStringMaskPrelude(out, match, s, buildVars(k, column - buildOffset[k]).stringDict());
+                }
             }
+            emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k]);
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
@@ -2030,17 +2033,12 @@ public final class PipelineCompiler
 
     /**
      * Whether {@code filter} can be enforced while building the dimension whose combined columns occupy
-     * {@code [start, end)}: it must reference at least one column, every referenced column must be that build's, and
-     * it must contain no string-match condition (those rely on a predicate-over-dictionary mask not yet built when
-     * the build is constructed).
+     * {@code [start, end)}: it must reference at least one column and every referenced column must be that build's.
+     * String-match filters qualify -- this dimension's predicate-over-dictionary masks are emitted before its
+     * structures.
      */
     private static boolean pushableToBuild(Plan.Condition filter, int start, int end)
     {
-        List<Plan.Condition> stringMatches = new ArrayList<>();
-        collectStringMatches(filter, stringMatches);
-        if (!stringMatches.isEmpty()) {
-            return false;
-        }
         TreeSet<Integer> columns = new TreeSet<>();
         collectConditionColumns(filter, columns);
         if (columns.isEmpty()) {
