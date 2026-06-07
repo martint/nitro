@@ -356,6 +356,27 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, union.stringColumns(), harness, tables);
     }
 
+    @Test
+    void query65()
+    {
+        assertCompositeMatchesHarness(CompiledTpcdsQueries.query65(), TpcdsParquetSupport::query65);
+    }
+
+    /** Run a multi-stage query as a tree of compiled pipelines: each stage materialized under its virtual name, then the main. */
+    private static void assertCompositeMatchesHarness(CompiledTpcdsQueries.Composite composite, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals));
+        }
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+        assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
+    }
+
     /** As {@link #assertMultiStageMatchesHarness}, but the main stage streams its (large) fact probe via {@code runStreamingMultiStage}. */
     private static void assertStreamingMultiStageMatchesHarness(CompiledTpcdsQueries.MultiStage staged, HarnessChain harness)
     {

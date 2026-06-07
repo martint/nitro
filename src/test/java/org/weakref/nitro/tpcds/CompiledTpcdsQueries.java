@@ -516,6 +516,82 @@ public final class CompiledTpcdsQueries
         return new MultiStage(subquery, main, "__item_averages__", List.of());
     }
 
+    /** One stage of a multi-stage operator tree: a lowering plus the virtual-table name its materialized output is exposed under. */
+    public record Stage(QueryLowering plan, String virtualName) {}
+
+    /**
+     * A multi-stage query as a tree of compiled pipelines (the shape the planner already produced). {@code stages}
+     * run in order, each materialized under its {@link Stage#virtualName} and visible to later stages and {@code main}
+     * by that name; a subtree shared in the logical plan is listed twice (recomputed, since the engine has no reuse).
+     */
+    public record Composite(List<Stage> stages, QueryLowering main, List<DictRef> stringColumns) {}
+
+    public static Composite query65()
+    {
+        // Per-store low-revenue items: items whose store revenue is <= 10% of that store's average item revenue.
+        // The store-item revenue subtree feeds both the per-store average AND the detail join, so (no reuse) it is
+        // assembled twice -- exactly as the Trino/Nitro operator trees do.
+        QueryLowering thresholds = QueryLowering.scan("q65_sales_for_average",
+                        new QueryLowering.Column("sis_store"),
+                        new QueryLowering.Column("sis_item"),
+                        new QueryLowering.Column("sis_revenue", ColumnEncoding.FLAT, true))
+                .groupBy("sis_store")
+                .count()
+                .aggregate("sum", "sis_revenue");
+        // result columns: (store=0, count=1, sum=2) -> (store, round(sum / count)) = per-store average revenue.
+        thresholds.select(new Plan.Col(0), new Plan.Call("divide_round_i64", new Plan.Col(2), new Plan.Col(1)));
+
+        QueryLowering main = QueryLowering.scan("q65_sales_detail",
+                        new QueryLowering.Column("sis_store"),
+                        new QueryLowering.Column("sis_item"),
+                        new QueryLowering.Column("sis_revenue", ColumnEncoding.FLAT, true))
+                .join("q65_thresholds", "sis_store", "thr_store",
+                        new QueryLowering.Column("thr_store"),
+                        new QueryLowering.Column("thr_average"))   // computed (round(sum/count)) -> never null
+                .join("store", "sis_store", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, true))
+                .join("item", "sis_item", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_wholesale_cost", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true));
+        main.where(new Plan.Predicate("<=",
+                new Plan.Bin("*", main.column("sis_revenue"), new Plan.Lit(10)),
+                main.column("thr_average")));
+        main.select(main.column("s_store_name"), main.column("i_item_desc"), main.column("sis_revenue"),
+                main.column("i_current_price"), main.column("i_wholesale_cost"), main.column("i_brand"));
+        main.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(5, false), new Plan.SortKey(2, false)), 100));
+
+        List<Stage> stages = List.of(
+                new Stage(query65StoreItemSales(), "q65_sales_detail"),
+                new Stage(query65StoreItemSales(), "q65_sales_for_average"),
+                new Stage(thresholds, "q65_thresholds"));
+        // Output strings: s_store_name from main input 2 (store) col 1; i_item_desc and i_brand from input 3 (item) cols 1 and 4.
+        return new Composite(stages, main, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1), new DictRef(5, 3, 4)));
+    }
+
+    /** Store revenue per (store, item) over month_seq 1176..1187 -- the shared Q65 subtree (assembled per use). */
+    private static QueryLowering query65StoreItemSales()
+    {
+        QueryLowering sales = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq"));
+        sales.where(
+                        new Plan.Predicate(">", sales.column("d_month_seq"), new Plan.Lit(1175)),
+                        new Plan.Predicate("<", sales.column("d_month_seq"), new Plan.Lit(1188)))
+                .groupBy("ss_store_sk", "ss_item_sk")
+                .aggregate("sum", "ss_sales_price");
+        return sales;
+    }
+
     public static MultiStage query37()
     {
         return inventorySalesItems("__q37_sales__", "catalog_sales", "cs_item_sk",

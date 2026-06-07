@@ -632,6 +632,72 @@ public final class CompiledQuerySupport
     /** A streamed result together with its materialized build (dimension) inputs, so a string output column can be resolved back to its dictionary. */
     public record StreamedResult(CompiledPipeline.Result result, org.weakref.nitro.jit.Column[][] builds) {}
 
+    /** A materialized relation (one {@link org.weakref.nitro.jit.Column} per output column, plus its row count) produced by an earlier pipeline stage. */
+    public record Materialized(org.weakref.nitro.jit.Column[] columns, int rows) {}
+
+    /**
+     * Execute one pipeline stage of a multi-stage operator tree. Inputs named in {@code virtuals} are fed from the
+     * given already-materialized relations (an earlier stage's output); every other input is read from Parquet. When
+     * the probe (input 0) is a Parquet fact it is streamed batch-by-batch; when the probe is a materialized relation
+     * the stage runs eagerly over it. This is the same input substitution {@link #runMultiStage} performs, generalized
+     * to any number of materialized inputs, so the harness can wire compiled pipelines into the same tree shape the
+     * Trino/Nitro operator trees use (recomputing a shared subtree rather than reusing it).
+     */
+    public static LoweredResult runStage(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
+    {
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
+        org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
+        boolean probeVirtual = virtuals.containsKey(probe.table());
+
+        if (probeVirtual) {
+            org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+            int[] rowCounts = new int[sources.size()];
+            for (int s = 0; s < sources.size(); s++) {
+                resolveInput(allocator, tables, sources.get(s), virtuals, inputs, rowCounts, s);
+            }
+            return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
+        }
+
+        org.weakref.nitro.jit.StreamingPipeline streaming =
+                PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        int buildCount = sources.size() - 1;
+        org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
+        int[] buildRowCounts = new int[buildCount];
+        org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[sources.size()][];
+        for (int b = 0; b < buildCount; b++) {
+            resolveInput(allocator, tables, sources.get(b + 1), virtuals, builds, buildRowCounts, b);
+            inputsForDictRef[b + 1] = builds[b];
+        }
+        org.weakref.nitro.jit.StreamingPipeline.Source source = parquetLazySource(allocator, tables, probe.table(), probe.columns());
+        return new LoweredResult(streaming.execute(source, builds, buildRowCounts), inputsForDictRef);
+    }
+
+    /** Resolve input {@code slot} into {@code columns}/{@code rowCounts}[slot]: a materialized virtual relation if named in {@code virtuals}, else a Parquet drain. */
+    private static void resolveInput(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Input source,
+            java.util.Map<String, Materialized> virtuals, org.weakref.nitro.jit.Column[][] columns, int[] rowCounts, int slot)
+    {
+        Materialized virtual = virtuals.get(source.table());
+        if (virtual != null) {
+            columns[slot] = virtual.columns();
+            rowCounts[slot] = virtual.rows();
+        }
+        else {
+            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+            DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+            columns[slot] = loaded.columns;
+            rowCounts[slot] = loaded.rows;
+        }
+    }
+
+    /** Run a pipeline stage (via {@link #runStage}) and materialize its result for use as a downstream stage's input. */
+    public static Materialized materializeStage(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
+    {
+        LoweredResult result = runStage(allocator, tables, lowered, virtuals);
+        return new Materialized(materialize(result.result()), result.result().rowCount());
+    }
+
     private static StreamedResult streamCapturingBuilds(Allocator allocator, TpcdsParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
     {
