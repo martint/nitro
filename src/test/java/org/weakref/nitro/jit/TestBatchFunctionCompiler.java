@@ -36,9 +36,15 @@ public class TestBatchFunctionCompiler
         Plan.Expr expression = new Plan.Bin("+",
                 new Plan.Bin("*", new Plan.Col(0), new Plan.Col(1)),
                 new Plan.Bin("*", new Plan.Col(2), new Plan.Col(3)));
-        PrimitiveFunction function = BatchFunctionCompiler.compile(expression);
+        // Both the scalar (auto-vectorizable) and explicit Vector-API dense paths must match.
+        for (boolean explicitVector : new boolean[] {false, true}) {
+            assertFusedExpressionMatchesNaive(BatchFunctionCompiler.compile(expression, explicitVector));
+        }
+    }
 
-        int rows = 4096;
+    private static void assertFusedExpressionMatchesNaive(PrimitiveFunction function)
+    {
+        int rows = 4099;   // not a multiple of the SIMD width, so the explicit-vector path exercises its scalar tail
         long[] a = new long[rows];
         long[] b = new long[rows];
         long[] c = new long[rows];

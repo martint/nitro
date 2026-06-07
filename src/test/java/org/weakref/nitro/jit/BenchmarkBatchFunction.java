@@ -59,6 +59,7 @@ public class BenchmarkBatchFunction
     public int rows;
 
     private PrimitiveFunction fused;
+    private PrimitiveFunction fusedVector;
     private final PrimitiveFunction multiply = new MultiplyI64();
     private final PrimitiveFunction add = new AddI64();
     private List<Streams> inputs;
@@ -72,9 +73,11 @@ public class BenchmarkBatchFunction
     @Setup
     public void setup()
     {
-        fused = BatchFunctionCompiler.compile(new Plan.Bin("+",
+        Plan.Expr expression = new Plan.Bin("+",
                 new Plan.Bin("*", new Plan.Col(0), new Plan.Col(1)),
-                new Plan.Bin("*", new Plan.Col(2), new Plan.Col(3))));
+                new Plan.Bin("*", new Plan.Col(2), new Plan.Col(3)));
+        fused = BatchFunctionCompiler.compile(expression, false);
+        fusedVector = BatchFunctionCompiler.compile(expression, true);
         long[] a = new long[rows];
         long[] b = new long[rows];
         long[] c = new long[rows];
@@ -100,6 +103,12 @@ public class BenchmarkBatchFunction
     public Object fused()
     {
         return fused.apply(inputs, mask, VALUES, fusedOut, context);
+    }
+
+    @Benchmark
+    public Object fusedVector()
+    {
+        return fusedVector.apply(inputs, mask, VALUES, fusedOut, context);
     }
 
     @Benchmark

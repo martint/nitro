@@ -40,8 +40,20 @@ public final class BatchFunctionCompiler
     /** Compile {@code expression} (over {@code I64} input columns referenced by {@link Plan.Col} index) into a fused batch function. */
     public static PrimitiveFunction compile(Plan.Expr expression)
     {
+        return compile(expression, false);
+    }
+
+    /**
+     * Compile {@code expression} into a fused batch function. When {@code explicitVector} is set and the expression
+     * is lane-wise vectorizable ({@code + - *} over columns/literals), the dense path is emitted with the explicit
+     * Vector API ({@link jdk.incubator.vector.LongVector}) -- full control over SIMD, for the ops C2's
+     * auto-vectorizer reaches inconsistently or not at all -- with a scalar tail; otherwise the dense path is a
+     * plain counted loop the JIT may auto-vectorize. The sparse (gather) path is always scalar.
+     */
+    public static PrimitiveFunction compile(Plan.Expr expression, boolean explicitVector)
+    {
         String simpleName = "BatchFn_" + COUNTER.incrementAndGet();
-        String source = render(expression, simpleName);
+        String source = render(expression, simpleName, explicitVector);
         try {
             Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
             return (PrimitiveFunction) compiled.getDeclaredConstructor().newInstance();
@@ -51,17 +63,27 @@ public final class BatchFunctionCompiler
         }
     }
 
-    /** Exposed for inspection/tests: the Java source that would be compiled. */
+    /** Exposed for inspection/tests: the Java source that would be compiled (scalar dense path). */
     public static String render(Plan.Expr expression, String simpleName)
+    {
+        return render(expression, simpleName, false);
+    }
+
+    /** Exposed for inspection/tests: the Java source that would be compiled. */
+    public static String render(Plan.Expr expression, String simpleName, boolean explicitVector)
     {
         TreeSet<Integer> columns = new TreeSet<>();
         collectColumns(expression, columns);
+        boolean vector = explicitVector && vectorizable(expression);
 
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.operator.evaluator.PrimitiveFunction {\n");
         out.append("  private static final org.weakref.nitro.operator.evaluator.ir.Stream V = org.weakref.nitro.operator.evaluator.ir.Stream.VALUES;\n");
+        if (vector) {
+            out.append("  private static final jdk.incubator.vector.VectorSpecies<Long> S = jdk.incubator.vector.LongVector.SPECIES_PREFERRED;\n");
+        }
         out.append("  @Override public org.weakref.nitro.operator.Streams apply("
                 + "java.util.List<org.weakref.nitro.operator.Streams> inputs, "
                 + "org.weakref.nitro.data.Mask mask, "
@@ -80,10 +102,18 @@ public final class BatchFunctionCompiler
                 + "org.weakref.nitro.data.I64Vector.class, required, org.weakref.nitro.data.I64Vector::new);\n");
         out.append("    long[] o = out.values();\n");
         String value = expr(expression);
-        // Dense path: contiguous, unit-stride -- the auto-vectorizable shape. Sparse path: gather through the mask.
+        // Dense path: contiguous, unit-stride. Either explicit SIMD over LongVector lanes + a scalar tail, or a
+        // plain counted loop the JIT may auto-vectorize. Sparse path: gather through the mask (always scalar).
         out.append("    if (mask.all()) {\n");
         out.append("      int n = mask.count();\n");
-        out.append("      for (int i = 0; i < n; i++) { o[i] = ").append(value).append("; }\n");
+        if (vector) {
+            out.append("      int upper = S.loopBound(n); int i = 0;\n");
+            out.append("      for (; i < upper; i += S.length()) { (").append(vectorExpr(expression)).append(").intoArray(o, i); }\n");
+            out.append("      for (; i < n; i++) { o[i] = ").append(value).append("; }\n");
+        }
+        else {
+            out.append("      for (int i = 0; i < n; i++) { o[i] = ").append(value).append("; }\n");
+        }
         out.append("    }\n");
         out.append("    else {\n");
         out.append("      int n = mask.count();\n");
@@ -105,6 +135,37 @@ public final class BatchFunctionCompiler
             case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(BatchFunctionCompiler::expr).toList());
             case Plan.Case ignored -> throw new UnsupportedOperationException("CASE not yet supported in batch functions");
             case Plan.Coalesce ignored -> throw new UnsupportedOperationException("COALESCE not yet supported in batch functions");
+        };
+    }
+
+    /** Whether the expression is lane-wise vectorizable with {@link jdk.incubator.vector.LongVector}: {@code + - *} over columns/literals. */
+    private static boolean vectorizable(Plan.Expr expression)
+    {
+        return switch (expression) {
+            case Plan.Col ignored -> true;
+            case Plan.Lit ignored -> true;
+            case Plan.Bin bin -> (bin.op().equals("+") || bin.op().equals("-") || bin.op().equals("*"))
+                    && vectorizable(bin.left()) && vectorizable(bin.right());
+            default -> false;
+        };
+    }
+
+    /** Render the expression as a {@link jdk.incubator.vector.LongVector} value loaded at the loop offset {@code i}. */
+    private static String vectorExpr(Plan.Expr expression)
+    {
+        return switch (expression) {
+            case Plan.Col col -> "jdk.incubator.vector.LongVector.fromArray(S, in" + col.index() + ", i)";
+            case Plan.Lit lit -> "jdk.incubator.vector.LongVector.broadcast(S, " + lit.value() + "L)";
+            case Plan.Bin bin -> {
+                String op = switch (bin.op()) {
+                    case "+" -> "add";
+                    case "-" -> "sub";
+                    case "*" -> "mul";
+                    default -> throw new IllegalStateException("non-vectorizable op reached vectorExpr: " + bin.op());
+                };
+                yield "(" + vectorExpr(bin.left()) + ")." + op + "(" + vectorExpr(bin.right()) + ")";
+            }
+            default -> throw new IllegalStateException("non-vectorizable expression reached vectorExpr: " + expression);
         };
     }
 
