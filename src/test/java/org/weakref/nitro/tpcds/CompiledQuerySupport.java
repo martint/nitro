@@ -383,7 +383,17 @@ public final class CompiledQuerySupport
             @Override
             public org.weakref.nitro.jit.Column[] materialize(int[] columns)
             {
-                return materialize(columns, identity(currentRows), currentRows);
+                // Full-batch materialize (the eager join-key/filter phase): when the batch is dense, convert with a
+                // type-dispatched bulk path (zero-copy for a non-null I64 column, else one tight loop) instead of the
+                // per-row gather, which paid a mask.position indirection and a longValue type-test per row.
+                if (!mask.all()) {
+                    return materialize(columns, identity(currentRows), currentRows);
+                }
+                org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+                for (int column : columns) {
+                    out[column] = denseColumn(open.output(column).borrow(Stream.VALUES), open.output(column).borrowOrNull(Stream.NULLS), currentRows);
+                }
+                return out;
             }
         };
     }
@@ -395,6 +405,44 @@ public final class CompiledQuerySupport
             identity[i] = i;
         }
         return identity;
+    }
+
+    /**
+     * Convert a dense batch column (logical row {@code j} == batch position {@code j}) to a flat column, dispatching
+     * on the vector type once: a non-null {@code I64} column is wrapped with no copy; otherwise one tight loop fills
+     * the values (and null mask). Avoids the per-row {@code mask.position} indirection and {@code longValue} type-test
+     * of {@link #convertColumn}.
+     */
+    private static org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count)
+    {
+        if (values instanceof I64Vector i64) {
+            long[] backing = i64.values();
+            if (nulls == null) {
+                return new org.weakref.nitro.jit.Column.FlatColumn(backing);   // no copy
+            }
+            long[] copy = new long[count];
+            boolean[] nullMask = new boolean[count];
+            for (int i = 0; i < count; i++) {
+                boolean isNull = isNull(nulls, i);
+                nullMask[i] = isNull;
+                copy[i] = isNull ? 0 : backing[i];
+            }
+            return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+        }
+        if (values instanceof I32Vector i32) {
+            int[] backing = i32.values();
+            long[] copy = new long[count];
+            boolean[] nullMask = nulls != null ? new boolean[count] : null;
+            for (int i = 0; i < count; i++) {
+                boolean isNull = nulls != null && isNull(nulls, i);
+                if (nullMask != null) {
+                    nullMask[i] = isNull;
+                }
+                copy[i] = isNull ? 0 : backing[i];
+            }
+            return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+        }
+        throw new IllegalArgumentException("Unsupported column vector type: " + values.getClass().getName());
     }
 
     /** Convert column {@code c} of {@code batch} to a flat column of {@code count} rows, row {@code j} being batch position {@code mask.position(selection[j])}. */
