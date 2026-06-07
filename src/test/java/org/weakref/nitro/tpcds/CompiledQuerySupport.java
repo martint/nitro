@@ -734,12 +734,28 @@ public final class CompiledQuerySupport
         int width = 0;
         for (int i = 0; i < branches.size(); i++) {
             org.weakref.nitro.jit.QueryLowering.Lowered branch = branches.get(i);
-            org.weakref.nitro.jit.StreamingPipeline streaming =
-                    PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
-            StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true);
-            org.weakref.nitro.jit.Column[] materialized = materialize(streamed.result(), streamed.builds(), branchStringColumns);
+            CompiledPipeline.Result result;
+            org.weakref.nitro.jit.Column[][] dictInputs;   // indexed by DictRef.dictInput (0 = probe)
+            if (projectionOnly(branch)) {
+                // An ungrouped (projection-only) branch emits all surviving rows; the streaming compiler does not
+                // support that terminal, so run it eagerly. Its inputs are the dictionary source for any string column.
+                LoadedInputs loaded = loadLoweredInputs(allocator, tables, branch);
+                result = branch.compile().execute(loaded.inputs(), loaded.rowCounts());
+                dictInputs = loaded.inputs();
+            }
+            else {
+                org.weakref.nitro.jit.StreamingPipeline streaming =
+                        PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
+                StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true);
+                result = streamed.result();
+                dictInputs = new org.weakref.nitro.jit.Column[branch.inputs().size()][];
+                for (int b = 0; b < streamed.builds().length; b++) {
+                    dictInputs[b + 1] = streamed.builds()[b];   // probe (index 0) is streamed, has no materialized dictionary
+                }
+            }
+            org.weakref.nitro.jit.Column[] materialized = materialize(result, dictInputs, branchStringColumns);
             parts.add(materialized);
-            counts[i] = streamed.result().rowCount();
+            counts[i] = result.rowCount();
             width = materialized.length;
         }
         int total = 0;
@@ -836,6 +852,12 @@ public final class CompiledQuerySupport
         return materialize(result, null, List.of());
     }
 
+    /** Whether a lowered branch is an ungrouped projection (no GROUP BY, no aggregates) -- emits all surviving rows. */
+    private static boolean projectionOnly(org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    {
+        return lowered.pipeline().groupKeys().isEmpty() && lowered.pipeline().aggregates().isEmpty();
+    }
+
     /**
      * Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s, resolving each string result column
      * named in {@code stringColumns} back to a {@link org.weakref.nitro.jit.Column.StringColumn}: the result stores a
@@ -843,7 +865,7 @@ public final class CompiledQuerySupport
      * build's dictionary. {@code builds} are the dimension inputs (probe excluded), as captured by the streaming run.
      */
     private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result,
-            org.weakref.nitro.jit.Column[][] builds, List<CompiledTpcdsQueries.DictRef> stringColumns)
+            org.weakref.nitro.jit.Column[][] dictInputs, List<CompiledTpcdsQueries.DictRef> stringColumns)
     {
         long[][] columns = result.columns();
         boolean[][] nulls = result.nulls();
@@ -857,10 +879,10 @@ public final class CompiledQuerySupport
             org.weakref.nitro.jit.Type type = result.types()[c];
             if (type == org.weakref.nitro.jit.Types.STRING) {
                 CompiledTpcdsQueries.DictRef ref = stringByColumn.get(c);
-                if (ref == null || ref.dictInput() < 1) {
-                    throw new UnsupportedOperationException("string result column " + c + " has no resolvable build-input dictionary");
+                if (ref == null || dictInputs == null || dictInputs[ref.dictInput()] == null) {
+                    throw new UnsupportedOperationException("string result column " + c + " has no resolvable source dictionary");
                 }
-                byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) builds[ref.dictInput() - 1][ref.dictColumn()]).dictionary();
+                byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
                 int[] ids = new int[rowCount];
                 for (int r = 0; r < rowCount; r++) {
                     ids[r] = (int) columns[c][r];

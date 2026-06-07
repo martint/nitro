@@ -390,6 +390,60 @@ public final class CompiledTpcdsQueries
         return new Union(branches, main, "__q60_union__", List.of(new DictRef(0, 1, 2)), List.of(new DictRef(0, 0, 0)));
     }
 
+    public static Union query71()
+    {
+        // A different union shape: the branches are UNGROUPED (projection-only) per-channel sales for d_moy=11,
+        // d_year=1999, projected to (item_sk, time_sk, ext_sales_price). Their row-wise concatenation feeds a single
+        // main pipeline that joins item (i_manager_id=1) and time_dim (meal in {breakfast,dinner}), groups by
+        // (i_brand_id, i_brand, t_hour, t_minute) summing ext_sales_price, ordered by (sum desc, brand_id, hour, minute).
+        List<QueryLowering> branches = List.of(
+                query71ChannelSales("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sold_time_sk", "ws_ext_sales_price"),
+                query71ChannelSales("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_sold_time_sk", "cs_ext_sales_price"),
+                query71ChannelSales("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sold_time_sk", "ss_ext_sales_price"));
+        QueryLowering main = QueryLowering.scan("__q71_union__",
+                        new QueryLowering.Column("u_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_time_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_sales", ColumnEncoding.FLAT, true))
+                .join("item", "u_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manager_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true))
+                .join("time_dim", "u_time_sk", "t_time_sk",
+                        new QueryLowering.Column("t_time_sk"),
+                        new QueryLowering.Column("t_hour", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("t_minute", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("t_meal_time", ColumnEncoding.STRING, true));
+        main.where(
+                        new Plan.Predicate("=", main.column("i_manager_id"), new Plan.Lit(1)),
+                        new Plan.StringMatch(main.position("t_meal_time"), List.of("breakfast", "dinner"), false))
+                .groupBy("i_brand_id", "i_brand", "t_hour", "t_minute")
+                .aggregate("sum", "u_sales");
+        main.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(4, true), new Plan.SortKey(0, false), new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+        // Output column 1 (i_brand) is a dictionary string from main input 1 (item), column 3.
+        return new Union(branches, main, "__q71_union__", List.of(), List.of(new DictRef(1, 1, 3)));
+    }
+
+    /** One channel of Q71: channel sales JOIN date_dim(d_moy=11, d_year=1999), projected (ungrouped) to (item_sk, time_sk, ext_sales_price). */
+    private static QueryLowering query71ChannelSales(String table, String soldDate, String item, String time, String sales)
+    {
+        QueryLowering query = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(time, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(sales, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_year"));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1999)))
+                .select(query.column(item), query.column(time), query.column(sales));
+        return query;
+    }
+
     /** The three sales-channel branches of a Q33/Q56/Q60-shaped union, parameterized by the item filter and group key. */
     private static List<QueryLowering> unionChannelBranches(String itemAttribute, List<String> itemValues,
             String groupColumn, ColumnEncoding groupEncoding, int year, int month)
