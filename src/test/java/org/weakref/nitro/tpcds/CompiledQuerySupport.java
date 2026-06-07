@@ -727,6 +727,23 @@ public final class CompiledQuerySupport
     }
 
     /**
+     * Run a single-stage lowered query through the streaming path (the probe fact is streamed batch-by-batch instead
+     * of drained), returning the result with the build inputs positioned for {@link CompiledTpcdsQueries.DictRef}
+     * reconstruction. Needed when the probe is a huge fact (e.g. Q37/Q82 over inventory) that cannot be drained eagerly.
+     */
+    public static LoweredResult runStreamingPorted(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    {
+        org.weakref.nitro.jit.StreamingPipeline streaming =
+                PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        StreamedResult streamed = streamCapturingBuilds(allocator, tables, lowered, streaming, true);
+        org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[lowered.inputs().size()][];
+        for (int b = 0; b < streamed.builds().length; b++) {
+            inputsForDictRef[b + 1] = streamed.builds()[b];
+        }
+        return new LoweredResult(streamed.result(), inputsForDictRef);
+    }
+
+    /**
      * Run a two-stage (pipeline-breaker) query: execute {@code subquery}, materialize its result into a relation,
      * and run {@code main} with that relation substituted for the input whose table name is {@code virtualTable}
      * (all other {@code main} inputs are read from Parquet). This is the decorrelated correlated-subquery shape --
@@ -772,48 +789,6 @@ public final class CompiledQuerySupport
             }
         }
         return new LoweredResult(mainCompiled.execute(inputs, rowCounts), inputs);
-    }
-
-    /**
-     * As {@link #runMultiStage}, but the main stage is STREAMED: its probe (the fact table, e.g. inventory at ~133M
-     * rows) is read batch-by-batch from Parquet rather than drained into memory, and the subquery result is injected
-     * as the build named {@code virtualTable}. This is the decorrelated DISTINCT-then-join shape (Q37/Q82): stage A
-     * computes the set of qualifying keys, stage B streams the fact and joins it as a dimension. The fact is far too
-     * large to materialize, so only a streamed main is viable.
-     */
-    public static LoweredResult runStreamingMultiStage(Allocator allocator, TpcdsParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
-    {
-        org.weakref.nitro.jit.StreamingPipeline subStreaming =
-                PipelineCompiler.compileStreaming(subquery.pipeline(), subquery.encodings(), subquery.nullable());
-        CompiledPipeline.Result subResult = runStreamingLowered(allocator, tables, subquery, subStreaming, true);
-        org.weakref.nitro.jit.Column[] subMaterialized = materialize(subResult);
-        int subRows = subResult.rowCount();
-
-        org.weakref.nitro.jit.StreamingPipeline mainStreaming =
-                PipelineCompiler.compileStreaming(main.pipeline(), main.encodings(), main.nullable());
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
-        int buildCount = sources.size() - 1;
-        org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
-        int[] buildRowCounts = new int[buildCount];
-        org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[sources.size()][];
-        for (int b = 0; b < buildCount; b++) {
-            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(b + 1);
-            if (source.table().equals(virtualTable)) {
-                builds[b] = subMaterialized;
-                buildRowCounts[b] = subRows;
-            }
-            else {
-                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
-                DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
-                builds[b] = loaded.columns;
-                buildRowCounts[b] = loaded.rows;
-            }
-            inputsForDictRef[b + 1] = builds[b];
-        }
-        org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
-        org.weakref.nitro.jit.StreamingPipeline.Source source = parquetLazySource(allocator, tables, probe.table(), probe.columns());
-        return new LoweredResult(mainStreaming.execute(source, builds, buildRowCounts), inputsForDictRef);
     }
 
     /**

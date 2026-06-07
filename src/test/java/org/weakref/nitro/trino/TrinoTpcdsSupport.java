@@ -110,6 +110,12 @@ public final class TrinoTpcdsSupport
         return explainSql(TpcdsQueryCatalog.benchmarkQuerySql(queryId, "tpcds", schema));
     }
 
+    /** Optimized logical plan for an arbitrary SQL string (used to audit ported-query computation trees against Trino's plan). */
+    public String explainQuery(String sql)
+    {
+        return explainSql(sql);
+    }
+
     public MaterializedResult executeReferenceQuery(String queryId)
     {
         return executeSql(TpcdsQueryCatalog.referenceQuerySql(queryId));
