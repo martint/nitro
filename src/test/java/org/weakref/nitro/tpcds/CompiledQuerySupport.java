@@ -463,6 +463,38 @@ public final class CompiledQuerySupport
         return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
     }
 
+    /**
+     * Fill {@code values[offset..offset+count)} from a dense numeric batch column (batch position {@code i} == row
+     * {@code i}), dispatching on the vector type once: a non-null I64 column is bulk-copied, otherwise one tight loop
+     * fills values and null flags. Avoids the per-row {@code mask.position}/{@code longValue} of the generic gather.
+     */
+    private static void fillDenseNumeric(Vector valueVector, Vector nullVector, long[] values, boolean[] nulls, int offset, int count)
+    {
+        if (valueVector instanceof I64Vector i64) {
+            long[] backing = i64.values();
+            if (nullVector == null) {
+                System.arraycopy(backing, 0, values, offset, count);
+                return;
+            }
+            for (int i = 0; i < count; i++) {
+                boolean isNull = isNull(nullVector, i);
+                nulls[offset + i] = isNull;
+                values[offset + i] = isNull ? 0 : backing[i];
+            }
+            return;
+        }
+        if (valueVector instanceof I32Vector i32) {
+            int[] backing = i32.values();
+            for (int i = 0; i < count; i++) {
+                boolean isNull = nullVector != null && isNull(nullVector, i);
+                nulls[offset + i] = isNull;
+                values[offset + i] = isNull ? 0 : backing[i];
+            }
+            return;
+        }
+        throw new IllegalArgumentException("Unsupported column vector type: " + valueVector.getClass().getName());
+    }
+
     /** Drain a scan into per-column arrays, dropping any row that is null in any selected column. */
     private static long[][] drain(Operator operator)
     {
@@ -674,10 +706,17 @@ public final class CompiledQuerySupport
                             nulls[c] = java.util.Arrays.copyOf(nulls[c], capacity);
                         }
                     }
+                    boolean dense = mask.all();
                     for (int c = 0; c < width; c++) {
                         boolean string = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
                         Vector valueVector = batch.output(c).borrow(Stream.VALUES);
                         Vector nullVector = batch.output(c).borrowOrNull(Stream.NULLS);
+                        if (!string && dense) {
+                            // Dense numeric column: dispatch on the vector type once and bulk-fill (arraycopy a
+                            // non-null I64 column) instead of the per-row mask.position + longValue gather.
+                            fillDenseNumeric(valueVector, nullVector, values[c], nulls[c], size, count);
+                            continue;
+                        }
                         for (int index = 0; index < count; index++) {
                             int position = mask.position(index);
                             boolean isNull = isNull(nullVector, position);
