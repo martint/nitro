@@ -408,18 +408,23 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * Convert a dense batch column (logical row {@code j} == batch position {@code j}) to a flat column, dispatching
-     * on the vector type once: a non-null {@code I64} column is wrapped with no copy; otherwise one tight loop fills
-     * the values (and null mask). Avoids the per-row {@code mask.position} indirection and {@code longValue} type-test
-     * of {@link #convertColumn}.
+     * Convert a dense batch column (logical row {@code j} == batch position {@code j}) to a flat column with no copy:
+     * an {@code I64} column wraps the decoded vector's backing {@code long[]} directly, and a present nulls stream
+     * wraps the {@code BooleanVector}'s backing {@code boolean[]} directly -- both share the decoder's batch (held
+     * open until the next advance). Null positions are never read: the generated code skips them via the nulls array
+     * (a nullable column must be declared nullable so that guard is emitted), so no per-row copy or null-zeroing is
+     * needed. Only an {@code I32} column is widened (its {@code int[]} cannot alias a {@code long[]}).
      */
     private static org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count)
     {
         if (values instanceof I64Vector i64) {
-            long[] backing = i64.values();
             if (nulls == null) {
-                return new org.weakref.nitro.jit.Column.FlatColumn(backing);   // no copy
+                return new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
             }
+            if (nulls instanceof BooleanVector booleans) {
+                return new org.weakref.nitro.jit.Column.FlatColumn(i64.values(), booleans.values());   // no copy
+            }
+            long[] backing = i64.values();
             long[] copy = new long[count];
             boolean[] nullMask = new boolean[count];
             for (int i = 0; i < count; i++) {
