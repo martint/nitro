@@ -102,6 +102,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query13()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query13(), TpcdsParquetSupport::query13);
+    }
+
+    @Test
     void query48()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query48(), TpcdsParquetSupport::query48);
@@ -167,6 +173,7 @@ public class TestCompiledTpcdsQueries
         java.util.Map<String, CompiledTpcdsQueries.Ported> ported = new java.util.LinkedHashMap<>();
         ported.put("03", CompiledTpcdsQueries.query03());
         ported.put("07", CompiledTpcdsQueries.query07());
+        ported.put("13", CompiledTpcdsQueries.query13());
         ported.put("15", CompiledTpcdsQueries.query15());
         ported.put("26", CompiledTpcdsQueries.query26());
         ported.put("42", CompiledTpcdsQueries.query42());
