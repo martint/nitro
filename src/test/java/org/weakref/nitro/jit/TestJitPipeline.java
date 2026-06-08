@@ -2027,4 +2027,252 @@ public class TestJitPipeline
         assertThat(seenByA).isEqualTo(byA.size());
         assertThat(seenTotal).isEqualTo(1);
     }
+
+    @Test
+    void compilesRankingWindow()
+    {
+        // SELECT p, o, m, rank() OVER (PARTITION BY p ORDER BY o DESC) AS rnk WHERE rnk <= 3 -- the top-N-per-partition
+        // ranking window matching the operator harness's TopNRankingOperator. Columns: 0 = partition p, 1 = order o,
+        // 2 = a passthrough measure m. RANK ties share a rank and the next rank skips; output is globally ordered by
+        // (p ASC, o DESC). Ties on o are exercised so RANK semantics (not row_number) are observable.
+        int limit = 3;
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(),
+                List.of())
+                .withWindow(new Plan.Window(
+                        new int[] {0},
+                        List.of(new Plan.SortKey(1, true)),
+                        Plan.RankFunction.RANK,
+                        limit));
+
+        int rows = 50_000;
+        long[] p = new long[rows];
+        long[] o = new long[rows];
+        long[] m = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            p[i] = i % 8;            // eight partitions
+            o[i] = (i % 5);          // five distinct ordering values -> guaranteed ties within each partition
+            m[i] = i;                // distinct passthrough payload
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{p, o, m}}, new int[] {rows});
+
+        long[] expectedRank = referenceRanking(p, o, m, new int[] {0}, new int[] {1}, new boolean[] {true}, limit);
+
+        assertThat(result.rowCount()).isEqualTo(expectedRank.length);
+        long[] outP = result.columns()[0];
+        long[] outO = result.columns()[1];
+        long[] outM = result.columns()[2];
+        long[] outRank = result.columns()[3];
+
+        // The reference walks the same global (p ASC, o DESC) order and emits the surviving rows; for distinct
+        // payloads the row identity is recoverable from m, so assert row-by-row equality.
+        Map<Long, Long> expectedRankByM = new HashMap<>();
+        Map<Long, Long> expectedPByM = new HashMap<>();
+        Map<Long, Long> expectedOByM = new HashMap<>();
+        for (int i = 0; i < rows; i++) {
+            expectedPByM.put(m[i], p[i]);
+            expectedOByM.put(m[i], o[i]);
+        }
+        // Recompute the per-row ranks against the full data to compare by row identity (m).
+        long[] fullRanks = referenceRanksKeyedByPayload(p, o, m, new int[] {0}, new int[] {1}, new boolean[] {true});
+        for (int i = 0; i < rows; i++) {
+            expectedRankByM.put(m[i], fullRanks[i]);
+        }
+
+        for (int g = 0; g < outRank.length; g++) {
+            long payload = outM[g];
+            assertThat(outP[g]).as("partition for payload %d", payload).isEqualTo(expectedPByM.get(payload));
+            assertThat(outO[g]).as("order for payload %d", payload).isEqualTo(expectedOByM.get(payload));
+            assertThat(outRank[g]).as("rank for payload %d", payload).isEqualTo(expectedRankByM.get(payload));
+            assertThat(outRank[g]).as("kept rows must be within the limit").isLessThanOrEqualTo(limit);
+        }
+
+        // Output must be globally ordered by (p ASC, o DESC).
+        for (int g = 1; g < outRank.length; g++) {
+            boolean ordered = outP[g - 1] < outP[g]
+                    || (outP[g - 1] == outP[g] && outO[g - 1] >= outO[g]);
+            assertThat(ordered).as("rows must be ordered by (p asc, o desc) at %d", g).isTrue();
+        }
+    }
+
+    @Test
+    void compilesRowNumberWindowWithNullPartitions()
+    {
+        // row_number() OVER (PARTITION BY p ORDER BY o), p nullable. A null-partition row is its own singleton at
+        // rank 1 (partition equality is value equality, false for nulls). No rank limit: every row is kept. Exercises
+        // the nullable-partition and ROW_NUMBER (no-tie) code paths together.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(),
+                List.of())
+                .withWindow(new Plan.Window(
+                        new int[] {0},
+                        List.of(new Plan.SortKey(1, false)),
+                        Plan.RankFunction.ROW_NUMBER,
+                        -1));
+
+        int rows = 20_000;
+        long[] p = new long[rows];
+        boolean[] pNull = new boolean[rows];
+        long[] o = new long[rows];
+        long[] m = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            p[i] = i % 6;
+            pNull[i] = (i % 11) == 0;   // a sprinkling of null partitions
+            o[i] = i % 10;
+            m[i] = i;
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(
+                        pipeline,
+                        null,
+                        new boolean[][] {{true, false, false}})
+                .execute(new Column[][] {{new Column.FlatColumn(p, pNull), new Column.FlatColumn(o), new Column.FlatColumn(m)}},
+                        new int[] {rows});
+
+        // Every row is kept (no limit), so output row count equals input.
+        assertThat(result.rowCount()).isEqualTo(rows);
+
+        long[] outRank = result.columns()[3];
+        // Each null-partition row is a singleton, so its row_number must be 1.
+        boolean[][] nulls = result.nulls();
+        assertThat(nulls).isNotNull();
+        boolean[] outPNull = nulls[0];
+        assertThat(outPNull).isNotNull();
+        int seenNullPartitions = 0;
+        for (int g = 0; g < outRank.length; g++) {
+            if (outPNull[g]) {
+                assertThat(outRank[g]).as("null-partition row must have row_number 1").isEqualTo(1L);
+                seenNullPartitions++;
+            }
+        }
+        int expectedNullPartitions = 0;
+        for (int i = 0; i < rows; i++) {
+            if (pNull[i]) {
+                expectedNullPartitions++;
+            }
+        }
+        assertThat(seenNullPartitions).isEqualTo(expectedNullPartitions);
+
+        // Within each non-null partition, row_number is a dense 1..n sequence (no ties even on equal o).
+        Map<Long, Long> maxRankByPartition = new HashMap<>();
+        Map<Long, Long> countByPartition = new HashMap<>();
+        long[] outP = result.columns()[0];
+        for (int g = 0; g < outRank.length; g++) {
+            if (!outPNull[g]) {
+                maxRankByPartition.merge(outP[g], outRank[g], Math::max);
+                countByPartition.merge(outP[g], 1L, Long::sum);
+            }
+        }
+        for (Map.Entry<Long, Long> entry : countByPartition.entrySet()) {
+            assertThat(maxRankByPartition.get(entry.getKey()))
+                    .as("row_number must run 1..count for partition %d", entry.getKey())
+                    .isEqualTo(entry.getValue());
+        }
+    }
+
+    /** Per-row rank() within (partition, order), keyed positionally by input row (no top-N filter). */
+    private static long[] referenceRanksKeyedByPayload(long[] p, long[] o, long[] m, int[] partitionColumns, int[] orderingColumns, boolean[] descending)
+    {
+        long[][] columns = {p, o, m};
+        int rows = p.length;
+        Integer[] order = new Integer[rows];
+        for (int i = 0; i < rows; i++) {
+            order[i] = i;
+        }
+        java.util.Arrays.sort(order, (a, b) -> compareForReference(columns, partitionColumns, orderingColumns, descending, a, b));
+        long[] ranks = new long[rows];
+        int prev = -1;
+        long partitionRowNumber = 0;
+        long rank = 0;
+        for (int oi = 0; oi < rows; oi++) {
+            int r = order[oi];
+            if (prev == -1 || partitionChanged(columns, partitionColumns, prev, r)) {
+                partitionRowNumber = 1;
+                rank = 1;
+            }
+            else {
+                partitionRowNumber++;
+                if (orderingChanged(columns, orderingColumns, prev, r)) {
+                    rank = partitionRowNumber;
+                }
+            }
+            ranks[r] = rank;
+            prev = r;
+        }
+        return ranks;
+    }
+
+    /** The set of ranks the engine should keep (rank <= limit), in global (partition, order) order. */
+    private static long[] referenceRanking(long[] p, long[] o, long[] m, int[] partitionColumns, int[] orderingColumns, boolean[] descending, int limit)
+    {
+        long[] all = referenceRanksKeyedByPayload(p, o, m, partitionColumns, orderingColumns, descending);
+        long[][] columns = {p, o, m};
+        int rows = p.length;
+        Integer[] order = new Integer[rows];
+        for (int i = 0; i < rows; i++) {
+            order[i] = i;
+        }
+        java.util.Arrays.sort(order, (a, b) -> compareForReference(columns, partitionColumns, orderingColumns, descending, a, b));
+        int kept = 0;
+        for (int i = 0; i < rows; i++) {
+            if (all[i] <= limit) {
+                kept++;
+            }
+        }
+        long[] result = new long[kept];
+        int w = 0;
+        for (int oi = 0; oi < rows; oi++) {
+            int r = order[oi];
+            if (all[r] <= limit) {
+                result[w++] = all[r];
+            }
+        }
+        return result;
+    }
+
+    private static int compareForReference(long[][] columns, int[] partitionColumns, int[] orderingColumns, boolean[] descending, int a, int b)
+    {
+        for (int partitionColumn : partitionColumns) {
+            int c = Long.compare(columns[partitionColumn][a], columns[partitionColumn][b]);
+            if (c != 0) {
+                return c;
+            }
+        }
+        for (int i = 0; i < orderingColumns.length; i++) {
+            int c = Long.compare(columns[orderingColumns[i]][a], columns[orderingColumns[i]][b]);
+            if (descending[i]) {
+                c = -c;
+            }
+            if (c != 0) {
+                return c;
+            }
+        }
+        return 0;
+    }
+
+    private static boolean partitionChanged(long[][] columns, int[] partitionColumns, int prev, int r)
+    {
+        for (int partitionColumn : partitionColumns) {
+            if (columns[partitionColumn][prev] != columns[partitionColumn][r]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean orderingChanged(long[][] columns, int[] orderingColumns, int prev, int r)
+    {
+        for (int orderingColumn : orderingColumns) {
+            if (columns[orderingColumn][prev] != columns[orderingColumn][r]) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

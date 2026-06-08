@@ -433,9 +433,21 @@ public final class PipelineCompiler
             emitMix(out);
         }
         boolean projectionOnly = projectionOnly(pipeline);
-        List<Type> resultTypes = projectionOnly ? projectionOutputTypes(pipeline, encodings) : outputColumnTypes(pipeline, encodings);
+        List<Type> resultTypes;
+        if (pipeline.window() != null) {
+            resultTypes = windowOutputTypes(pipeline, encodings);
+        }
+        else if (projectionOnly) {
+            resultTypes = projectionOutputTypes(pipeline, encodings);
+        }
+        else {
+            resultTypes = outputColumnTypes(pipeline, encodings);
+        }
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
-        if (!pipeline.joins().isEmpty()) {
+        if (pipeline.window() != null) {
+            emitWindowBody(out, pipeline, encodings, nullable, resultTypes);
+        }
+        else if (!pipeline.joins().isEmpty()) {
             emitJoinBody(out, pipeline, encodings, nullable, resultTypes);
         }
         else {
@@ -781,6 +793,244 @@ public final class PipelineCompiler
         else {
             emitGlobalResult(out, pipeline.aggregates(), resultTypes);
         }
+    }
+
+    // ---- ranking window (rank / row_number per partition, top-N) ----
+    //
+    // A window is a pipeline breaker: scan + filter, materialize every surviving row's columns, sort a row-index
+    // permutation by (partition columns ascending, then the window's ORDER BY keys), then walk that order assigning
+    // each row its rank within its partition and keeping the rows within the rank limit. The result is all input
+    // columns ([0, columnCount)) followed by a trailing LONG rank column, in that same global (partition, order)
+    // order -- byte-for-byte the operator harness's TopNRankingOperator. A row with a NULL partition column is its
+    // own singleton partition (rank 1), because partition equality is value equality and that is false for nulls.
+
+    /**
+     * Logical types of a window pipeline's result columns: every input column ({@code [0, columnCount)}) typed by its
+     * encoding (STRING for a string-encoded column, else LONG), then a trailing LONG rank column.
+     */
+    private static List<Type> windowOutputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    {
+        List<Type> types = new ArrayList<>();
+        for (int column = 0; column < pipeline.columnCount(); column++) {
+            types.add(combinedEncoding(pipeline, encodings, column) == ColumnEncoding.STRING ? Types.STRING : Types.LONG);
+        }
+        types.add(Types.LONG);
+        return types;
+    }
+
+    private static void emitWindowBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    {
+        Plan.Window window = pipeline.window();
+        int columnCount = pipeline.columnCount();
+        out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
+        // Load every input column: all are output (matching the operator's "all source columns + rank").
+        for (int column = 0; column < columnCount; column++) {
+            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+        }
+        // Predicate-over-dictionary: evaluate each string filter once per dictionary entry into an id mask.
+        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
+        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
+        for (int s = 0; s < stringMatches.size(); s++) {
+            Plan.Condition match = stringMatches.get(s);
+            stringMaskIds.put(match, s);
+            emitStringConditionPrelude(out, match, s, column -> "cStr" + column);
+        }
+        IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
+        IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
+
+        // Materialize every surviving row's columns (value + null) into per-column arrays.
+        out.append("    int cap = 1024; int rows = 0;\n");
+        for (int column = 0; column < columnCount; column++) {
+            out.append("    long[] w").append(column).append(" = new long[cap];\n");
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append("    boolean[] wN").append(column).append(" = new boolean[cap];\n");
+            }
+        }
+        out.append("    for (int i = 0; i < rowCount; i++) {\n");
+        String bodyIndent = "      ";
+        boolean emitFilter = !pipeline.filters().isEmpty();
+        if (emitFilter) {
+            out.append("      if (").append(conjunction(pipeline.filters(), resolver, nullResolver, stringMaskIds)).append(") {\n");
+            bodyIndent = "        ";
+        }
+        out.append(bodyIndent).append("if (rows == cap) {\n");
+        out.append(bodyIndent).append("  cap *= 2;\n");
+        for (int column = 0; column < columnCount; column++) {
+            out.append(bodyIndent).append("  w").append(column).append(" = java.util.Arrays.copyOf(w").append(column).append(", cap);\n");
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append(bodyIndent).append("  wN").append(column).append(" = java.util.Arrays.copyOf(wN").append(column).append(", cap);\n");
+            }
+        }
+        out.append(bodyIndent).append("}\n");
+        for (int column = 0; column < columnCount; column++) {
+            out.append(bodyIndent).append("w").append(column).append("[rows] = ")
+                    .append(encodeSlot(resultTypes.get(column), resolver.apply(column))).append(";\n");
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append(bodyIndent).append("wN").append(column).append("[rows] = ").append(nullResolver.apply(column)).append(";\n");
+            }
+        }
+        out.append(bodyIndent).append("rows++;\n");
+        if (emitFilter) {
+            out.append("      }\n");
+        }
+        out.append("    }\n");
+
+        // Freeze the (grown) materialization arrays into final locals so the sort comparator lambda can capture them.
+        for (int column = 0; column < columnCount; column++) {
+            out.append("    final long[] fw").append(column).append(" = w").append(column).append(";\n");
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append("    final boolean[] fwN").append(column).append(" = wN").append(column).append(";\n");
+            }
+        }
+
+        // Sort a row-index permutation by (partition columns ascending, then ORDER BY keys); this is both the
+        // grouping order (equal-partition rows become contiguous) and the final output order.
+        out.append("    Integer[] order = new Integer[rows];\n");
+        out.append("    for (int i = 0; i < rows; i++) { order[i] = i; }\n");
+        out.append("    java.util.Arrays.sort(order, (pa, pb) -> {\n");
+        out.append("      int c;\n");
+        for (int partitionColumn : window.partitionColumns()) {
+            emitWindowCompare(out, pipeline, nullable, resultTypes, partitionColumn, false);
+        }
+        for (Plan.SortKey key : window.orderBy()) {
+            emitWindowCompare(out, pipeline, nullable, resultTypes, key.column(), key.descending());
+        }
+        out.append("      return 0;\n");
+        out.append("    });\n");
+
+        // Walk the ordered rows, tracking partition boundaries and assigning ranks, keeping rank <= limit.
+        out.append("    long[] outRank = new long[rows]; int[] keep = new int[rows]; int kept = 0;\n");
+        out.append("    long partitionRowNumber = 0; long rank = 0; boolean newPartition = true;\n");
+        out.append("    int prev = -1;\n");
+        out.append("    for (int oi = 0; oi < rows; oi++) {\n");
+        out.append("      int r = order[oi];\n");
+        // A row is a singleton partition when any partition column is null; otherwise the partition breaks when a
+        // partition column differs from the previous row.
+        out.append("      boolean nullPartition = ").append(windowNullPartitionTest(window, pipeline, nullable, resultTypes, "r")).append(";\n");
+        out.append("      if (prev == -1 || nullPartition || ").append(windowPartitionChanged(window, pipeline, nullable, resultTypes)).append(") {\n");
+        out.append("        partitionRowNumber = 1; rank = 1;\n");
+        out.append("      }\n");
+        out.append("      else {\n");
+        out.append("        partitionRowNumber++;\n");
+        if (window.function() == Plan.RankFunction.RANK) {
+            out.append("        if (").append(windowOrderingChanged(window, pipeline, nullable, resultTypes)).append(") { rank = partitionRowNumber; }\n");
+        }
+        else {
+            out.append("        rank = partitionRowNumber;\n");
+        }
+        out.append("      }\n");
+        String limit = window.rankLimit() < 0 ? "true" : "rank <= " + window.rankLimit() + "L";
+        out.append("      if (").append(limit).append(") { outRank[kept] = rank; keep[kept] = r; kept++; }\n");
+        out.append("      prev = r;\n");
+        out.append("    }\n");
+
+        // Gather kept rows (in order) into the result columns plus the trailing rank column.
+        int resultColumnCount = columnCount + 1;
+        out.append("    long[][] result = new long[").append(resultColumnCount).append("][kept];\n");
+        out.append("    for (int g = 0; g < kept; g++) {\n");
+        out.append("      int s = keep[g];\n");
+        for (int column = 0; column < columnCount; column++) {
+            out.append("      result[").append(column).append("][g] = w").append(column).append("[s];\n");
+        }
+        out.append("      result[").append(columnCount).append("][g] = outRank[g];\n");
+        out.append("    }\n");
+        emitResultTypes(out, "    ", resultTypes);
+        boolean anyNull = false;
+        for (int column = 0; column < columnCount; column++) {
+            anyNull |= windowColumnNullable(pipeline, nullable, column, resultTypes);
+        }
+        if (anyNull) {
+            out.append("    boolean[][] resultNulls = new boolean[").append(resultColumnCount).append("][];\n");
+            for (int column = 0; column < columnCount; column++) {
+                if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                    out.append("    boolean[] rn").append(column).append(" = new boolean[kept];\n");
+                    out.append("    for (int g = 0; g < kept; g++) { rn").append(column).append("[g] = wN").append(column).append("[keep[g]]; }\n");
+                    out.append("    resultNulls[").append(column).append("] = rn").append(column).append(";\n");
+                }
+            }
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
+            return;
+        }
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types))));\n");
+    }
+
+    /** A window output column carries nulls when its (nullable) source column does -- the rank column never does. */
+    private static boolean windowColumnNullable(Plan.Pipeline pipeline, boolean[][] nullable, int column, List<Type> resultTypes)
+    {
+        return combinedNullable(pipeline, nullable, column);
+    }
+
+    /** Emit one comparator clause over materialized window columns {@code wC[pa]} vs {@code wC[pb]}, null-aware. */
+    private static void emitWindowCompare(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, int column, boolean descending)
+    {
+        String compare = resultTypes.get(column).compare("fw" + column + "[pa]", "fw" + column + "[pb]");
+        if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+            // Mirror OperatorOrderingSemantics: a null compares greater (ascending puts nulls last; the descending
+            // flip then yields nulls first), and two nulls are equal.
+            out.append("      { boolean an = fwN").append(column).append("[pa]; boolean bn = fwN").append(column).append("[pb];\n");
+            out.append("        if (an || bn) { c = (an == bn) ? 0 : (an ? 1 : -1); } else { c = ").append(compare).append("; }");
+        }
+        else {
+            out.append("      { c = ").append(compare).append(";");
+        }
+        if (descending) {
+            out.append(" c = -c;");
+        }
+        out.append(" if (c != 0) { return c; } }\n");
+    }
+
+    /** True when row {@code rowVar} has a null in any partition column (so it is a singleton partition). */
+    private static String windowNullPartitionTest(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, String rowVar)
+    {
+        StringBuilder test = new StringBuilder("false");
+        for (int partitionColumn : window.partitionColumns()) {
+            if (windowColumnNullable(pipeline, nullable, partitionColumn, resultTypes)) {
+                test.append(" || wN").append(partitionColumn).append("[").append(rowVar).append("]");
+            }
+        }
+        return test.toString();
+    }
+
+    /** True when the current row {@code r} differs from {@code prev} on any partition column (value equality, null-aware). */
+    private static String windowPartitionChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        return windowValuesDiffer(window.partitionColumns(), pipeline, nullable, resultTypes);
+    }
+
+    /** True when the current row {@code r} differs from {@code prev} on any ORDER BY key (drives RANK ties). */
+    private static String windowOrderingChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        int[] columns = new int[window.orderBy().size()];
+        for (int i = 0; i < columns.length; i++) {
+            columns[i] = window.orderBy().get(i).column();
+        }
+        return windowValuesDiffer(columns, pipeline, nullable, resultTypes);
+    }
+
+    /**
+     * Disjunction that is true when row {@code r} differs from row {@code prev} on any of {@code columns}, by value
+     * equality. Matches {@code OperatorEqualitySemantics}: two nulls are NOT equal (so they count as differing) and
+     * a null differs from a value.
+     */
+    private static String windowValuesDiffer(int[] columns, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        if (columns.length == 0) {
+            return "false";
+        }
+        StringBuilder differ = new StringBuilder();
+        for (int column : columns) {
+            if (differ.length() > 0) {
+                differ.append(" || ");
+            }
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                differ.append("(wN").append(column).append("[r] || wN").append(column).append("[prev]")
+                        .append(" || w").append(column).append("[r] != w").append(column).append("[prev])");
+            }
+            else {
+                differ.append("(w").append(column).append("[r] != w").append(column).append("[prev])");
+            }
+        }
+        return "(" + differ + ")";
     }
 
     /** Declare the local(s) for a scan column according to its encoding: flat values, dict ids + dictionary, or a constant; plus a null mask when nullable. */

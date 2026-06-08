@@ -278,6 +278,33 @@ public final class Plan
     /** One ORDER BY key: a result column index and direction. */
     public record SortKey(int column, boolean descending) {}
 
+    /** The ranking window function: {@code RANK()} (ties share a rank, the next rank skips) or {@code ROW_NUMBER()}. */
+    public enum RankFunction
+    {
+        RANK,
+        ROW_NUMBER
+    }
+
+    /**
+     * A ranking window: {@code rank() / row_number() OVER (PARTITION BY partitionColumns ORDER BY orderBy)} with the
+     * common {@code WHERE rank <= rankLimit} top-N-per-partition filter folded in. {@code partitionColumns} and the
+     * {@code orderBy} key columns index the pipeline's input (scan) columns. A row whose partition column is NULL
+     * shares a partition with no other row (partition equality is value equality, which is false for nulls), so it is
+     * its own singleton partition at rank 1 -- matching the operator harness's {@code TopNRankingOperator}.
+     * <p>
+     * {@code rankLimit < 0} keeps every row (no top-N filter). {@link RankFunction#RANK} gives tied rows (equal on
+     * every {@code orderBy} key) the same rank and skips the next; {@link RankFunction#ROW_NUMBER} numbers rows
+     * 1, 2, 3, ... within the partition with no ties.
+     */
+    public record Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit)
+    {
+        public Window
+        {
+            partitionColumns = partitionColumns.clone();
+            orderBy = List.copyOf(orderBy);
+        }
+    }
+
     /**
      * Post-aggregation ORDER BY / LIMIT applied to the pipeline's result columns. {@code limit < 0} means no
      * limit. Sort keys index the result columns (group keys first, then aggregates).
@@ -298,7 +325,7 @@ public final class Plan
      * group key in a scan pipeline the compiler speculates array-mode grouping and deopts to a hash table at
      * runtime; the structure is chosen from the data, not declared in the plan.
      */
-    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections, List<int[]> groupingSets)
+    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections, List<int[]> groupingSets, Window window)
     {
         public Pipeline
         {
@@ -308,6 +335,12 @@ public final class Plan
             aggregates = List.copyOf(aggregates);
             projections = List.copyOf(projections);
             groupingSets = copyGroupingSets(groupingSets);
+        }
+
+        /** Convenience: no ranking window (an ordinary aggregating / projecting pipeline). */
+        public Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections, List<int[]> groupingSets)
+        {
+            this(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets, null);
         }
 
         /** Convenience: no grouping sets (single grouping over all {@code groupKeys}). */
@@ -365,7 +398,7 @@ public final class Plan
          */
         public Pipeline withProjections(List<Expr> projections)
         {
-            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets);
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets, window);
         }
 
         /**
@@ -382,7 +415,22 @@ public final class Plan
          */
         public Pipeline withGroupingSets(List<int[]> groupingSets)
         {
-            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets);
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets, window);
+        }
+
+        /**
+         * Same pipeline computing a ranking {@code window} (rank / row_number per partition, with an optional
+         * {@code rank <= N} top-N filter) instead of an aggregation. The pipeline scans its input, keeps the rows
+         * passing every {@code filter}, then -- per partition, ordered by the window's keys -- assigns each surviving
+         * row its rank, keeps the rows within the rank limit, and emits all input columns ({@code [0, columnCount)})
+         * followed by a trailing LONG rank column, globally ordered by {@code (partitionColumns, orderBy)}. This
+         * mirrors the operator harness's {@code TopNRankingOperator}. A window pipeline has no group keys, aggregates,
+         * grouping sets, joins, HAVING, or post projections (they are unsupported in this first cut); apply ORDER BY /
+         * LIMIT and projections through a following pipeline if needed.
+         */
+        public Pipeline withWindow(Window window)
+        {
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets, window);
         }
 
         private static List<int[]> copyGroupingSets(List<int[]> groupingSets)
