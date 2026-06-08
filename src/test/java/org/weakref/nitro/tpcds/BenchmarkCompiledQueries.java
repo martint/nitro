@@ -56,7 +56,7 @@ import java.util.function.Supplier;
 public class BenchmarkCompiledQueries
 {
     @Param({"01", "03", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
-            "60", "62", "63", "65", "71", "73", "82", "89", "91", "16", "92", "94", "95", "96", "99"})
+            "60", "62", "63", "65", "71", "73", "82", "89", "91", "16", "19", "92", "94", "95", "96", "99"})
     public String query;
 
     private Allocator allocator;
@@ -72,6 +72,7 @@ public class BenchmarkCompiledQueries
         ported("07", CompiledTpcdsQueries.query07());
         ported("13", CompiledTpcdsQueries.query13());
         ported("15", CompiledTpcdsQueries.query15());
+        ported("19", CompiledTpcdsQueries.query19());
         ported("26", CompiledTpcdsQueries.query26());
         ported("27", CompiledTpcdsQueries.query27());
         ported("42", CompiledTpcdsQueries.query42());

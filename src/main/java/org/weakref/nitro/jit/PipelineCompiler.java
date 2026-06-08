@@ -1674,6 +1674,17 @@ public final class PipelineCompiler
             }
         }
 
+        // A column-vs-column string compare whose BOTH operands are build (dimension) columns can be remapped now that
+        // every build dictionary is materialized. Emit it here so the lazy streaming path -- which has no post-probe
+        // prelude site -- shares it; compares that touch a probe column are emitted after the probe loads (below).
+        for (int s = 0; s < stringMatches.size(); s++) {
+            if (stringMatches.get(s) instanceof Plan.StringColumnCompare compare
+                    && compare.left() >= probeColumns && compare.right() >= probeColumns) {
+                emitStringConditionPrelude(out, compare, s, column ->
+                        buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]).stringDict());
+            }
+        }
+
         boolean grouped = !pipeline.groupKeys().isEmpty();
         boolean projection = projectionOnly(pipeline);
         if (projection) {
@@ -1774,6 +1785,9 @@ public final class PipelineCompiler
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
             }
             for (Plan.Condition match : filterMatches) {
+                if (match instanceof Plan.StringColumnCompare) {
+                    continue;   // column-vs-column needs both dictionaries; its remap/prefix prelude is emitted once after all builds load
+                }
                 if (stringMatchColumn(match) < probeColumns) {
                     emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
                 }
@@ -1848,9 +1862,12 @@ public final class PipelineCompiler
             }
             for (int s = 0; s < stringMatches.size(); s++) {
                 Plan.Condition match = stringMatches.get(s);
-                if (match instanceof Plan.StringColumnCompare) {
-                    // Both dictionaries are materialized now (builds above, probe just loaded), so emit the remap here,
-                    // resolving each operand's dictionary variable from whichever side (probe or a build) it lives on.
+                if (match instanceof Plan.StringColumnCompare compare) {
+                    if (compare.left() >= probeColumns && compare.right() >= probeColumns) {
+                        continue;   // build-only: already emitted once after the builds loaded
+                    }
+                    // A probe column is involved; its dictionary is materialized now (probe just loaded), so emit the
+                    // remap here, resolving each operand's dictionary variable from whichever side it lives on.
                     emitStringConditionPrelude(out, match, s, column -> column < probeColumns
                             ? probeVars(column).stringDict()
                             : buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]).stringDict());

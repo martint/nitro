@@ -248,6 +248,52 @@ public final class CompiledTpcdsQueries
         return new Ported(query, 1, 2, 3);
     }
 
+    public static Ported query19()
+    {
+        // store_sales ⋈ date_dim(d_moy=11, d_year=1998) ⋈ item(i_manager_id=8) ⋈ customer ⋈ customer_address (on the
+        // customer's current address) ⋈ store. Keep only rows where the customer's zip and the store's zip differ in
+        // their 5-char prefix (substr(ca_zip,1,5) <> substr(s_zip,1,5)); GROUP BY brand/manufacturer; sum ext sales
+        // price; ORDER BY sum DESC then the keys; top 100. Exercises the substring string-column compare across two
+        // dimension joins, plus two dictionary-string group keys (i_brand, i_manufact).
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk"),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manager_id"),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_manufact_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_manufact", ColumnEncoding.STRING, true))
+                .join("customer", "ss_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_zip", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(11)),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.Predicate("=", query.column("i_manager_id"), new Plan.Lit(8)),
+                        new Plan.StringColumnCompare(query.position("ca_zip"), query.position("s_zip"), true, 1, 5))
+                .groupBy("i_brand_id", "i_brand", "i_manufact_id", "i_manufact")
+                .aggregate("sum", "ss_ext_sales_price")
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(4, true), new Plan.SortKey(1, false), new Plan.SortKey(0, false),
+                        new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+        return new Ported(query, List.of(new DictRef(1, 2, 3), new DictRef(3, 2, 5)));
+    }
+
     public static Ported query15()
     {
         // catalog_sales -> customer -> customer_address (snowflake: the second join keys on customer's

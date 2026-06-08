@@ -222,6 +222,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query19()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query19(), TpcdsParquetSupport::query19);
+    }
+
+    @Test
     void query62()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query62(), TpcdsParquetSupport::query62);
@@ -281,6 +287,7 @@ public class TestCompiledTpcdsQueries
         ported.put("43", CompiledTpcdsQueries.query43());
         ported.put("52", CompiledTpcdsQueries.query52());
         ported.put("55", CompiledTpcdsQueries.query55());
+        ported.put("19", CompiledTpcdsQueries.query19());   // exercises a column-vs-column string compare on the streaming probe path
         ported.put("62", CompiledTpcdsQueries.query62());
         ported.put("91", CompiledTpcdsQueries.query91());
         ported.put("96", CompiledTpcdsQueries.query96());
