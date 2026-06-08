@@ -225,31 +225,38 @@ public final class Plan
      * (the decorrelated form of a scalar/aggregate subquery joined back to its outer query).
      */
     /**
-     * A join of the probe to {@code build} on {@code probeKeyColumns}. {@code outer} keeps a non-matching probe row
-     * (build columns read NULL); {@code anti} keeps only the probe rows with NO match (NOT EXISTS) and the build
-     * contributes no columns. An EXISTS/semi-join needs no flag -- it is an inner join to a build that carries only
-     * its key, since the probe lookup keeps each row at most once. {@code outer} and {@code anti} are mutually exclusive.
+     * A join of the probe to {@code build} on {@code probeKeyColumns}. An INNER join (no flag) emits a row for EVERY
+     * matching build row -- a one-to-many build fans the probe row out, since the compiler does not assume the build
+     * key is unique. {@code outer} is a LEFT join: a probe row with no match is kept with the build's columns NULL.
+     * {@code anti} (NOT EXISTS) keeps only probe rows with NO match; {@code semi} (EXISTS) keeps each matching probe
+     * row exactly once regardless of how many build rows match. {@code cross} pairs every probe row with every build
+     * row (no key). {@code outer}, {@code anti}, {@code semi} and {@code cross} are mutually exclusive.
      */
-    public record Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti, boolean cross)
+    public record Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti, boolean cross, boolean semi)
     {
         public Join
         {
             probeKeyColumns = probeKeyColumns.clone();
         }
 
+        public Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti, boolean cross)
+        {
+            this(build, probeKeyColumns, outer, anti, cross, false);
+        }
+
         public Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti)
         {
-            this(build, probeKeyColumns, outer, anti, false);
+            this(build, probeKeyColumns, outer, anti, false, false);
         }
 
         public Join(Build build, int[] probeKeyColumns, boolean outer)
         {
-            this(build, probeKeyColumns, outer, false, false);
+            this(build, probeKeyColumns, outer, false, false, false);
         }
 
         public Join(Build build, int[] probeKeyColumns)
         {
-            this(build, probeKeyColumns, false, false, false);
+            this(build, probeKeyColumns, false, false, false, false);
         }
 
         public Join(Build build, int probeKeyColumn)
@@ -265,13 +272,19 @@ public final class Plan
         /** A NOT EXISTS / anti-join keeping probe rows with no match in {@code build}. */
         public static Join anti(Build build, int... probeKeyColumns)
         {
-            return new Join(build, probeKeyColumns, false, true, false);
+            return new Join(build, probeKeyColumns, false, true, false, false);
+        }
+
+        /** An EXISTS / semi-join keeping each matching probe row exactly once (build contributes no columns). */
+        public static Join semi(Build build, int... probeKeyColumns)
+        {
+            return new Join(build, probeKeyColumns, false, false, false, true);
         }
 
         /** A cross / nested-loop join: every probe row is paired with every {@code build} row (no key). */
         public static Join cross(Build build)
         {
-            return new Join(build, new int[0], false, false, true);
+            return new Join(build, new int[0], false, false, true, false);
         }
     }
 

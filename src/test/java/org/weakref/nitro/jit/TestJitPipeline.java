@@ -702,6 +702,45 @@ public class TestJitPipeline
     }
 
     @Test
+    void streamsFanOutOverNonUniqueBuildInBatches()
+    {
+        // SELECT sum(b.v) FROM p JOIN b ON p.k = b.k -- streamed probe joined to a build whose key is NOT unique (each
+        // key has 3 rows), so a batch yields up to 3x its rows in survivors. Exercises the streaming late-materialize
+        // fan-out and selection-array growth; must match the eager run (which the eager fan-out tests pin as correct).
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,                                                    // probe [p.k]
+                List.of(new Plan.Join(new Plan.Build(2, 0), 0)),      // build [b.k, b.v]
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
+
+        int rows = 50_000;
+        long[] k = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 1000;
+        }
+        int distinct = 1000;
+        int copies = 3;
+        long[] buildKey = new long[distinct * copies];
+        long[] buildVal = new long[distinct * copies];
+        for (int key = 0; key < distinct; key++) {
+            for (int d = 0; d < copies; d++) {
+                int idx = key * copies + d;
+                buildKey[idx] = key;
+                buildVal[idx] = d + 1;   // each matching probe row contributes 1+2+3 = 6
+            }
+        }
+
+        long eager = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{k}, {buildKey, buildVal}}, new int[] {rows, buildKey.length}).columns()[0][0];
+        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null).execute(
+                flatBatches(4096, rows, k), new Column[][] {{new Column.FlatColumn(buildKey), new Column.FlatColumn(buildVal)}}, new int[] {buildKey.length});
+
+        assertThat(streamed.columns()[0][0]).isEqualTo(eager);
+        assertThat(eager).isEqualTo((long) rows * 6);
+    }
+
+    @Test
     void streamsAcrossGrowingBatchesReusesScratch()
     {
         // The streaming late-materialization reuses its per-batch survivor index (selection) and matched build-row
@@ -1202,13 +1241,13 @@ public class TestJitPipeline
     @Test
     void innerJoinWithKeyOnlyBuildIsSemiJoin()
     {
-        // SELECT sum(p.v) FROM p WHERE p.k IN (SELECT k FROM b) -- an EXISTS/semi-join expressed as an inner join to
-        // a build that contributes only its key (no payload). The probe key lookup takes the first match, so each
-        // probe row is kept at most once even if the build key repeats -- exactly EXISTS semantics.
+        // SELECT sum(p.v) FROM p WHERE p.k IN (SELECT k FROM b) -- an EXISTS/semi-join (Plan.Join.semi): the build
+        // contributes only its key (no payload) and each probe row is kept at most once even if the build key repeats.
+        // (A plain inner join now fans the probe row out over every matching build row, so EXISTS needs the semi flag.)
         Plan.Build keyOnly = new Plan.Build(1, 0);   // [b.k]
         Plan.Pipeline pipeline = new Plan.Pipeline(
                 2,                                    // probe: [p.k, p.v]
-                List.of(new Plan.Join(keyOnly, 0)),
+                List.of(Plan.Join.semi(keyOnly, 0)),
                 List.of(),
                 List.of(),
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
@@ -1220,6 +1259,55 @@ public class TestJitPipeline
 
         CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
                 new long[][][] {{probeKey, probeVal}, {buildKey}}, new int[] {probeKey.length, buildKey.length});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
+    void innerJoinFansOutOverNonUniqueArrayBuild()
+    {
+        // SELECT sum(b.v) FROM p JOIN b ON p.k = b.k -- the build key is NOT unique, so a probe row matches several
+        // build rows and is emitted once per match (the compiler must not assume a 1:1 relationship). Dense keys take
+        // the array-mode build path, where duplicates chain through buildNext.
+        Plan.Build build = new Plan.Build(2, 0);   // [b.k, b.v], key col 0
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,                                  // probe: [p.k]
+                List.of(new Plan.Join(build, 0)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))));   // combined: p.k=0, b.k=1, b.v=2
+
+        long[] probeKey = {1, 2, 3};
+        long[] buildKey = {1, 1, 2};               // key 1 appears twice (one-to-many), key 3 is absent
+        long[] buildVal = {10, 20, 30};
+        long expected = 10 + 20 + 30;              // p.k=1 -> {10,20}, p.k=2 -> {30}, p.k=3 -> none
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+                new long[][][] {{probeKey}, {buildKey, buildVal}}, new int[] {probeKey.length, buildKey.length});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
+    void innerJoinFansOutOverNonUniqueHashBuild()
+    {
+        // Same one-to-many fan-out, but sparse keys force the open-addressing hash build path, where duplicates chain
+        // through buildNext with the latest row as the slot head.
+        Plan.Build build = new Plan.Build(2, 0);   // [b.k, b.v], key col 0
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,                                  // probe: [p.k]
+                List.of(new Plan.Join(build, 0)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
+
+        long[] probeKey = {5, 1_000_000};
+        long[] buildKey = {1_000_000, 1_000_000, 1_000_000, 5};   // key 1_000_000 appears three times
+        long[] buildVal = {1, 2, 4, 8};
+        long expected = 8 + (1 + 2 + 4);           // p.k=5 -> {8}, p.k=1_000_000 -> {1,2,4}
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+                new long[][][] {{probeKey}, {buildKey, buildVal}}, new int[] {probeKey.length, buildKey.length});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
     }

@@ -1416,8 +1416,19 @@ public final class PipelineCompiler
                 indent += "  ";
                 openBraces++;
             }
-            else if (!joins.get(k).outer()) {
+            else if (joins.get(k).semi()) {
+                // EXISTS / semi-join: keep each matching probe row exactly once (no fan-out over the build chain),
+                // whether or not the build key repeats. The build contributes no columns downstream.
                 out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+                indent += "  ";
+                openBraces++;
+            }
+            else if (!joins.get(k).outer()) {
+                // Inner join: emit a row for EVERY matching build row by walking the key's chain (emitProbeLookup left
+                // buildRow<k> at the chain head, -1 if no match). A unique build has buildNext<k> == null, so the loop
+                // runs exactly once -- identical to the former single-match `if`. A one-to-many build fans out here.
+                out.append(indent).append("for ( ; buildRow").append(k).append(" != -1; buildRow").append(k)
+                        .append(" = (buildNext").append(k).append(" == null ? -1 : buildNext").append(k).append("[buildRow").append(k).append("])) {\n");
                 indent += "  ";
                 openBraces++;
             }
@@ -1676,10 +1687,12 @@ public final class PipelineCompiler
             out.append("        for (int i = 0; i < probeRows; i++) {\n");
             int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, resolver, nullResolver, stringMaskIds);
             String indent = "          " + "  ".repeat(openBraces);
-            // A cross join pairs one probe row with many build rows, so survivors can exceed the probe-row count;
-            // grow the selection arrays when full. (Inner/left/anti keep at most one survivor per probe row.)
-            boolean hasCross = joins.stream().anyMatch(Plan.Join::cross);
-            if (hasCross) {
+            // A cross join, or an inner/left join over a non-unique build, pairs one probe row with many build rows,
+            // so survivors can exceed the probe-row count; grow the selection arrays when full. Only an anti-join is
+            // guaranteed at most one survivor per probe row. (Unique builds never actually exceed probeRows, so for
+            // them the guard's branch is simply never taken.)
+            boolean hasFanOut = joins.stream().anyMatch(join -> !join.anti());
+            if (hasFanOut) {
                 out.append(indent).append("if (selected == selection.length) {\n");
                 out.append(indent).append("  int grown = selected * 2;\n");
                 out.append(indent).append("  selection = java.util.Arrays.copyOf(selection, grown);\n");
@@ -1810,6 +1823,11 @@ public final class PipelineCompiler
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
         String skip = buildFilter == null ? "" : "if (!(" + buildFilter + ")) { continue; } ";
+        // buildNext<k> chains build rows sharing a join key (lazily allocated on the first duplicate key). It stays
+        // null when every key is unique -- the common dimension-PK case -- so the probe loop runs exactly once per
+        // match and unique-build queries are byte-identical with no chain overhead. A non-unique build (a one-to-many
+        // join) populates it so the probe emits every matching build row. The compiler does not assume uniqueness.
+        out.append("    int[] buildNext").append(k).append(" = null;\n");
         if (keyCount == 1) {
             String buildKey = "b" + k + "_" + buildKeys[0];
             out.append("    long minKey").append(k).append(" = Long.MAX_VALUE, maxKey").append(k).append(" = Long.MIN_VALUE;\n");
@@ -1822,7 +1840,12 @@ public final class PipelineCompiler
             out.append("    long[] jKey").append(k).append("_0 = null; int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
             out.append("    if (useArray").append(k).append(") {\n");
             out.append("      int range = (int) keyRange").append(k).append("; buildRowByKey").append(k).append(" = new int[range]; java.util.Arrays.fill(buildRowByKey").append(k).append(", -1);\n");
-            out.append("      for (int r = 0; r < ").append(rows).append("; r++) { ").append(skip).append("buildRowByKey").append(k).append("[(int) (").append(buildKey).append("[r] - minKey").append(k).append(")] = r; }\n");
+            // Array mode: buildRowByKey holds the chain head per key; a duplicate prepends through buildNext (the new
+            // row becomes the head, pointing at the previous head). Unique keys never collide, so buildNext stays null.
+            out.append("      for (int r = 0; r < ").append(rows).append("; r++) { ").append(skip)
+                    .append("int idx = (int) (").append(buildKey).append("[r] - minKey").append(k).append(");")
+                    .append(" if (buildRowByKey").append(k).append("[idx] != -1) { if (buildNext").append(k).append(" == null) { buildNext").append(k).append(" = new int[").append(rows).append("]; java.util.Arrays.fill(buildNext").append(k).append(", -1); } buildNext").append(k).append("[r] = buildRowByKey").append(k).append("[idx]; }")
+                    .append(" buildRowByKey").append(k).append("[idx] = r; }\n");
             out.append("    }\n    else {\n");
             emitHashBuild(out, "      ", k, buildKeys, buildFilter);
             out.append("    }\n");
@@ -1838,11 +1861,20 @@ public final class PipelineCompiler
         }
     }
 
-    /** Open-addressing build for join {@code k} (build keys assumed unique), populating the join's slot arrays. */
+    /**
+     * Open-addressing build for join {@code k}. Each slot owns one distinct key; build rows that share a key are
+     * chained through {@code buildNext<k>} (declared by {@link #emitBuildStructures}, lazily allocated on the first
+     * duplicate) with the latest row as the chain head in {@code jRow<k>[slot]}. A unique build never collides on key,
+     * so {@code buildNext<k>} stays null and the probe runs a single iteration -- byte-identical to a unique-key table.
+     */
     private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
+        StringBuilder keyMatch = new StringBuilder();
+        for (int kx = 0; kx < keyCount; kx++) {
+            keyMatch.append(kx == 0 ? "" : " && ").append("jKey").append(k).append("_").append(kx).append("[slot] == bk").append(kx);
+        }
         out.append(indent).append("int jcap = 16; while (jcap * 0.75f < ").append(rows).append(") { jcap <<= 1; }\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(indent).append("jKey").append(k).append("_").append(kx).append(" = new long[jcap];\n");
@@ -1856,11 +1888,17 @@ public final class PipelineCompiler
             out.append(indent).append("  long bk").append(kx).append(" = b").append(k).append("_").append(buildKeys[kx]).append("[r];\n");
         }
         out.append(indent).append("  int slot = mix(").append(hashFold("bk", "", keyCount)).append(") & jMask").append(k).append(";\n");
-        out.append(indent).append("  while (jRow").append(k).append("[slot] != -1) { slot = (slot + 1) & jMask").append(k).append("; }\n");
+        out.append(indent).append("  while (jRow").append(k).append("[slot] != -1 && !(").append(keyMatch).append(")) { slot = (slot + 1) & jMask").append(k).append("; }\n");
+        out.append(indent).append("  if (jRow").append(k).append("[slot] == -1) {\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("  jKey").append(k).append("_").append(kx).append("[slot] = bk").append(kx).append(";\n");
+            out.append(indent).append("    jKey").append(k).append("_").append(kx).append("[slot] = bk").append(kx).append(";\n");
         }
-        out.append(indent).append("  jRow").append(k).append("[slot] = r;\n");
+        out.append(indent).append("    jRow").append(k).append("[slot] = r;\n");
+        out.append(indent).append("  }\n");
+        out.append(indent).append("  else {\n");
+        out.append(indent).append("    if (buildNext").append(k).append(" == null) { buildNext").append(k).append(" = new int[").append(rows).append("]; java.util.Arrays.fill(buildNext").append(k).append(", -1); }\n");
+        out.append(indent).append("    buildNext").append(k).append("[r] = jRow").append(k).append("[slot]; jRow").append(k).append("[slot] = r;\n");
+        out.append(indent).append("  }\n");
         out.append(indent).append("}\n");
     }
 
