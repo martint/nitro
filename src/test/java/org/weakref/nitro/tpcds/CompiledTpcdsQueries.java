@@ -1516,6 +1516,79 @@ public final class CompiledTpcdsQueries
                 new Stage(qualified, "q94_grouped")), main, List.of());
     }
 
+    public static Composite query16()
+    {
+        // Q16: the catalog-channel sibling of Q94 -- catalog_sales shipped in a 60-day window to Georgia addresses via
+        // the 'Williamson County' call center, for orders shipped from MORE THAN ONE warehouse and NOT returned; report
+        // count(distinct order), sum(ext_ship_cost), sum(net_profit). Identical four-stage shape to Q94: (1)
+        // multi-warehouse orders (catalog_sales self-join on order with differing warehouse, distinct), (2) distinct
+        // returned orders, (3) filtered sales SEMI-joined to (1) and ANTI-joined to (2) then grouped via
+        // ROLLUP({order},{}); main = count(distinct)+sums via sum(CASE on grouping_id).
+        QueryLowering multiWarehouse = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_order_number", ColumnEncoding.FLAT, true))
+                .join("catalog_sales", "cs_order_number", "cs_order_number_2",
+                        new QueryLowering.Column("cs_warehouse_sk_2", "cs_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_order_number_2", "cs_order_number", ColumnEncoding.FLAT, true));
+        multiWarehouse.where(new Plan.Predicate("<>", multiWarehouse.column("cs_warehouse_sk"), multiWarehouse.column("cs_warehouse_sk_2")))
+                .groupBy("cs_order_number")
+                .count();
+
+        QueryLowering returned = QueryLowering.scan("catalog_returns",
+                        new QueryLowering.Column("cr_order_number", ColumnEncoding.FLAT, true))
+                .groupBy("cr_order_number")
+                .count();
+
+        LocalDate start = LocalDate.of(2002, 2, 1);
+        QueryLowering qualified = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_ship_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_ship_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_call_center_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_ext_ship_cost", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_ship_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join("customer_address", "cs_ship_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, false))
+                .join("call_center", "cs_call_center_sk", "cc_call_center_sk",
+                        new QueryLowering.Column("cc_call_center_sk"),
+                        new QueryLowering.Column("cc_county", ColumnEncoding.STRING, false))
+                .join("q16_mw_orders", "cs_order_number", "mw_order",
+                        new QueryLowering.Column("mw_order", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("mw_count", ColumnEncoding.FLAT, false))
+                .antiJoin("q16_ret_orders", "cs_order_number", "ret_order",
+                        new QueryLowering.Column("ret_order", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("ret_count", ColumnEncoding.FLAT, false));
+        qualified.where(
+                        new Plan.Predicate(">=", qualified.column("d_date"), new Plan.Lit(start.toEpochDay())),
+                        new Plan.Predicate("<=", qualified.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.StringMatch(qualified.position("ca_state"), List.of("GA"), false),
+                        new Plan.StringMatch(qualified.position("cc_county"), List.of("Williamson County"), false))
+                .groupBy("cs_order_number")
+                .groupingSets(List.of(new int[] {0}, new int[0]))
+                .aggregate("sum", "cs_ext_ship_cost")
+                .aggregate("sum", "cs_net_profit");
+
+        QueryLowering main = QueryLowering.scan("q16_grouped",
+                        new QueryLowering.Column("g_order", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_ship", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_profit", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_grouping", ColumnEncoding.FLAT, false));
+        Plan.Condition perOrder = new Plan.Predicate("=", main.column("g_grouping"), new Plan.Lit(0));
+        Plan.Condition grandTotal = new Plan.Predicate("=", main.column("g_grouping"), new Plan.Lit(1));
+        main.aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(perOrder, new Plan.Lit(1))), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(grandTotal, main.column("g_ship"))), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(grandTotal, main.column("g_profit"))), new Plan.Lit(0)));
+
+        return new Composite(List.of(
+                new Stage(multiWarehouse, "q16_mw_orders"),
+                new Stage(returned, "q16_ret_orders"),
+                new Stage(qualified, "q16_grouped")), main, List.of());
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
