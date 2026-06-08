@@ -16,6 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.weakref.nitro.jit.ColumnEncoding;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.jit.QueryLowering;
+import org.weakref.nitro.jit.Types;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -1201,5 +1202,57 @@ public final class CompiledTpcdsQueries
                         new Plan.Col(5))    // avg(ss_sales_price)
                 .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
         return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1)));
+    }
+
+    public static Ported query22()
+    {
+        // inventory ⋈ date_dim(d_month_seq in [1200, 1211]) ⋈ item; ROLLUP(i_product_name, i_brand, i_class,
+        // i_category); avg(inv_quantity_on_hand). ORDER BY the computed average then the four item keys; top 100.
+        // The harness pre-aggregates inventory by item before the rollup, which is algebraically transparent to the
+        // sum and the count, so a single ROLLUP over the item attributes with sum(coalesce(qoh, 0)) and count(*)
+        // matches it to the bit (same integer numerator and denominator, then one double division). ROLLUP nulls
+        // the trailing item keys per level, so their string outputs reconstruct through their null masks.
+        QueryLowering query = QueryLowering.scan("inventory",
+                        new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
+                .join("date_dim", "inv_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq"))
+                .join("item", "inv_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_product_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false));
+        query.where(
+                        new Plan.Predicate(">", query.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", query.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("i_product_name", "i_brand", "i_class", "i_category")
+                .groupingSets(List.of(
+                        new int[] {0, 1, 2, 3},
+                        new int[] {0, 1, 2},
+                        new int[] {0, 1},
+                        new int[] {0},
+                        new int[0]))
+                .aggregate("sum", new Plan.Coalesce(query.column("inv_quantity_on_hand"), new Plan.Lit(0)))
+                .count();
+        // Result columns: i_product_name (0), i_brand (1), i_class (2), i_category (3), sum (4), count (5),
+        // grouping_id (6). The average is the computed quotient sum/count as a true double.
+        Plan.Expr average = new Plan.Call("divide_i64_to_f64", new Plan.Col(4), new Plan.Col(5));
+        query.select(
+                        new Plan.Col(0),    // i_product_name
+                        new Plan.Col(1),    // i_brand
+                        new Plan.Col(2),    // i_class
+                        new Plan.Col(3),    // i_category
+                        average)            // avg(inv_quantity_on_hand)
+                .orderBy(new Plan.Ordering(List.of(
+                        Plan.SortKey.expression(average, Types.DOUBLE, false),
+                        new Plan.SortKey(0, false),
+                        new Plan.SortKey(1, false),
+                        new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false)), 100));
+        return new Ported(query, List.of(
+                new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 2, 3), new DictRef(3, 2, 4)));
     }
 }
