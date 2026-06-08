@@ -395,8 +395,10 @@ public final class CompiledQuerySupport
             @Override
             public org.weakref.nitro.jit.Column[] columns()
             {
-                // Fallback for non-staged callers: convert every column over the whole batch.
-                return materialize(identity(width), identity(currentRows), currentRows);
+                // Non-staged callers (a pipeline with no deferrable payload) get every column over the whole batch
+                // through the dense zero-copy path -- wrapping a non-null I64 column's array by reference -- not the
+                // per-row convert gather.
+                return materialize(identity(width));
             }
 
             @Override
@@ -420,7 +422,7 @@ public final class CompiledQuerySupport
                 }
                 org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
                 for (int column : columns) {
-                    out[column] = denseColumn(open.output(column).borrow(Stream.VALUES), open.output(column).borrowOrNull(Stream.NULLS), currentRows);
+                    out[column] = denseColumn(open.output(column).borrow(Stream.VALUES), open.output(column).borrowOrNull(Stream.NULLS), currentRows, specs.get(column).nullable());
                 }
                 return out;
             }
@@ -437,28 +439,34 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * Convert a dense batch column (logical row {@code j} == batch position {@code j}) to a flat column with no copy:
-     * an {@code I64} column wraps the decoded vector's backing {@code long[]} directly, and a present nulls stream
-     * wraps the {@code BooleanVector}'s backing {@code boolean[]} directly -- both share the decoder's batch (held
-     * open until the next advance). Null positions are never read: the generated code skips them via the nulls array
-     * (a nullable column must be declared nullable so that guard is emitted), so no per-row copy or null-zeroing is
-     * needed. Only an {@code I32} column is widened (its {@code int[]} cannot alias a {@code long[]}).
+     * Convert a dense batch column (logical row {@code j} == batch position {@code j}) to a flat column, honoring the
+     * declared {@code nullable} contract so it is byte-exact with {@link #convertColumn}. When the column is declared
+     * nullable, an {@code I64} column wraps the decoded vector's backing {@code long[]} by reference and a present
+     * nulls stream wraps the {@code BooleanVector}'s backing {@code boolean[]} by reference -- both share the decoder's
+     * batch (held open until the next advance), and the generated code skips null positions via the nulls array, so no
+     * copy or null-zeroing is needed. When the column is declared non-nullable but the batch nonetheless carries
+     * nulls, the generated code emits no null guard, so those positions must read as {@code 0} (as {@code convertColumn}
+     * does) -- that requires a fresh zeroed copy, since the shared backing array cannot be mutated. Only the
+     * non-nullable, no-nulls case (and the nullable I64 case) stays zero-copy; an {@code I32} column is always widened
+     * (its {@code int[]} cannot alias a {@code long[]}).
      */
-    private static org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count)
+    private static org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count, boolean nullable)
     {
         if (values instanceof I64Vector i64) {
             if (nulls == null) {
                 return new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
             }
-            if (nulls instanceof BooleanVector booleans) {
+            if (nullable && nulls instanceof BooleanVector booleans) {
                 return new org.weakref.nitro.jit.Column.FlatColumn(i64.values(), booleans.values());   // no copy
             }
             long[] backing = i64.values();
             long[] copy = new long[count];
-            boolean[] nullMask = new boolean[count];
+            boolean[] nullMask = nullable ? new boolean[count] : null;
             for (int i = 0; i < count; i++) {
                 boolean isNull = isNull(nulls, i);
-                nullMask[i] = isNull;
+                if (nullMask != null) {
+                    nullMask[i] = isNull;
+                }
                 copy[i] = isNull ? 0 : backing[i];
             }
             return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
@@ -466,7 +474,7 @@ public final class CompiledQuerySupport
         if (values instanceof I32Vector i32) {
             int[] backing = i32.values();
             long[] copy = new long[count];
-            boolean[] nullMask = nulls != null ? new boolean[count] : null;
+            boolean[] nullMask = nullable ? new boolean[count] : null;
             for (int i = 0; i < count; i++) {
                 boolean isNull = nulls != null && isNull(nulls, i);
                 if (nullMask != null) {
@@ -970,12 +978,21 @@ public final class CompiledQuerySupport
     private static DrainedInput drainColumns(Operator operator, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
     {
         int width = specs.size();
-        long[][] values = new long[width][16];          // flat values
-        int[][] ids = new int[width][16];               // string ids
+        // Each column drains into exactly one value array -- a numeric column uses values[c] (long[]), a string
+        // column uses ids[c] (int[]). Allocating (and growing) both per column wasted ~half the drain's allocation:
+        // a low-cardinality string dimension over millions of rows grew a full-size long[] it never read.
+        long[] emptyLong = new long[0];
+        int[] emptyInt = new int[0];
+        boolean[] string = new boolean[width];
+        long[][] values = new long[width][];            // flat values (numeric columns only)
+        int[][] ids = new int[width][];                 // string ids (string columns only)
         boolean[][] nulls = new boolean[width][16];
         List<java.util.Map<String, Integer>> dictionaryIndex = new ArrayList<>();
         List<List<byte[]>> dictionaries = new ArrayList<>();
         for (int c = 0; c < width; c++) {
+            string[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
+            values[c] = string[c] ? emptyLong : new long[16];
+            ids[c] = string[c] ? new int[16] : emptyInt;
             dictionaryIndex.add(new java.util.LinkedHashMap<>());
             dictionaries.add(new ArrayList<>());
         }
@@ -988,23 +1005,26 @@ public final class CompiledQuerySupport
                     if (size + count > nulls[0].length) {
                         int capacity = Math.max(nulls[0].length * 2, size + count);
                         for (int c = 0; c < width; c++) {
-                            values[c] = java.util.Arrays.copyOf(values[c], capacity);
-                            ids[c] = java.util.Arrays.copyOf(ids[c], capacity);
+                            if (string[c]) {
+                                ids[c] = java.util.Arrays.copyOf(ids[c], capacity);
+                            }
+                            else {
+                                values[c] = java.util.Arrays.copyOf(values[c], capacity);
+                            }
                             nulls[c] = java.util.Arrays.copyOf(nulls[c], capacity);
                         }
                     }
                     boolean dense = mask.all();
                     for (int c = 0; c < width; c++) {
-                        boolean string = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
                         Vector valueVector = batch.output(c).borrow(Stream.VALUES);
                         Vector nullVector = batch.output(c).borrowOrNull(Stream.NULLS);
-                        if (!string && dense) {
+                        if (!string[c] && dense) {
                             // Dense numeric column: dispatch on the vector type once and bulk-fill (arraycopy a
                             // non-null I64 column) instead of the per-row mask.position + longValue gather.
                             fillDenseNumeric(valueVector, nullVector, values[c], nulls[c], size, count);
                             continue;
                         }
-                        if (string && dense && valueVector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector) {
+                        if (string[c] && dense && valueVector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector) {
                             // Dense dictionary-encoded string column: intern each distinct dictionary entry once and
                             // remap the per-row ids, instead of interning byte-by-byte per row. For a low-cardinality
                             // dimension column (e.g. cd_gender over ~2M rows) this turns N interns into K (K = distinct
@@ -1029,7 +1049,7 @@ public final class CompiledQuerySupport
                             boolean isNull = isNull(nullVector, position);
                             int slot = size + index;
                             nulls[c][slot] = isNull;
-                            if (string) {
+                            if (string[c]) {
                                 ids[c][slot] = isNull ? 0 : intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(valueVector, position));
                             }
                             else {
