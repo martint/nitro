@@ -164,6 +164,33 @@ public final class QueryLowering
         return this;
     }
 
+    /**
+     * Left (outer) join on a composite key: {@code probeKeys[i] = buildKeys[i]}. A probe row with no match is kept,
+     * this build's columns reading NULL -- the sales-to-returns shape (e.g. catalog_sales left join catalog_returns
+     * on order + item, where most sales were never returned).
+     */
+    public QueryLowering leftJoin(String table, String[] probeKeys, String[] buildKeys, Column... columns)
+    {
+        if (probeKeys.length != buildKeys.length) {
+            throw new IllegalArgumentException("join key count mismatch: " + probeKeys.length + " probe vs " + buildKeys.length + " build");
+        }
+        Input build = new Input(table, List.of(columns));
+        int[] buildKeyLocals = new int[buildKeys.length];
+        for (int i = 0; i < buildKeys.length; i++) {
+            buildKeyLocals[i] = indexOf(columns, buildKeys[i]);
+        }
+        for (Column column : columns) {
+            assign(column.name());
+        }
+        builds.add(build);
+        int[] probePositions = new int[probeKeys.length];
+        for (int i = 0; i < probeKeys.length; i++) {
+            probePositions[i] = position(probeKeys[i]);
+        }
+        joins.add(new Plan.Join(new Plan.Build(columns.length, buildKeyLocals), probePositions, true));
+        return this;
+    }
+
     private QueryLowering join(String table, String probeKey, String buildKey, boolean outer, Column... columns)
     {
         Input build = new Input(table, List.of(columns));

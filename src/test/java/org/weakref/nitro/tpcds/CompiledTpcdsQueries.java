@@ -1061,6 +1061,53 @@ public final class CompiledTpcdsQueries
         return new Ported(query, -1, 0, 0);
     }
 
+    public static Ported query40()
+    {
+        // Q40: catalog_sales LEFT JOIN catalog_returns (multi-key on order+item -- most sales were never returned) ⋈
+        // warehouse ⋈ item(i_current_price 99..149) ⋈ date_dim(d_date within 30 days of 2000-03-11); per (w_state,
+        // i_item_id) sum the net sales (cs_sales_price - coalesce(cr_refunded_cash, 0)) split into before/after the
+        // cutoff date; ORDER BY w_state, i_item_id, top 100. The returns join is a left/outer multi-key join, so
+        // cr_refunded_cash reads NULL for unreturned sales and coalesce maps it to 0.
+        LocalDate cutoff = LocalDate.of(2000, 3, 11);
+        QueryLowering query = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sales_price", ColumnEncoding.FLAT, true))
+                .leftJoin("catalog_returns",
+                        new String[] {"cs_order_number", "cs_item_sk"},
+                        new String[] {"cr_order_number", "cr_item_sk"},
+                        new QueryLowering.Column("cr_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_refunded_cash", ColumnEncoding.FLAT, true))
+                .join("warehouse", "cs_warehouse_sk", "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"),
+                        new QueryLowering.Column("w_state", ColumnEncoding.STRING, true))
+                .join("item", "cs_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        Plan.Expr netSales = new Plan.Bin("-", query.column("cs_sales_price"),
+                new Plan.Coalesce(query.column("cr_refunded_cash"), new Plan.Lit(0)));
+        Plan.Condition beforeCutoff = new Plan.Predicate("<", query.column("d_date"), new Plan.Lit(cutoff.toEpochDay()));
+        query.where(
+                        new Plan.Predicate(">=", query.column("i_current_price"), new Plan.Lit(99)),
+                        new Plan.Predicate("<=", query.column("i_current_price"), new Plan.Lit(149)),
+                        new Plan.Predicate(">=", query.column("d_date"), new Plan.Lit(cutoff.minusDays(30).toEpochDay())),
+                        new Plan.Predicate("<=", query.column("d_date"), new Plan.Lit(cutoff.plusDays(30).toEpochDay())))
+                .groupBy("w_state", "i_item_id")
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(beforeCutoff, netSales)), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(
+                        new Plan.Predicate(">=", query.column("d_date"), new Plan.Lit(cutoff.toEpochDay())), netSales)), new Plan.Lit(0)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+        // w_state (output 0) from warehouse (input 2, col 1); i_item_id (output 1) from item (input 3, col 2).
+        return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 2)));
+    }
+
     public static Ported query25()
     {
         // Q25: store_sales ⋈ date_dim(sold: d_moy=4, d_year=2001) ⋈ store_returns (multi-key on customer+item+ticket)

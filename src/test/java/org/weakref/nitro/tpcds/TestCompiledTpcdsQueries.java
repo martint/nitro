@@ -156,6 +156,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query40()
+    {
+        assertMatchesHarness(CompiledTpcdsQueries.query40(), TpcdsParquetSupport::query40);
+    }
+
+    @Test
     void query29()
     {
         assertMatchesHarness(CompiledTpcdsQueries.query29(), TpcdsParquetSupport::query29);
@@ -232,6 +238,7 @@ public class TestCompiledTpcdsQueries
         ported.put("26", CompiledTpcdsQueries.query26());
         ported.put("42", CompiledTpcdsQueries.query42());
         ported.put("25", CompiledTpcdsQueries.query25());
+        ported.put("40", CompiledTpcdsQueries.query40());
         ported.put("29", CompiledTpcdsQueries.query29());
         ported.put("48", CompiledTpcdsQueries.query48());
         ported.put("50", CompiledTpcdsQueries.query50());
