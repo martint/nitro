@@ -83,8 +83,8 @@ public class BenchmarkCompiledQueries
         ported("96", CompiledTpcdsQueries.query96());
         ported("99", CompiledTpcdsQueries.query99());
 
-        streamingPorted("37", CompiledTpcdsQueries.query37());
-        streamingPorted("82", CompiledTpcdsQueries.query82());
+        ported("37", CompiledTpcdsQueries.query37());
+        ported("82", CompiledTpcdsQueries.query82());
 
         multiStage("32", CompiledTpcdsQueries.query32());
         multiStage("34", CompiledTpcdsQueries.query34());
@@ -100,15 +100,12 @@ public class BenchmarkCompiledQueries
         composite("65", CompiledTpcdsQueries.query65());
     }
 
-    /** A single-stage star query, run eagerly over its drained inputs. */
+    /**
+     * A single-stage star query. The probe fact is streamed batch-by-batch (its dimensions built into hash tables) --
+     * the engine's production execution and the apples-to-apples match for the operator harnesses, which also stream
+     * the fact. (Draining the whole fact into arrays first would dominate the measurement with load-side allocation.)
+     */
     private void ported(String name, CompiledTpcdsQueries.Ported ported)
-    {
-        Lowered lowered = ported.query().lower();
-        runners.put(name, () -> CompiledQuerySupport.runLowered(allocator, tables, lowered));
-    }
-
-    /** A single-stage query whose probe fact is streamed (too large to drain eagerly). */
-    private void streamingPorted(String name, CompiledTpcdsQueries.Ported ported)
     {
         Lowered lowered = ported.query().lower();
         runners.put(name, () -> CompiledQuerySupport.runStreamingPorted(allocator, tables, lowered));
