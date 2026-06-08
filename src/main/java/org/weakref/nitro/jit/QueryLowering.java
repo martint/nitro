@@ -31,12 +31,22 @@ import java.util.Map;
  */
 public final class QueryLowering
 {
-    /** A physical source column: its name and how it is encoded / whether it is nullable. */
-    public record Column(String name, ColumnEncoding encoding, boolean nullable)
+    /**
+     * A physical source column: its logical {@code name} (unique within a query, used to wire keys/filters/outputs),
+     * the {@code sourceName} to read from the table (defaults to {@code name}), and how it is encoded / nullable.
+     * An explicit {@code sourceName} lets the same physical column be loaded under distinct logical names -- needed to
+     * join one table more than once in a query (e.g. {@code date_dim} for both a sold and a returned date).
+     */
+    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable)
     {
+        public Column(String name, ColumnEncoding encoding, boolean nullable)
+        {
+            this(name, name, encoding, nullable);
+        }
+
         public Column(String name)
         {
-            this(name, ColumnEncoding.FLAT, false);
+            this(name, name, ColumnEncoding.FLAT, false);
         }
     }
 
@@ -125,6 +135,33 @@ public final class QueryLowering
     public QueryLowering leftJoin(String table, String probeKey, String buildKey, Column... columns)
     {
         return join(table, probeKey, buildKey, true, columns);
+    }
+
+    /**
+     * Inner-join {@code table} on a composite key: {@code probeKeys[i] = buildKeys[i]} for all i. {@code columns} are
+     * the build columns to load (the build keys included). Used for fact-to-fact joins (e.g. sales to returns on
+     * ticket + item + customer), where the build key need not be unique -- the join emits every matching build row.
+     */
+    public QueryLowering join(String table, String[] probeKeys, String[] buildKeys, Column... columns)
+    {
+        if (probeKeys.length != buildKeys.length) {
+            throw new IllegalArgumentException("join key count mismatch: " + probeKeys.length + " probe vs " + buildKeys.length + " build");
+        }
+        Input build = new Input(table, List.of(columns));
+        int[] buildKeyLocals = new int[buildKeys.length];
+        for (int i = 0; i < buildKeys.length; i++) {
+            buildKeyLocals[i] = indexOf(columns, buildKeys[i]);
+        }
+        for (Column column : columns) {
+            assign(column.name());
+        }
+        builds.add(build);
+        int[] probePositions = new int[probeKeys.length];
+        for (int i = 0; i < probeKeys.length; i++) {
+            probePositions[i] = position(probeKeys[i]);
+        }
+        joins.add(new Plan.Join(new Plan.Build(columns.length, buildKeyLocals), probePositions));
+        return this;
     }
 
     private QueryLowering join(String table, String probeKey, String buildKey, boolean outer, Column... columns)

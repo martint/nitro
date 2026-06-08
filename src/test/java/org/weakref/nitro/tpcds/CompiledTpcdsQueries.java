@@ -1061,6 +1061,70 @@ public final class CompiledTpcdsQueries
         return new Ported(query, -1, 0, 0);
     }
 
+    public static Ported query50()
+    {
+        // Q50: store_sales ⋈ store_returns (multi-key fact-to-fact join on ticket+item+customer) ⋈ date_dim(sold)
+        // ⋈ date_dim(returned: d_year=2001, d_moy=8) ⋈ store; GROUP BY 10 store address columns; five sum(CASE) counts
+        // bucketing the return delay days = sr_returned_date_sk - ss_sold_date_sk into <=30 / 31-60 / 61-90 / 91-120 /
+        // >120 (date_sks are day-sequential, so their difference is the day count); ORDER BY the 10 columns, top 100.
+        // date_dim is joined twice (sold + returned), so the returned key is loaded under the alias d_date_sk_returned.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true))
+                .join("store_returns",
+                        new String[] {"ss_ticket_number", "ss_item_sk", "ss_customer_sk"},
+                        new String[] {"sr_ticket_number", "sr_item_sk", "sr_customer_sk"},
+                        new QueryLowering.Column("sr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_customer_sk", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"))
+                .join("date_dim", "sr_returned_date_sk", "d_date_sk_returned",
+                        new QueryLowering.Column("d_date_sk_returned", "d_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year"),
+                        new QueryLowering.Column("d_moy"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_company_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_street_number", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_street_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_street_type", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_suite_number", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_zip", ColumnEncoding.STRING, true));
+        Plan.Expr days = new Plan.Bin("-", query.column("sr_returned_date_sk"), query.column("ss_sold_date_sk"));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(8)))
+                .groupBy("s_store_name", "s_company_id", "s_street_number", "s_street_name", "s_street_type",
+                        "s_suite_number", "s_city", "s_county", "s_state", "s_zip")
+                .aggregate("sum", bucket(new Plan.Predicate("<", days, new Plan.Lit(31))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(30)), new Plan.Predicate("<", days, new Plan.Lit(61)))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(60)), new Plan.Predicate("<", days, new Plan.Lit(91)))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(90)), new Plan.Predicate("<", days, new Plan.Lit(121)))))
+                .aggregate("sum", bucket(new Plan.Predicate(">", days, new Plan.Lit(120))))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false), new Plan.SortKey(5, false),
+                        new Plan.SortKey(6, false), new Plan.SortKey(7, false), new Plan.SortKey(8, false),
+                        new Plan.SortKey(9, false)), 100));
+        // The 9 string group columns (all but s_company_id, output col 1) reconstruct from the store build (input 4).
+        return new Ported(query, List.of(
+                new DictRef(0, 4, 1), new DictRef(2, 4, 3), new DictRef(3, 4, 4), new DictRef(4, 4, 5),
+                new DictRef(5, 4, 6), new DictRef(6, 4, 7), new DictRef(7, 4, 8), new DictRef(8, 4, 9),
+                new DictRef(9, 4, 10)));
+    }
+
     public static Ported query48()
     {
         // store_sales JOIN store, customer_demographics, customer_address(ca_country='United States'),

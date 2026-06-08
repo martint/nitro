@@ -284,7 +284,7 @@ public final class CompiledQuerySupport
     public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, TpcdsParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
     {
         int width = specs.size();
-        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
         Operator operator = scan(allocator, tables, table, names);
         return new org.weakref.nitro.jit.StreamingPipeline.Source()
         {
@@ -354,7 +354,7 @@ public final class CompiledQuerySupport
             String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
     {
         int width = specs.size();
-        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
         Operator operator = scan(allocator, tables, table, names);
         return new org.weakref.nitro.jit.StreamingPipeline.Source()
         {
@@ -633,7 +633,7 @@ public final class CompiledQuerySupport
         int[] rowCounts = new int[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
             org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
-            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
             DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
             inputs[s] = loaded.columns;
             rowCounts[s] = loaded.rows;
@@ -717,7 +717,7 @@ public final class CompiledQuerySupport
             rowCounts[slot] = virtual.rows();
         }
         else {
-            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
             DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
             columns[slot] = loaded.columns;
             rowCounts[slot] = loaded.rows;
@@ -741,7 +741,7 @@ public final class CompiledQuerySupport
         int[] buildRowCounts = new int[buildCount];
         for (int b = 0; b < buildCount; b++) {
             org.weakref.nitro.jit.QueryLowering.Input source = sources.get(b + 1);
-            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
             DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
             builds[b] = loaded.columns;
             buildRowCounts[b] = loaded.rows;
@@ -816,7 +816,7 @@ public final class CompiledQuerySupport
                 rowCounts[s] = subRows;
             }
             else {
-                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
                 DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
                 inputs[s] = loaded.columns;
                 rowCounts[s] = loaded.rows;
@@ -882,7 +882,7 @@ public final class CompiledQuerySupport
                 rowCounts[s] = total;
             }
             else {
-                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::name).toArray(String[]::new);
+                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
                 DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
                 inputs[s] = loaded.columns;
                 rowCounts[s] = loaded.rows;
