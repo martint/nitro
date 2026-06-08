@@ -1378,6 +1378,33 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesPartitionSumWindow()
+    {
+        // SELECT p, v, sum(v) OVER (PARTITION BY p) FROM t -- the whole-partition total appended to every row
+        // (matching PartitionSumI64WindowFunction). Columns: 0 = p, 1 = v.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(),
+                List.of())
+                .withWindow(Plan.Window.partitionSum(new int[] {0}, 1));
+
+        long[] p = {1, 1, 1, 2, 2, 3};
+        long[] v = {10, 11, 12, 100, 105, 7};
+        Map<Long, Long> expectedSum = Map.of(1L, 33L, 2L, 205L, 3L, 7L);
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{p, v}}, new int[] {p.length});
+
+        assertThat(result.rowCount()).isEqualTo(p.length);
+        long[] outP = result.columns()[0];
+        long[] outSum = result.columns()[2];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(outSum[g]).as("partition-sum for p=%d", outP[g]).isEqualTo(expectedSum.get(outP[g]));
+        }
+    }
+
+    @Test
     void compilesCrossJoin()
     {
         // SELECT count(*) FROM p, b WHERE p.v > b.t -- a cross / nested-loop join (no key): each probe row pairs with

@@ -1119,7 +1119,14 @@ public final class PipelineCompiler
         }
         out.append("        }\n");
         out.append("        long avg = 0; boolean has = cnt > 0;\n");
-        out.append("        if (has) { long pn = sum >= 0 ? sum : -sum; long rounded = (pn + (cnt / 2)) / cnt; avg = sum < 0 ? -rounded : rounded; }\n");
+        if (window.aggregate().function().equals("sum")) {
+            // Partition SUM: broadcast the partition's total (over non-null values) to every row; NULL if no values.
+            out.append("        if (has) { avg = sum; }\n");
+        }
+        else {
+            // Partition AVG: round half away from zero, matching the operator's integer-average semantics.
+            out.append("        if (has) { long pn = sum >= 0 ? sum : -sum; long rounded = (pn + (cnt / 2)) / cnt; avg = sum < 0 ? -rounded : rounded; }\n");
+        }
         out.append("        for (int k = pStart; k < oi; k++) { outAgg[k] = avg; outAggNull[k] = !has; }\n");
         out.append("        pStart = oi;\n");
         out.append("      }\n");

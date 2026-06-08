@@ -373,9 +373,19 @@ public final class Plan
         {
             return new Window(partitionColumns, List.of(), null, -1, new WindowAggregate("avg", inputColumn));
         }
+
+        /**
+         * A partition-sum window: {@code sum(inputColumn) OVER (PARTITION BY partitionColumns)} -- the partition total
+         * (over non-null values, NULL when the partition has none) assigned to every row, appended as a trailing
+         * column. Used for the revenue-ratio shape (Q12/Q20/Q98): each item's revenue over its class total.
+         */
+        public static Window partitionSum(int[] partitionColumns, int inputColumn)
+        {
+            return new Window(partitionColumns, List.of(), null, -1, new WindowAggregate("sum", inputColumn));
+        }
     }
 
-    /** A whole-partition aggregate ({@code avg}) over {@code inputColumn} for a partition-aggregate {@link Window}. */
+    /** A whole-partition aggregate ({@code avg} or {@code sum}) over {@code inputColumn} for a partition-aggregate {@link Window}. */
     public record WindowAggregate(String function, int inputColumn) {}
 
     /**
