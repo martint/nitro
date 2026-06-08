@@ -1788,6 +1788,101 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 1, 2), new DictRef(1, 1, 3), new DictRef(2, 2, 1), new DictRef(3, 0, 2)));
     }
 
+    public static Composite query12()
+    {
+        // Q12: web_sales ⋈ item (category in {Sports,Books,Home}) ⋈ date_dim (30-day window) GROUP BY item attrs
+        // sum(ext_sales_price) = itemrevenue; then sum(itemrevenue) OVER (PARTITION BY i_class) and report each item's
+        // revenue as a scaled percentage of its class total. Two stages: the grouped pre-aggregate (pipeline breaker)
+        // carrying four dictionary-string keys through the virtual table, then the partition-sum window + ratio + ORDER.
+        QueryLowering grouped = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_ext_sales_price", ColumnEncoding.FLAT, true))
+                .join("item", "ws_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ws_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        grouped.where(
+                        new Plan.StringMatch(grouped.position("i_category"), List.of("Sports", "Books", "Home"), false),
+                        new Plan.Predicate(">", grouped.column("d_date"), new Plan.Lit(10_643)),
+                        new Plan.Predicate("<", grouped.column("d_date"), new Plan.Lit(10_675)))
+                .groupBy("i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price")
+                .aggregate("sum", "ws_ext_sales_price");
+        // grouped result: item_id(0), item_desc(1), category(2), class(3), current_price(4), itemrevenue(5).
+
+        QueryLowering main = QueryLowering.scan("q12_grouped",
+                        new QueryLowering.Column("g_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_item_desc", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_itemrevenue", ColumnEncoding.FLAT, true))
+                .window(Plan.Window.partitionSum(new int[] {3}, 5));
+        // window output: item_id(0), item_desc(1), category(2), class(3), current_price(4), itemrevenue(5), classrev(6).
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4), new Plan.Col(5),
+                        new Plan.Call("divide_scale_round_i64", new Plan.Col(5), new Plan.Col(6), new Plan.Lit(100_000_000L)))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(2, false), new Plan.SortKey(3, false), new Plan.SortKey(0, false),
+                        new Plan.SortKey(1, false), new Plan.SortKey(6, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(grouped, "q12_grouped",
+                        List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3), new DictRef(3, 1, 4)))),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2), new DictRef(3, 0, 3)));
+    }
+
+    public static Composite query20()
+    {
+        // Q20: the Q12 revenue-ratio-by-class shape over catalog_sales (identical item/date filters); top 100.
+        QueryLowering grouped = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_ext_sales_price", ColumnEncoding.FLAT, true))
+                .join("item", "cs_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        grouped.where(
+                        new Plan.StringMatch(grouped.position("i_category"), List.of("Sports", "Books", "Home"), false),
+                        new Plan.Predicate(">", grouped.column("d_date"), new Plan.Lit(10_643)),
+                        new Plan.Predicate("<", grouped.column("d_date"), new Plan.Lit(10_675)))
+                .groupBy("i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price")
+                .aggregate("sum", "cs_ext_sales_price");
+
+        QueryLowering main = QueryLowering.scan("q20_grouped",
+                        new QueryLowering.Column("g_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_item_desc", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_itemrevenue", ColumnEncoding.FLAT, true))
+                .window(Plan.Window.partitionSum(new int[] {3}, 5));
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4), new Plan.Col(5),
+                        new Plan.Call("divide_scale_round_i64", new Plan.Col(5), new Plan.Col(6), new Plan.Lit(100_000_000L)))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(2, false), new Plan.SortKey(3, false), new Plan.SortKey(0, false),
+                        new Plan.SortKey(1, false), new Plan.SortKey(6, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(grouped, "q20_grouped",
+                        List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3), new DictRef(3, 1, 4)))),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2), new DictRef(3, 0, 3)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
