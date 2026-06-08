@@ -334,14 +334,32 @@ public final class Plan
      * every {@code orderBy} key) the same rank and skips the next; {@link RankFunction#ROW_NUMBER} numbers rows
      * 1, 2, 3, ... within the partition with no ties.
      */
-    public record Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit)
+    public record Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit, WindowAggregate aggregate)
     {
         public Window
         {
             partitionColumns = partitionColumns.clone();
             orderBy = List.copyOf(orderBy);
         }
+
+        public Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit)
+        {
+            this(partitionColumns, orderBy, function, rankLimit, null);
+        }
+
+        /**
+         * A partition-aggregate window: {@code avg(inputColumn) OVER (PARTITION BY partitionColumns)} -- the aggregate
+         * over each whole partition assigned to every row of that partition, appended as a trailing column. Unlike a
+         * ranking window there is no ORDER BY or top-N. Used for the deviation-from-average shape (Q53/Q63/Q89).
+         */
+        public static Window partitionAverage(int[] partitionColumns, int inputColumn)
+        {
+            return new Window(partitionColumns, List.of(), null, -1, new WindowAggregate("avg", inputColumn));
+        }
     }
+
+    /** A whole-partition aggregate ({@code avg}) over {@code inputColumn} for a partition-aggregate {@link Window}. */
+    public record WindowAggregate(String function, int inputColumn) {}
 
     /**
      * Post-aggregation ORDER BY / LIMIT applied to the pipeline's result columns. {@code limit < 0} means no

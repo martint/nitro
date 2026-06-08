@@ -673,7 +673,9 @@ public final class PipelineCompiler
     /** A pipeline that selects/computes columns over its (joined, filtered) rows without aggregating -- a SELECT ... LIMIT shape. */
     private static boolean projectionOnly(Plan.Pipeline pipeline)
     {
-        return pipeline.groupKeys().isEmpty() && pipeline.aggregates().isEmpty() && !pipeline.projections().isEmpty();
+        // A window pipeline is never projection-only: its projections are a post-window SELECT applied after the
+        // window appends its column, not the inline output of a bare scan/project.
+        return pipeline.window() == null && pipeline.groupKeys().isEmpty() && pipeline.aggregates().isEmpty() && !pipeline.projections().isEmpty();
     }
 
     /** Logical types of every combined input column (probe then each build): STRING for a dictionary column, else LONG. */
@@ -975,6 +977,10 @@ public final class PipelineCompiler
     private static void emitWindowRankAndGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         Plan.Window window = pipeline.window();
+        if (window.aggregate() != null) {
+            emitWindowAggregateGather(out, pipeline, nullable, resultTypes);
+            return;
+        }
         int columnCount = pipeline.columnCount();
         // Freeze the (grown) materialization arrays into final locals so the sort comparator lambda can capture them.
         for (int column = 0; column < columnCount; column++) {
@@ -1053,6 +1059,94 @@ public final class PipelineCompiler
             return;
         }
         out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types))));\n");
+    }
+
+    /**
+     * Partition-aggregate window: sort the materialized rows by the partition columns (so equal-partition rows are
+     * contiguous), average the value column over each partition's non-null rows (round-half-up, matching
+     * {@code PartitionAverageI64WindowFunction#roundDivide}), and append that average to every row of the partition.
+     * Every row is kept; the result is the input columns plus the trailing average column (NULL for an all-null
+     * partition). The pipeline's following HAVING/ORDER BY/projection then apply.
+     */
+    private static void emitWindowAggregateGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        Plan.Window window = pipeline.window();
+        int columnCount = pipeline.columnCount();
+        int valueColumn = window.aggregate().inputColumn();
+        boolean valueNullable = windowColumnNullable(pipeline, nullable, valueColumn, resultTypes);
+
+        // Freeze the (grown) materialization arrays into final locals so the sort comparator lambda can capture them.
+        for (int column = 0; column < columnCount; column++) {
+            out.append("    final long[] fw").append(column).append(" = w").append(column).append(";\n");
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append("    final boolean[] fwN").append(column).append(" = wN").append(column).append(";\n");
+            }
+        }
+
+        // Sort a row-index permutation by the partition columns (ascending) so each partition is a contiguous run.
+        out.append("    Integer[] order = new Integer[rows];\n");
+        out.append("    for (int i = 0; i < rows; i++) { order[i] = i; }\n");
+        out.append("    java.util.Arrays.sort(order, (pa, pb) -> {\n");
+        out.append("      int c;\n");
+        for (int partitionColumn : window.partitionColumns()) {
+            emitWindowCompare(out, pipeline, nullable, resultTypes, partitionColumn, false);
+        }
+        out.append("      return 0;\n");
+        out.append("    });\n");
+
+        // Walk the ordered rows; close each partition at a boundary, average its non-null values, and back-fill the
+        // average (aligned to the gather position) for every row of the partition. A row with a NULL partition column
+        // is its own singleton partition (boundary both before and after it), matching the ranking window's semantics.
+        out.append("    long[] outAgg = new long[rows]; boolean[] outAggNull = new boolean[rows];\n");
+        out.append("    int pStart = 0;\n");
+        out.append("    for (int oi = 1; oi <= rows; oi++) {\n");
+        out.append("      boolean boundary = oi == rows;\n");
+        out.append("      if (!boundary) {\n");
+        out.append("        int r = order[oi]; int prev = order[oi - 1];\n");
+        out.append("        boundary = ").append(windowNullPartitionTest(window, pipeline, nullable, resultTypes, "r"))
+                .append(" || ").append(windowNullPartitionTest(window, pipeline, nullable, resultTypes, "prev"))
+                .append(" || ").append(windowPartitionChanged(window, pipeline, nullable, resultTypes)).append(";\n");
+        out.append("      }\n");
+        out.append("      if (boundary) {\n");
+        out.append("        long sum = 0; long cnt = 0;\n");
+        out.append("        for (int k = pStart; k < oi; k++) {\n");
+        out.append("          int rr = order[k];\n");
+        if (valueNullable) {
+            out.append("          if (!wN").append(valueColumn).append("[rr]) { sum += w").append(valueColumn).append("[rr]; cnt++; }\n");
+        }
+        else {
+            out.append("          sum += w").append(valueColumn).append("[rr]; cnt++;\n");
+        }
+        out.append("        }\n");
+        out.append("        long avg = 0; boolean has = cnt > 0;\n");
+        out.append("        if (has) { long pn = sum >= 0 ? sum : -sum; long rounded = (pn + (cnt / 2)) / cnt; avg = sum < 0 ? -rounded : rounded; }\n");
+        out.append("        for (int k = pStart; k < oi; k++) { outAgg[k] = avg; outAggNull[k] = !has; }\n");
+        out.append("        pStart = oi;\n");
+        out.append("      }\n");
+        out.append("    }\n");
+
+        // Gather all rows (in partition order) into the result columns plus the trailing average column.
+        int resultColumnCount = columnCount + 1;
+        out.append("    int kept = rows;\n");
+        out.append("    long[][] result = new long[").append(resultColumnCount).append("][kept];\n");
+        out.append("    for (int g = 0; g < kept; g++) {\n");
+        out.append("      int s = order[g];\n");
+        for (int column = 0; column < columnCount; column++) {
+            out.append("      result[").append(column).append("][g] = w").append(column).append("[s];\n");
+        }
+        out.append("      result[").append(columnCount).append("][g] = outAgg[g];\n");
+        out.append("    }\n");
+        emitResultTypes(out, "    ", resultTypes);
+        out.append("    boolean[][] resultNulls = new boolean[").append(resultColumnCount).append("][];\n");
+        for (int column = 0; column < columnCount; column++) {
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append("    boolean[] rn").append(column).append(" = new boolean[kept];\n");
+                out.append("    for (int g = 0; g < kept; g++) { rn").append(column).append("[g] = wN").append(column).append("[order[g]]; }\n");
+                out.append("    resultNulls[").append(column).append("] = rn").append(column).append(";\n");
+            }
+        }
+        out.append("    resultNulls[").append(columnCount).append("] = outAggNull;\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
     }
 
     /** A window output column carries nulls when its (nullable) source column does -- the rank column never does. */

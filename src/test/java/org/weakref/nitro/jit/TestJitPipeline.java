@@ -1313,6 +1313,43 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesPartitionAverageWindow()
+    {
+        // SELECT p, v, avg(v) OVER (PARTITION BY p) FROM t -- the whole-partition average appended to every row,
+        // round-half-up over the partition's values (matching PartitionAverageI64WindowFunction). Columns: 0 = p, 1 = v.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(),
+                List.of())
+                .withWindow(Plan.Window.partitionAverage(new int[] {0}, 1));
+
+        long[] p = {1, 1, 1, 2, 2, 3};
+        long[] v = {10, 11, 12, 100, 105, 7};
+        // averages: p=1 -> round(33/3)=11; p=2 -> round(205/2)=103 (round half up: (205+1)/2=103); p=3 -> 7
+        Map<Long, Long> expectedAvg = Map.of(1L, 11L, 2L, 103L, 3L, 7L);
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{p, v}}, new int[] {p.length});
+
+        assertThat(result.rowCount()).isEqualTo(p.length);
+        long[] outP = result.columns()[0];
+        long[] outV = result.columns()[1];
+        long[] outAvg = result.columns()[2];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(outAvg[g]).as("partition-average for p=%d v=%d", outP[g], outV[g]).isEqualTo(expectedAvg.get(outP[g]));
+        }
+        // Every input (p, v) pair is present exactly once.
+        Map<Long, Long> seen = new HashMap<>();
+        for (int g = 0; g < result.rowCount(); g++) {
+            seen.merge(outP[g] * 1000 + outV[g], 1L, Long::sum);
+        }
+        for (int i = 0; i < p.length; i++) {
+            assertThat(seen.get(p[i] * 1000 + v[i])).as("row p=%d v=%d present", p[i], v[i]).isEqualTo(1L);
+        }
+    }
+
+    @Test
     void compilesCrossJoin()
     {
         // SELECT count(*) FROM p, b WHERE p.v > b.t -- a cross / nested-loop join (no key): each probe row pairs with
