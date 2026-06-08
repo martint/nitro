@@ -230,21 +230,26 @@ public final class Plan
      * contributes no columns. An EXISTS/semi-join needs no flag -- it is an inner join to a build that carries only
      * its key, since the probe lookup keeps each row at most once. {@code outer} and {@code anti} are mutually exclusive.
      */
-    public record Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti)
+    public record Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti, boolean cross)
     {
         public Join
         {
             probeKeyColumns = probeKeyColumns.clone();
         }
 
+        public Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti)
+        {
+            this(build, probeKeyColumns, outer, anti, false);
+        }
+
         public Join(Build build, int[] probeKeyColumns, boolean outer)
         {
-            this(build, probeKeyColumns, outer, false);
+            this(build, probeKeyColumns, outer, false, false);
         }
 
         public Join(Build build, int[] probeKeyColumns)
         {
-            this(build, probeKeyColumns, false, false);
+            this(build, probeKeyColumns, false, false, false);
         }
 
         public Join(Build build, int probeKeyColumn)
@@ -260,7 +265,13 @@ public final class Plan
         /** A NOT EXISTS / anti-join keeping probe rows with no match in {@code build}. */
         public static Join anti(Build build, int... probeKeyColumns)
         {
-            return new Join(build, probeKeyColumns, false, true);
+            return new Join(build, probeKeyColumns, false, true, false);
+        }
+
+        /** A cross / nested-loop join: every probe row is paired with every {@code build} row (no key). */
+        public static Join cross(Build build)
+        {
+            return new Join(build, new int[0], false, false, true);
         }
     }
 

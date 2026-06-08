@@ -1032,6 +1032,30 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesCrossJoin()
+    {
+        // SELECT count(*) FROM p, b WHERE p.v > b.t -- a cross / nested-loop join (no key): each probe row pairs with
+        // every build row. Uses a 2-row build to exercise the inner loop, not just the scalar (1-row) case.
+        Plan.Build build = new Plan.Build(1, new int[0]);   // [b.t], no key
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,                                            // probe: [p.v]
+                List.of(Plan.Join.cross(build)),
+                List.of(new Plan.Predicate(">", new Plan.Col(0), new Plan.Col(1))),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        long[] probeVal = {10, 20};
+        long[] buildThreshold = {5, 15};
+        // pairs: (10>5) T, (10>15) F, (20>5) T, (20>15) T -> 3
+        long expected = 3;
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+                new long[][][] {{probeVal}, {buildThreshold}}, new int[] {probeVal.length, buildThreshold.length});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
     void compilesAntiJoin()
     {
         // SELECT sum(p.v) FROM p WHERE p.k NOT IN (SELECT k FROM b) -- a NOT EXISTS / anti-join keeps only the probe

@@ -1038,6 +1038,20 @@ public final class PipelineCompiler
             openBraces++;
         }
         for (int k = 0; k < joinCount; k++) {
+            if (joins.get(k).cross()) {
+                // Cross / nested-loop join: no key, so pair the probe row with every build row (a scalar-subquery
+                // build has a single row, so this is one iteration). Build columns are read at the loop variable.
+                out.append(indent).append("for (int buildRow").append(k).append(" = 0; buildRow").append(k).append(" < build").append(k).append("Rows; buildRow").append(k).append("++) {\n");
+                indent += "  ";
+                openBraces++;
+                List<Plan.Condition> crossLevel = filtersByLevel.get(k);
+                if (crossLevel != null) {
+                    out.append(indent).append("if (").append(conjunction(crossLevel, resolver, nullResolver, stringMaskIds)).append(") {\n");
+                    indent += "  ";
+                    openBraces++;
+                }
+                continue;
+            }
             emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
             // An inner join drops a probe row with no match; a left join keeps it (build columns read NULL); an
             // anti-join (NOT EXISTS) keeps only the rows with no match (its build contributes no columns).
@@ -1194,7 +1208,9 @@ public final class PipelineCompiler
                     emitStringMaskPrelude(out, match, s, buildVars(k, column - buildOffset[k]).stringDict());
                 }
             }
-            emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k]);
+            if (!join.cross()) {
+                emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k]);
+            }
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
