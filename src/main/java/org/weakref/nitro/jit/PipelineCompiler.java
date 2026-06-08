@@ -1227,7 +1227,7 @@ public final class PipelineCompiler
                 payloadProbe.add(column);
             }
         }
-        boolean lateMaterialize = streaming && !projection && !payloadProbe.isEmpty();
+        boolean lateMaterialize = streaming && !payloadProbe.isEmpty();
 
         if (lateMaterialize) {
             // In the survivor (accumulate) loop a probe column is read at the compacted index j, and a build column
@@ -1304,7 +1304,10 @@ public final class PipelineCompiler
                 }
             }
             out.append("        for (int j = 0; j < selected; j++) {\n");
-            if (grouped) {
+            if (projection) {
+                emitProjectionAppend(out, "          ", pipeline, encodings, nullable, lazyResolver, lazyNullResolver, stringMaskIds);
+            }
+            else if (grouped) {
                 emitGroupedAccumulate(out, "          ", pipeline, nullable, lazyResolver, lazyResolver, lazyNullResolver, stringMaskIds, false);
             }
             else {
@@ -2031,6 +2034,14 @@ public final class PipelineCompiler
     private static TreeSet<Integer> accumulateColumns(Plan.Pipeline pipeline)
     {
         TreeSet<Integer> columns = new TreeSet<>();
+        if (projectionOnly(pipeline)) {
+            // A projection-only pipeline's payload is the columns its projections read (over the combined inputs);
+            // grouped/global projections instead run post-aggregation over result columns and are not collected here.
+            for (Plan.Expr projection : pipeline.projections()) {
+                collectColumns(projection, columns);
+            }
+            return columns;
+        }
         for (Plan.Expr groupKey : pipeline.groupKeys()) {
             collectColumns(groupKey, columns);
         }
