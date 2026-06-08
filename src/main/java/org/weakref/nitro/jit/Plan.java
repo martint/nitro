@@ -224,16 +224,27 @@ public final class Plan
      * it is a LEFT join: a probe row with no matching build row is kept, with the build's columns reading as NULL
      * (the decorrelated form of a scalar/aggregate subquery joined back to its outer query).
      */
-    public record Join(Build build, int[] probeKeyColumns, boolean outer)
+    /**
+     * A join of the probe to {@code build} on {@code probeKeyColumns}. {@code outer} keeps a non-matching probe row
+     * (build columns read NULL); {@code anti} keeps only the probe rows with NO match (NOT EXISTS) and the build
+     * contributes no columns. An EXISTS/semi-join needs no flag -- it is an inner join to a build that carries only
+     * its key, since the probe lookup keeps each row at most once. {@code outer} and {@code anti} are mutually exclusive.
+     */
+    public record Join(Build build, int[] probeKeyColumns, boolean outer, boolean anti)
     {
         public Join
         {
             probeKeyColumns = probeKeyColumns.clone();
         }
 
+        public Join(Build build, int[] probeKeyColumns, boolean outer)
+        {
+            this(build, probeKeyColumns, outer, false);
+        }
+
         public Join(Build build, int[] probeKeyColumns)
         {
-            this(build, probeKeyColumns, false);
+            this(build, probeKeyColumns, false, false);
         }
 
         public Join(Build build, int probeKeyColumn)
@@ -244,6 +255,12 @@ public final class Plan
         public Join(Build build, int probeKeyColumn, boolean outer)
         {
             this(build, new int[] {probeKeyColumn}, outer);
+        }
+
+        /** A NOT EXISTS / anti-join keeping probe rows with no match in {@code build}. */
+        public static Join anti(Build build, int... probeKeyColumns)
+        {
+            return new Join(build, probeKeyColumns, false, true);
         }
     }
 

@@ -1007,6 +1007,55 @@ public class TestJitPipeline
     }
 
     @Test
+    void innerJoinWithKeyOnlyBuildIsSemiJoin()
+    {
+        // SELECT sum(p.v) FROM p WHERE p.k IN (SELECT k FROM b) -- an EXISTS/semi-join expressed as an inner join to
+        // a build that contributes only its key (no payload). The probe key lookup takes the first match, so each
+        // probe row is kept at most once even if the build key repeats -- exactly EXISTS semantics.
+        Plan.Build keyOnly = new Plan.Build(1, 0);   // [b.k]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                    // probe: [p.k, p.v]
+                List.of(new Plan.Join(keyOnly, 0)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        long[] probeKey = {0, 1, 2, 3, 4};
+        long[] probeVal = {10, 20, 30, 40, 50};
+        long[] buildKey = {1, 3, 3};   // subset, with a duplicate to prove the probe row is kept once
+        long expected = 20 + 40;       // only keys 1 and 3 are present
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+                new long[][][] {{probeKey, probeVal}, {buildKey}}, new int[] {probeKey.length, buildKey.length});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
+    void compilesAntiJoin()
+    {
+        // SELECT sum(p.v) FROM p WHERE p.k NOT IN (SELECT k FROM b) -- a NOT EXISTS / anti-join keeps only the probe
+        // rows whose key has no match in the build.
+        Plan.Build keyOnly = new Plan.Build(1, 0);   // [b.k]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                    // probe: [p.k, p.v]
+                List.of(Plan.Join.anti(keyOnly, 0)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        long[] probeKey = {0, 1, 2, 3, 4};
+        long[] probeVal = {10, 20, 30, 40, 50};
+        long[] buildKey = {1, 3, 3};   // keys 1 and 3 are present (duplicate proves it still excludes once)
+        long expected = 10 + 30 + 50;  // keys 0, 2, 4 have no match
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+                new long[][][] {{probeKey, probeVal}, {buildKey}}, new int[] {probeKey.length, buildKey.length});
+
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
     void compilesStringColumnCompareAcrossJoin()
     {
         // SELECT count(*) FROM probe JOIN dim ON probe.k = dim.k WHERE probe.bought <> dim.current -- the two string

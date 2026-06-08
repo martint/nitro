@@ -1039,8 +1039,14 @@ public final class PipelineCompiler
         }
         for (int k = 0; k < joinCount; k++) {
             emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
-            // An inner join drops a probe row with no match; a left join keeps it (build columns read NULL).
-            if (!joins.get(k).outer()) {
+            // An inner join drops a probe row with no match; a left join keeps it (build columns read NULL); an
+            // anti-join (NOT EXISTS) keeps only the rows with no match (its build contributes no columns).
+            if (joins.get(k).anti()) {
+                out.append(indent).append("if (buildRow").append(k).append(" == -1) {\n");
+                indent += "  ";
+                openBraces++;
+            }
+            else if (!joins.get(k).outer()) {
                 out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
                 indent += "  ";
                 openBraces++;
