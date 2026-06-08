@@ -2160,6 +2160,57 @@ public class TestJitPipeline
     }
 
     @Test
+    void streamsRankingWindowInBatches()
+    {
+        // SELECT p, o, m, rank() OVER (PARTITION BY p ORDER BY o DESC) AS rnk WHERE rnk <= 3 -- a top-N-per-partition
+        // ranking window (a pipeline breaker) computed once eagerly and once by streaming the probe in batches; the
+        // window must buffer all batches before ranking, so the two paths must produce an identical result.
+        int limit = 3;
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(new Plan.Predicate(">=", new Plan.Col(1), new Plan.Lit(0))),   // a scan filter must apply per batch
+                List.of(),
+                List.of())
+                .withWindow(new Plan.Window(
+                        new int[] {0},
+                        List.of(new Plan.SortKey(1, true)),
+                        Plan.RankFunction.RANK,
+                        limit));
+
+        int rows = 200_000;
+        long[] p = new long[rows];
+        long[] o = new long[rows];
+        long[] m = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            p[i] = i % 8;            // eight partitions
+            o[i] = (i % 5);          // five distinct ordering values -> guaranteed ties exercising RANK semantics
+            m[i] = i;                // distinct passthrough payload
+        }
+
+        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{p, o, m}}, new int[] {rows});
+
+        int batchSize = 4096;
+        StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
+        CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, p, o, m), new Column[0][], new int[0]);
+
+        // Batches are contiguous input-order slices, so the streamed materialization order matches the eager one; the
+        // results (including the global (p asc, o desc) ordering and every tie) must be byte-for-byte identical.
+        assertThat(streamed.rowCount()).isEqualTo(eager.rowCount());
+        assertThat(eager.rowCount()).isGreaterThan(0);
+        for (int column = 0; column < 4; column++) {
+            assertThat(streamed.columns()[column])
+                    .as("window result column %d (0=p,1=o,2=m,3=rank)", column)
+                    .containsExactly(eager.columns()[column]);
+        }
+        long[] outRank = streamed.columns()[3];
+        for (long rank : outRank) {
+            assertThat(rank).as("kept rows must be within the limit").isLessThanOrEqualTo(limit);
+        }
+        assertThat(rows / batchSize).isGreaterThan(1);   // genuinely multiple batches
+    }
+
+    @Test
     void compilesRowNumberWindowWithNullPartitions()
     {
         // row_number() OVER (PARTITION BY p ORDER BY o), p nullable. A null-partition row is its own singleton at

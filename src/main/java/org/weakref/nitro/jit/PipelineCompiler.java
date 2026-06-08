@@ -129,9 +129,29 @@ public final class PipelineCompiler
             emitMix(out);
         }
         boolean projectionOnly = projectionOnly(pipeline);
-        List<Type> resultTypes = projectionOnly ? projectionOutputTypes(pipeline, encodings) : outputColumnTypes(pipeline, encodings);
+        List<Type> resultTypes;
+        if (pipeline.window() != null) {
+            resultTypes = windowOutputTypes(pipeline, encodings);
+        }
+        else if (projectionOnly) {
+            resultTypes = projectionOutputTypes(pipeline, encodings);
+        }
+        else {
+            resultTypes = outputColumnTypes(pipeline, encodings);
+        }
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
                 + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
+
+        if (pipeline.window() != null) {
+            // A window is a pipeline breaker: drain all probe batches into a buffer, then run the eager ranking logic.
+            emitWindowBodyStreaming(out, pipeline, encodings, nullable, resultTypes);
+            out.append("  }\n");
+            emitApplyHaving(out, pipeline.having(), resultTypes);
+            emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+            emitApplyProjection(out, pipeline.projections(), resultTypes);
+            out.append("}\n");
+            return out.toString();
+        }
 
         if (!pipeline.joins().isEmpty()) {
             emitJoinBody(out, pipeline, encodings, nullable, resultTypes, true);
@@ -820,24 +840,66 @@ public final class PipelineCompiler
 
     private static void emitWindowBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
-        Plan.Window window = pipeline.window();
         int columnCount = pipeline.columnCount();
+        Map<Plan.Condition, Integer> stringMaskIds = emitWindowMaterializationArrays(out, pipeline, nullable, resultTypes);
+        IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
+        IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
+
+        // Eager: the whole input is materialized up front, so load every column once and fill in a single pass.
         out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         // Load every input column: all are output (matching the operator's "all source columns + rank").
         for (int column = 0; column < columnCount; column++) {
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
-        // Predicate-over-dictionary: evaluate each string filter once per dictionary entry into an id mask.
-        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
-        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
-        for (int s = 0; s < stringMatches.size(); s++) {
-            Plan.Condition match = stringMatches.get(s);
-            stringMaskIds.put(match, s);
-            emitStringConditionPrelude(out, match, s, column -> "cStr" + column);
+        for (Map.Entry<Plan.Condition, Integer> match : stringMaskIds.entrySet()) {
+            emitStringConditionPrelude(out, match.getKey(), match.getValue(), column -> "cStr" + column);
         }
+        emitWindowFillLoop(out, "    ", pipeline, nullable, resultTypes, resolver, nullResolver, stringMaskIds);
+
+        emitWindowRankAndGather(out, pipeline, nullable, resultTypes);
+    }
+
+    /**
+     * Streaming variant of {@link #emitWindowBody}: a window is a pipeline breaker, so drain every probe batch --
+     * applying any scan filters -- into the same materialization arrays the eager path builds, then run the identical
+     * ranking logic. Reuses the shared fill loop and rank/gather codegen so the two paths produce identical results.
+     */
+    private static void emitWindowBodyStreaming(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    {
+        int columnCount = pipeline.columnCount();
+        Map<Plan.Condition, Integer> stringMaskIds = emitWindowMaterializationArrays(out, pipeline, nullable, resultTypes);
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
 
+        // Drain the probe batch by batch; the materialization arrays persist across batches and grow as needed.
+        out.append("    while (source.advance()) {\n");
+        out.append("      int rowCount = source.rows();\n");
+        out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
+        for (int column = 0; column < columnCount; column++) {
+            emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+        }
+        for (Map.Entry<Plan.Condition, Integer> match : stringMaskIds.entrySet()) {
+            emitStringConditionPrelude(out, match.getKey(), match.getValue(), column -> "cStr" + column);
+        }
+        emitWindowFillLoop(out, "      ", pipeline, nullable, resultTypes, resolver, nullResolver, stringMaskIds);
+        out.append("    }\n");
+
+        emitWindowRankAndGather(out, pipeline, nullable, resultTypes);
+    }
+
+    /**
+     * Declare the grow-able per-column materialization arrays ({@code w<c>}/{@code wN<c>}, plus {@code cap}/{@code rows})
+     * shared by the eager and streaming window paths, and return the predicate-over-dictionary mask ids (stable across
+     * batches because each string filter is reduced once per batch into the same {@code stringMask<id>} variable).
+     */
+    private static Map<Plan.Condition, Integer> emitWindowMaterializationArrays(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        int columnCount = pipeline.columnCount();
+        List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
+        Map<Plan.Condition, Integer> stringMaskIds = new IdentityHashMap<>();
+        for (int s = 0; s < stringMatches.size(); s++) {
+            stringMaskIds.put(stringMatches.get(s), s);
+        }
         // Materialize every surviving row's columns (value + null) into per-column arrays.
         out.append("    int cap = 1024; int rows = 0;\n");
         for (int column = 0; column < columnCount; column++) {
@@ -846,12 +908,19 @@ public final class PipelineCompiler
                 out.append("    boolean[] wN").append(column).append(" = new boolean[cap];\n");
             }
         }
-        out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        String bodyIndent = "      ";
+        return stringMaskIds;
+    }
+
+    /** Per-batch (or whole-input) fill loop appending each surviving row's columns into the materialization arrays. */
+    private static void emitWindowFillLoop(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        int columnCount = pipeline.columnCount();
+        out.append(indent).append("for (int i = 0; i < rowCount; i++) {\n");
+        String bodyIndent = indent + "  ";
         boolean emitFilter = !pipeline.filters().isEmpty();
         if (emitFilter) {
-            out.append("      if (").append(conjunction(pipeline.filters(), resolver, nullResolver, stringMaskIds)).append(") {\n");
-            bodyIndent = "        ";
+            out.append(bodyIndent).append("if (").append(conjunction(pipeline.filters(), resolver, nullResolver, stringMaskIds)).append(") {\n");
+            bodyIndent = bodyIndent + "  ";
         }
         out.append(bodyIndent).append("if (rows == cap) {\n");
         out.append(bodyIndent).append("  cap *= 2;\n");
@@ -871,10 +940,20 @@ public final class PipelineCompiler
         }
         out.append(bodyIndent).append("rows++;\n");
         if (emitFilter) {
-            out.append("      }\n");
+            out.append(indent).append("  }\n");
         }
-        out.append("    }\n");
+        out.append(indent).append("}\n");
+    }
 
+    /**
+     * Sort the materialized rows by {@code (partition, orderBy)}, assign ranks within each partition (keeping
+     * {@code rank <= limit}), and gather the kept rows plus the trailing rank column into the result. Shared by the
+     * eager and streaming window paths once the {@code w<c>}/{@code wN<c>}/{@code rows} arrays are filled.
+     */
+    private static void emitWindowRankAndGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        Plan.Window window = pipeline.window();
+        int columnCount = pipeline.columnCount();
         // Freeze the (grown) materialization arrays into final locals so the sort comparator lambda can capture them.
         for (int column = 0; column < columnCount; column++) {
             out.append("    final long[] fw").append(column).append(" = w").append(column).append(";\n");
