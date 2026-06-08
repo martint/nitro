@@ -1635,6 +1635,81 @@ public final class CompiledTpcdsQueries
                 new Stage(qualified, "q16_grouped")), main, List.of());
     }
 
+    public static Composite query46()
+    {
+        // Q46: the same shape as Q68 over a different slice -- per (ticket, customer) store-sale coupon and net-profit
+        // totals for two stores, on weekends (d_dow in {6,0}) in 1999-2001, for households with four dependents or
+        // three vehicles; then the customer's name, current city, the bought city, and the totals, kept only when the
+        // current city differs from the bought city. Ordered by name, both cities, and ticket -- so unlike Q68 it also
+        // sorts by the virtual-table bought-city string (safe: the reconstructed dictionary keeps its sorted source).
+        QueryLowering grouped = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number"),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_dow"),
+                        new QueryLowering.Column("d_year"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_city", ColumnEncoding.STRING, false))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_dep_count", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("hd_vehicle_count", ColumnEncoding.FLAT, true))
+                .join("customer_address", "ss_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_city", ColumnEncoding.STRING, true));
+        grouped.where(
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("d_dow"), new Plan.Lit(6)),
+                                new Plan.Predicate("=", grouped.column("d_dow"), new Plan.Lit(0)))),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(1999)),
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2000)),
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2001)))),
+                        new Plan.StringMatch(grouped.position("s_city"), List.of("Fairview", "Midway"), false),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("hd_dep_count"), new Plan.Lit(4)),
+                                new Plan.Predicate("=", grouped.column("hd_vehicle_count"), new Plan.Lit(3)))))
+                .groupBy("ss_ticket_number", "ss_customer_sk", "ca_city")
+                .aggregate("sum", "ss_coupon_amt")
+                .aggregate("sum", "ss_net_profit");
+        // grouped result: ticket(0), customer(1), bought_city(2), sum_amt(3), sum_profit(4).
+
+        QueryLowering main = QueryLowering.scan("q46_grouped",
+                        new QueryLowering.Column("g_ticket"),
+                        new QueryLowering.Column("g_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_bought_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_profit", ColumnEncoding.FLAT, true))
+                .join("customer", "g_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_city_current", "ca_city", ColumnEncoding.STRING, true));
+        main.where(new Plan.StringColumnCompare(main.position("ca_city_current"), main.position("g_bought_city"), true))
+                .select(main.column("c_last_name"), main.column("c_first_name"), main.column("ca_city_current"),
+                        main.column("g_bought_city"), main.column("g_ticket"),
+                        main.column("g_amt"), main.column("g_profit"))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(grouped, "q46_grouped", List.of(new DictRef(2, 4, 1)))),
+                main,
+                List.of(new DictRef(0, 1, 2), new DictRef(1, 1, 3), new DictRef(2, 2, 1), new DictRef(3, 0, 2)));
+    }
+
     public static Composite query68()
     {
         // Q68: per (ticket, customer) store-sale totals for two specific stores, on the 1st/2nd of the month in
