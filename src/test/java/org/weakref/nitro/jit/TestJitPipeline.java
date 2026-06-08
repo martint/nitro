@@ -1675,7 +1675,10 @@ public class TestJitPipeline
     @Test
     void compilesStddevAggregate()
     {
-        // SELECT k, stddev(v) GROUP BY k -- 3-cell aggregate, double result; added by registration only.
+        // SELECT k, stddev(v) GROUP BY k -- 3-cell aggregate, double result. The compiled engine uses Welford's online
+        // algorithm to match the operator's StddevSamp BIT-FOR-BIT (the result is compared as an exact double in the
+        // TPC-DS parity tests), so the expected value here is computed by the identical Welford recurrence over each
+        // group's values in scan order and asserted EXACTLY -- the naive sum/sum-of-squares form would diverge.
         Plan.Pipeline pipeline = new Plan.Pipeline(
                 2,
                 List.of(),
@@ -1698,10 +1701,18 @@ public class TestJitPipeline
         long[] bits = result.columns()[1];
         for (int g = 0; g < result.rowCount(); g++) {
             List<Long> values = groups.get(keys[g]);
-            double mean = values.stream().mapToLong(Long::longValue).average().orElse(0);
-            double ss = values.stream().mapToDouble(x -> (x - mean) * (x - mean)).sum();
-            double expected = values.size() < 2 ? 0.0 : Math.sqrt(ss / (values.size() - 1));
-            assertThat(Double.longBitsToDouble(bits[g])).as("stddev for k %d", keys[g]).isEqualTo(expected, within(1e-6));
+            long count = 0;
+            double mean = 0.0;
+            double m2 = 0.0;
+            for (long x : values) {
+                count++;
+                double delta = x - mean;
+                mean += delta / count;
+                double delta2 = x - mean;
+                m2 += delta * delta2;
+            }
+            double expected = count < 2 ? 0.0 : Math.sqrt(m2 / (count - 1));
+            assertThat(Double.longBitsToDouble(bits[g])).as("stddev for k %d", keys[g]).isEqualTo(expected);
         }
     }
 

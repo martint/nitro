@@ -162,34 +162,50 @@ public final class AggregateLibrary
                 return Types.DOUBLE;
             }
 
+            // Welford's online algorithm, matching the operator engine's StddevSamp byte-for-byte: cells are the
+            // count (long), and the running mean and M2 (sum of squared deviations) stored as raw double bits. The
+            // naive sum/sum-of-squares form would diverge from the operator in the last ULPs (catastrophic
+            // cancellation), and the result is compared as an exact double. Update is order-dependent, so a query
+            // using stddev must accumulate row-by-row in scan order (the hash-grouping path); the array-mode merge
+            // below is a correct parallel combine for the (TPC-DS-unused) dense-single-key case.
             @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
             {
                 out.append(indent).append(cells.get(0)).append(" = 0L;\n");
-                out.append(indent).append(cells.get(1)).append(" = 0L;\n");
+                out.append(indent).append(cells.get(1)).append(" = 0L;\n");   // Double.doubleToRawLongBits(0.0) == 0L
                 out.append(indent).append(cells.get(2)).append(" = 0L;\n");
             }
 
             @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
             {
-                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + 1L;\n");
-                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(input).append(";\n");
-                out.append(indent).append(cells.get(2)).append(" = ").append(cells.get(2)).append(" + ").append(input).append(" * ").append(input).append(";\n");
+                out.append(indent).append("{ long sdC = ").append(cells.get(0)).append(" + 1L;")
+                        .append(" double sdMean = Double.longBitsToDouble(").append(cells.get(1)).append(");")
+                        .append(" double sdDelta = (double) ").append(input).append(" - sdMean;")
+                        .append(" sdMean += sdDelta / sdC;")
+                        .append(" double sdDelta2 = (double) ").append(input).append(" - sdMean;")
+                        .append(" double sdM2 = Double.longBitsToDouble(").append(cells.get(2)).append(") + sdDelta * sdDelta2;")
+                        .append(" ").append(cells.get(0)).append(" = sdC;")
+                        .append(" ").append(cells.get(1)).append(" = Double.doubleToRawLongBits(sdMean);")
+                        .append(" ").append(cells.get(2)).append(" = Double.doubleToRawLongBits(sdM2); }\n");
             }
 
             @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
             {
-                out.append(indent).append(cells.get(0)).append(" = ").append(cells.get(0)).append(" + ").append(other.get(0)).append(";\n");
-                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(other.get(1)).append(";\n");
-                out.append(indent).append(cells.get(2)).append(" = ").append(cells.get(2)).append(" + ").append(other.get(2)).append(";\n");
+                out.append(indent).append("{ long sdCa = ").append(cells.get(0)).append(", sdCb = ").append(other.get(0)).append(";")
+                        .append(" if (sdCb != 0L) {")
+                        .append(" if (sdCa == 0L) { ").append(cells.get(0)).append(" = sdCb; ").append(cells.get(1)).append(" = ").append(other.get(1)).append("; ").append(cells.get(2)).append(" = ").append(other.get(2)).append("; }")
+                        .append(" else { double sdMa = Double.longBitsToDouble(").append(cells.get(1)).append("), sdMb = Double.longBitsToDouble(").append(other.get(1)).append(");")
+                        .append(" double sdM2a = Double.longBitsToDouble(").append(cells.get(2)).append("), sdM2b = Double.longBitsToDouble(").append(other.get(2)).append(");")
+                        .append(" long sdC = sdCa + sdCb; double sdDelta = sdMb - sdMa;")
+                        .append(" double sdMean = sdMa + sdDelta * sdCb / sdC;")
+                        .append(" double sdM2 = sdM2a + sdM2b + sdDelta * sdDelta * sdCa * sdCb / sdC;")
+                        .append(" ").append(cells.get(0)).append(" = sdC; ").append(cells.get(1)).append(" = Double.doubleToRawLongBits(sdMean); ").append(cells.get(2)).append(" = Double.doubleToRawLongBits(sdM2); } } }\n");
             }
 
             @Override public String result(List<String> cells)
             {
-                String n = "(double) " + cells.get(0);
-                String sum = "(double) " + cells.get(1);
-                String sumSquares = "(double) " + cells.get(2);
-                String variance = "((" + sumSquares + " - " + sum + " * " + sum + " / " + n + ") / (double) (" + cells.get(0) + " - 1L))";
-                return "Double.doubleToRawLongBits(" + cells.get(0) + " < 2L ? 0.0 : Math.sqrt(" + variance + "))";
+                // sqrt(M2 / (count - 1)), matching the operator; NULL (handled by resultNull) when count < 2.
+                return "Double.doubleToRawLongBits(" + cells.get(0) + " < 2L ? 0.0 : Math.sqrt(Double.longBitsToDouble("
+                        + cells.get(2) + ") / (double) (" + cells.get(0) + " - 1L)))";
             }
 
             @Override public String resultNull(List<String> cells)
