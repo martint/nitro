@@ -213,6 +213,63 @@ public class TestJitPipeline
     }
 
     @Test
+    void ordersByComputedDoubleExpression()
+    {
+        // SELECT k, avg(v) AS a FROM t GROUP BY k ORDER BY avg(v) DESC LIMIT 5 -- ORDER BY a value the final
+        // projection computes (a true double average), not a raw result column. The sort key carries the
+        // divide_i64_to_f64 expression over the pre-projection columns (k=0, sum=1, count=2), compared as DOUBLE.
+        int limit = 5;
+        Plan.Expr average = new Plan.Call("divide_i64_to_f64", new Plan.Col(1), new Plan.Col(2));
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1)), new Plan.Aggregate("count", new Plan.Col(1))))
+                .withOrdering(new Plan.Ordering(List.of(Plan.SortKey.expression(average, Types.DOUBLE, true)), limit))
+                .withProjections(List.of(new Plan.Col(0), average));
+
+        int rows = 60_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // k -> {sum, count}
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 37;
+            v[i] = (i % 53) + 1;
+            reference.computeIfAbsent(k[i], ignored -> new long[2]);
+            reference.get(k[i])[0] += v[i];
+            reference.get(k[i])[1]++;
+        }
+
+        // Expected: the keys with the largest average, descending, truncated to the limit.
+        List<Long> expectedKeys = reference.entrySet().stream()
+                .sorted((x, y) -> Double.compare(
+                        (double) y.getValue()[0] / y.getValue()[1],
+                        (double) x.getValue()[0] / x.getValue()[1]))
+                .limit(limit)
+                .map(Map.Entry::getKey)
+                .toList();
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(limit);
+        assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
+        long[] outKey = result.columns()[0];
+        long[] outAverage = result.columns()[1];
+        for (int g = 0; g < result.rowCount(); g++) {
+            assertThat(outKey[g]).as("key at rank %d", g).isEqualTo(expectedKeys.get(g));
+            long[] sumCount = reference.get(outKey[g]);
+            assertThat(Double.longBitsToDouble(outAverage[g]))
+                    .as("average at rank %d", g)
+                    .isCloseTo((double) sumCount[0] / sumCount[1], within(1e-9));
+        }
+        // The ordering must be non-increasing in the computed average.
+        for (int g = 1; g < result.rowCount(); g++) {
+            assertThat(Double.longBitsToDouble(outAverage[g - 1]))
+                    .isGreaterThanOrEqualTo(Double.longBitsToDouble(outAverage[g]));
+        }
+    }
+
+    @Test
     void compilesNullAwareCaseInAggregate()
     {
         // SELECT sum(CASE WHEN v > 5 THEN 1 ELSE 0) -- v nullable; a null v makes the WHEN unknown, so the row

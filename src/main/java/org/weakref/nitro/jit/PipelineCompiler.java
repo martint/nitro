@@ -552,6 +552,23 @@ public final class PipelineCompiler
         out.append("    java.util.Arrays.sort(order, (a, b) -> {\n");
         out.append("      int c;\n");
         for (Plan.SortKey key : ordering.keys()) {
+            if (key.expr() != null) {
+                // Expression key: evaluate the expression over the result columns for each side and compare as its
+                // declared type. This lets an aggregating pipeline ORDER BY a value the final projection computes
+                // (e.g. avg(x)) without first projecting -- the same pre-projection columns the projection reads are
+                // visible here. Computed keys are non-null (no result-column null mask short-circuit).
+                Type type = key.type();
+                IntFunction<String> decodeA = index -> types.get(index).decode("cols[" + index + "][a]");
+                IntFunction<String> decodeB = index -> types.get(index).decode("cols[" + index + "][b]");
+                String valueA = encodeSlot(type, expr(key.expr(), decodeA));
+                String valueB = encodeSlot(type, expr(key.expr(), decodeB));
+                out.append("      { c = ").append(type.compare(valueA, valueB)).append(";");
+                if (key.descending()) {
+                    out.append(" c = -c;");
+                }
+                out.append(" if (c != 0) { return c; } }\n");
+                continue;
+            }
             int col = key.column();
             String compare = types.get(col).compare("cols[" + col + "][a]", "cols[" + col + "][b]");
             // Null ordering mirrors the operator path (OperatorOrderingSemantics): a null compares as greater than
@@ -634,7 +651,7 @@ public final class PipelineCompiler
             case Plan.Col col -> inputTypes.get(col.index());
             case Plan.Lit ignored -> Types.LONG;
             case Plan.Bin bin -> projectionType(bin.left(), inputTypes) == Types.DOUBLE || projectionType(bin.right(), inputTypes) == Types.DOUBLE ? Types.DOUBLE : Types.LONG;
-            case Plan.Call call -> call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
+            case Plan.Call call -> ScalarLibrary.isDoubleResult(call.name()) || call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
             case Plan.Coalesce coalesce -> coalesce.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
             case Plan.Case caseExpr -> projectionType(caseExpr.defaultValue(), inputTypes);
         };

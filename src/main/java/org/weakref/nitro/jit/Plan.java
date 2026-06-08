@@ -275,8 +275,33 @@ public final class Plan
         }
     }
 
-    /** One ORDER BY key: a result column index and direction. */
-    public record SortKey(int column, boolean descending) {}
+    /**
+     * One ORDER BY key and its direction. Ordinarily it is a result column index ({@code column}); but it may
+     * instead be a {@code expr} computed over the result columns (group keys, then aggregates, then -- for grouping
+     * sets -- the trailing grouping_id), compared as its declared result {@code type}. The expression form lets an
+     * aggregating pipeline order by a value that is only produced by the final projection (e.g. {@code ORDER BY
+     * avg(x)} where the projection computes the average) without first projecting -- the expression is evaluated
+     * over the same pre-projection columns the projection sees, so it does not disturb the established
+     * {@code project(order(having(...)))} emission order or any existing column-index key.
+     * <p>
+     * Exactly one of ({@code column}) or ({@code expr} with {@code type}) is meaningful: when {@code expr} is null
+     * this is a plain column key on {@code column} (the historical behavior, unchanged); when {@code expr} is set,
+     * {@code column} is ignored.
+     */
+    public record SortKey(int column, boolean descending, Expr expr, Type type)
+    {
+        /** A plain ORDER BY on a result column index. */
+        public SortKey(int column, boolean descending)
+        {
+            this(column, descending, null, null);
+        }
+
+        /** An ORDER BY on an expression computed over the result columns, compared as {@code type}. */
+        public static SortKey expression(Expr expr, Type type, boolean descending)
+        {
+            return new SortKey(-1, descending, expr, type);
+        }
+    }
 
     /** The ranking window function: {@code RANK()} (ties share a rank, the next rank skips) or {@code ROW_NUMBER()}. */
     public enum RankFunction

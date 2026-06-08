@@ -15,6 +15,7 @@ package org.weakref.nitro.jit;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -37,6 +38,13 @@ public final class ScalarLibrary
 
     private static final Map<String, ScalarCompiler> REGISTRY = new ConcurrentHashMap<>();
 
+    /**
+     * Names of scalar functions whose result is a DOUBLE regardless of argument types (e.g. an integer average that
+     * yields a true floating-point quotient). The compiler consults this so the projection / sort machinery encodes
+     * such a call's slot as raw double bits and compares it as DOUBLE.
+     */
+    private static final Set<String> DOUBLE_RESULTS = ConcurrentHashMap.newKeySet();
+
     static {
         register("+", infix("+"));
         register("-", infix("-"));
@@ -55,6 +63,13 @@ public final class ScalarLibrary
                 "org.weakref.nitro.jit.DecimalMath.roundScaledDivide(" + arguments.get(0) + ", " + arguments.get(1) + ", " + arguments.get(2) + ")");
         register("divide_round_i64", arguments ->
                 "org.weakref.nitro.jit.DecimalMath.roundDivide(" + arguments.get(0) + ", " + arguments.get(1) + ")");
+        // True (non-rounded) average of two longs as a DOUBLE: sum / count in floating point. Unlike
+        // divide_round_i64 (a rounded long quotient), the result is a real double, so it is registered as
+        // double-returning -- the projection / sort machinery then encodes its slot via doubleToRawLongBits and
+        // treats it (and any ORDER BY over it) as DOUBLE.
+        register("divide_i64_to_f64", arguments ->
+                "((double) " + arguments.get(0) + " / (double) " + arguments.get(1) + ")");
+        DOUBLE_RESULTS.add("divide_i64_to_f64");
     }
 
     private ScalarLibrary() {}
@@ -71,6 +86,12 @@ public final class ScalarLibrary
             throw new UnsupportedOperationException("scalar function: " + name);
         }
         return compiler;
+    }
+
+    /** Whether the named scalar function returns a DOUBLE irrespective of its argument types. */
+    public static boolean isDoubleResult(String name)
+    {
+        return DOUBLE_RESULTS.contains(name);
     }
 
     private static ScalarCompiler infix(String operator)
