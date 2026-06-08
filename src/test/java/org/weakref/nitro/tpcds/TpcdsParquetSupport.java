@@ -1506,32 +1506,99 @@ final class TpcdsParquetSupport
 
     public static Operator query82(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryInventorySalesItems(
+        // Q82: SELECT DISTINCT i_item_id, i_item_desc, i_current_price over store-sold items priced 62.00..92.00 from
+        // manufacturers {129,270,821,423}, on hand (inv_quantity_on_hand 100..500) in a 60-day window from 2000-05-25,
+        // and sold (item_sk IN store_sales). item ⋈ inventory ⋈ date_dim ⋈ DISTINCT(store_sales item_sk); the GROUP BY
+        // over the item attributes is the DISTINCT; top 100.
+        LocalDate startDate = LocalDate.of(2000, 5, 25);
+        Operator items = profiled("q82.scan.item", filteredProjectedTable(
                 allocator,
                 primitiveRegistry,
                 tables,
-                "q82",
-                "store_sales",
-                "ss_item_sk",
-                LocalDate.of(2000, 5, 25),
-                62_00L,
-                92_00L,
-                129L, 270L, 821L, 423L);
+                "item",
+                and(betweenInclusive(3, 62_00L, 92_00L), anyOf(4, 129L, 270L, 821L, 423L)),
+                new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_current_price", "i_manufact_id"},
+                0, 1, 2, 3));
+        Operator inventory = profiled("q82.scan.inventory", filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "inventory",
+                betweenInclusive(2, 100, 500),
+                new String[] {"inv_item_sk", "inv_date_sk", "inv_quantity_on_hand"},
+                0, 1));
+        Operator dates = profiled("q82.scan.date_dim", filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                betweenInclusive(1, startDate.toEpochDay(), startDate.plusDays(60).toEpochDay()),
+                new String[] {"d_date_sk", "d_date"},
+                0));
+        Operator salesItems = profiled("q82.distinct.sales_items", new MarkDistinctOperator(
+                allocator,
+                0,
+                profiled("q82.scan.sales_items", scannedTable(allocator, tables, "store_sales", "ss_item_sk"))));
+
+        Operator joined = profiled("q82.join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
+        joined = profiled("q82.join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
+        joined = profiled("q82.join.sales_items", new HashJoinOperator(allocator, joined, 0, salesItems, 0));
+        joined = profiled("q82.project.keys", projectInputs(allocator, primitiveRegistry, joined, 1, 2, 3));
+        joined = profiled("q82.group.keys", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new CountAll()),
+                joined));
+        joined = profiled("q82.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2));
+        return profiled("q82.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
     }
 
     public static Operator query37(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryInventorySalesItems(
+        // Q37: SELECT DISTINCT i_item_id, i_item_desc, i_current_price over catalog-sold items priced 68.00..98.00 from
+        // manufacturers {677,940,694,808}, on hand (inv_quantity_on_hand 100..500) in a 60-day window from 2000-02-01,
+        // and sold (item_sk IN catalog_sales). Same inventory-sales-items shape as Q82 over catalog_sales.
+        LocalDate startDate = LocalDate.of(2000, 2, 1);
+        Operator items = profiled("q37.scan.item", filteredProjectedTable(
                 allocator,
                 primitiveRegistry,
                 tables,
-                "q37",
-                "catalog_sales",
-                "cs_item_sk",
-                LocalDate.of(2000, 2, 1),
-                68_00L,
-                98_00L,
-                677L, 940L, 694L, 808L);
+                "item",
+                and(betweenInclusive(3, 68_00L, 98_00L), anyOf(4, 677L, 940L, 694L, 808L)),
+                new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_current_price", "i_manufact_id"},
+                0, 1, 2, 3));
+        Operator inventory = profiled("q37.scan.inventory", filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "inventory",
+                betweenInclusive(2, 100, 500),
+                new String[] {"inv_item_sk", "inv_date_sk", "inv_quantity_on_hand"},
+                0, 1));
+        Operator dates = profiled("q37.scan.date_dim", filteredProjectedTable(
+                allocator,
+                primitiveRegistry,
+                tables,
+                "date_dim",
+                betweenInclusive(1, startDate.toEpochDay(), startDate.plusDays(60).toEpochDay()),
+                new String[] {"d_date_sk", "d_date"},
+                0));
+        Operator salesItems = profiled("q37.distinct.sales_items", new MarkDistinctOperator(
+                allocator,
+                0,
+                profiled("q37.scan.sales_items", scannedTable(allocator, tables, "catalog_sales", "cs_item_sk"))));
+
+        Operator joined = profiled("q37.join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
+        joined = profiled("q37.join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
+        joined = profiled("q37.join.sales_items", new HashJoinOperator(allocator, joined, 0, salesItems, 0));
+        joined = profiled("q37.project.keys", projectInputs(allocator, primitiveRegistry, joined, 1, 2, 3));
+        joined = profiled("q37.group.keys", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new CountAll()),
+                joined));
+        joined = profiled("q37.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2));
+        return profiled("q37.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
     }
 
     public static Operator query40(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -6908,52 +6975,6 @@ final class TpcdsParquetSupport
                 List.of(0),
                 List.of(new Sum(1)),
                 facts);
-    }
-
-    private static Operator queryInventorySalesItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix, String salesTable, String salesItemColumn, LocalDate startDate, long minimumPriceInclusive, long maximumPriceInclusive, long... manufacturerIds)
-    {
-        Operator items = profiled(profilePrefix + ".scan.item", filteredProjectedTable(
-                allocator,
-                primitiveRegistry,
-                tables,
-                "item",
-                and(
-                        betweenInclusive(3, minimumPriceInclusive, maximumPriceInclusive),
-                        anyOf(4, manufacturerIds)),
-                new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_current_price", "i_manufact_id"},
-                0, 1, 2, 3));
-        Operator inventory = profiled(profilePrefix + ".scan.inventory", filteredProjectedTable(
-                allocator,
-                primitiveRegistry,
-                tables,
-                "inventory",
-                betweenInclusive(2, 100, 500),
-                new String[] {"inv_item_sk", "inv_date_sk", "inv_quantity_on_hand"},
-                0, 1));
-        Operator dates = profiled(profilePrefix + ".scan.date_dim", filteredProjectedTable(
-                allocator,
-                primitiveRegistry,
-                tables,
-                "date_dim",
-                betweenInclusive(1, startDate.toEpochDay(), startDate.plusDays(60).toEpochDay()),
-                new String[] {"d_date_sk", "d_date"},
-                0));
-        Operator salesItems = profiled(profilePrefix + ".distinct.sales_items", new MarkDistinctOperator(
-                allocator,
-                0,
-                profiled(profilePrefix + ".scan.sales_items", scannedTable(allocator, tables, salesTable, salesItemColumn))));
-
-        Operator joined = profiled(profilePrefix + ".join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
-        joined = profiled(profilePrefix + ".join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
-        joined = profiled(profilePrefix + ".join.sales_items", new HashJoinOperator(allocator, joined, 0, salesItems, 0));
-        joined = profiled(profilePrefix + ".project.keys", projectInputs(allocator, primitiveRegistry, joined, 1, 2, 3));
-        joined = profiled(profilePrefix + ".group.keys", new GroupedAggregationOperator(
-                allocator,
-                List.of(0, 1, 2),
-                List.of(new CountAll()),
-                joined));
-        joined = profiled(profilePrefix + ".project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2));
-        return profiled(profilePrefix + ".topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
     }
 
     private static Operator query21InventoryByWarehouseItem(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean beforeCutoff)
