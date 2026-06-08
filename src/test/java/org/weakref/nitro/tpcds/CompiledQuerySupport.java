@@ -1087,23 +1087,108 @@ public final class CompiledQuerySupport
         if (entries == 0) {
             return new org.weakref.nitro.jit.Column.StringColumn(java.util.Arrays.copyOf(ids, size), new byte[0][], nullMask);
         }
-        Integer[] order = new Integer[entries];
+        byte[][] dict = dictionary.toArray(new byte[0][]);
+        int[] order = new int[entries];        // old ids in sorted (unsigned-byte) order
         for (int i = 0; i < entries; i++) {
             order[i] = i;
         }
-        java.util.Arrays.sort(order, (a, b) -> java.util.Arrays.compareUnsigned(dictionary.get(a), dictionary.get(b)));
+        // A multikey (three-way radix) quicksort over the byte strings: partitions on one byte position at a time
+        // and only the equal-on-that-byte range recurses to the next position. Produces the same unsigned-byte
+        // lexicographic order as a comparison sort, but without boxing entry ids or re-comparing shared prefixes --
+        // building the ordered dictionary for a high-cardinality column (e.g. c_customer_id, ~2M distinct) was the
+        // dominant cost of those plans, almost all of it in compareUnsigned over a boxed Integer[] sort.
+        multikeyQuickSort(order, 0, entries - 1, 0, dict);
         int[] remap = new int[entries];        // old id -> position in sorted order
         byte[][] sorted = new byte[entries][];
         for (int newId = 0; newId < entries; newId++) {
             int oldId = order[newId];
             remap[oldId] = newId;
-            sorted[newId] = dictionary.get(oldId);
+            sorted[newId] = dict[oldId];
         }
         int[] remapped = new int[size];
         for (int r = 0; r < size; r++) {
             remapped[r] = remap[ids[r]];
         }
         return new org.weakref.nitro.jit.Column.StringColumn(remapped, sorted, nullMask);
+    }
+
+    /** The byte at position {@code d} of {@code s} as an unsigned int, or -1 once the string has ended (sorts first). */
+    private static int byteAt(byte[] s, int d)
+    {
+        return d < s.length ? (s[d] & 0xFF) : -1;
+    }
+
+    /**
+     * Sort {@code order[lo..hi]} (inclusive) so the referenced strings {@code dict[order[*]]} are in ascending
+     * unsigned-byte order, comparing from byte position {@code d}. Three-way (Bentley-McIlroy) partition on the byte
+     * at {@code d} with a median-of-three pivot (so a nearly-sorted dictionary does not hit the quadratic case); the
+     * middle (equal) partition recurses to {@code d + 1}.
+     */
+    private static void multikeyQuickSort(int[] order, int lo, int hi, int d, byte[][] dict)
+    {
+        while (hi - lo > 8) {
+            int mid = lo + ((hi - lo) >>> 1);
+            int pivot = medianOfThree(byteAt(dict[order[lo]], d), byteAt(dict[order[mid]], d), byteAt(dict[order[hi]], d));
+            int lt = lo;
+            int gt = hi;
+            int i = lo;
+            while (i <= gt) {
+                int c = byteAt(dict[order[i]], d);
+                if (c < pivot) {
+                    swap(order, lt, i);
+                    lt++;
+                    i++;
+                }
+                else if (c > pivot) {
+                    swap(order, gt, i);
+                    gt--;
+                }
+                else {
+                    i++;
+                }
+            }
+            // order[lo..lt-1] < pivot ; order[lt..gt] == pivot ; order[gt+1..hi] > pivot
+            multikeyQuickSort(order, lo, lt - 1, d, dict);
+            if (pivot >= 0) {
+                multikeyQuickSort(order, lt, gt, d + 1, dict);
+            }
+            // Tail-recurse the high partition by looping (keeps stack depth bounded).
+            lo = gt + 1;
+        }
+        // Small range: insertion sort by full unsigned-byte comparison from position d.
+        for (int i = lo + 1; i <= hi; i++) {
+            for (int j = i; j > lo && compareFrom(dict[order[j - 1]], dict[order[j]], d) > 0; j--) {
+                swap(order, j, j - 1);
+            }
+        }
+    }
+
+    private static void swap(int[] a, int i, int j)
+    {
+        int t = a[i];
+        a[i] = a[j];
+        a[j] = t;
+    }
+
+    private static int medianOfThree(int a, int b, int c)
+    {
+        if (a < b) {
+            return b < c ? b : (a < c ? c : a);
+        }
+        return a < c ? a : (b < c ? c : b);
+    }
+
+    /** Unsigned-byte comparison of {@code a} and {@code b} starting at byte position {@code d}. */
+    private static int compareFrom(byte[] a, byte[] b, int d)
+    {
+        int len = Math.min(a.length, b.length);
+        for (int i = d; i < len; i++) {
+            int diff = (a[i] & 0xFF) - (b[i] & 0xFF);
+            if (diff != 0) {
+                return diff;
+            }
+        }
+        return a.length - b.length;
     }
 
     /** Bytes of a string value at {@code position}, whether the scan returned it flat or dictionary-encoded. */
