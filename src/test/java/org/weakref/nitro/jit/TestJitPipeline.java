@@ -701,6 +701,81 @@ public class TestJitPipeline
         assertThat(eager).isGreaterThan(0);
     }
 
+    @Test
+    void streamsAcrossGrowingBatchesReusesScratch()
+    {
+        // The streaming late-materialization reuses its per-batch survivor index (selection) and matched build-row
+        // index (bsel) across batches, growing them on demand. Feed batches of strictly increasing size so the scratch
+        // must grow mid-stream while a column is read at the new larger length; the result must still equal the eager
+        // run (no stale/undersized buffer). SELECT k, sum(v) FROM p JOIN b ON p.k = b.k GROUP BY k -- a join + group so
+        // both selection and bsel are exercised, with a probe payload column (v) materialized for survivors.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(new Plan.Join(new Plan.Build(1, 0), 0)),
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int rows = 60_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 4000;
+            v[i] = i % 13;
+        }
+        long[] buildKey = new long[4000];
+        for (int i = 0; i < buildKey.length; i++) {
+            buildKey[i] = i;   // every probe key matches
+        }
+
+        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{k, v}, {buildKey}}, new int[] {rows, buildKey.length});
+        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null)
+                .execute(growingBatches(rows, k, v), new Column[][] {{new Column.FlatColumn(buildKey)}}, new int[] {buildKey.length});
+
+        assertThat(streamed.rowCount()).isEqualTo(eager.rowCount());
+        assertThat(groupSums(streamed)).isEqualTo(groupSums(eager));
+    }
+
+    /** A streaming source whose batches strictly grow (512, 1024, 1536, ...), so a reused scratch buffer must grow mid-stream. */
+    private static StreamingPipeline.Source growingBatches(int rows, long[]... columns)
+    {
+        return new StreamingPipeline.Source()
+        {
+            private int start;
+            private int batchRows;
+            private int step;
+
+            @Override
+            public boolean advance()
+            {
+                start += batchRows;
+                if (start >= rows) {
+                    return false;
+                }
+                step++;
+                batchRows = Math.min(512 * step, rows - start);
+                return true;
+            }
+
+            @Override
+            public int rows()
+            {
+                return batchRows;
+            }
+
+            @Override
+            public Column[] columns()
+            {
+                Column[] batch = new Column[columns.length];
+                for (int c = 0; c < columns.length; c++) {
+                    batch[c] = new Column.FlatColumn(java.util.Arrays.copyOfRange(columns[c], start, start + batchRows));
+                }
+                return batch;
+            }
+        };
+    }
+
     private static Map<Long, Long> groupSums(CompiledPipeline.Result result)
     {
         Map<Long, Long> map = new HashMap<>();

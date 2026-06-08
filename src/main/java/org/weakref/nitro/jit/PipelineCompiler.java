@@ -190,9 +190,14 @@ public final class PipelineCompiler
         // as early as possible. No filter -> every row survives, so a single eager pass is cheaper.
         if (!pipeline.filters().isEmpty()) {
             List<Plan.Condition> conjuncts = orderBySelectivity(pipeline.filters());
+            // The per-batch selection index is transient scratch reused across batches: allocated once, grown
+            // geometrically when a batch is larger, and refilled to the identity each batch (the batch is fully
+            // processed before the next advance()).
+            out.append("    int[] selection = new int[0];\n");
             out.append("    while (source.advance()) {\n");
             out.append("      int rowCount = source.rows();\n");
-            out.append("      int[] selection = new int[rowCount]; int selected = rowCount;\n");
+            out.append("      if (selection.length < rowCount) { selection = new int[org.weakref.nitro.jit.StreamingScratch.grow(selection.length, rowCount)]; }\n");
+            out.append("      int selected = rowCount;\n");
             out.append("      for (int i = 0; i < rowCount; i++) { selection[i] = i; }\n");
             for (Plan.Condition conjunct : conjuncts) {
                 TreeSet<Integer> columns = new TreeSet<>();
@@ -1638,12 +1643,25 @@ public final class PipelineCompiler
                     collectStringMatchesInExpr(aggregate.input(), aggregateMatches);
                 }
             }
+            // The per-batch survivor index (selection) and matched build-row indices (bsel<k>) are transient scratch
+            // reused across batches: allocate them once, grow geometrically when a batch needs more capacity, and
+            // reset the logical length (selected = 0) each batch. The whole batch is processed before the next
+            // advance(), so last-batch's buffer is free to be the next batch's. The cross-join grow path below
+            // reassigns these same locals when one probe row yields more survivors than rows.
+            out.append("    int[] selection = new int[0];\n");
+            for (int k = 0; k < joinCount; k++) {
+                out.append("    int[] bsel").append(k).append(" = new int[0];\n");
+            }
             out.append("    while (source.advance()) {\n");
             out.append("      int probeRows = source.rows();\n");
-            out.append("      int[] selection = new int[probeRows]; int selected = 0;\n");
+            out.append("      if (selection.length < probeRows) {\n");
+            out.append("        int grown = org.weakref.nitro.jit.StreamingScratch.grow(selection.length, probeRows);\n");
+            out.append("        selection = new int[grown];\n");
             for (int k = 0; k < joinCount; k++) {
-                out.append("      int[] bsel").append(k).append(" = new int[probeRows];\n");
+                out.append("        bsel").append(k).append(" = new int[grown];\n");
             }
+            out.append("      }\n");
+            out.append("      int selected = 0;\n");
             // Phase 1: eager probe columns -> joins + filters -> selection + matched build rows.
             out.append("      {\n");
             out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(eagerProbe)).append(");\n");
