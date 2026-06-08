@@ -1123,50 +1123,76 @@ public final class CompiledTpcdsQueries
 
     public static Ported query62()
     {
-        return shippingDelayBuckets("web_sales", "ws_ship_date_sk", "ws_sold_date_sk", "ws_warehouse_sk",
-                "ws_ship_mode_sk", "ws_web_site_sk", "web_site", "web_site_sk", "web_name");
+        // Q62: web_sales joined to date_dim (d_month_seq in [1200,1211]), warehouse, ship_mode, and web_site; GROUP BY
+        // warehouse name, ship-mode type, web-site name; five sum(CASE) counts bucketing the shipping delay
+        // days = ws_ship_date_sk - ws_sold_date_sk into 0-30 / 31-60 / 61-90 / 91-120 / >120; ORDER BY the three names
+        // LIMIT 100. The warehouse name is genuinely NULL for one warehouse, so the string group keys are declared
+        // nullable (a null name forms its own group), and days is null when sold_date is null, falling through to 0.
+        QueryLowering query = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_ship_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_ship_mode_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_web_site_sk", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ws_ship_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq"))
+                .join("warehouse", "ws_warehouse_sk", "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"),
+                        new QueryLowering.Column("w_warehouse_name", ColumnEncoding.STRING, true))
+                .join("ship_mode", "ws_ship_mode_sk", "sm_ship_mode_sk",
+                        new QueryLowering.Column("sm_ship_mode_sk"),
+                        new QueryLowering.Column("sm_type", ColumnEncoding.STRING, true))
+                .join("web_site", "ws_web_site_sk", "web_site_sk",
+                        new QueryLowering.Column("web_site_sk"),
+                        new QueryLowering.Column("web_name", ColumnEncoding.STRING, true));
+        Plan.Expr days = new Plan.Bin("-", query.column("ws_ship_date_sk"), query.column("ws_sold_date_sk"));
+        query.where(
+                        new Plan.Predicate(">", query.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", query.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("w_warehouse_name", "sm_type", "web_name")
+                .aggregate("sum", bucket(new Plan.Predicate("<", days, new Plan.Lit(31))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(30)), new Plan.Predicate("<", days, new Plan.Lit(61)))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(60)), new Plan.Predicate("<", days, new Plan.Lit(91)))))
+                .aggregate("sum", bucket(new Plan.And(
+                        new Plan.Predicate(">", days, new Plan.Lit(90)), new Plan.Predicate("<", days, new Plan.Lit(121)))))
+                .aggregate("sum", bucket(new Plan.Predicate(">", days, new Plan.Lit(120))))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+        return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1), new DictRef(2, 4, 1)));
     }
 
     public static Ported query99()
     {
-        return shippingDelayBuckets("catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk",
-                "cs_ship_mode_sk", "cs_call_center_sk", "call_center", "cc_call_center_sk", "cc_name");
-    }
-
-    /**
-     * Q62/Q99 shape: a sales table joined to date_dim (d_month_seq in [1200,1211]), warehouse, ship_mode, and a
-     * third dimension (web_site / call_center); GROUP BY three dimension names; five {@code sum(CASE)} counts
-     * bucketing the shipping delay {@code days = ship_date_sk - sold_date_sk} into 0-30 / 31-60 / 61-90 / 91-120 /
-     * >120; ORDER BY the three names LIMIT 100. The warehouse name is genuinely NULL for one warehouse, so the
-     * string group keys are declared nullable (a null name forms its own group, kept distinct from any real name),
-     * and {@code days} is null when sold_date is null, falling through every bucket's {@code CASE} to 0.
-     */
-    private static Ported shippingDelayBuckets(String salesTable, String shipDate, String soldDate, String warehouseFk,
-            String shipModeFk, String thirdFk, String thirdTable, String thirdKey, String thirdName)
-    {
-        QueryLowering query = QueryLowering.scan(salesTable,
-                        new QueryLowering.Column(shipDate, ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column(warehouseFk, ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column(shipModeFk, ColumnEncoding.FLAT, true),
-                        new QueryLowering.Column(thirdFk, ColumnEncoding.FLAT, true))
-                .join("date_dim", shipDate, "d_date_sk",
+        // Q99: catalog_sales joined to date_dim (d_month_seq in [1200,1211]), warehouse, ship_mode, and call_center;
+        // GROUP BY warehouse name, ship-mode type, call-center name; five sum(CASE) counts bucketing the shipping delay
+        // days = cs_ship_date_sk - cs_sold_date_sk into 0-30 / 31-60 / 61-90 / 91-120 / >120; ORDER BY the three names
+        // LIMIT 100. Same nullable-name / null-days handling as Q62, over catalog_sales and the call_center dimension.
+        QueryLowering query = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_ship_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_ship_mode_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_call_center_sk", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_ship_date_sk", "d_date_sk",
                         new QueryLowering.Column("d_date_sk"),
                         new QueryLowering.Column("d_month_seq"))
-                .join("warehouse", warehouseFk, "w_warehouse_sk",
+                .join("warehouse", "cs_warehouse_sk", "w_warehouse_sk",
                         new QueryLowering.Column("w_warehouse_sk"),
                         new QueryLowering.Column("w_warehouse_name", ColumnEncoding.STRING, true))
-                .join("ship_mode", shipModeFk, "sm_ship_mode_sk",
+                .join("ship_mode", "cs_ship_mode_sk", "sm_ship_mode_sk",
                         new QueryLowering.Column("sm_ship_mode_sk"),
                         new QueryLowering.Column("sm_type", ColumnEncoding.STRING, true))
-                .join(thirdTable, thirdFk, thirdKey,
-                        new QueryLowering.Column(thirdKey),
-                        new QueryLowering.Column(thirdName, ColumnEncoding.STRING, true));
-        Plan.Expr days = new Plan.Bin("-", query.column(shipDate), query.column(soldDate));
+                .join("call_center", "cs_call_center_sk", "cc_call_center_sk",
+                        new QueryLowering.Column("cc_call_center_sk"),
+                        new QueryLowering.Column("cc_name", ColumnEncoding.STRING, true));
+        Plan.Expr days = new Plan.Bin("-", query.column("cs_ship_date_sk"), query.column("cs_sold_date_sk"));
         query.where(
                         new Plan.Predicate(">", query.column("d_month_seq"), new Plan.Lit(1199)),
                         new Plan.Predicate("<", query.column("d_month_seq"), new Plan.Lit(1212)))
-                .groupBy("w_warehouse_name", "sm_type", thirdName)
+                .groupBy("w_warehouse_name", "sm_type", "cc_name")
                 .aggregate("sum", bucket(new Plan.Predicate("<", days, new Plan.Lit(31))))
                 .aggregate("sum", bucket(new Plan.And(
                         new Plan.Predicate(">", days, new Plan.Lit(30)), new Plan.Predicate("<", days, new Plan.Lit(61)))))
