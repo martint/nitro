@@ -110,6 +110,7 @@ public final class QueryLowering
     private Plan.Ordering ordering;
     private final List<Plan.Expr> projections = new ArrayList<>();
     private List<int[]> groupingSets = List.of();
+    private Plan.Window window;
     private int combined;   // next combined position to assign
 
     private QueryLowering() {}
@@ -247,6 +248,17 @@ public final class QueryLowering
         return this;
     }
 
+    /**
+     * Apply a window over the (scan) input columns: a ranking or a partition-aggregate (see {@link Plan.Window}). The
+     * window's partition/order/input columns index this query's input columns. A window is a pipeline breaker; any
+     * following filter on the windowed value goes through {@link #having} (post-window), not {@link #where}.
+     */
+    public QueryLowering window(Plan.Window window)
+    {
+        this.window = window;
+        return this;
+    }
+
     public QueryLowering aggregate(String function, String columnName)
     {
         aggregates.add(new Plan.Aggregate(function, column(columnName)));
@@ -299,7 +311,8 @@ public final class QueryLowering
                 having,
                 ordering,
                 projections,
-                groupingSets);
+                groupingSets,
+                window);
         List<Input> inputs = new ArrayList<>();
         inputs.add(probe);
         inputs.addAll(builds);

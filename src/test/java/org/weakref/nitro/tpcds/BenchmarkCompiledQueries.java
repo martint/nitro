@@ -55,7 +55,7 @@ import java.util.function.Supplier;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"01", "03", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "37", "40", "42", "43", "48", "50", "52", "55", "56",
+    @Param({"01", "03", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
             "60", "62", "65", "71", "73", "82", "91", "92", "96", "99"})
     public String query;
 
@@ -103,6 +103,7 @@ public class BenchmarkCompiledQueries
 
         composite("01", CompiledTpcdsQueries.query01());
         composite("22", CompiledTpcdsQueries.query22());
+        composite("53", CompiledTpcdsQueries.query53());
         composite("65", CompiledTpcdsQueries.query65());
     }
 

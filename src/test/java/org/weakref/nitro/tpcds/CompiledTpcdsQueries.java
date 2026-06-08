@@ -1061,6 +1061,65 @@ public final class CompiledTpcdsQueries
         return new Ported(query, -1, 0, 0);
     }
 
+    public static Composite query53()
+    {
+        // Q53: per (i_manufact_id, d_qoy) sum store_sales price over a 12-month window for two item category/class/
+        // brand cohorts, then AVG(sum) OVER (PARTITION BY i_manufact_id); keep the (manufact, quarter) rows whose
+        // quarterly sum deviates more than 10% from the manufacturer's average quarterly sales; ORDER BY the average,
+        // the sum, then i_manufact_id, top 100. Two stages: a grouped pre-aggregate (pipeline breaker), then the
+        // partition-average window + deviation HAVING over its output.
+        QueryLowering quarterly = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manufact_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, false))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_qoy"),
+                        new QueryLowering.Column("d_month_seq"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"));
+        quarterly.where(
+                        new Plan.Predicate(">", quarterly.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", quarterly.column("d_month_seq"), new Plan.Lit(1212)),
+                        new Plan.Or(
+                                new Plan.And(
+                                        new Plan.StringMatch(quarterly.position("i_category"), List.of("Books", "Children", "Electronics"), false),
+                                        new Plan.StringMatch(quarterly.position("i_class"), List.of("personal", "portable", "reference", "self-help"), false),
+                                        new Plan.StringMatch(quarterly.position("i_brand"), List.of("scholaramalgamalg #14", "scholaramalgamalg #7", "exportiunivamalg #9", "scholaramalgamalg #9"), false)),
+                                new Plan.And(
+                                        new Plan.StringMatch(quarterly.position("i_category"), List.of("Women", "Music", "Men"), false),
+                                        new Plan.StringMatch(quarterly.position("i_class"), List.of("accessories", "classical", "fragrances", "pants"), false),
+                                        new Plan.StringMatch(quarterly.position("i_brand"), List.of("amalgimporto #1", "edu packscholar #1", "exportiimporto #1", "importoamalg #1"), false))))
+                .groupBy("i_manufact_id", "d_qoy")
+                .aggregate("sum", "ss_sales_price");
+        // Pre-aggregation output: (i_manufact_id = 0, d_qoy = 1, sum_sales = 2); all non-null.
+
+        QueryLowering main = QueryLowering.scan("q53_quarterly",
+                        new QueryLowering.Column("qs_manufact_id", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("qs_qoy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("qs_sum", ColumnEncoding.FLAT, false))
+                .window(Plan.Window.partitionAverage(new int[] {0}, 2));
+        // Window output: qs_manufact_id (0), qs_qoy (1), qs_sum (2), avg_quarterly_sales (3). Keep rows whose sum
+        // deviates > 10% from the average: avg > 0 AND |sum - avg| * 10 > avg (fraction-free, matching the harness).
+        main.having(new Plan.And(
+                        new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(0)),
+                        new Plan.Or(
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(2), new Plan.Col(3)), new Plan.Lit(10)), new Plan.Col(3)),
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(3), new Plan.Col(2)), new Plan.Lit(10)), new Plan.Col(3)))))
+                .select(new Plan.Col(0), new Plan.Col(2), new Plan.Col(3))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(3, false), new Plan.SortKey(2, false), new Plan.SortKey(0, false)), 100));
+
+        return new Composite(List.of(new Stage(quarterly, "q53_quarterly")), main, List.of());
+    }
+
     public static Ported query40()
     {
         // Q40: catalog_sales LEFT JOIN catalog_returns (multi-key on order+item -- most sales were never returned) ⋈
