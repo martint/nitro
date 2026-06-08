@@ -99,6 +99,7 @@ public final class QueryLowering
     private Plan.Condition having;
     private Plan.Ordering ordering;
     private final List<Plan.Expr> projections = new ArrayList<>();
+    private List<int[]> groupingSets = List.of();
     private int combined;   // next combined position to assign
 
     private QueryLowering() {}
@@ -170,6 +171,18 @@ public final class QueryLowering
         return this;
     }
 
+    /**
+     * Aggregate over the given {@code groupingSets} (GROUPING SETS / ROLLUP / CUBE) rather than a single grouping over
+     * all {@link #groupBy} keys. Each {@code int[]} is the sorted indices into the group keys that are ACTIVE in that
+     * set; the others are nulled. The result carries a trailing {@code grouping_id} LONG column. Additive: leaving this
+     * unset keeps the ordinary single-grouping behavior.
+     */
+    public QueryLowering groupingSets(List<int[]> groupingSets)
+    {
+        this.groupingSets = List.copyOf(groupingSets);
+        return this;
+    }
+
     public QueryLowering aggregate(String function, String columnName)
     {
         aggregates.add(new Plan.Aggregate(function, column(columnName)));
@@ -221,7 +234,8 @@ public final class QueryLowering
                 aggregates,
                 having,
                 ordering,
-                projections);
+                projections,
+                groupingSets);
         List<Input> inputs = new ArrayList<>();
         inputs.add(probe);
         inputs.addAll(builds);

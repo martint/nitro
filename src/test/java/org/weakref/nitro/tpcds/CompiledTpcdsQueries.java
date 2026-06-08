@@ -1149,4 +1149,57 @@ public final class CompiledTpcdsQueries
                 .count();
         return new Ported(query, -1, 0, 0);
     }
+
+    public static Ported query27()
+    {
+        // store_sales ⋈ date_dim(d_year=2002) ⋈ item ⋈ store(s_state='TN') ⋈ customer_demographics(M/S/College);
+        // GROUP BY ROLLUP(i_item_id, s_state); four averages; the trailing grouping_id (= GROUPING(s_state)) is the
+        // g_state column. ORDER BY i_item_id, s_state; top 100. ROLLUP nulls s_state at the by-item level, so its
+        // string output column reconstructs through its null mask.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_list_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, false))
+                .join("customer_demographics", "ss_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, false));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2002)),
+                        new Plan.StringMatch(query.position("s_state"), List.of("TN"), false),
+                        new Plan.StringMatch(query.position("cd_gender"), List.of("M"), false),
+                        new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
+                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false))
+                .groupBy("i_item_id", "s_state")
+                .groupingSets(List.of(new int[] {0, 1}, new int[] {0}))
+                .aggregate("avg", "ss_quantity")
+                .aggregate("avg", "ss_list_price")
+                .aggregate("avg", "ss_coupon_amt")
+                .aggregate("avg", "ss_sales_price")
+                .select(
+                        new Plan.Col(0),    // i_item_id
+                        new Plan.Col(1),    // s_state
+                        new Plan.Col(6),    // grouping_id = GROUPING(s_state) = g_state
+                        new Plan.Col(2),    // avg(ss_quantity)
+                        new Plan.Col(3),    // avg(ss_list_price)
+                        new Plan.Col(4),    // avg(ss_coupon_amt)
+                        new Plan.Col(5))    // avg(ss_sales_price)
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+        return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1)));
+    }
 }
