@@ -361,6 +361,15 @@ public final class CompiledQuerySupport
             private Batch open;   // current batch, kept open so any column can be converted on demand in materialize()
             private Mask mask;
             private int currentRows;
+            // Transient per-batch buffers, allocated once and reused across batches. A streamed pipeline consumes each
+            // batch fully before the next advance(), so a column's converted buffer (or the gather selection / output
+            // wrapper array) is free to back the next batch -- this turns the per-batch widen/gather churn into a
+            // bounded number of geometric growths. The zero-copy dense paths still wrap the decoder's array directly
+            // and never touch these buffers.
+            private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+            private final long[][] valueBuffers = new long[width][];
+            private final boolean[][] nullBuffers = new boolean[width][];
+            private int[] identityBuffer = new int[0];
 
             @Override
             public boolean advance()
@@ -404,9 +413,8 @@ public final class CompiledQuerySupport
             @Override
             public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
             {
-                org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
                 for (int column : columns) {
-                    out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable());
+                    out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable(), column);
                 }
                 return out;
             }
@@ -420,89 +428,107 @@ public final class CompiledQuerySupport
                 if (!mask.all()) {
                     return materialize(columns, identity(currentRows), currentRows);
                 }
-                org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
                 for (int column : columns) {
-                    out[column] = denseColumn(open.output(column).borrow(Stream.VALUES), open.output(column).borrowOrNull(Stream.NULLS), currentRows, specs.get(column).nullable());
+                    out[column] = denseColumn(open.output(column).borrow(Stream.VALUES), open.output(column).borrowOrNull(Stream.NULLS), currentRows, specs.get(column).nullable(), column);
                 }
                 return out;
             }
+
+            /** Reusable identity selection [0, count), grown geometrically; valid only until the next call. */
+            private int[] identity(int count)
+            {
+                if (identityBuffer.length < count) {
+                    identityBuffer = new int[org.weakref.nitro.jit.StreamingScratch.grow(identityBuffer.length, count)];
+                    for (int i = 0; i < identityBuffer.length; i++) {
+                        identityBuffer[i] = i;
+                    }
+                }
+                return identityBuffer;
+            }
+
+            /** A reusable value buffer for {@code column} holding at least {@code count} longs. */
+            private long[] valueBuffer(int column, int count)
+            {
+                long[] buffer = valueBuffers[column];
+                if (buffer == null || buffer.length < count) {
+                    buffer = new long[org.weakref.nitro.jit.StreamingScratch.grow(buffer == null ? 0 : buffer.length, count)];
+                    valueBuffers[column] = buffer;
+                }
+                return buffer;
+            }
+
+            /** A reusable null buffer for {@code column} holding at least {@code count} booleans. */
+            private boolean[] nullBuffer(int column, int count)
+            {
+                boolean[] buffer = nullBuffers[column];
+                if (buffer == null || buffer.length < count) {
+                    buffer = new boolean[org.weakref.nitro.jit.StreamingScratch.grow(buffer == null ? 0 : buffer.length, count)];
+                    nullBuffers[column] = buffer;
+                }
+                return buffer;
+            }
+
+            /**
+             * Dense materialize of {@code column} into reusable per-column buffers, honoring the {@code nullable}
+             * contract exactly as {@link #denseColumn}: a non-null I64 column (and a nullable I64 with a
+             * {@link BooleanVector} nulls stream) stays zero-copy by wrapping the decoder's array; every other shape
+             * widens/null-zeroes into the column's reused value (and, when nullable, null) buffer.
+             */
+            private org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count, boolean nullable, int column)
+            {
+                if (values instanceof I64Vector i64) {
+                    if (nulls == null) {
+                        return new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
+                    }
+                    if (nullable && nulls instanceof BooleanVector booleans) {
+                        return new org.weakref.nitro.jit.Column.FlatColumn(i64.values(), booleans.values());   // no copy
+                    }
+                    long[] backing = i64.values();
+                    long[] copy = valueBuffer(column, count);
+                    boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
+                    for (int i = 0; i < count; i++) {
+                        boolean isNull = isNull(nulls, i);
+                        if (nullMask != null) {
+                            nullMask[i] = isNull;
+                        }
+                        copy[i] = isNull ? 0 : backing[i];
+                    }
+                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                }
+                if (values instanceof I32Vector i32) {
+                    int[] backing = i32.values();
+                    long[] copy = valueBuffer(column, count);
+                    boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
+                    for (int i = 0; i < count; i++) {
+                        boolean isNull = nulls != null && isNull(nulls, i);
+                        if (nullMask != null) {
+                            nullMask[i] = isNull;
+                        }
+                        copy[i] = isNull ? 0 : backing[i];
+                    }
+                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                }
+                throw new IllegalArgumentException("Unsupported column vector type: " + values.getClass().getName());
+            }
+
+            /** Gather {@code column} for the first {@code count} positions of {@code selection} into reusable per-column buffers (see {@link #convertColumn}). */
+            private org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask batchMask, int c, int count, int[] selection, boolean nullable, int column)
+            {
+                Vector vector = batch.output(c).borrow(Stream.VALUES);
+                Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
+                long[] values = valueBuffer(column, count);
+                boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
+                for (int j = 0; j < count; j++) {
+                    int position = batchMask.position(selection[j]);
+                    boolean isNull = nulls != null && isNull(nulls, position);
+                    if (nullMask != null) {
+                        nullMask[j] = isNull;
+                    }
+                    values[j] = isNull ? 0 : longValue(vector, position);
+                }
+                return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+            }
         };
-    }
-
-    private static int[] identity(int count)
-    {
-        int[] identity = new int[count];
-        for (int i = 0; i < count; i++) {
-            identity[i] = i;
-        }
-        return identity;
-    }
-
-    /**
-     * Convert a dense batch column (logical row {@code j} == batch position {@code j}) to a flat column, honoring the
-     * declared {@code nullable} contract so it is byte-exact with {@link #convertColumn}. When the column is declared
-     * nullable, an {@code I64} column wraps the decoded vector's backing {@code long[]} by reference and a present
-     * nulls stream wraps the {@code BooleanVector}'s backing {@code boolean[]} by reference -- both share the decoder's
-     * batch (held open until the next advance), and the generated code skips null positions via the nulls array, so no
-     * copy or null-zeroing is needed. When the column is declared non-nullable but the batch nonetheless carries
-     * nulls, the generated code emits no null guard, so those positions must read as {@code 0} (as {@code convertColumn}
-     * does) -- that requires a fresh zeroed copy, since the shared backing array cannot be mutated. Only the
-     * non-nullable, no-nulls case (and the nullable I64 case) stays zero-copy; an {@code I32} column is always widened
-     * (its {@code int[]} cannot alias a {@code long[]}).
-     */
-    private static org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count, boolean nullable)
-    {
-        if (values instanceof I64Vector i64) {
-            if (nulls == null) {
-                return new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
-            }
-            if (nullable && nulls instanceof BooleanVector booleans) {
-                return new org.weakref.nitro.jit.Column.FlatColumn(i64.values(), booleans.values());   // no copy
-            }
-            long[] backing = i64.values();
-            long[] copy = new long[count];
-            boolean[] nullMask = nullable ? new boolean[count] : null;
-            for (int i = 0; i < count; i++) {
-                boolean isNull = isNull(nulls, i);
-                if (nullMask != null) {
-                    nullMask[i] = isNull;
-                }
-                copy[i] = isNull ? 0 : backing[i];
-            }
-            return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
-        }
-        if (values instanceof I32Vector i32) {
-            int[] backing = i32.values();
-            long[] copy = new long[count];
-            boolean[] nullMask = nullable ? new boolean[count] : null;
-            for (int i = 0; i < count; i++) {
-                boolean isNull = nulls != null && isNull(nulls, i);
-                if (nullMask != null) {
-                    nullMask[i] = isNull;
-                }
-                copy[i] = isNull ? 0 : backing[i];
-            }
-            return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
-        }
-        throw new IllegalArgumentException("Unsupported column vector type: " + values.getClass().getName());
-    }
-
-    /** Convert column {@code c} of {@code batch} to a flat column of {@code count} rows, row {@code j} being batch position {@code mask.position(selection[j])}. */
-    private static org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask mask, int c, int count, int[] selection, boolean nullable)
-    {
-        Vector vector = batch.output(c).borrow(Stream.VALUES);
-        Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
-        long[] values = new long[count];
-        boolean[] nullMask = nullable ? new boolean[count] : null;
-        for (int j = 0; j < count; j++) {
-            int position = mask.position(selection[j]);
-            boolean isNull = nulls != null && isNull(nulls, position);
-            if (nullMask != null) {
-                nullMask[j] = isNull;
-            }
-            values[j] = isNull ? 0 : longValue(vector, position);
-        }
-        return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
     }
 
     /**
