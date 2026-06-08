@@ -204,6 +204,22 @@ public final class QueryLowering
         return this;
     }
 
+    /**
+     * Anti-join (NOT EXISTS): keep probe rows with NO match in {@code table} on {@code probeKey = buildKey}. The build
+     * contributes no output columns; pass just its key column. Used for "orders that were not returned"-style filters.
+     */
+    public QueryLowering antiJoin(String table, String probeKey, String buildKey, Column... columns)
+    {
+        Input build = new Input(table, List.of(columns));
+        int buildKeyLocal = indexOf(columns, buildKey);
+        for (Column column : columns) {
+            assign(column.name());
+        }
+        builds.add(build);
+        joins.add(Plan.Join.anti(new Plan.Build(columns.length, buildKeyLocal), position(probeKey)));
+        return this;
+    }
+
     /** Combined position of a column, for building filters/HAVING expressions by name. */
     public int position(String columnName)
     {

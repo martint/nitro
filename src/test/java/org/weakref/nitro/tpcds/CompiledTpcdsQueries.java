@@ -1371,6 +1371,81 @@ public final class CompiledTpcdsQueries
                 new DictRef(0, 7, 1), new DictRef(1, 7, 2), new DictRef(2, 6, 1), new DictRef(3, 6, 2)));
     }
 
+    public static Composite query94()
+    {
+        // Q94: web_sales shipped in a 60-day window from Illinois addresses via 'pri%' web sites, for orders shipped
+        // from MORE THAN ONE warehouse and NOT returned; report count(distinct order), sum(ext_ship_cost),
+        // sum(net_profit). Four stages: (1) multi-warehouse orders (web_sales self-join on order with differing
+        // warehouse, distinct), (2) distinct returned orders, (3) filtered sales SEMI-joined to (1) and ANTI-joined to
+        // (2) then grouped by order via ROLLUP({order},{}) -- the per-order set enumerates distinct orders, the empty
+        // set carries the grand totals; main = the global count(distinct)+sums via sum(CASE on grouping_id).
+        QueryLowering multiWarehouse = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_order_number", ColumnEncoding.FLAT, true))
+                .join("web_sales", "ws_order_number", "ws_order_number_2",
+                        new QueryLowering.Column("ws_warehouse_sk_2", "ws_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_order_number_2", "ws_order_number", ColumnEncoding.FLAT, true));
+        multiWarehouse.where(new Plan.Predicate("<>", multiWarehouse.column("ws_warehouse_sk"), multiWarehouse.column("ws_warehouse_sk_2")))
+                .groupBy("ws_order_number")
+                .count();   // distinct eligible orders (the count is unused; the order key is the eligible set)
+
+        QueryLowering returned = QueryLowering.scan("web_returns",
+                        new QueryLowering.Column("wr_order_number", ColumnEncoding.FLAT, true))
+                .groupBy("wr_order_number")
+                .count();
+
+        LocalDate start = LocalDate.of(1999, 2, 1);
+        QueryLowering qualified = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_ship_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_ship_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_web_site_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_ext_ship_cost", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ws_ship_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join("customer_address", "ws_ship_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, false))
+                .join("web_site", "ws_web_site_sk", "web_site_sk",
+                        new QueryLowering.Column("web_site_sk"),
+                        new QueryLowering.Column("web_company_name", ColumnEncoding.STRING, false))
+                .join("q94_mw_orders", "ws_order_number", "mw_order",
+                        new QueryLowering.Column("mw_order", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("mw_count", ColumnEncoding.FLAT, false))
+                .antiJoin("q94_ret_orders", "ws_order_number", "ret_order",
+                        new QueryLowering.Column("ret_order", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("ret_count", ColumnEncoding.FLAT, false));
+        qualified.where(
+                        new Plan.Predicate(">=", qualified.column("d_date"), new Plan.Lit(start.toEpochDay())),
+                        new Plan.Predicate("<=", qualified.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.StringMatch(qualified.position("ca_state"), List.of("IL"), false),
+                        new Plan.LikeMatch(qualified.position("web_company_name"), "pri%", false))
+                .groupBy("ws_order_number")
+                .groupingSets(List.of(new int[] {0}, new int[0]))
+                .aggregate("sum", "ws_ext_ship_cost")
+                .aggregate("sum", "ws_net_profit");
+        // Stage 3 output: order(0), sum_ship(1), sum_profit(2), grouping_id(3). grouping_id = GROUPING(order): 0 for the
+        // per-order set (order active), 1 for the empty/grand-total set (order nulled).
+
+        QueryLowering main = QueryLowering.scan("q94_grouped",
+                        new QueryLowering.Column("g_order", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_ship", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_profit", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_grouping", ColumnEncoding.FLAT, false));
+        Plan.Condition perOrder = new Plan.Predicate("=", main.column("g_grouping"), new Plan.Lit(0));
+        Plan.Condition grandTotal = new Plan.Predicate("=", main.column("g_grouping"), new Plan.Lit(1));
+        main.aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(perOrder, new Plan.Lit(1))), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(grandTotal, main.column("g_ship"))), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(grandTotal, main.column("g_profit"))), new Plan.Lit(0)));
+
+        return new Composite(List.of(
+                new Stage(multiWarehouse, "q94_mw_orders"),
+                new Stage(returned, "q94_ret_orders"),
+                new Stage(qualified, "q94_grouped")), main, List.of());
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
