@@ -397,7 +397,13 @@ public final class CompiledTpcdsQueries
         // UNION ALL of store/catalog/web sales, each grouped by i_manufact_id with sum(ext_sales_price) over
         // item(category='Electronics') JOIN date_dim(d_year=1998,d_moy=5) JOIN customer_address(gmt_offset=-5);
         // then a final group by manufacturer summing the per-channel totals, ordered by total, LIMIT 100.
-        List<QueryLowering> branches = unionChannelBranches("i_category", List.of("Electronics"), "i_manufact_id", ColumnEncoding.FLAT, 1998, 5);
+        List<QueryLowering> branches = List.of(
+                unionChannelGroupedSales("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_addr_sk", "ss_ext_sales_price",
+                        "i_category", List.of("Electronics"), "i_manufact_id", ColumnEncoding.FLAT, 1998, 5),
+                unionChannelGroupedSales("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_addr_sk", "cs_ext_sales_price",
+                        "i_category", List.of("Electronics"), "i_manufact_id", ColumnEncoding.FLAT, 1998, 5),
+                unionChannelGroupedSales("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_addr_sk", "ws_ext_sales_price",
+                        "i_category", List.of("Electronics"), "i_manufact_id", ColumnEncoding.FLAT, 1998, 5));
         QueryLowering main = QueryLowering.scan("__q33_union__",
                         new QueryLowering.Column("g_manufact_id"),
                         new QueryLowering.Column("g_total", ColumnEncoding.FLAT, true))
@@ -411,8 +417,13 @@ public final class CompiledTpcdsQueries
     {
         // Same union shape as Q33 but filtered on i_color in {slate,blanched,burnished}, d_year=2001/d_moy=2, and
         // grouped by the dictionary string i_item_id; ordered by (total, item_id), LIMIT 100.
-        List<QueryLowering> branches = unionChannelBranches(
-                "i_color", List.of("slate", "blanched", "burnished"), "i_item_id", ColumnEncoding.STRING, 2001, 2);
+        List<QueryLowering> branches = List.of(
+                unionChannelGroupedSales("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_addr_sk", "ss_ext_sales_price",
+                        "i_color", List.of("slate", "blanched", "burnished"), "i_item_id", ColumnEncoding.STRING, 2001, 2),
+                unionChannelGroupedSales("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_addr_sk", "cs_ext_sales_price",
+                        "i_color", List.of("slate", "blanched", "burnished"), "i_item_id", ColumnEncoding.STRING, 2001, 2),
+                unionChannelGroupedSales("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_addr_sk", "ws_ext_sales_price",
+                        "i_color", List.of("slate", "blanched", "burnished"), "i_item_id", ColumnEncoding.STRING, 2001, 2));
         QueryLowering main = QueryLowering.scan("__q56_union__",
                         new QueryLowering.Column("g_item_id", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("g_total", ColumnEncoding.FLAT, true))
@@ -427,8 +438,13 @@ public final class CompiledTpcdsQueries
     {
         // Same union shape as Q33 but filtered on i_category='Music', d_year=1998/d_moy=9, grouped by the dictionary
         // string i_item_id; ordered by (item_id, total), LIMIT 100.
-        List<QueryLowering> branches = unionChannelBranches(
-                "i_category", List.of("Music"), "i_item_id", ColumnEncoding.STRING, 1998, 9);
+        List<QueryLowering> branches = List.of(
+                unionChannelGroupedSales("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_addr_sk", "ss_ext_sales_price",
+                        "i_category", List.of("Music"), "i_item_id", ColumnEncoding.STRING, 1998, 9),
+                unionChannelGroupedSales("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_addr_sk", "cs_ext_sales_price",
+                        "i_category", List.of("Music"), "i_item_id", ColumnEncoding.STRING, 1998, 9),
+                unionChannelGroupedSales("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_addr_sk", "ws_ext_sales_price",
+                        "i_category", List.of("Music"), "i_item_id", ColumnEncoding.STRING, 1998, 9));
         QueryLowering main = QueryLowering.scan("__q60_union__",
                         new QueryLowering.Column("g_item_id", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("g_total", ColumnEncoding.FLAT, true))
@@ -490,19 +506,6 @@ public final class CompiledTpcdsQueries
                         new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1999)))
                 .select(query.column(item), query.column(time), query.column(sales));
         return query;
-    }
-
-    /** The three sales-channel branches of a Q33/Q56/Q60-shaped union, parameterized by the item filter and group key. */
-    private static List<QueryLowering> unionChannelBranches(String itemAttribute, List<String> itemValues,
-            String groupColumn, ColumnEncoding groupEncoding, int year, int month)
-    {
-        return List.of(
-                unionChannelGroupedSales("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_addr_sk", "ss_ext_sales_price",
-                        itemAttribute, itemValues, groupColumn, groupEncoding, year, month),
-                unionChannelGroupedSales("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_addr_sk", "cs_ext_sales_price",
-                        itemAttribute, itemValues, groupColumn, groupEncoding, year, month),
-                unionChannelGroupedSales("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_addr_sk", "ws_ext_sales_price",
-                        itemAttribute, itemValues, groupColumn, groupEncoding, year, month));
     }
 
     public static MultiStage query92()
