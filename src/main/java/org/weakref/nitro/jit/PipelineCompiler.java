@@ -1307,6 +1307,18 @@ public final class PipelineCompiler
             out.append("        for (int i = 0; i < probeRows; i++) {\n");
             int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, resolver, nullResolver, stringMaskIds);
             String indent = "          " + "  ".repeat(openBraces);
+            // A cross join pairs one probe row with many build rows, so survivors can exceed the probe-row count;
+            // grow the selection arrays when full. (Inner/left/anti keep at most one survivor per probe row.)
+            boolean hasCross = joins.stream().anyMatch(Plan.Join::cross);
+            if (hasCross) {
+                out.append(indent).append("if (selected == selection.length) {\n");
+                out.append(indent).append("  int grown = selected * 2;\n");
+                out.append(indent).append("  selection = java.util.Arrays.copyOf(selection, grown);\n");
+                for (int k = 0; k < joinCount; k++) {
+                    out.append(indent).append("  bsel").append(k).append(" = java.util.Arrays.copyOf(bsel").append(k).append(", grown);\n");
+                }
+                out.append(indent).append("}\n");
+            }
             out.append(indent).append("selection[selected] = i;\n");
             for (int k = 0; k < joinCount; k++) {
                 out.append(indent).append("bsel").append(k).append("[selected] = buildRow").append(k).append(";\n");

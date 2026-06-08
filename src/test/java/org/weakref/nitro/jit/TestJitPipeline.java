@@ -583,6 +583,67 @@ public class TestJitPipeline
         assertThat(rows / batchSize).isGreaterThan(1);   // genuinely multiple batches
     }
 
+    @Test
+    void streamsAntiJoinInBatches()
+    {
+        // SELECT sum(p.v) WHERE p.k NOT IN (SELECT k FROM b) -- streamed probe + materialized build; the streaming
+        // late-materialization records non-matching probe rows (no build row) and matches the eager result.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(Plan.Join.anti(new Plan.Build(1, 0), 0)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
+
+        int rows = 200_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 5000;
+            v[i] = i % 11;
+        }
+        long[] buildKey = new long[2500];
+        for (int i = 0; i < buildKey.length; i++) {
+            buildKey[i] = i;   // keys 0..2499 present; 2500..4999 absent -> anti keeps the absent half
+        }
+
+        long eager = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{k, v}, {buildKey}}, new int[] {rows, buildKey.length}).columns()[0][0];
+        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null).execute(
+                flatBatches(4096, rows, k, v), new Column[][] {{new Column.FlatColumn(buildKey)}}, new int[] {buildKey.length});
+
+        assertThat(streamed.columns()[0][0]).isEqualTo(eager);
+        assertThat(eager).isGreaterThan(0);
+    }
+
+    @Test
+    void streamsCrossJoinInBatches()
+    {
+        // SELECT sum(p.v) FROM p, b WHERE p.v > b.t -- streamed probe crossed with a 2-row build, so a batch yields
+        // up to 2x its rows in survivors, exercising the streaming selection-array growth. Must match the eager run.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,
+                List.of(Plan.Join.cross(new Plan.Build(1, new int[0]))),
+                List.of(new Plan.Predicate(">", new Plan.Col(0), new Plan.Col(1))),
+                List.of(),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(0))));
+
+        int rows = 50_000;
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            v[i] = i % 100;
+        }
+        long[] thresholds = {10, 50};
+
+        long eager = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{v}, {thresholds}}, new int[] {rows, thresholds.length}).columns()[0][0];
+        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null).execute(
+                flatBatches(4096, rows, v), new Column[][] {{new Column.FlatColumn(thresholds)}}, new int[] {thresholds.length});
+
+        assertThat(streamed.columns()[0][0]).isEqualTo(eager);
+        assertThat(eager).isGreaterThan(0);
+    }
+
     private static Map<Long, Long> groupSums(CompiledPipeline.Result result)
     {
         Map<Long, Long> map = new HashMap<>();
