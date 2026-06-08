@@ -19,7 +19,6 @@ import org.weakref.nitro.jit.QueryLowering;
 import org.weakref.nitro.jit.Types;
 
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -706,27 +705,12 @@ public final class CompiledTpcdsQueries
 
     public static Ported query37()
     {
-        return inventorySalesItems("catalog_sales", "cs_item_sk",
-                LocalDate.of(2000, 2, 1), 68_00L, 98_00L, 677L, 940L, 694L, 808L);
-    }
-
-    public static Ported query82()
-    {
-        return inventorySalesItems("store_sales", "ss_item_sk",
-                LocalDate.of(2000, 5, 25), 62_00L, 92_00L, 129L, 270L, 821L, 423L);
-    }
-
-    /**
-     * Q37/Q82: {@code SELECT DISTINCT i_item_id, i_item_desc, i_current_price} over items priced in a range and from
-     * one of {@code manufacturerIds}, on hand (inv_quantity_on_hand 100..500) during a 60-day window and sold
-     * ({@code item_sk IN (SELECT item_sk FROM sales)}). Trino's plan is a single four-way inner join of
-     * item / inventory / date_dim / sales whose GROUP BY does the DISTINCT -- there is no separate distinct
-     * subquery -- so this mirrors that: inventory is streamed as the probe and item (its selective filter prunes the
-     * fact at the join), date_dim, and the sales fact are joined as builds, then GROUP BY the item attributes.
-     */
-    private static Ported inventorySalesItems(String salesTable, String salesItem,
-            LocalDate start, long minimumPrice, long maximumPrice, long... manufacturerIds)
-    {
+        // Q37: SELECT DISTINCT i_item_id, i_item_desc, i_current_price over catalog-sold items priced 68.00..98.00
+        // from manufacturers {677,940,694,808}, on hand (inv_quantity_on_hand 100..500) during a 60-day window from
+        // 2000-02-01, and sold (item_sk IN catalog_sales). Trino's plan is a single four-way inner join of
+        // inventory / item / date_dim / catalog_sales whose GROUP BY does the DISTINCT -- there is no separate distinct
+        // subquery -- so inventory is the probe and item / date_dim / catalog_sales are builds; GROUP BY item attrs.
+        LocalDate start = LocalDate.of(2000, 2, 1);
         QueryLowering query = QueryLowering.scan("inventory",
                         new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
@@ -740,20 +724,63 @@ public final class CompiledTpcdsQueries
                 .join("date_dim", "inv_date_sk", "d_date_sk",
                         new QueryLowering.Column("d_date_sk"),
                         new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
-                .join(salesTable, "inv_item_sk", salesItem,
-                        new QueryLowering.Column(salesItem));   // raw join on item_sk; the GROUP BY does the DISTINCT
-        List<Plan.Condition> manufacturers = new ArrayList<>();
-        for (long id : manufacturerIds) {
-            manufacturers.add(new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(id)));
-        }
+                .join("catalog_sales", "inv_item_sk", "cs_item_sk",
+                        new QueryLowering.Column("cs_item_sk"));   // raw join on item_sk; the GROUP BY does the DISTINCT
         query.where(
                         new Plan.Predicate(">=", query.column("inv_quantity_on_hand"), new Plan.Lit(100)),
                         new Plan.Predicate("<=", query.column("inv_quantity_on_hand"), new Plan.Lit(500)),
-                        new Plan.Predicate(">=", query.column("i_current_price"), new Plan.Lit(minimumPrice)),
-                        new Plan.Predicate("<=", query.column("i_current_price"), new Plan.Lit(maximumPrice)),
+                        new Plan.Predicate(">=", query.column("i_current_price"), new Plan.Lit(68_00L)),
+                        new Plan.Predicate("<=", query.column("i_current_price"), new Plan.Lit(98_00L)),
                         new Plan.Predicate(">=", query.column("d_date"), new Plan.Lit(start.toEpochDay())),
                         new Plan.Predicate("<=", query.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
-                        new Plan.Or(manufacturers))
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(677L)),
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(940L)),
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(694L)),
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(808L)))))
+                .groupBy("i_item_id", "i_item_desc", "i_current_price")
+                .count();   // grouping is the DISTINCT; the count is dropped by the SELECT below
+        query.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
+        query.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+        // Output columns 0 (i_item_id) and 1 (i_item_desc) are dictionary strings from input 1 (item), cols 1 and 2.
+        return new Ported(query, List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2)));
+    }
+
+    public static Ported query82()
+    {
+        // Q82: SELECT DISTINCT i_item_id, i_item_desc, i_current_price over store-sold items priced 62.00..92.00 from
+        // manufacturers {129,270,821,423}, on hand (inv_quantity_on_hand 100..500) during a 60-day window from
+        // 2000-05-25, and sold (item_sk IN store_sales). Same four-way inner join shape as Q37 (inventory probe;
+        // item / date_dim / store_sales builds) whose GROUP BY does the DISTINCT.
+        LocalDate start = LocalDate.of(2000, 5, 25);
+        QueryLowering query = QueryLowering.scan("inventory",
+                        new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
+                .join("item", "inv_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_manufact_id", ColumnEncoding.FLAT, true))
+                .join("date_dim", "inv_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join("store_sales", "inv_item_sk", "ss_item_sk",
+                        new QueryLowering.Column("ss_item_sk"));   // raw join on item_sk; the GROUP BY does the DISTINCT
+        query.where(
+                        new Plan.Predicate(">=", query.column("inv_quantity_on_hand"), new Plan.Lit(100)),
+                        new Plan.Predicate("<=", query.column("inv_quantity_on_hand"), new Plan.Lit(500)),
+                        new Plan.Predicate(">=", query.column("i_current_price"), new Plan.Lit(62_00L)),
+                        new Plan.Predicate("<=", query.column("i_current_price"), new Plan.Lit(92_00L)),
+                        new Plan.Predicate(">=", query.column("d_date"), new Plan.Lit(start.toEpochDay())),
+                        new Plan.Predicate("<=", query.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(129L)),
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(270L)),
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(821L)),
+                                new Plan.Predicate("=", query.column("i_manufact_id"), new Plan.Lit(423L)))))
                 .groupBy("i_item_id", "i_item_desc", "i_current_price")
                 .count();   // grouping is the DISTINCT; the count is dropped by the SELECT below
         query.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
