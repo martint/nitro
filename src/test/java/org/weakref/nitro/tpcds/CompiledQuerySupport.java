@@ -728,8 +728,21 @@ public final class CompiledQuerySupport
     public static Materialized materializeStage(Allocator allocator, TpcdsParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
+        return materializeStage(allocator, tables, lowered, virtuals, List.of());
+    }
+
+    /**
+     * As {@link #materializeStage(Allocator, TpcdsParquetTables, org.weakref.nitro.jit.QueryLowering.Lowered, Map)} but
+     * reconstructing the stage's STRING output columns (per {@code stringColumns}, resolved against the stage's own
+     * loaded inputs) into dictionary columns, so the virtual relation carries their dictionaries for a downstream stage
+     * that passes the string through rather than re-joining its base table.
+     */
+    public static Materialized materializeStage(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals,
+            List<CompiledTpcdsQueries.DictRef> stringColumns)
+    {
         LoweredResult result = runStage(allocator, tables, lowered, virtuals);
-        return new Materialized(materialize(result.result()), result.result().rowCount());
+        return new Materialized(materialize(result.result(), result.inputs(), stringColumns), result.result().rowCount());
     }
 
     private static StreamedResult streamCapturingBuilds(Allocator allocator, TpcdsParquetTables tables,

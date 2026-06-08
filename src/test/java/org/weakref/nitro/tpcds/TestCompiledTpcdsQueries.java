@@ -108,6 +108,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query89()
+    {
+        assertCompositeMatchesHarness(CompiledTpcdsQueries.query89(), TpcdsParquetSupport::query89);
+    }
+
+    @Test
     void query33()
     {
         assertUnionMatchesHarness(CompiledTpcdsQueries.query33(), TpcdsParquetSupport::query33);
@@ -429,7 +435,7 @@ public class TestCompiledTpcdsQueries
         Allocator allocator = new Allocator();
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
-            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals));
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
         }
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
         assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);

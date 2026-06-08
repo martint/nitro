@@ -56,7 +56,7 @@ import java.util.function.Supplier;
 public class BenchmarkCompiledQueries
 {
     @Param({"01", "03", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
-            "60", "62", "63", "65", "71", "73", "82", "91", "92", "96", "99"})
+            "60", "62", "63", "65", "71", "73", "82", "89", "91", "92", "96", "99"})
     public String query;
 
     private Allocator allocator;
@@ -105,6 +105,7 @@ public class BenchmarkCompiledQueries
         composite("22", CompiledTpcdsQueries.query22());
         composite("53", CompiledTpcdsQueries.query53());
         composite("63", CompiledTpcdsQueries.query63());
+        composite("89", CompiledTpcdsQueries.query89());
         composite("65", CompiledTpcdsQueries.query65());
     }
 
@@ -144,17 +145,17 @@ public class BenchmarkCompiledQueries
     /** A multi-stage query expressed as a tree of pipelines (each stage materialized under a virtual table name). */
     private void composite(String name, CompiledTpcdsQueries.Composite composite)
     {
-        record StagePlan(Lowered plan, String virtualName) {}
+        record StagePlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
 
         List<StagePlan> stages = new ArrayList<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
-            stages.add(new StagePlan(stage.plan().lower(), stage.virtualName()));
+            stages.add(new StagePlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
         }
         Lowered main = composite.main().lower();
         runners.put(name, () -> {
             Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
             for (StagePlan stage : stages) {
-                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals));
+                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
             }
             return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
         });

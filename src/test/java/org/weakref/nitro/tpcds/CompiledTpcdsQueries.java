@@ -598,8 +598,20 @@ public final class CompiledTpcdsQueries
         return new MultiStage(subquery, main, "__item_averages__", List.of());
     }
 
-    /** One stage of a multi-stage operator tree: a lowering plus the virtual-table name its materialized output is exposed under. */
-    public record Stage(QueryLowering plan, String virtualName) {}
+    /**
+     * One stage of a multi-stage operator tree: a lowering plus the virtual-table name its materialized output is
+     * exposed under. {@code stringColumns} declares any STRING output columns of this stage (mapping a result column to
+     * the stage's own input dictionary) so the stage materializes them as dictionary columns -- then a later stage that
+     * passes a string group key through (rather than re-joining the base table) can still reconstruct it from the
+     * virtual relation. Empty when the stage emits no strings.
+     */
+    public record Stage(QueryLowering plan, String virtualName, List<DictRef> stringColumns)
+    {
+        public Stage(QueryLowering plan, String virtualName)
+        {
+            this(plan, virtualName, List.of());
+        }
+    }
 
     /**
      * A multi-stage query as a tree of compiled pipelines (the shape the planner already produced). {@code stages}
@@ -1059,6 +1071,72 @@ public final class CompiledTpcdsQueries
                 .aggregate("avg", "ss_ext_wholesale_cost")
                 .aggregate("sum", "ss_ext_wholesale_cost");
         return new Ported(query, -1, 0, 0);
+    }
+
+    public static Composite query89()
+    {
+        // Q89: monthly store_sales sums per (i_category, i_class, i_brand, s_store_name, s_company_name, d_moy) over
+        // two item cohorts in 1999, then avg OVER (PARTITION BY i_category, i_brand, s_store_name, s_company_name);
+        // keep months deviating >10% from that average, ORDER BY (sum - avg), s_store_name, top 100. The five string
+        // group keys flow THROUGH the virtual table into the window stage (the main does not re-join item/store), so
+        // the pre-aggregate stage declares them as string outputs to carry their dictionaries forward.
+        QueryLowering monthly = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, false))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_year"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("s_company_name", ColumnEncoding.STRING, false));
+        monthly.where(
+                        new Plan.Predicate("=", monthly.column("d_year"), new Plan.Lit(1999)),
+                        new Plan.Or(
+                                new Plan.And(
+                                        new Plan.StringMatch(monthly.position("i_category"), List.of("Books", "Electronics", "Sports"), false),
+                                        new Plan.StringMatch(monthly.position("i_class"), List.of("computers", "stereo", "football"), false)),
+                                new Plan.And(
+                                        new Plan.StringMatch(monthly.position("i_category"), List.of("Men", "Jewelry", "Women"), false),
+                                        new Plan.StringMatch(monthly.position("i_class"), List.of("shirts", "birdal", "dresses"), false))))
+                .groupBy("i_category", "i_class", "i_brand", "s_store_name", "s_company_name", "d_moy")
+                .aggregate("sum", "ss_sales_price");
+        // Stage output: i_category(0), i_class(1), i_brand(2), s_store_name(3), s_company_name(4), d_moy(5), sum(6).
+        // The string keys reconstruct from the stage's item build (input 1, cols 1-3) and store build (input 3, cols 1-2).
+        List<DictRef> stageStrings = List.of(
+                new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3),
+                new DictRef(3, 3, 1), new DictRef(4, 3, 2));
+
+        QueryLowering main = QueryLowering.scan("q89_monthly",
+                        new QueryLowering.Column("ms_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ms_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ms_brand", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ms_store_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ms_company_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ms_moy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("ms_sum", ColumnEncoding.FLAT, false))
+                .window(Plan.Window.partitionAverage(new int[] {0, 2, 3, 4}, 6));
+        // Window output: category(0), class(1), brand(2), store_name(3), company_name(4), moy(5), sum(6), avg(7).
+        Plan.Expr difference = new Plan.Bin("-", new Plan.Col(6), new Plan.Col(7));
+        main.having(new Plan.And(
+                        new Plan.Predicate(">", new Plan.Col(7), new Plan.Lit(0)),
+                        new Plan.Or(
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(6), new Plan.Col(7)), new Plan.Lit(10)), new Plan.Col(7)),
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(7), new Plan.Col(6)), new Plan.Lit(10)), new Plan.Col(7)))))
+                .orderBy(new Plan.Ordering(List.of(
+                        Plan.SortKey.expression(difference, Types.LONG, false), new Plan.SortKey(3, false)), 100));
+        // The five string outputs reconstruct from the virtual scan (main input 0), cols 0-4.
+        return new Composite(List.of(new Stage(monthly, "q89_monthly", stageStrings)), main, List.of(
+                new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2),
+                new DictRef(3, 0, 3), new DictRef(4, 0, 4)));
     }
 
     public static Composite query63()
