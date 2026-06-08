@@ -974,6 +974,73 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesStringColumnCompare()
+    {
+        // SELECT count(*) FROM t WHERE s0 <> s1 -- two dictionary-encoded string columns carrying INDEPENDENT
+        // dictionaries (different entries and a different id order), so a dict-id comparison would be wrong; the
+        // compiler must remap one column's ids into the other's id space and compare by value.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(new Plan.StringColumnCompare(0, 1, true)),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        byte[][] dict0 = {bytes("AA"), bytes("BB"), bytes("CC")};                              // AA=0, BB=1, CC=2
+        int[] ids0 = {0, 1, 2, 0, 1};                                                         // AA, BB, CC, AA, BB
+        byte[][] dict1 = {bytes("YY"), bytes("XX"), bytes("CC"), bytes("BB"), bytes("AA")};    // YY=0 .. AA=4
+        int[] ids1 = {4, 1, 2, 0, 3};                                                         // AA, XX, CC, YY, BB
+        // row values: (AA,AA) equal, (BB,XX) differ, (CC,CC) equal, (AA,YY) differ, (BB,BB) equal -> 2 survive <>.
+        long expected = 2;
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {{new Column.StringColumn(ids0, dict0), new Column.StringColumn(ids1, dict1)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {ids0.length});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    private static byte[] bytes(String value)
+    {
+        return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void compilesStringColumnCompareAcrossJoin()
+    {
+        // SELECT count(*) FROM probe JOIN dim ON probe.k = dim.k WHERE probe.bought <> dim.current -- the two string
+        // columns live on different sides of a join with independent dictionaries, so the remap must resolve one
+        // operand from the probe and the other from the build.
+        Plan.Build dim = new Plan.Build(2, 0);   // [dim.k, dim.current]
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                // probe: [probe.k, probe.bought]
+                List.of(new Plan.Join(dim, 0)),   // probe.k = dim.k (combined col 2)
+                List.of(new Plan.StringColumnCompare(1, 3, true)),   // probe.bought (1) <> dim.current (3)
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        byte[][] boughtDict = {bytes("AA"), bytes("BB"), bytes("CC")};        // AA=0, BB=1, CC=2
+        long[] probeKey = {0, 1, 2, 0};
+        int[] boughtIds = {0, 0, 2, 1};                                      // AA, AA, CC, BB
+        byte[][] currentDict = {bytes("CC"), bytes("BB"), bytes("AA")};       // CC=0, BB=1, AA=2 (different order)
+        long[] dimKey = {0, 1, 2};
+        int[] currentIds = {2, 1, 0};                                        // AA, BB, CC
+        // joined rows: (AA,AA) equal, (AA,BB) differ, (CC,CC) equal, (BB,AA) differ -> 2 survive <>.
+        long expected = 2;
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.STRING}, {ColumnEncoding.FLAT, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {
+                {new Column.FlatColumn(probeKey), new Column.StringColumn(boughtIds, boughtDict)},
+                {new Column.FlatColumn(dimKey), new Column.StringColumn(currentIds, currentDict)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {probeKey.length, dimKey.length});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
     void compilesSnowflakeJoin()
     {
         // SELECT sum(d2.v) FROM fact JOIN d1 ON fact.k = d1.k JOIN d2 ON d1.fk = d2.k -- the second join keys on a

@@ -96,7 +96,19 @@ public final class Plan
      * {@link Predicate}s; {@code BETWEEN lo AND hi} to {@link And} of {@code >=} and {@code <=}.
      */
     public sealed interface Condition
-            permits Predicate, And, Or, Not, StringMatch, LikeMatch, SubstringMatch
+            permits Predicate, And, Or, Not, StringMatch, LikeMatch, SubstringMatch, StringColumnCompare
+    {}
+
+    /**
+     * Value equality (or inequality, when {@code negated}) between two dictionary-encoded string columns,
+     * {@code left} and {@code right}, which may carry independent dictionaries (so a dict-id comparison is wrong).
+     * Compiled by remapping the left column's dictionary ids into the right column's id space once -- for each left
+     * entry, the id of the right-dictionary entry with the same bytes (or a sentinel when absent) -- so each row is
+     * the integer test {@code remap[leftId] == rightId} (negated for {@code <>}). A null on either side makes the
+     * comparison null (the row is dropped), matching SQL.
+     */
+    public record StringColumnCompare(int left, int right, boolean negated)
+            implements Condition
     {}
 
     /**

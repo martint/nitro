@@ -185,7 +185,7 @@ public final class PipelineCompiler
                     emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
                 }
                 for (Plan.Condition match : matches) {
-                    emitStringMaskPrelude(out, match, stringMaskIds.get(match), "cStr" + stringMatchColumn(match));
+                    emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
                 }
                 out.append("        int kept = 0;\n");
                 out.append("        for (int i = 0; i < selected; i++) {\n");
@@ -208,7 +208,7 @@ public final class PipelineCompiler
                 emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
             }
             for (Plan.Condition match : aggregateMatches) {
-                emitStringMaskPrelude(out, match, stringMaskIds.get(match), "cStr" + stringMatchColumn(match));
+                emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
             }
             out.append("        for (int i = 0; i < selected; i++) {\n");
             if (grouped) {
@@ -229,7 +229,7 @@ public final class PipelineCompiler
                 emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
             }
             for (Plan.Condition match : stringMatches) {
-                emitStringMaskPrelude(out, match, stringMaskIds.get(match), "cStr" + stringMatchColumn(match));
+                emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
             }
             out.append("      for (int i = 0; i < rowCount; i++) {\n");
             emitRowBody(out, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
@@ -729,7 +729,7 @@ public final class PipelineCompiler
         for (int s = 0; s < stringMatches.size(); s++) {
             Plan.Condition match = stringMatches.get(s);
             stringMaskIds.put(match, s);
-            emitStringMaskPrelude(out, match, s, "cStr" + stringMatchColumn(match));
+            emitStringConditionPrelude(out, match, s, column -> "cStr" + column);
         }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
@@ -837,7 +837,8 @@ public final class PipelineCompiler
     /** Collect every predicate-over-dictionary leaf (exact, LIKE, substring) reachable through and/or/not. */
     private static void collectStringMatches(Plan.Condition condition, List<Plan.Condition> into)
     {
-        if (condition instanceof Plan.StringMatch || condition instanceof Plan.LikeMatch || condition instanceof Plan.SubstringMatch) {
+        if (condition instanceof Plan.StringMatch || condition instanceof Plan.LikeMatch || condition instanceof Plan.SubstringMatch
+                || condition instanceof Plan.StringColumnCompare) {
             into.add(condition);
         }
         else if (condition instanceof Plan.And and) {
@@ -1179,6 +1180,9 @@ public final class PipelineCompiler
             // CASE conditions in aggregate inputs, not just WHERE filters; probe-side masks build per batch below.
             for (int s = 0; s < stringMatches.size(); s++) {
                 Plan.Condition match = stringMatches.get(s);
+                if (match instanceof Plan.StringColumnCompare) {
+                    continue;   // column-vs-column remap needs both dictionaries; emitted once below, after all builds load
+                }
                 int column = stringMatchColumn(match);
                 if (column >= buildOffset[k] && column < buildOffset[k] + join.build().columnCount()) {
                     emitStringMaskPrelude(out, match, s, buildVars(k, column - buildOffset[k]).stringDict());
@@ -1334,6 +1338,14 @@ public final class PipelineCompiler
             }
             for (int s = 0; s < stringMatches.size(); s++) {
                 Plan.Condition match = stringMatches.get(s);
+                if (match instanceof Plan.StringColumnCompare) {
+                    // Both dictionaries are materialized now (builds above, probe just loaded), so emit the remap here,
+                    // resolving each operand's dictionary variable from whichever side (probe or a build) it lives on.
+                    emitStringConditionPrelude(out, match, s, column -> column < probeColumns
+                            ? probeVars(column).stringDict()
+                            : buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]).stringDict());
+                    continue;
+                }
                 int column = stringMatchColumn(match);
                 if (column < probeColumns) {
                     emitStringMaskPrelude(out, match, s, probeVars(column).stringDict());
@@ -2080,6 +2092,7 @@ public final class PipelineCompiler
             case Plan.StringMatch match -> match.negated() ? 4 : (match.values().size() == 1 ? 0 : 1);
             case Plan.SubstringMatch match -> match.negated() ? 4 : 2;
             case Plan.LikeMatch match -> match.negated() ? 4 : 3;
+            case Plan.StringColumnCompare compare -> compare.negated() ? 4 : 1;
             case Plan.And ignored -> 1;
             case Plan.Or ignored -> 5;
             case Plan.Not ignored -> 4;
@@ -2139,6 +2152,10 @@ public final class PipelineCompiler
             case Plan.StringMatch match -> into.add(match.column());
             case Plan.LikeMatch match -> into.add(match.column());
             case Plan.SubstringMatch match -> into.add(match.column());
+            case Plan.StringColumnCompare compare -> {
+                into.add(compare.left());
+                into.add(compare.right());
+            }
         }
     }
 
@@ -2187,6 +2204,7 @@ public final class PipelineCompiler
             case Plan.StringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
             case Plan.LikeMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
             case Plan.SubstringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
+            case Plan.StringColumnCompare ignored -> throw new UnsupportedOperationException("string column compare is only supported in WHERE filters");
         };
     }
 
@@ -2381,6 +2399,9 @@ public final class PipelineCompiler
             case Plan.SubstringMatch match -> {
                 return stringMaskTrue(match, resolver, nullResolver, stringMaskIds);
             }
+            case Plan.StringColumnCompare compare -> {
+                return stringColumnCompareTest(compare, compare.negated(), resolver, nullResolver, stringMaskIds);
+            }
         }
     }
 
@@ -2428,6 +2449,10 @@ public final class PipelineCompiler
             case Plan.SubstringMatch match -> {
                 return stringMaskFalse(match, resolver, nullResolver, stringMaskIds);
             }
+            case Plan.StringColumnCompare compare -> {
+                // The complement of an equality is an inequality and vice versa (over non-null rows).
+                return stringColumnCompareTest(compare, !compare.negated(), resolver, nullResolver, stringMaskIds);
+            }
         }
     }
 
@@ -2438,5 +2463,48 @@ public final class PipelineCompiler
         String guard = notNullGuard(nullResolver.apply(column));
         String lookup = "!sMask" + stringMaskIds.get(match) + "[" + resolver.apply(column) + "]";
         return guard.isEmpty() ? lookup : "(" + guard + " && " + lookup + ")";
+    }
+
+    /**
+     * Per-row test for a {@link Plan.StringColumnCompare}: {@code sRemap<id>[leftId] == rightId} (or {@code !=} when
+     * {@code inequality}), guarded so a null on either side makes the row fail (SQL: the comparison is null). The remap
+     * (emitted by {@link #emitStringRemapPrelude}) translates a left-dictionary id into the right column's id space, so
+     * value equality becomes the integer test; a left value absent from the right dictionary maps to {@code -1}, which
+     * never equals a (non-negative) right id.
+     */
+    private static String stringColumnCompareTest(Plan.StringColumnCompare compare, boolean inequality, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        String guard = andGuards(notNullGuard(nullResolver.apply(compare.left())), notNullGuard(nullResolver.apply(compare.right())));
+        String test = "sRemap" + stringMaskIds.get(compare) + "[" + resolver.apply(compare.left()) + "] " + (inequality ? "!=" : "==") + " " + resolver.apply(compare.right());
+        return guard.isEmpty() ? "(" + test + ")" : "(" + guard + " && (" + test + "))";
+    }
+
+    /**
+     * Precompute the {@code int[] sRemap<id>} that maps each entry of the left column's dictionary to the id of the
+     * right column's dictionary entry with the same bytes (or {@code -1}). A {@link Plan.StringColumnCompare} then
+     * compares two columns carrying independent dictionaries with a single integer lookup per row.
+     */
+    /** Emit the per-dictionary prelude for a string condition: a remap for a column-vs-column compare, else a mask. {@code dictionaryVar} maps a column index to its materialized dictionary variable. */
+    private static void emitStringConditionPrelude(StringBuilder out, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
+    {
+        if (match instanceof Plan.StringColumnCompare compare) {
+            emitStringRemapPrelude(out, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()));
+        }
+        else {
+            emitStringMaskPrelude(out, match, id, dictionaryVar.apply(stringMatchColumn(match)));
+        }
+    }
+
+    private static void emitStringRemapPrelude(StringBuilder out, int id, String leftDictionaryVar, String rightDictionaryVar)
+    {
+        out.append("    java.util.HashMap<String, Integer> sRightIdx").append(id).append(" = new java.util.HashMap<>();\n");
+        out.append("    for (int e = 0; e < ").append(rightDictionaryVar).append(".length; e++) {\n");
+        out.append("      sRightIdx").append(id).append(".putIfAbsent(new String(").append(rightDictionaryVar).append("[e], java.nio.charset.StandardCharsets.UTF_8), e);\n");
+        out.append("    }\n");
+        out.append("    int[] sRemap").append(id).append(" = new int[").append(leftDictionaryVar).append(".length];\n");
+        out.append("    for (int e = 0; e < ").append(leftDictionaryVar).append(".length; e++) {\n");
+        out.append("      Integer r = sRightIdx").append(id).append(".get(new String(").append(leftDictionaryVar).append("[e], java.nio.charset.StandardCharsets.UTF_8));\n");
+        out.append("      sRemap").append(id).append("[e] = r == null ? -1 : r;\n");
+        out.append("    }\n");
     }
 }
