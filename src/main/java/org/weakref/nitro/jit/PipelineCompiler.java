@@ -1292,8 +1292,11 @@ public final class PipelineCompiler
             }
             out.append("        }\n");
             out.append("      }\n");
-            // Phase 2: payload probe columns materialized for the survivors only, then folded in.
-            out.append("      {\n");
+            // Phase 2: payload probe columns materialized for the survivors only, then folded in. Skip the whole
+            // phase when the batch has no survivors -- materializing would borrow (and so decode) the payload columns
+            // over the batch for nothing. This is how an operator scan avoids decoding payload for batches a selective
+            // join/filter fully prunes (e.g. a date-clustered fact where most batches contain no qualifying rows).
+            out.append("      if (selected > 0) {\n");
             out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(payloadProbe)).append(", selection, selected);\n");
             for (int column : payloadProbe) {
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
