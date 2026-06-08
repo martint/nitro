@@ -247,7 +247,40 @@ final class TpcdsParquetSupport
 
     public static Operator query12(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryRevenueRatioByClass(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price", true);
+        // web_sales ⋈ item(category in the Q12 set) ⋈ date_dim(30-day window); GROUP BY item attrs sum(ext_sales_price);
+        // PARTITION SUM of those sums over i_class (window); revenue ratio = class-sum-relative percent; top 100.
+        Operator facts = factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query12CategoryPredicate(),
+                        new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query12DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2);
+        facts = new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts);
+        facts = new WindowOperator(allocator, facts, new int[] {3}, new int[0], new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(5)));
+        facts = projectQuery12RevenueRatio(allocator, primitiveRegistry, facts);
+        return new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
     }
 
     public static Operator query13(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -322,7 +355,40 @@ final class TpcdsParquetSupport
 
     public static Operator query20(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryRevenueRatioByClass(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price", true);
+        // Same revenue-ratio-by-class shape as Q12 over catalog_sales: item(category) ⋈ date_dim(30-day window);
+        // GROUP BY item attrs sum(ext_sales_price); PARTITION SUM over i_class; revenue ratio; top 100.
+        Operator facts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query12CategoryPredicate(),
+                        new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query12DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2);
+        facts = new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts);
+        facts = new WindowOperator(allocator, facts, new int[] {3}, new int[0], new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(5)));
+        facts = projectQuery12RevenueRatio(allocator, primitiveRegistry, facts);
+        return new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
     }
 
     public static Operator query39(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2002,17 +2068,57 @@ final class TpcdsParquetSupport
 
     public static Operator query98(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryRevenueRatioByClass(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price", false);
+        // Same revenue-ratio-by-class shape as Q12 over store_sales, but the final ordering is a full SORT (no LIMIT):
+        // item(category) ⋈ date_dim(30-day window); GROUP BY item attrs sum(ext_sales_price); PARTITION SUM over
+        // i_class; revenue ratio; ORDER BY category, class, item id/desc, ratio.
+        Operator facts = query98RevenueWindowed(allocator, primitiveRegistry, tables);
+        facts = projectQuery12RevenueRatio(allocator, primitiveRegistry, facts);
+        return new SortOperator(allocator, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
     }
 
+    /** Q98 sub-stage (tested independently against Trino): store_sales ⋈ item(category) ⋈ date_dim, grouped sums. */
     static Operator query98RevenueGrouped(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryRevenueRatioByClassGrouped(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
+        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                1,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "item",
+                        query12CategoryPredicate(),
+                        new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
+                0);
+        facts = new HashJoinOperator(
+                allocator,
+                facts,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        query12DatePredicate(),
+                        new String[] {"d_date_sk", "d_date"},
+                        0),
+                0);
+        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2);
+        return new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts);
     }
 
+    /** Q98 sub-stage (tested independently against Trino): the grouped sums with a PARTITION SUM over i_class. */
     static Operator query98RevenueWindowed(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return queryRevenueRatioByClassWindowed(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price");
+        return new WindowOperator(
+                allocator,
+                query98RevenueGrouped(allocator, primitiveRegistry, tables),
+                new int[] {3},
+                new int[0],
+                new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(5)));
     }
 
     public static Operator query89(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2109,67 +2215,6 @@ final class TpcdsParquetSupport
         joined = projectQuery47SortKey(allocator, primitiveRegistry, joined);
         joined = new TopNOperator(allocator, 100, new int[] {10, 2}, new boolean[] {false, false}, joined);
         return projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
-    }
-
-    private static Operator queryRevenueRatioByClass(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn, boolean limitToTop100)
-    {
-        Operator facts = queryRevenueRatioByClassWindowed(allocator, primitiveRegistry, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
-        facts = projectQuery12RevenueRatio(allocator, primitiveRegistry, facts);
-        if (limitToTop100) {
-            facts = new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
-        }
-        else {
-            facts = new SortOperator(allocator, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
-        }
-        return facts;
-    }
-
-    private static Operator queryRevenueRatioByClassWindowed(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
-    {
-        Operator facts = queryRevenueRatioByClassGrouped(allocator, primitiveRegistry, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
-        return new WindowOperator(
-                allocator,
-                facts,
-                new int[] {3},
-                new int[0],
-                new boolean[0],
-                List.of(new PartitionSumI64WindowFunction(5)));
-    }
-
-    private static Operator queryRevenueRatioByClassGrouped(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesColumn)
-    {
-        Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesColumn);
-        facts = new HashJoinOperator(
-                allocator,
-                facts,
-                1,
-                filteredProjectedTable(
-                        allocator,
-                        primitiveRegistry,
-                        tables,
-                        "item",
-                        query12CategoryPredicate(),
-                        new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
-                0);
-        facts = new HashJoinOperator(
-                allocator,
-                facts,
-                0,
-                filteredProjectedTable(
-                        allocator,
-                        primitiveRegistry,
-                        tables,
-                        "date_dim",
-                        query12DatePredicate(),
-                        new String[] {"d_date_sk", "d_date"},
-                        0),
-                0);
-        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2);
-        return new GroupedAggregationOperator(
-                allocator,
-                List.of(0, 1, 2, 3, 4),
-                List.of(new Sum(5)),
-                facts);
     }
 
     public static Operator query09(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
