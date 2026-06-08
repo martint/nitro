@@ -1061,6 +1061,62 @@ public final class CompiledTpcdsQueries
         return new Ported(query, -1, 0, 0);
     }
 
+    public static Composite query63()
+    {
+        // Q63: like Q53 but groups store_sales sums per (i_manager_id, d_moy) -- monthly sales per manager over the same
+        // two item cohorts -- then avg OVER (PARTITION BY i_manager_id) and keeps months deviating >10% from the
+        // manager's average, ORDER BY i_manager_id, the average, then the sum, top 100.
+        QueryLowering monthly = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_manager_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, false))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_month_seq"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"));
+        monthly.where(
+                        new Plan.Predicate(">", monthly.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", monthly.column("d_month_seq"), new Plan.Lit(1212)),
+                        new Plan.Or(
+                                new Plan.And(
+                                        new Plan.StringMatch(monthly.position("i_category"), List.of("Books", "Children", "Electronics"), false),
+                                        new Plan.StringMatch(monthly.position("i_class"), List.of("personal", "portable", "reference", "self-help"), false),
+                                        new Plan.StringMatch(monthly.position("i_brand"), List.of("scholaramalgamalg #14", "scholaramalgamalg #7", "exportiunivamalg #9", "scholaramalgamalg #9"), false)),
+                                new Plan.And(
+                                        new Plan.StringMatch(monthly.position("i_category"), List.of("Women", "Music", "Men"), false),
+                                        new Plan.StringMatch(monthly.position("i_class"), List.of("accessories", "classical", "fragrances", "pants"), false),
+                                        new Plan.StringMatch(monthly.position("i_brand"), List.of("amalgimporto #1", "edu packscholar #1", "exportiimporto #1", "importoamalg #1"), false))))
+                .groupBy("i_manager_id", "d_moy")
+                .aggregate("sum", "ss_sales_price");
+        // Pre-aggregation output: (i_manager_id = 0, d_moy = 1, sum_sales = 2); all non-null.
+
+        QueryLowering main = QueryLowering.scan("q63_monthly",
+                        new QueryLowering.Column("ms_manager_id", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("ms_moy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("ms_sum", ColumnEncoding.FLAT, false))
+                .window(Plan.Window.partitionAverage(new int[] {0}, 2));
+        // Window output: ms_manager_id (0), ms_moy (1), ms_sum (2), avg_monthly_sales (3).
+        main.having(new Plan.And(
+                        new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(0)),
+                        new Plan.Or(
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(2), new Plan.Col(3)), new Plan.Lit(10)), new Plan.Col(3)),
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(3), new Plan.Col(2)), new Plan.Lit(10)), new Plan.Col(3)))))
+                .select(new Plan.Col(0), new Plan.Col(2), new Plan.Col(3))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(3, false), new Plan.SortKey(2, false)), 100));
+
+        return new Composite(List.of(new Stage(monthly, "q63_monthly")), main, List.of());
+    }
+
     public static Composite query53()
     {
         // Q53: per (i_manufact_id, d_qoy) sum store_sales price over a 12-month window for two item category/class/
