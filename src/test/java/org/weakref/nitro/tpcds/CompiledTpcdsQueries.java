@@ -1061,6 +1061,77 @@ public final class CompiledTpcdsQueries
         return new Ported(query, -1, 0, 0);
     }
 
+    public static Ported query29()
+    {
+        // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
+        // customer+item+ticket) ⋈ date_dim(returned: d_moy 9..12, d_year=1999) ⋈ catalog_sales (multi-key on the
+        // RETURN's customer+item -- a snowflake, one-to-many fact-to-fact join) ⋈ date_dim(catalog: d_year in
+        // 1999/2000/2001); GROUP BY item id/desc, store id/name; sum(ss_quantity), sum(sr_return_quantity),
+        // sum(cs_quantity); ORDER BY the four group columns, top 100. date_dim is joined three times, so the returned
+        // and catalog instances load their columns under aliases.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy"),
+                        new QueryLowering.Column("d_year"))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, false))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false))
+                .join("store_returns",
+                        new String[] {"ss_customer_sk", "ss_item_sk", "ss_ticket_number"},
+                        new String[] {"sr_customer_sk", "sr_item_sk", "sr_ticket_number"},
+                        new QueryLowering.Column("sr_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_return_quantity", ColumnEncoding.FLAT, true))
+                .join("date_dim", "sr_returned_date_sk", "d_date_sk_returned",
+                        new QueryLowering.Column("d_date_sk_returned", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_moy_returned", "d_moy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_year_returned", "d_year", ColumnEncoding.FLAT, false))
+                .join("catalog_sales",
+                        new String[] {"sr_customer_sk", "sr_item_sk"},
+                        new String[] {"cs_bill_customer_sk", "cs_item_sk"},
+                        new QueryLowering.Column("cs_bill_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_quantity", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk_catalog",
+                        new QueryLowering.Column("d_date_sk_catalog", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_year_catalog", "d_year", ColumnEncoding.FLAT, false));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_moy"), new Plan.Lit(9)),
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1999)),
+                        new Plan.Predicate(">=", query.column("d_moy_returned"), new Plan.Lit(9)),
+                        new Plan.Predicate("<=", query.column("d_moy_returned"), new Plan.Lit(12)),
+                        new Plan.Predicate("=", query.column("d_year_returned"), new Plan.Lit(1999)),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", query.column("d_year_catalog"), new Plan.Lit(1999)),
+                                new Plan.Predicate("=", query.column("d_year_catalog"), new Plan.Lit(2000)),
+                                new Plan.Predicate("=", query.column("d_year_catalog"), new Plan.Lit(2001)))))
+                .groupBy("i_item_id", "i_item_desc", "s_store_id", "s_store_name")
+                .aggregate("sum", "ss_quantity")
+                .aggregate("sum", "sr_return_quantity")
+                .aggregate("sum", "cs_quantity")
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false),
+                        new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+        // The four string group columns reconstruct from item (input 2, cols 1-2) and store (input 3, cols 1-2).
+        return new Ported(query, List.of(
+                new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 3, 1), new DictRef(3, 3, 2)));
+    }
+
     public static Ported query50()
     {
         // Q50: store_sales ⋈ store_returns (multi-key fact-to-fact join on ticket+item+customer) ⋈ date_dim(sold)
