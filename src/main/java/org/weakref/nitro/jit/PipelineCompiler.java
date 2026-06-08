@@ -465,6 +465,10 @@ public final class PipelineCompiler
         for (Plan.Aggregate aggregate : pipeline.aggregates()) {
             types.add(aggregator(aggregate).outputType());
         }
+        // Grouping sets append a trailing grouping_id (the GROUPING() bitmask) column.
+        if (!pipeline.groupingSets().isEmpty()) {
+            types.add(Types.LONG);
+        }
         return types;
     }
 
@@ -738,6 +742,7 @@ public final class PipelineCompiler
         // direct-indexed array, and deopt to a hash table if a later key falls outside the bet. A nullable key or
         // a nullable aggregate routes through the null-aware hash path instead (array mode emits no result null mask).
         boolean speculate = grouped && pipeline.groupKeys().size() == 1
+                && pipeline.groupingSets().isEmpty()
                 && !anyGroupKeyNullable(pipeline, nullable) && !anyAggregateNullable(pipeline);
 
         // Group-on-id: when the single group key is a dictionary column, group on its dense id (so array mode
@@ -1653,10 +1658,237 @@ public final class PipelineCompiler
         out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types))));\n");
     }
 
+    // ---- grouping sets / ROLLUP (single-pass EXPAND) ----
+    //
+    // One aggregation matching the operator harness's GroupId expand: each input row is folded once per grouping
+    // set into a hash table keyed by (setId, k0', k1', ...), where an active key keeps its value (and real null
+    // flag) and an inactive key is forced null. The leading setId disambiguates two sets that null to the same key
+    // when the data has real nulls. The per-set fold is unrolled at compile time (each set is a compile-time
+    // bitmask), so the inactive columns are constant-folded to null in the emitted code. Result columns are the
+    // group-key columns (null where inactive in the group's set), the aggregate columns, then a trailing
+    // grouping_id column (the GROUPING() bitmask: bit i set for each group key i not in the set).
+
+    private static void emitGroupingSetsState(StringBuilder out, Plan.Pipeline pipeline)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        int keyCount = pipeline.groupKeys().size();
+        int total = cellCount(aggregates);
+        // Hash key is (setId, dataKey0, ..., dataKey{keyCount-1}); gsKey0 holds the setId, gsKey{kx+1} a data key.
+        // setId is never null; every data key is treated as nullable (an inactive key is null by construction).
+        out.append("    int cap = 1024;\n");
+        out.append("    long[] gsKey0 = new long[cap];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append("    long[] gsKey").append(kx + 1).append(" = new long[cap];\n");
+            out.append("    boolean[] gsKeyN").append(kx).append(" = new boolean[cap];\n");
+        }
+        out.append("    int[] gsGid = new int[cap];\n");
+        out.append("    java.util.Arrays.fill(gsGid, -1);\n");
+        out.append("    int gsMask = cap - 1; int gsFill = (int) (cap * 0.75f); int groupCount = 0;\n");
+        out.append("    int[] setByGid = new int[16];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
+            out.append("    boolean[] nullByGid").append(kx).append(" = new boolean[16];\n");
+        }
+        for (int c = 0; c < total; c++) {
+            out.append("    long[] agg").append(c).append(" = new long[16];\n");
+        }
+    }
+
+    private static void emitGroupingSetsAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        int keyCount = pipeline.groupKeys().size();
+        // Materialize each data key's raw value and null once per row (shared by every set this row folds into).
+        for (int kx = 0; kx < keyCount; kx++) {
+            String value = expr(pipeline.groupKeys().get(kx), groupKeyResolver);
+            if (keyNullable(pipeline, nullable, kx)) {
+                int colIndex = ((Plan.Col) pipeline.groupKeys().get(kx)).index();
+                out.append(indent).append("boolean rvN").append(kx).append(" = ").append(nullResolver.apply(colIndex)).append(";\n");
+                out.append(indent).append("long rv").append(kx).append(" = ").append(value).append(";\n");
+            }
+            else {
+                out.append(indent).append("boolean rvN").append(kx).append(" = false;\n");
+                out.append(indent).append("long rv").append(kx).append(" = ").append(value).append(";\n");
+            }
+        }
+        List<int[]> sets = pipeline.groupingSets();
+        for (int s = 0; s < sets.size(); s++) {
+            int[] set = sets.get(s);
+            java.util.Set<Integer> active = new java.util.HashSet<>();
+            for (int index : set) {
+                active.add(index);
+            }
+            out.append(indent).append("{\n");
+            String b = indent + "  ";
+            // Canonical per-set key components: an active key keeps its value (null canonicalized to 0); an inactive
+            // key is constant-folded to null.
+            for (int kx = 0; kx < keyCount; kx++) {
+                if (active.contains(kx)) {
+                    out.append(b).append("boolean ckN").append(kx).append(" = rvN").append(kx).append(";\n");
+                    out.append(b).append("long ck").append(kx).append(" = rvN").append(kx).append(" ? 0L : rv").append(kx).append(";\n");
+                }
+                else {
+                    out.append(b).append("boolean ckN").append(kx).append(" = true;\n");
+                    out.append(b).append("long ck").append(kx).append(" = 0L;\n");
+                }
+            }
+            out.append(b).append("int setId = ").append(s).append(";\n");
+            out.append(b).append("int gslot = mix(").append(groupingSetsHashFold(keyCount)).append(") & gsMask;\n");
+            out.append(b).append("while (gsGid[gslot] != -1 && !(").append(groupingSetsKeyCompare("gslot", keyCount)).append(")) { gslot = (gslot + 1) & gsMask; }\n");
+            out.append(b).append("int gid = gsGid[gslot];\n");
+            out.append(b).append("if (gid == -1) {\n");
+            String c = b + "  ";
+            out.append(c).append("gid = groupCount++; gsGid[gslot] = gid;\n");
+            out.append(c).append("gsKey0[gslot] = setId;\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append(c).append("gsKey").append(kx + 1).append("[gslot] = ck").append(kx).append(";\n");
+                out.append(c).append("gsKeyN").append(kx).append("[gslot] = ckN").append(kx).append(";\n");
+            }
+            out.append(c).append("if (gid == setByGid.length) {\n");
+            out.append(c).append("  int n = setByGid.length * 2;\n");
+            out.append(c).append("  setByGid = java.util.Arrays.copyOf(setByGid, n);\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append(c).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
+                out.append(c).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
+            }
+            for (int cell = 0; cell < cellCount(aggregates); cell++) {
+                out.append(c).append("  agg").append(cell).append(" = java.util.Arrays.copyOf(agg").append(cell).append(", n);\n");
+            }
+            out.append(c).append("}\n");
+            out.append(c).append("setByGid[gid] = setId;\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append(c).append("keyByGid").append(kx).append("[gid] = ck").append(kx).append(";\n");
+                out.append(c).append("nullByGid").append(kx).append("[gid] = ckN").append(kx).append(";\n");
+            }
+            emitStateIdentity(out, c, aggregates, "agg", "gid");
+            out.append(c).append("if (groupCount > gsFill) {\n");
+            out.append(c).append("  int ncap = cap * 2;\n");
+            out.append(c).append("  long[] nKey0 = new long[ncap];\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append(c).append("  long[] nKey").append(kx + 1).append(" = new long[ncap];\n");
+                out.append(c).append("  boolean[] nKeyN").append(kx).append(" = new boolean[ncap];\n");
+            }
+            out.append(c).append("  int[] nGid = new int[ncap];\n");
+            out.append(c).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
+            out.append(c).append("  for (int t = 0; t < cap; t++) { if (gsGid[t] != -1) {\n");
+            out.append(c).append("    int ns = mix(").append(groupingSetsRehashFold(keyCount)).append(") & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
+            out.append(c).append("    nKey0[ns] = gsKey0[t];\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append(c).append("    nKey").append(kx + 1).append("[ns] = gsKey").append(kx + 1).append("[t];\n");
+                out.append(c).append("    nKeyN").append(kx).append("[ns] = gsKeyN").append(kx).append("[t];\n");
+            }
+            out.append(c).append("    nGid[ns] = gsGid[t]; } }\n");
+            out.append(c).append("  gsKey0 = nKey0;\n");
+            for (int kx = 0; kx < keyCount; kx++) {
+                out.append(c).append("  gsKey").append(kx + 1).append(" = nKey").append(kx + 1).append(";\n");
+                out.append(c).append("  gsKeyN").append(kx).append(" = nKeyN").append(kx).append(";\n");
+            }
+            out.append(c).append("  gsGid = nGid; gsMask = nMask; cap = ncap; gsFill = (int) (cap * 0.75f);\n");
+            out.append(c).append("}\n");
+            out.append(b).append("}\n");
+            for (int a = 0; a < aggregates.size(); a++) {
+                emitAggregateUpdate(out, b, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver, stringMaskIds);
+            }
+            out.append(indent).append("}\n");
+        }
+    }
+
+    private static void emitGroupingSetsResult(StringBuilder out, Plan.Pipeline pipeline, int reconstructDictColumn, List<Type> resultTypes)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        int keyCount = pipeline.groupKeys().size();
+        int aggregateCount = aggregates.size();
+        // Result columns: each group key, then each aggregate, then a trailing grouping_id (the GROUPING() bitmask).
+        int columnCount = keyCount + aggregateCount + 1;
+        out.append("    long[][] result = new long[").append(columnCount).append("][];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            int dict = kx == 0 ? reconstructDictColumn : -1;
+            emitKeyResultColumn(out, "    ", kx, kx, dict, "groupCount");
+        }
+        emitAggregateResultColumns(out, "    ", keyCount, aggregates);
+        // grouping_id from setByGid: a precomputed per-set bitmask, indexed by each gid's set.
+        out.append("    long[] setMask = new long[").append(pipeline.groupingSets().size()).append("];\n");
+        List<int[]> sets = pipeline.groupingSets();
+        for (int s = 0; s < sets.size(); s++) {
+            long mask = groupingIdBitmask(sets.get(s), keyCount);
+            out.append("    setMask[").append(s).append("] = ").append(mask).append("L;\n");
+        }
+        out.append("    long[] outGroupingId = new long[groupCount];\n");
+        out.append("    for (int g = 0; g < groupCount; g++) { outGroupingId[g] = setMask[setByGid[g]]; }\n");
+        out.append("    result[").append(keyCount + aggregateCount).append("] = outGroupingId;\n");
+        emitResultTypes(out, "    ", resultTypes);
+        // Every group key is nullable in a grouping-sets result (inactive in some set), so emit a null mask driven by
+        // each gid's set membership; aggregates may also finalize to null.
+        out.append("    boolean[][] resultNulls = new boolean[").append(columnCount).append("][];\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append("    resultNulls[").append(kx).append("] = java.util.Arrays.copyOf(nullByGid").append(kx).append(", groupCount);\n");
+        }
+        for (int a = 0; a < aggregateCount; a++) {
+            String resultNull = aggregator(aggregates.get(a)).resultNull(cells(aggregates, a, "agg", "g"));
+            if (resultNull != null) {
+                out.append("    boolean[] aggNull").append(a).append(" = new boolean[groupCount];\n");
+                out.append("    for (int g = 0; g < groupCount; g++) { aggNull").append(a).append("[g] = ").append(resultNull).append("; }\n");
+                out.append("    resultNulls[").append(keyCount + a).append("] = aggNull").append(a).append(";\n");
+            }
+        }
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");
+    }
+
+    /** Hash input over (setId, ck0, ..., ck{keyCount-1}) for the grouping-sets accumulate. */
+    private static String groupingSetsHashFold(int keyCount)
+    {
+        String folded = "(long) setId";
+        for (int kx = 0; kx < keyCount; kx++) {
+            folded = "(" + folded + ") * 0x9E3779B97F4A7C15L + ck" + kx;
+        }
+        return folded;
+    }
+
+    /** Hash input over a stored slot {@code t} for the grouping-sets rehash. */
+    private static String groupingSetsRehashFold(int keyCount)
+    {
+        String folded = "gsKey0[t]";
+        for (int kx = 0; kx < keyCount; kx++) {
+            folded = "(" + folded + ") * 0x9E3779B97F4A7C15L + gsKey" + (kx + 1) + "[t]";
+        }
+        return folded;
+    }
+
+    /** Conjunction comparing a stored slot's (setId, keys, null flags) against the probe's. */
+    private static String groupingSetsKeyCompare(String slot, int keyCount)
+    {
+        StringBuilder compare = new StringBuilder("gsKey0[").append(slot).append("] == setId");
+        for (int kx = 0; kx < keyCount; kx++) {
+            compare.append(" && gsKey").append(kx + 1).append("[").append(slot).append("] == ck").append(kx);
+            compare.append(" && gsKeyN").append(kx).append("[").append(slot).append("] == ckN").append(kx);
+        }
+        return compare.toString();
+    }
+
+    /** The GROUPING() bitmask for a set: bit {@code kx} set when group key {@code kx} is NOT active in the set. */
+    private static long groupingIdBitmask(int[] set, int keyCount)
+    {
+        java.util.Set<Integer> active = new java.util.HashSet<>();
+        for (int index : set) {
+            active.add(index);
+        }
+        long mask = 0L;
+        for (int kx = 0; kx < keyCount; kx++) {
+            if (!active.contains(kx)) {
+                mask |= 1L << (keyCount - 1 - kx);
+            }
+        }
+        return mask;
+    }
+
     // ---- grouped aggregation (single long key) ----
 
     private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate)
     {
+        if (!pipeline.groupingSets().isEmpty()) {
+            emitGroupingSetsState(out, pipeline);
+            return;
+        }
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int total = cellCount(aggregates);
         if (speculate) {
@@ -1694,6 +1926,10 @@ public final class PipelineCompiler
 
     private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
     {
+        if (!pipeline.groupingSets().isEmpty()) {
+            emitGroupingSetsAccumulate(out, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds);
+            return;
+        }
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         if (speculate) {
             int aggregateCount = aggregates.size();
@@ -1815,6 +2051,10 @@ public final class PipelineCompiler
 
     private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate, int reconstructDictColumn, List<Type> resultTypes)
     {
+        if (!pipeline.groupingSets().isEmpty()) {
+            emitGroupingSetsResult(out, pipeline, reconstructDictColumn, resultTypes);
+            return;
+        }
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int aggregateCount = aggregates.size();
         if (speculate) {

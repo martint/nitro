@@ -1948,4 +1948,83 @@ public class TestJitPipeline
             assertThat(sums[g]).as("sum for attr %d", keys[g]).isEqualTo(reference.get(keys[g]));
         }
     }
+
+    @Test
+    void compilesRollup()
+    {
+        // SELECT a, b, sum(v), grouping_id GROUP BY ROLLUP(a, b) -- the single-pass EXPAND grouping-sets path.
+        // ROLLUP(a, b) = grouping sets {(a, b), (a), ()}. Result columns are [a, b, sum, grouping_id] where an
+        // inactive key reads NULL and grouping_id is the GROUPING() bitmask (bit for a = 2, bit for b = 1; a set
+        // bit means the key is aggregated away). So the three levels carry grouping_id 0, 1, 3 respectively.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Col(0), new Plan.Col(1)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))))
+                .withGroupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[0]));
+
+        int rows = 60_000;
+        long[] a = new long[rows];
+        long[] b = new long[rows];
+        long[] v = new long[rows];
+        // Expected sums per level, keyed by a normalized (a, b) where -1 stands for an inactive (NULL) key.
+        Map<Long, Long> full = new HashMap<>();      // (a, b)
+        Map<Long, Long> byA = new HashMap<>();        // (a)
+        long total = 0;
+        for (int i = 0; i < rows; i++) {
+            a[i] = i % 4;                 // four distinct a
+            b[i] = i % 7;                 // seven distinct b
+            v[i] = (i % 100) - 30;        // mix of negative and positive
+            full.merge(a[i] * 1000 + b[i], v[i], Long::sum);
+            byA.merge(a[i], v[i], Long::sum);
+            total += v[i];
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{a, b, v}}, new int[] {rows});
+
+        long[] outA = result.columns()[0];
+        long[] outB = result.columns()[1];
+        long[] outSum = result.columns()[2];
+        long[] outGroupingId = result.columns()[3];
+        boolean[][] nulls = result.nulls();
+        assertThat(nulls).isNotNull();
+
+        // Expect every level: full (4*7 = 28 groups), by-a (4 groups), grand total (1 group).
+        int expectedRows = full.size() + byA.size() + 1;
+        assertThat(result.rowCount()).isEqualTo(expectedRows);
+
+        int seenFull = 0;
+        int seenByA = 0;
+        int seenTotal = 0;
+        for (int g = 0; g < result.rowCount(); g++) {
+            boolean aNull = nulls[0] != null && nulls[0][g];
+            boolean bNull = nulls[1] != null && nulls[1][g];
+            long groupingId = outGroupingId[g];
+            if (!aNull && !bNull) {
+                // Full level (a, b): grouping_id 0, both keys active.
+                assertThat(groupingId).as("grouping_id at full level").isEqualTo(0L);
+                assertThat(outSum[g]).as("sum for (a=%d, b=%d)", outA[g], outB[g])
+                        .isEqualTo(full.get(outA[g] * 1000 + outB[g]));
+                seenFull++;
+            }
+            else if (!aNull) {
+                // By-a level: b is NULL, grouping_id 1 (b aggregated away).
+                assertThat(bNull).as("b must be null at by-a level").isTrue();
+                assertThat(groupingId).as("grouping_id at by-a level").isEqualTo(1L);
+                assertThat(outSum[g]).as("sum for (a=%d)", outA[g]).isEqualTo(byA.get(outA[g]));
+                seenByA++;
+            }
+            else {
+                // Grand total: both keys NULL, grouping_id 3.
+                assertThat(bNull).as("b must be null at grand-total level").isTrue();
+                assertThat(groupingId).as("grouping_id at grand-total level").isEqualTo(3L);
+                assertThat(outSum[g]).as("grand total").isEqualTo(total);
+                seenTotal++;
+            }
+        }
+        assertThat(seenFull).isEqualTo(full.size());
+        assertThat(seenByA).isEqualTo(byA.size());
+        assertThat(seenTotal).isEqualTo(1);
+    }
 }

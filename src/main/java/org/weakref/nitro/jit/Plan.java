@@ -298,7 +298,7 @@ public final class Plan
      * group key in a scan pipeline the compiler speculates array-mode grouping and deopts to a hash table at
      * runtime; the structure is chosen from the data, not declared in the plan.
      */
-    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections)
+    public record Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections, List<int[]> groupingSets)
     {
         public Pipeline
         {
@@ -307,6 +307,13 @@ public final class Plan
             groupKeys = List.copyOf(groupKeys);
             aggregates = List.copyOf(aggregates);
             projections = List.copyOf(projections);
+            groupingSets = copyGroupingSets(groupingSets);
+        }
+
+        /** Convenience: no grouping sets (single grouping over all {@code groupKeys}). */
+        public Pipeline(int columnCount, List<Join> joins, List<Condition> filters, List<Expr> groupKeys, List<Aggregate> aggregates, Condition having, Ordering ordering, List<Expr> projections)
+        {
+            this(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, List.of());
         }
 
         /** Convenience: no final projection (output is the group-key columns then the aggregate columns). */
@@ -358,7 +365,33 @@ public final class Plan
          */
         public Pipeline withProjections(List<Expr> projections)
         {
-            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections);
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets);
+        }
+
+        /**
+         * Same pipeline aggregated over {@code groupingSets} (GROUPING SETS / ROLLUP / CUBE) instead of one grouping
+         * over all {@code groupKeys}. Each {@code int[]} is the sorted indices into {@code groupKeys} that are ACTIVE
+         * in that set; the others are grouped to NULL. An empty list (the default) means a single ordinary grouping.
+         * <p>
+         * The engine matches the operator harness's single-pass EXPAND: one aggregation whose hash key is
+         * {@code (setId, k0', k1', ...)} where {@code k_i'} is the key value if {@code i} is in the set, else a NULL
+         * sentinel; the leading {@code setId} disambiguates two sets that null to the same key when the data has real
+         * nulls. The result columns are the group-key columns (NULL where inactive in that group's set), then the
+         * aggregate columns, then a trailing {@code grouping_id} LONG column: the {@code GROUPING()} bitmask with bit
+         * {@code i} set for each group key {@code i} that is NOT in the set (i.e. aggregated away).
+         */
+        public Pipeline withGroupingSets(List<int[]> groupingSets)
+        {
+            return new Pipeline(columnCount, joins, filters, groupKeys, aggregates, having, ordering, projections, groupingSets);
+        }
+
+        private static List<int[]> copyGroupingSets(List<int[]> groupingSets)
+        {
+            List<int[]> copy = new java.util.ArrayList<>(groupingSets.size());
+            for (int[] set : groupingSets) {
+                copy.add(set.clone());
+            }
+            return List.copyOf(copy);
         }
     }
 }
