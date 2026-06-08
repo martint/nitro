@@ -2029,6 +2029,66 @@ public class TestJitPipeline
     }
 
     @Test
+    void streamsRollupInBatches()
+    {
+        // SELECT a, b, sum(v), grouping_id GROUP BY ROLLUP(a, b) -- computed once eagerly and once by streaming the
+        // input in batches through a StreamingPipeline; the two must agree on every grouping level (full, by-a, grand
+        // total), the per-group sums, the nulled keys, and the trailing grouping_id column.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Col(0), new Plan.Col(1)),
+                List.of(new Plan.Aggregate("sum", new Plan.Col(2))))
+                .withGroupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[0]));
+
+        int rows = 200_000;
+        long[] a = new long[rows];
+        long[] b = new long[rows];
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            a[i] = i % 4;                 // four distinct a
+            b[i] = i % 7;                 // seven distinct b
+            v[i] = (i % 100) - 30;        // mix of negative and positive
+        }
+
+        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{a, b, v}}, new int[] {rows});
+
+        int batchSize = 4096;
+        StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
+        CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, a, b, v), new Column[0][], new int[0]);
+
+        Map<String, String> eagerRows = rollupRows(eager);
+        Map<String, String> streamedRows = rollupRows(streamed);
+
+        assertThat(streamedRows).isEqualTo(eagerRows);
+        assertThat(streamedRows).hasSize(eager.rowCount());
+        assertThat(streamedRows).isNotEmpty();
+        assertThat(rows / batchSize).isGreaterThan(1);   // genuinely multiple batches
+    }
+
+    /**
+     * Index a ROLLUP(a, b) result by a normalized key encoding each key's null-ness and value, to a "sum|grouping_id"
+     * string (so {@link Map#equals} compares values by content, unlike a {@code long[]} value).
+     */
+    private static Map<String, String> rollupRows(CompiledPipeline.Result result)
+    {
+        Map<String, String> map = new HashMap<>();
+        long[] outA = result.columns()[0];
+        long[] outB = result.columns()[1];
+        long[] outSum = result.columns()[2];
+        long[] outGroupingId = result.columns()[3];
+        boolean[][] nulls = result.nulls();
+        for (int g = 0; g < result.rowCount(); g++) {
+            boolean aNull = nulls != null && nulls[0] != null && nulls[0][g];
+            boolean bNull = nulls != null && nulls[1] != null && nulls[1][g];
+            String key = (aNull ? "_" : Long.toString(outA[g])) + "|" + (bNull ? "_" : Long.toString(outB[g]));
+            map.put(key, outSum[g] + "|" + outGroupingId[g]);
+        }
+        return map;
+    }
+
+    @Test
     void compilesRankingWindow()
     {
         // SELECT p, o, m, rank() OVER (PARTITION BY p ORDER BY o DESC) AS rnk WHERE rnk <= 3 -- the top-N-per-partition
