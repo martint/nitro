@@ -106,10 +106,27 @@ public final class Plan
      * entry, the id of the right-dictionary entry with the same bytes (or a sentinel when absent) -- so each row is
      * the integer test {@code remap[leftId] == rightId} (negated for {@code <>}). A null on either side makes the
      * comparison null (the row is dropped), matching SQL.
+     * <p>
+     * When {@code substringStart >= 1} the comparison is over a fixed substring of each side (1-based start,
+     * {@code substringLength} characters) rather than the whole value -- SQL {@code substring(left, s, n) <>
+     * substring(right, s, n)}, the zip-prefix shape in Q19. The substring case canonicalizes each side's dictionary
+     * into shared prefix classes (a remap into the other side's ids is insufficient, since two right entries can share
+     * a prefix). {@code substringStart < 0} means no substring (whole-value compare).
      */
-    public record StringColumnCompare(int left, int right, boolean negated)
+    public record StringColumnCompare(int left, int right, boolean negated, int substringStart, int substringLength)
             implements Condition
-    {}
+    {
+        public StringColumnCompare(int left, int right, boolean negated)
+        {
+            this(left, right, negated, -1, -1);
+        }
+
+        /** Whether this compares a fixed substring of each side rather than the whole value. */
+        public boolean hasSubstring()
+        {
+            return substringStart >= 1;
+        }
+    }
 
     /**
      * SQL {@code column LIKE pattern} (or its negation) on a dictionary-encoded string column. {@code %} matches

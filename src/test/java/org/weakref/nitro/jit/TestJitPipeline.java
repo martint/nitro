@@ -1233,6 +1233,34 @@ public class TestJitPipeline
         assertThat(result.columns()[0][0]).isEqualTo(expected);
     }
 
+    @Test
+    void compilesStringColumnSubstringCompare()
+    {
+        // SELECT count(*) FROM t WHERE substring(s0,1,2) <> substring(s1,1,2) -- the zip-prefix shape in Q19. Entries
+        // that share a 2-char prefix but differ later must compare EQUAL (so the row is dropped under <>), which a
+        // whole-value remap would get wrong; the compiler canonicalizes both dictionaries into shared prefix classes.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(new Plan.StringColumnCompare(0, 1, true, 1, 2)),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        byte[][] dict0 = {bytes("12345"), bytes("12999"), bytes("67000")};   // prefixes 12, 12, 67
+        int[] ids0 = {0, 1, 2, 0};                                          // 12345, 12999, 67000, 12345
+        byte[][] dict1 = {bytes("67abc"), bytes("12zzz"), bytes("99xxx")};   // prefixes 67, 12, 99
+        int[] ids1 = {1, 1, 0, 2};                                          // 12zzz, 12zzz, 67abc, 99xxx
+        // prefixes: (12,12) equal, (12,12) equal, (67,67) equal, (12,99) differ -> only 1 survives <>.
+        long expected = 1;
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {{new Column.StringColumn(ids0, dict0), new Column.StringColumn(ids1, dict1)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {ids0.length});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
     private static byte[] bytes(String value)
     {
         return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);

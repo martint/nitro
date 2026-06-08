@@ -3245,7 +3245,11 @@ public final class PipelineCompiler
     private static String stringColumnCompareTest(Plan.StringColumnCompare compare, boolean inequality, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         String guard = andGuards(notNullGuard(nullResolver.apply(compare.left())), notNullGuard(nullResolver.apply(compare.right())));
-        String test = "sRemap" + stringMaskIds.get(compare) + "[" + resolver.apply(compare.left()) + "] " + (inequality ? "!=" : "==") + " " + resolver.apply(compare.right());
+        int id = stringMaskIds.get(compare);
+        String operator = inequality ? "!=" : "==";
+        String test = compare.hasSubstring()
+                ? "sLeftClass" + id + "[" + resolver.apply(compare.left()) + "] " + operator + " sRightClass" + id + "[" + resolver.apply(compare.right()) + "]"
+                : "sRemap" + id + "[" + resolver.apply(compare.left()) + "] " + operator + " " + resolver.apply(compare.right());
         return guard.isEmpty() ? "(" + test + ")" : "(" + guard + " && (" + test + "))";
     }
 
@@ -3258,7 +3262,12 @@ public final class PipelineCompiler
     private static void emitStringConditionPrelude(StringBuilder out, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
     {
         if (match instanceof Plan.StringColumnCompare compare) {
-            emitStringRemapPrelude(out, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()));
+            if (compare.hasSubstring()) {
+                emitStringPrefixClassPrelude(out, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()), compare.substringStart(), compare.substringLength());
+            }
+            else {
+                emitStringRemapPrelude(out, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()));
+            }
         }
         else {
             emitStringMaskPrelude(out, match, id, dictionaryVar.apply(stringMatchColumn(match)));
@@ -3275,6 +3284,34 @@ public final class PipelineCompiler
         out.append("    for (int e = 0; e < ").append(leftDictionaryVar).append(".length; e++) {\n");
         out.append("      Integer r = sRightIdx").append(id).append(".get(new String(").append(leftDictionaryVar).append("[e], java.nio.charset.StandardCharsets.UTF_8));\n");
         out.append("      sRemap").append(id).append("[e] = r == null ? -1 : r;\n");
+        out.append("    }\n");
+    }
+
+    /**
+     * Precompute {@code int[] sLeftClass<id>} / {@code int[] sRightClass<id>} mapping each side's dictionary id to a
+     * shared prefix-class id: entries whose {@code substring(value, start, length)} bytes are equal get the same class,
+     * across both dictionaries. A {@link Plan.StringColumnCompare} over a substring then reduces to
+     * {@code sLeftClass[leftId] == sRightClass[rightId]}. Unlike the whole-value remap, both sides are canonicalized,
+     * since two distinct right entries can share a prefix.
+     */
+    private static void emitStringPrefixClassPrelude(StringBuilder out, int id, String leftDictionaryVar, String rightDictionaryVar, int start, int length)
+    {
+        out.append("    java.util.HashMap<String, Integer> sClass").append(id).append(" = new java.util.HashMap<>();\n");
+        emitPrefixClassLoop(out, id, "sLeftClass", leftDictionaryVar, start, length);
+        emitPrefixClassLoop(out, id, "sRightClass", rightDictionaryVar, start, length);
+    }
+
+    private static void emitPrefixClassLoop(StringBuilder out, int id, String arrayName, String dictionaryVar, int start, int length)
+    {
+        out.append("    int[] ").append(arrayName).append(id).append(" = new int[").append(dictionaryVar).append(".length];\n");
+        out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
+        out.append("      byte[] sub = org.weakref.nitro.function.scalar.builtin.Utf8Support.substring(")
+                .append(dictionaryVar).append("[e], 0, ").append(dictionaryVar).append("[e].length, ")
+                .append((long) start).append("L, ").append((long) length).append("L);\n");
+        out.append("      String key = new String(sub, java.nio.charset.StandardCharsets.UTF_8);\n");
+        out.append("      Integer c = sClass").append(id).append(".get(key);\n");
+        out.append("      if (c == null) { c = sClass").append(id).append(".size(); sClass").append(id).append(".put(key, c); }\n");
+        out.append("      ").append(arrayName).append(id).append("[e] = c;\n");
         out.append("    }\n");
     }
 }
