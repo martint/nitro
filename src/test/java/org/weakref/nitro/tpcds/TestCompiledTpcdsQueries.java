@@ -86,7 +86,7 @@ public class TestCompiledTpcdsQueries
     @Test
     void query22()
     {
-        assertMatchesHarness(CompiledTpcdsQueries.query22(), TpcdsParquetSupport::query22);
+        assertCompositeMatchesHarness(CompiledTpcdsQueries.query22(), TpcdsParquetSupport::query22);
     }
 
     @Test
