@@ -817,24 +817,15 @@ public final class CompiledQuerySupport
         int width = 0;
         for (int i = 0; i < branches.size(); i++) {
             org.weakref.nitro.jit.QueryLowering.Lowered branch = branches.get(i);
-            CompiledPipeline.Result result;
-            org.weakref.nitro.jit.Column[][] dictInputs;   // indexed by DictRef.dictInput (0 = probe)
-            if (projectionOnly(branch)) {
-                // An ungrouped (projection-only) branch emits all surviving rows; the streaming compiler does not
-                // support that terminal, so run it eagerly. Its inputs are the dictionary source for any string column.
-                LoadedInputs loaded = loadLoweredInputs(allocator, tables, branch);
-                result = branch.compile().execute(loaded.inputs(), loaded.rowCounts());
-                dictInputs = loaded.inputs();
-            }
-            else {
-                org.weakref.nitro.jit.StreamingPipeline streaming =
-                        PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
-                StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true);
-                result = streamed.result();
-                dictInputs = new org.weakref.nitro.jit.Column[branch.inputs().size()][];
-                for (int b = 0; b < streamed.builds().length; b++) {
-                    dictInputs[b + 1] = streamed.builds()[b];   // probe (index 0) is streamed, has no materialized dictionary
-                }
+            // Stream every branch (grouped or projection-only): streaming materializes only the branch's filtered
+            // output, not its whole fact -- draining an ungrouped branch's fact eagerly was the dominant cost.
+            org.weakref.nitro.jit.StreamingPipeline streaming =
+                    PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
+            StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true);
+            CompiledPipeline.Result result = streamed.result();
+            org.weakref.nitro.jit.Column[][] dictInputs = new org.weakref.nitro.jit.Column[branch.inputs().size()][];
+            for (int b = 0; b < streamed.builds().length; b++) {
+                dictInputs[b + 1] = streamed.builds()[b];   // probe (index 0) is streamed, has no materialized dictionary
             }
             org.weakref.nitro.jit.Column[] materialized = materialize(result, dictInputs, branchStringColumns);
             parts.add(materialized);
@@ -933,12 +924,6 @@ public final class CompiledQuerySupport
     private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result)
     {
         return materialize(result, null, List.of());
-    }
-
-    /** Whether a lowered branch is an ungrouped projection (no GROUP BY, no aggregates) -- emits all surviving rows. */
-    private static boolean projectionOnly(org.weakref.nitro.jit.QueryLowering.Lowered lowered)
-    {
-        return lowered.pipeline().groupKeys().isEmpty() && lowered.pipeline().aggregates().isEmpty();
     }
 
     /**

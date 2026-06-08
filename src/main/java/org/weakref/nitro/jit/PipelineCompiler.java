@@ -128,7 +128,8 @@ public final class PipelineCompiler
         if (needsMix) {
             emitMix(out);
         }
-        List<Type> resultTypes = outputColumnTypes(pipeline, encodings);
+        boolean projectionOnly = projectionOnly(pipeline);
+        List<Type> resultTypes = projectionOnly ? projectionOutputTypes(pipeline, encodings) : outputColumnTypes(pipeline, encodings);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
                 + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
 
@@ -137,7 +138,8 @@ public final class PipelineCompiler
             out.append("  }\n");
             emitApplyHaving(out, pipeline.having(), resultTypes);
             emitApplyOrdering(out, pipeline.ordering(), resultTypes);
-            emitApplyProjection(out, pipeline.projections(), resultTypes);
+            // A projection-only pipeline applied its projections inline (they define the output); no post step.
+            emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
             out.append("}\n");
             return out.toString();
         }
