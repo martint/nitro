@@ -1635,6 +1635,84 @@ public final class CompiledTpcdsQueries
                 new Stage(qualified, "q16_grouped")), main, List.of());
     }
 
+    public static Composite query68()
+    {
+        // Q68: per (ticket, customer) store-sale totals for two specific stores, on the 1st/2nd of the month in
+        // 1999-2001, for households with 4 dependents or 3 vehicles -- then for each such basket report the customer's
+        // name, the city it was bought in, and the totals, but ONLY when the customer's current home city differs from
+        // the bought city. Two stages: (1) GROUP BY ticket/customer/bought-city summing the three price columns
+        // (bought-city is a dictionary-string group key carried through the virtual table); (2) a join-only stage that
+        // re-attaches the customer and their current address and keeps rows where current-city <> bought-city, then
+        // ORDER BY last name, ticket. Exercises a string group key flowing into a projection-only join stage whose
+        // WHERE is a whole-value string-column compare and whose output mixes virtual-table and base-table strings.
+        QueryLowering grouped = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number"),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_list_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_tax", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_dom"),
+                        new QueryLowering.Column("d_year"))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_city", ColumnEncoding.STRING, false))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_dep_count", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("hd_vehicle_count", ColumnEncoding.FLAT, true))
+                .join("customer_address", "ss_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_city", ColumnEncoding.STRING, true));
+        grouped.where(
+                        new Plan.Predicate(">", grouped.column("d_dom"), new Plan.Lit(0)),
+                        new Plan.Predicate("<", grouped.column("d_dom"), new Plan.Lit(3)),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(1999)),
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2000)),
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2001)))),
+                        new Plan.StringMatch(grouped.position("s_city"), List.of("Fairview", "Midway"), false),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("hd_dep_count"), new Plan.Lit(4)),
+                                new Plan.Predicate("=", grouped.column("hd_vehicle_count"), new Plan.Lit(3)))))
+                .groupBy("ss_ticket_number", "ss_customer_sk", "ca_city")
+                .aggregate("sum", "ss_ext_sales_price")
+                .aggregate("sum", "ss_ext_tax")
+                .aggregate("sum", "ss_ext_list_price");
+        // grouped result: ticket(0), customer(1), bought_city(2), sum_sales(3), sum_tax(4), sum_list(5).
+
+        QueryLowering main = QueryLowering.scan("q68_grouped",
+                        new QueryLowering.Column("g_ticket"),
+                        new QueryLowering.Column("g_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_bought_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_sum_sales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_sum_tax", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_sum_list", ColumnEncoding.FLAT, true))
+                .join("customer", "g_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_city_current", "ca_city", ColumnEncoding.STRING, true));
+        main.where(new Plan.StringColumnCompare(main.position("ca_city_current"), main.position("g_bought_city"), true))
+                .select(main.column("c_last_name"), main.column("c_first_name"), main.column("ca_city_current"),
+                        main.column("g_bought_city"), main.column("g_ticket"),
+                        main.column("g_sum_sales"), main.column("g_sum_tax"), main.column("g_sum_list"))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(4, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(grouped, "q68_grouped", List.of(new DictRef(2, 4, 1)))),
+                main,
+                List.of(new DictRef(0, 1, 2), new DictRef(1, 1, 3), new DictRef(2, 2, 1), new DictRef(3, 0, 2)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
