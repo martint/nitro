@@ -96,15 +96,23 @@ public final class Types
         Vector toVector(long[] slots, int count, byte[][] dictionary);
     }
 
+    private static final byte[] NO_BYTES = new byte[0];
+
     private static BinaryVector reconstructString(long[] slots, int count, byte[][] dictionary)
     {
+        // A null entry canonicalizes to id 0; for an all-null column the dictionary is empty, so id 0 is out of range.
+        // Such entries are masked null by the caller, so any bytes work -- emit empty rather than indexing the dictionary.
         int bytes = 0;
         for (int i = 0; i < count; i++) {
-            bytes += dictionary[(int) slots[i]].length;
+            int id = (int) slots[i];
+            if (id < dictionary.length) {
+                bytes += dictionary[id].length;
+            }
         }
         BinaryVector vector = new BinaryVector(count, bytes);
         for (int i = 0; i < count; i++) {
-            vector.setBytes(i, dictionary[(int) slots[i]]);
+            int id = (int) slots[i];
+            vector.setBytes(i, id < dictionary.length ? dictionary[id] : NO_BYTES);
         }
         vector.addTrait(Utf8Traits.UTF8_STRING);
         return vector;
