@@ -685,12 +685,7 @@ public final class CompiledQuerySupport
         boolean probeVirtual = virtuals.containsKey(probe.table());
 
         if (probeVirtual) {
-            org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
-            int[] rowCounts = new int[sources.size()];
-            for (int s = 0; s < sources.size(); s++) {
-                resolveInput(allocator, tables, sources.get(s), virtuals, inputs, rowCounts, s);
-            }
-            return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
+            return runStageEager(allocator, tables, lowered, virtuals);
         }
 
         org.weakref.nitro.jit.StreamingPipeline streaming =
@@ -741,8 +736,32 @@ public final class CompiledQuerySupport
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals,
             List<CompiledTpcdsQueries.DictRef> stringColumns)
     {
-        LoweredResult result = runStage(allocator, tables, lowered, virtuals);
+        // A string output reconstructed from the probe (dictInput 0) needs the probe's dictionary, which the streaming
+        // path does not capture (it streams the probe). Drain the whole stage eagerly so the probe's StringColumn -- and
+        // thus a probe-side string group key -- is available for reconstruction. Used for a small base probe grouped by
+        // a string (e.g. item by i_category) whose key a later stage re-joins.
+        boolean probeSideString = stringColumns.stream().anyMatch(ref -> ref.dictInput() == 0);
+        LoweredResult result = probeSideString
+                ? runStageEager(allocator, tables, lowered, virtuals)
+                : runStage(allocator, tables, lowered, virtuals);
         return new Materialized(materialize(result.result(), result.inputs(), stringColumns), result.result().rowCount());
+    }
+
+    /**
+     * Run a stage by draining every input eagerly (the probe and each build, resolving virtuals), then executing the
+     * compiled pipeline. Unlike {@link #runStage}, the probe is drained rather than streamed, so its column dictionaries
+     * are captured in the returned inputs -- letting a probe-side string group key be reconstructed at materialization.
+     */
+    public static LoweredResult runStageEager(Allocator allocator, TpcdsParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
+    {
+        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
+        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        int[] rowCounts = new int[sources.size()];
+        for (int s = 0; s < sources.size(); s++) {
+            resolveInput(allocator, tables, sources.get(s), virtuals, inputs, rowCounts, s);
+        }
+        return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
     }
 
     private static StreamedResult streamCapturingBuilds(Allocator allocator, TpcdsParquetTables tables,

@@ -1608,11 +1608,12 @@ public final class PipelineCompiler
         List<Plan.Join> joins = pipeline.joins();
         int joinCount = joins.size();
 
-        // String-keyed joins are remapped against a once-materialized probe dictionary; the streaming probe delivers a
-        // fresh (possibly re-dictionarized) batch each advance, so the remap is not yet valid there. Only the eager
-        // (fully-materialized probe) path supports them today -- every current consumer joins materialized stages.
-        if (streaming && hasStringJoinKey(pipeline, encodings)) {
-            throw new UnsupportedOperationException("string-keyed join is not supported on the streaming probe path");
+        // A string join key is remapped by value against a once-materialized dictionary. That is valid on the streaming
+        // path only when the key comes from a materialized build (an earlier-joined dimension, e.g. item.i_category):
+        // its dictionary is fully built, so the remap is build-time. A string key on the STREAMED FACT itself is not --
+        // each advance delivers a fresh, possibly re-dictionarized batch, so its ids have no stable mapping.
+        if (streaming && hasStreamedProbeStringJoinKey(pipeline, encodings)) {
+            throw new UnsupportedOperationException("string-keyed join on a streamed fact column is not supported");
         }
 
         // Where each build's columns begin in the combined column space (probe columns first, then each build).
@@ -2112,11 +2113,17 @@ public final class PipelineCompiler
 
     /** Per-row lookup for join {@code k}, leaving {@code int buildRow<k>} in scope (-1 = no match). */
     /** Whether any join's probe key column is a dictionary string (needing the value remap before matching). */
-    private static boolean hasStringJoinKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    /**
+     * Whether any string join key is a column of the streamed fact (probe) itself, rather than of a materialized build.
+     * Fact columns have index {@code < columnCount()}; build (dimension) columns come after. Only the former blocks the
+     * streaming path -- a build-originated string key (e.g. {@code item.i_category}) remaps against a fully-built
+     * dictionary.
+     */
+    private static boolean hasStreamedProbeStringJoinKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         for (Plan.Join join : pipeline.joins()) {
             for (int probeKey : join.probeKeyColumns()) {
-                if (combinedEncoding(pipeline, encodings, probeKey) == ColumnEncoding.STRING) {
+                if (probeKey < pipeline.columnCount() && combinedEncoding(pipeline, encodings, probeKey) == ColumnEncoding.STRING) {
                     return true;
                 }
             }
@@ -2140,7 +2147,12 @@ public final class PipelineCompiler
                 if (combinedEncoding(pipeline, encodings, probeKeys[kx]) != ColumnEncoding.STRING) {
                     continue;
                 }
-                String probeDictionary = probeVars(probeKeys[kx]).stringDict();
+                // The probe key may be a fact column (probe dictionary) or an earlier-joined build column (e.g.
+                // item.i_category) -- resolve its dictionary variable accordingly so a build-originated string key works.
+                int probeKey = probeKeys[kx];
+                String probeDictionary = probeKey < probeColumns
+                        ? probeVars(probeKey).stringDict()
+                        : buildVars(buildOf(joins, buildOffset, probeKey), probeKey - buildOffset[buildOf(joins, buildOffset, probeKey)]).stringDict();
                 String buildDictionary = buildVars(k, buildKeys[kx]).stringDict();
                 String id = k + "_" + kx;
                 out.append("    java.util.HashMap<String, Integer> jBuildIdx").append(id).append(" = new java.util.HashMap<>();\n");
