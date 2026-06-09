@@ -2271,6 +2271,99 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 6, 1), new DictRef(1, 6, 2), new DictRef(2, 6, 3), new DictRef(3, 6, 4)));
     }
 
+    /** Q11 per-customer "year total" (sum of list_price - discount) for one channel and year, keyed by customer identity. */
+    private static QueryLowering query11ChannelYearTotal(String table, String customerColumn, String soldDateColumn, String listPriceColumn, String discountColumn, int year)
+    {
+        QueryLowering channel = QueryLowering.scan(table,
+                        new QueryLowering.Column(customerColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldDateColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(listPriceColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(discountColumn, ColumnEncoding.FLAT, true))
+                .join("customer", customerColumn, "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_preferred_cust_flag", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_birth_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_login", ColumnEncoding.STRING, true))
+                .join("date_dim", soldDateColumn, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"));
+        channel.where(new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(year)))
+                .groupBy("c_customer_id", "c_first_name", "c_last_name", "c_preferred_cust_flag", "c_birth_country", "c_login")
+                .aggregate("sum", new Plan.Bin("-", channel.column(listPriceColumn), channel.column(discountColumn)));
+        // result: customer_id(0), first(1), last(2), preferred(3), birth_country(4), login(5), year_total(6). customer is input 1.
+        return channel;
+    }
+
+    public static Composite query11()
+    {
+        // Q11: customers whose store-sales grew slower year-over-year than their web-sales (the Q74 shape, but the year
+        // total is sum(list_price - discount) and the grouping/output carry six customer-identity columns). Four
+        // per-customer pre-aggregates (store/web x 2001/2002) self-join on c_customer_id (a non-null dictionary string
+        // key); keep customers with positive 2001 totals on both channels whose store growth ratio is below web's
+        // (cross-multiplied). Report the six identity columns; top 100 by the first four.
+        QueryLowering storeFirst = query11ChannelYearTotal("store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_discount_amt", 2001);
+        QueryLowering storeSecond = query11ChannelYearTotal("store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_discount_amt", 2002);
+        QueryLowering webFirst = query11ChannelYearTotal("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_discount_amt", 2001);
+        QueryLowering webSecond = query11ChannelYearTotal("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_discount_amt", 2002);
+
+        QueryLowering main = QueryLowering.scan("q11_store_first",
+                        new QueryLowering.Column("sf_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("sf_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_pref", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_login", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_total", ColumnEncoding.FLAT, true))
+                .join("q11_store_second", "sf_id", "ss_id",
+                        new QueryLowering.Column("ss_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ss_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_pref", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_login", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_total", ColumnEncoding.FLAT, true))
+                .join("q11_web_first", "sf_id", "wf_id",
+                        new QueryLowering.Column("wf_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("wf_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_pref", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_login", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_total", ColumnEncoding.FLAT, true))
+                .join("q11_web_second", "sf_id", "ws_id",
+                        new QueryLowering.Column("ws_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ws_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_pref", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_login", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_total", ColumnEncoding.FLAT, true));
+        main.where(
+                        new Plan.Predicate(">", main.column("sf_total"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("wf_total"), new Plan.Lit(0)),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("ss_total"), main.column("wf_total")),
+                                new Plan.Bin("*", main.column("ws_total"), main.column("sf_total"))))
+                .select(main.column("sf_id"), main.column("sf_first"), main.column("sf_last"),
+                        main.column("sf_pref"), main.column("sf_country"), main.column("sf_login"))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+
+        List<DictRef> stageStrings = List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3),
+                new DictRef(3, 1, 4), new DictRef(4, 1, 5), new DictRef(5, 1, 6));
+        return new Composite(
+                List.of(new Stage(storeFirst, "q11_store_first", stageStrings),
+                        new Stage(storeSecond, "q11_store_second", stageStrings),
+                        new Stage(webFirst, "q11_web_first", stageStrings),
+                        new Stage(webSecond, "q11_web_second", stageStrings)),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2),
+                        new DictRef(3, 0, 3), new DictRef(4, 0, 4), new DictRef(5, 0, 5)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
