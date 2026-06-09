@@ -236,6 +236,19 @@ public final class QueryLowering
         return this;
     }
 
+    /** Semi-join (EXISTS): keep each probe row that has at least one match in {@code table} on {@code probeKey = buildKey}. */
+    public QueryLowering semiJoin(String table, String probeKey, String buildKey, Column... columns)
+    {
+        Input build = new Input(table, List.of(columns));
+        int buildKeyLocal = indexOf(columns, buildKey);
+        for (Column column : columns) {
+            assign(column.name());
+        }
+        builds.add(build);
+        joins.add(Plan.Join.semi(new Plan.Build(columns.length, buildKeyLocal), position(probeKey)));
+        return this;
+    }
+
     /** Combined position of a column, for building filters/HAVING expressions by name. */
     public int position(String columnName)
     {
