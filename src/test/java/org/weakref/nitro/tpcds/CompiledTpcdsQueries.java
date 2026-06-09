@@ -3017,6 +3017,87 @@ public final class CompiledTpcdsQueries
         return customers;
     }
 
+    public static Composite query70()
+    {
+        // Q70: store-sale net profit per (s_state, s_county) ROLLUP for a 12-month window, restricted to states that had
+        // sales in the window, ranked DESCENDING within each rollup level by the profit total, top 100. Q86's sibling
+        // over store geography, plus the active-states semi-filter the harness assembles as a per-state aggregate (it
+        // carries no rank<=K, so it admits every state with sales -- but is reproduced as a real stage + join for
+        // apples-to-apples). Four stages: the active-states set; the ROLLUP aggregate joined to it; the level/rank-key
+        // projection; the RANK window plus the final order.
+        QueryLowering states = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true));
+        states.where(new Plan.Predicate(">", states.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", states.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("s_state")
+                .aggregate("sum", "ss_net_profit");
+        // q70_states: state(0), sum(1) -- the sum is the harness's (discarded) per-state total; only the state is joined.
+
+        QueryLowering rollup = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true))
+                .join("q70_states", "s_state", "qs_state",
+                        new QueryLowering.Column("qs_state", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("qs_sum", ColumnEncoding.FLAT, false));
+        rollup.where(new Plan.Predicate(">", rollup.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", rollup.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("s_state", "s_county")
+                .groupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", "ss_net_profit");
+        // rollup result: state(0), county(1), sum_net_profit(2), grouping_id(3).
+
+        QueryLowering derived = QueryLowering.scan("q70_rollup",
+                        new QueryLowering.Column("g_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_sum", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_grouping_id", ColumnEncoding.FLAT, false));
+        derived.select(
+                derived.column("g_state"),
+                derived.column("g_county"),
+                derived.column("g_sum"),
+                // lochierarchy: detail(gid 0)->0, grand(gid 3)->2, state-subtotal->1.
+                new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(0)), new Plan.Lit(0))),
+                        new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(3)), new Plan.Lit(2))), new Plan.Lit(1))),
+                // stateForRank: the state's dictionary id for detail rows, else -1.
+                new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(0)), derived.column("g_state"))), new Plan.Lit(-1)));
+        // derived result: state(0), county(1), sum(2), lochierarchy(3), state_rank_key(4).
+
+        QueryLowering ranked = QueryLowering.scan("q70_derived",
+                        new QueryLowering.Column("r_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_sum", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_lochierarchy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_state_rank_key", ColumnEncoding.FLAT, true));
+        ranked.window(new Plan.Window(new int[] {3, 4}, List.of(new Plan.SortKey(2, true)), Plan.RankFunction.RANK, 100));
+        // after window: r_state(0), r_county(1), r_sum(2), r_lochierarchy(3), r_state_rank_key(4), rank(5).
+        ranked.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(3, true), new Plan.SortKey(4, false), new Plan.SortKey(5, false)), 100))
+                .select(new Plan.Col(2), new Plan.Col(0), new Plan.Col(1), new Plan.Col(3), new Plan.Col(5));
+
+        return new Composite(
+                List.of(new Stage(states, "q70_states", List.of(new DictRef(0, 2, 1))),
+                        new Stage(rollup, "q70_rollup", List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 1))),
+                        new Stage(derived, "q70_derived", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1)))),
+                ranked,
+                List.of(new DictRef(1, 0, 0), new DictRef(2, 0, 1)));
+    }
+
     public static Composite query86()
     {
         // Q86: web-sale net paid per (i_category, i_class) ROLLUP for a 12-month window, ranked DESCENDING within each
