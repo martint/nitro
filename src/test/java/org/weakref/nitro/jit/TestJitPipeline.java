@@ -1659,6 +1659,36 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesIsNullConditionInPostAggregationProjection()
+    {
+        // SELECT k, CASE WHEN max(v) IS NULL THEN 1 ELSE 0 END GROUP BY k -- the CASE condition reads the aggregate
+        // column's null mask in the post-aggregation projection. Group 0 (all-null v) flags 1; group 1 flags 0.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("max", new Plan.Col(1))))
+                .withProjections(List.of(new Plan.Col(0), new Plan.Case(
+                        List.of(new Plan.Case.Branch(new Plan.IsNull(1), new Plan.Lit(1))),
+                        new Plan.Lit(0))));
+
+        long[] k = {0, 0, 1, 1};
+        long[] v = {0, 0, 7, 3};
+        boolean[] vNull = {true, true, false, false};
+
+        boolean[][] nullable = {{false, true}};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {k.length});
+
+        assertThat(result.rowCount()).isEqualTo(2);
+        long[] keys = result.columns()[0];
+        long[] flags = result.columns()[1];
+        for (int g = 0; g < 2; g++) {
+            assertThat(flags[g]).as("null flag for group %d", keys[g]).isEqualTo(keys[g] == 0 ? 1L : 0L);
+        }
+    }
+
+    @Test
     void dropsHavingRowsWithNullComparand()
     {
         // SELECT k, max(a), max(b) GROUP BY k HAVING max(b) < max(a) -- a comparison whose operand is NULL is UNKNOWN,

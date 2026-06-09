@@ -634,20 +634,20 @@ public final class PipelineCompiler
         out.append("    long[][] proj = new long[").append(outCount).append("][n];\n");
         out.append("    boolean[][] projNulls = null;\n");
         IntFunction<String> decode = i -> inputTypes.get(i).decode("cols[" + i + "][r]");
+        IntFunction<String> columnNull = i -> "(inNulls != null && inNulls[" + i + "] != null && inNulls[" + i + "][r])";
         List<Type> outputTypes = new ArrayList<>();
         for (int p = 0; p < outCount; p++) {
             Plan.Expr projection = projections.get(p);
             Type type = projectionType(projection, inputTypes);
             outputTypes.add(type);
             out.append("    for (int r = 0; r < n; r++) { proj[").append(p).append("][r] = ")
-                    .append(encodeSlot(type, expr(projection, decode))).append("; }\n");
+                    .append(encodeSlot(type, expr(projection, decode, columnNull))).append("; }\n");
             if (projection instanceof Plan.Col col) {
                 out.append("    if (inNulls != null && inNulls[").append(col.index()).append("] != null) { if (projNulls == null) { projNulls = new boolean[")
                         .append(outCount).append("][]; } projNulls[").append(p).append("] = inNulls[").append(col.index()).append("]; }\n");
             }
             else {
-                String nullCondition = computedProjectionNull(projection, decode,
-                        index -> "(inNulls != null && inNulls[" + index + "] != null && inNulls[" + index + "][r])");
+                String nullCondition = computedProjectionNull(projection, decode, columnNull);
                 if (nullCondition != null) {
                     out.append("    if (projNulls == null) { projNulls = new boolean[").append(outCount).append("][]; }\n");
                     out.append("    projNulls[").append(p).append("] = new boolean[n];\n");
