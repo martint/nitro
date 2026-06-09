@@ -92,6 +92,34 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesNullOnZeroDenominatorDivide()
+    {
+        // SELECT round(a / b) FROM t -- a rounding divide is NULL when its denominator is 0 (matching the interpreted
+        // DivideRoundI64), not 0; the projection path must carry that computed null on the result column's mask.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of())
+                .withProjections(List.of(new Plan.Call("divide_round_i64", new Plan.Col(0), new Plan.Col(1))));
+
+        long[] a = {100, 200, 300};
+        long[] b = {4, 0, 5};   // middle row divides by zero -> NULL
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{a, b}}, new int[] {a.length});
+
+        assertThat(result.rowCount()).isEqualTo(3);
+        assertThat(result.nulls()).isNotNull();
+        assertThat(result.nulls()[0]).isNotNull();
+        assertThat(result.nulls()[0][0]).isFalse();
+        assertThat(result.nulls()[0][1]).isTrue();           // 200 / 0 -> NULL
+        assertThat(result.nulls()[0][2]).isFalse();
+        assertThat(result.columns()[0][0]).isEqualTo(25L);   // round(100 / 4)
+        assertThat(result.columns()[0][2]).isEqualTo(60L);   // round(300 / 5)
+    }
+
+    @Test
     void compilesProjectionOnlyPipeline()
     {
         // SELECT v, k FROM t WHERE k > 50 ORDER BY v DESC LIMIT 5 -- no GROUP BY and no aggregates: one output row

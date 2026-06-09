@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
@@ -643,10 +644,47 @@ public final class PipelineCompiler
                 out.append("    if (inNulls != null && inNulls[").append(col.index()).append("] != null) { if (projNulls == null) { projNulls = new boolean[")
                         .append(outCount).append("][]; } projNulls[").append(p).append("] = inNulls[").append(col.index()).append("]; }\n");
             }
+            else {
+                String nullCondition = computedProjectionNull(projection, decode,
+                        index -> "(inNulls != null && inNulls[" + index + "] != null && inNulls[" + index + "][r])");
+                if (nullCondition != null) {
+                    out.append("    if (projNulls == null) { projNulls = new boolean[").append(outCount).append("][]; }\n");
+                    out.append("    projNulls[").append(p).append("] = new boolean[n];\n");
+                    out.append("    for (int r = 0; r < n; r++) { projNulls[").append(p).append("][r] = ").append(nullCondition).append("; }\n");
+                }
+            }
         }
         emitResultTypes(out, "    ", outputTypes);
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(n, proj, types, projNulls);\n");
         out.append("  }\n");
+    }
+
+    /**
+     * Scalar functions whose result is NULL when the denominator (argument index 1) is zero -- the rounding integer
+     * divides, matching the interpreted {@code DivideRoundI64} / {@code DivideScaleRoundI64} (which null on a zero
+     * divisor rather than producing a value). The compiled kernels return 0 for that case, so the null must be applied
+     * to the result column's mask instead.
+     */
+    private static final Set<String> NULL_ON_ZERO_DENOMINATOR = Set.of("divide_round_i64", "divide_scale_round_i64");
+
+    /**
+     * The per-row Java boolean expression under which a computed projection is NULL, or {@code null} when it carries no
+     * computed null. A rounding divide is NULL when its denominator is zero or any operand is null (matching the
+     * interpreted kernel); {@code columnNull} renders a column operand's per-row null test in the caller's scope.
+     */
+    private static String computedProjectionNull(Plan.Expr projection, IntFunction<String> decode, IntFunction<String> columnNull)
+    {
+        if (!(projection instanceof Plan.Call call) || !NULL_ON_ZERO_DENOMINATOR.contains(call.name())) {
+            return null;
+        }
+        List<String> terms = new ArrayList<>();
+        terms.add("(" + expr(call.arguments().get(1), decode) + " == 0L)");
+        for (Plan.Expr argument : call.arguments()) {
+            if (argument instanceof Plan.Col column) {
+                terms.add(columnNull.apply(column.index()));
+            }
+        }
+        return String.join(" || ", terms);
     }
 
     /** Inferred type of a projection expression: a column reference keeps its source type; arithmetic is DOUBLE when any operand is DOUBLE, else LONG. */
@@ -703,10 +741,17 @@ public final class PipelineCompiler
         return types;
     }
 
-    /** Whether projection {@code p} carries a null mask: a column reference to a nullable source column (computed projections are produced non-null). */
+    /**
+     * Whether projection {@code p} carries a null mask: a column reference to a nullable source column, or a rounding
+     * divide (NULL on a zero denominator). Other computed projections are produced non-null.
+     */
     private static boolean projectionCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, int p)
     {
-        return pipeline.projections().get(p) instanceof Plan.Col col && combinedNullable(pipeline, nullable, col.index());
+        Plan.Expr projection = pipeline.projections().get(p);
+        if (projection instanceof Plan.Col col) {
+            return combinedNullable(pipeline, nullable, col.index());
+        }
+        return projection instanceof Plan.Call call && NULL_ON_ZERO_DENOMINATOR.contains(call.name());
     }
 
     /** Declare the growable output arrays (one per projection, plus a null mask per nullable column reference) before the row loop. */
@@ -3080,6 +3125,10 @@ public final class PipelineCompiler
                 String nulls = "false";
                 for (Plan.Expr argument : call.arguments()) {
                     nulls = orNull(nulls, nullExpr(argument, resolver, nullResolver, stringMaskIds));
+                }
+                if (NULL_ON_ZERO_DENOMINATOR.contains(call.name())) {
+                    // A rounding divide is NULL on a zero denominator (argument 1), matching the interpreted kernel.
+                    nulls = orNull(nulls, "(" + expr(call.arguments().get(1), resolver, nullResolver, stringMaskIds) + " == 0L)");
                 }
                 yield nulls;
             }
