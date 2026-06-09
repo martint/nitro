@@ -104,8 +104,22 @@ public final class Plan
      * {@link Predicate}s; {@code BETWEEN lo AND hi} to {@link And} of {@code >=} and {@code <=}.
      */
     public sealed interface Condition
-            permits Predicate, And, Or, Not, StringMatch, LikeMatch, SubstringMatch, StringColumnCompare
+            permits Predicate, And, Or, Not, StringMatch, LikeMatch, SubstringMatch, StringColumnCompare, IsNull
     {}
+
+    /**
+     * SQL {@code column IS NULL} (or {@code IS NOT NULL} when {@code negated}) on any column. Reads the column's null
+     * mask directly -- unlike a comparison predicate, which a null operand makes UNKNOWN (dropping the row), this is
+     * the only way to KEEP null rows. The column must be declared nullable (a non-nullable column is never null).
+     */
+    public record IsNull(int column, boolean negated)
+            implements Condition
+    {
+        public IsNull(int column)
+        {
+            this(column, false);
+        }
+    }
 
     /**
      * Value equality (or inequality, when {@code negated}) between two dictionary-encoded string columns,

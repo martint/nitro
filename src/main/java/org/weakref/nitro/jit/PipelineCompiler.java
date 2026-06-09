@@ -3063,6 +3063,7 @@ public final class PipelineCompiler
             case Plan.SubstringMatch match -> match.negated() ? 4 : 2;
             case Plan.LikeMatch match -> match.negated() ? 4 : 3;
             case Plan.StringColumnCompare compare -> compare.negated() ? 4 : 1;
+            case Plan.IsNull isNull -> isNull.negated() ? 0 : 4;   // IS NOT NULL is highly selective, IS NULL rarely
             case Plan.And ignored -> 1;
             case Plan.Or ignored -> 5;
             case Plan.Not ignored -> 4;
@@ -3126,6 +3127,7 @@ public final class PipelineCompiler
                 into.add(compare.left());
                 into.add(compare.right());
             }
+            case Plan.IsNull isNull -> into.add(isNull.column());
         }
     }
 
@@ -3175,6 +3177,9 @@ public final class PipelineCompiler
             case Plan.LikeMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
             case Plan.SubstringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
             case Plan.StringColumnCompare ignored -> throw new UnsupportedOperationException("string column compare is only supported in WHERE filters");
+            case Plan.IsNull isNull -> isNull.negated()
+                    ? "(!(" + nullResolver.apply(isNull.column()) + "))"
+                    : "(" + nullResolver.apply(isNull.column()) + ")";
         };
     }
 
@@ -3378,6 +3383,10 @@ public final class PipelineCompiler
             case Plan.StringColumnCompare compare -> {
                 return stringColumnCompareTest(compare, compare.negated(), resolver, nullResolver, stringMaskIds);
             }
+            case Plan.IsNull isNull -> {
+                String isNullExpr = nullResolver.apply(isNull.column());
+                return isNull.negated() ? "(!(" + isNullExpr + "))" : "(" + isNullExpr + ")";
+            }
         }
     }
 
@@ -3428,6 +3437,11 @@ public final class PipelineCompiler
             case Plan.StringColumnCompare compare -> {
                 // The complement of an equality is an inequality and vice versa (over non-null rows).
                 return stringColumnCompareTest(compare, !compare.negated(), resolver, nullResolver, stringMaskIds);
+            }
+            case Plan.IsNull isNull -> {
+                // IS NULL is two-valued (never UNKNOWN), so its FALSE is simply its negation.
+                String isNullExpr = nullResolver.apply(isNull.column());
+                return isNull.negated() ? "(" + isNullExpr + ")" : "(!(" + isNullExpr + "))";
             }
         }
     }

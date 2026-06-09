@@ -894,7 +894,7 @@ public final class CompiledQuerySupport
             for (int b = 0; b < streamed.builds().length; b++) {
                 dictInputs[b + 1] = streamed.builds()[b];   // probe (index 0) is streamed, has no materialized dictionary
             }
-            org.weakref.nitro.jit.Column[] materialized = materialize(result, dictInputs, branchStringColumns);
+            org.weakref.nitro.jit.Column[] materialized = materialize(result, dictInputs, branchLiteralColumns(branch, branchStringColumns));
             parts.add(materialized);
             counts[i] = result.rowCount();
             width = materialized.length;
@@ -904,6 +904,33 @@ public final class CompiledQuerySupport
             total += count;
         }
         return new Materialized(concatenateColumns(parts, counts, total, width), total);
+    }
+
+    /**
+     * The string-output reconstruction refs for one union branch: the shared {@code branchStringColumns} (reconstructed
+     * dictionary columns, identical in shape across branches) plus each branch's OWN constant-label columns, derived
+     * from its {@link org.weakref.nitro.jit.Plan.LitStr} projections. A {@code LitStr} carries its value in the plan, so
+     * the per-branch label (e.g. a channel name that differs by branch) is self-describing -- no per-branch ref list is
+     * needed in the union spec. A shared ref already covering a column wins (it is not overridden by a derived literal).
+     */
+    private static List<CompiledTpcdsQueries.DictRef> branchLiteralColumns(
+            org.weakref.nitro.jit.QueryLowering.Lowered branch, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
+    {
+        List<org.weakref.nitro.jit.Plan.Expr> projections = branch.pipeline().projections();
+        if (projections.isEmpty()) {
+            return branchStringColumns;
+        }
+        java.util.Set<Integer> covered = new java.util.HashSet<>();
+        for (CompiledTpcdsQueries.DictRef ref : branchStringColumns) {
+            covered.add(ref.resultColumn());
+        }
+        List<CompiledTpcdsQueries.DictRef> refs = new ArrayList<>(branchStringColumns);
+        for (int c = 0; c < projections.size(); c++) {
+            if (projections.get(c) instanceof org.weakref.nitro.jit.Plan.LitStr literal && covered.add(c)) {
+                refs.add(CompiledTpcdsQueries.DictRef.literal(c, literal.value()));
+            }
+        }
+        return refs;
     }
 
     /**

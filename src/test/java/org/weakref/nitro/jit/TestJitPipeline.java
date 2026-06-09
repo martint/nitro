@@ -153,6 +153,37 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesIsNullFilters()
+    {
+        // SELECT count(*) WHERE v IS NULL, and the IS NOT NULL complement -- the only filters that key off the null mask
+        // (a comparison predicate makes a null operand UNKNOWN and drops the row, so it can never keep null rows).
+        int rows = 9_000;
+        long[] k = new long[rows];
+        long[] v = new long[rows];
+        boolean[] vNull = new boolean[rows];
+        long nullCount = 0;
+        for (int i = 0; i < rows; i++) {
+            k[i] = i;
+            v[i] = i;
+            vNull[i] = (i % 3 == 0);
+            if (vNull[i]) {
+                nullCount++;
+            }
+        }
+        boolean[][] nullable = {{false, true}};
+
+        Plan.Pipeline isNull = new Plan.Pipeline(2, List.of(new Plan.IsNull(1)), List.of(), List.of(new Plan.Aggregate("count", null)));
+        CompiledPipeline.Result nullResult = PipelineCompiler.compile(isNull, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {rows});
+        assertThat(nullResult.columns()[0][0]).isEqualTo(nullCount);
+
+        Plan.Pipeline isNotNull = new Plan.Pipeline(2, List.of(new Plan.IsNull(1, true)), List.of(), List.of(new Plan.Aggregate("count", null)));
+        CompiledPipeline.Result notNullResult = PipelineCompiler.compile(isNotNull, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {rows});
+        assertThat(notNullResult.columns()[0][0]).isEqualTo(rows - nullCount);
+    }
+
+    @Test
     void compilesProjectionOnlyPipeline()
     {
         // SELECT v, k FROM t WHERE k > 50 ORDER BY v DESC LIMIT 5 -- no GROUP BY and no aggregates: one output row
