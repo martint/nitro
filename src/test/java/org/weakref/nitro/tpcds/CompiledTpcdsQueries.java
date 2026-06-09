@@ -2931,6 +2931,68 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 4, 1), new DictRef(1, 4, 2), new DictRef(2, 4, 3), new DictRef(6, 4, 5)));
     }
 
+    public static UnionComposite query69()
+    {
+        // Q69: demographic breakdown of customers in a state set who bought from the store channel but NOT from web or
+        // catalog in a month window. Q10's sibling -- store customers are an EXISTS (semi) build, the web-or-catalog
+        // customers (a union) a NOT EXISTS (anti) build; the customer base is filtered to the states, semi-joined to the
+        // store set, anti-joined to the excluded set, joined to demographics, and counted per demographic profile.
+        List<QueryLowering> excludedBranches = List.of(
+                query69Customers("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk"),
+                query69Customers("catalog_sales", "cs_ship_customer_sk", "cs_sold_date_sk"));
+
+        QueryLowering main = QueryLowering.scan("customer",
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_cdemo_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true))
+                .semiJoin("q69_store", "c_customer_sk", "qs_customer",
+                        new QueryLowering.Column("qs_customer", ColumnEncoding.FLAT, false))
+                .antiJoin("q69_excluded", "c_customer_sk", "qe_customer",
+                        new QueryLowering.Column("qe_customer", ColumnEncoding.FLAT, false))
+                .join("customer_demographics", "c_current_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_purchase_estimate", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cd_credit_rating", ColumnEncoding.STRING, true));
+        main.where(new Plan.StringMatch(main.position("ca_state"), List.of("KY", "GA", "NM"), false))
+                .groupBy("cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating")
+                .count();
+        // result: gender(0), marital(1), education(2), purchase_estimate(3), credit_rating(4), count(5). ORDER BY runs
+        // pre-projection on the five group keys; SELECT then repeats the count after each of the three column groups.
+        main.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false)), 100))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(5),
+                        new Plan.Col(3), new Plan.Col(5), new Plan.Col(4), new Plan.Col(5));
+
+        return new UnionComposite(excludedBranches, "q69_excluded", List.of(),
+                List.of(new Stage(query69Customers("store_sales", "ss_customer_sk", "ss_sold_date_sk"), "q69_store")),
+                main,
+                List.of(new DictRef(0, 4, 1), new DictRef(1, 4, 2), new DictRef(2, 4, 3), new DictRef(6, 4, 5)));
+    }
+
+    private static QueryLowering query69Customers(String fact, String customerColumn, String dateColumn)
+    {
+        QueryLowering customers = QueryLowering.scan(fact,
+                        new QueryLowering.Column(customerColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(dateColumn, ColumnEncoding.FLAT, true))
+                .join("date_dim", dateColumn, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true));
+        customers.where(
+                        new Plan.Predicate("=", customers.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Predicate(">", customers.column("d_moy"), new Plan.Lit(3)),
+                        new Plan.Predicate("<", customers.column("d_moy"), new Plan.Lit(7)))
+                .select(customers.column(customerColumn));
+        return customers;
+    }
+
     private static QueryLowering query10Customers(String fact, String customerColumn, String dateColumn)
     {
         QueryLowering customers = QueryLowering.scan(fact,
