@@ -2772,6 +2772,70 @@ public final class CompiledTpcdsQueries
         return channel;
     }
 
+    public static Composite query06()
+    {
+        // Q06: per-state count of customers who bought (in a target month) an item priced above 1.2x its category
+        // average. Mirrors the harness operator tree: two subquery builds -- a scalar month-sequence and a per-category
+        // sum/count of item price -- feed a store_sales star, kept where price > 1.2*avg (as 6*sum < 5*count*price, the
+        // harness's exact integer form), grouped by state with HAVING count >= 10, top 100.
+        QueryLowering month = QueryLowering.scan("date_dim",
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, false));
+        month.where(new Plan.Predicate("=", month.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Predicate("=", month.column("d_moy"), new Plan.Lit(1)))
+                .groupBy("d_month_seq")
+                .count();   // SELECT DISTINCT d_month_seq -> one row; the trailing count is unused by the join
+
+        // The category aggregate groups item (the probe) by the string i_category, so its key is materialized via the
+        // eager-probe stage path (DictRef into input 0). count over i_current_price counts only non-null prices.
+        QueryLowering category = QueryLowering.scan("item",
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true))
+                .groupBy("i_category")
+                .aggregate("sum", "i_current_price")
+                .aggregate("count", "i_current_price");
+        // q06_category: category(0), sum(1), count(2).
+
+        QueryLowering main = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true))
+                .join("customer", "ss_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true))
+                .join("q06_month", "d_month_seq", "qm_month_seq",
+                        new QueryLowering.Column("qm_month_seq", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("qm_count", ColumnEncoding.FLAT, false))
+                .join("q06_category", "i_category", "qc_category",
+                        new QueryLowering.Column("qc_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("qc_sum", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("qc_count", ColumnEncoding.FLAT, false));
+        main.where(new Plan.Predicate("<",
+                        new Plan.Bin("*", main.column("qc_sum"), new Plan.Lit(6)),
+                        new Plan.Bin("*", new Plan.Bin("*", main.column("qc_count"), main.column("i_current_price")), new Plan.Lit(5))))
+                .groupBy("ca_state")
+                .count();
+        main.having(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(9)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, false), new Plan.SortKey(0, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(month, "q06_month"),
+                        new Stage(category, "q06_category", List.of(new DictRef(0, 0, 0)))),
+                main,
+                List.of(new DictRef(0, 2, 1)));
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
