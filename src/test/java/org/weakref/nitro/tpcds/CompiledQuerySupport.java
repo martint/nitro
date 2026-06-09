@@ -1056,7 +1056,9 @@ public final class CompiledQuerySupport
             org.weakref.nitro.jit.Type type = result.types()[c];
             if (type == org.weakref.nitro.jit.Types.STRING) {
                 CompiledTpcdsQueries.DictRef ref = stringByColumn.get(c);
-                if (ref == null || dictInputs == null || dictInputs[ref.dictInput()] == null) {
+                // A constant-label (literal) column carries its own single-entry dictionary and needs no source input;
+                // every other string column reconstructs through a build/probe dictionary, which must be present.
+                if (ref == null || (ref.literal() == null && (dictInputs == null || dictInputs[ref.dictInput()] == null))) {
                     throw new UnsupportedOperationException("string result column " + c + " has no resolvable source dictionary");
                 }
                 byte[][] dictionary = dictionaryFor(dictInputs, ref);

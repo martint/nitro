@@ -467,6 +467,60 @@ public final class CompiledTpcdsQueries
         return query;
     }
 
+    public static Union query76()
+    {
+        // Q76: per (channel, null-column, year, quarter, category) count and total ext-sales of sales rows where a
+        // particular dimension key IS NULL -- one branch per channel, each labelling its rows with a constant channel
+        // and null-column name. UNION ALL of the three branches, then top 100 by the five group columns. The constant
+        // labels are emitted as LitStr; the union merges each branch's labels (and categories) into one dictionary.
+        List<QueryLowering> branches = List.of(
+                query76ChannelCategorySales("store_sales", "ss_store_sk", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price", "store", "ss_store_sk"),
+                query76ChannelCategorySales("web_sales", "ws_ship_customer_sk", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price", "web", "ws_ship_customer_sk"),
+                query76ChannelCategorySales("catalog_sales", "cs_ship_addr_sk", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price", "catalog", "cs_ship_addr_sk"));
+
+        QueryLowering main = QueryLowering.scan("__q76_union__",
+                        new QueryLowering.Column("u_channel", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("u_col_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("u_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_qoy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("u_count", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_sum", ColumnEncoding.FLAT, true));
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4), new Plan.Col(5), new Plan.Col(6))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false)), 100));
+
+        return new Union(branches, main, "__q76_union__",
+                List.of(new DictRef(4, 2, 1)),   // each branch's category (result col 4) <- item (build 2) col 1
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(4, 0, 4)));
+    }
+
+    private static QueryLowering query76ChannelCategorySales(String salesTable, String nullableColumn, String soldDate,
+            String item, String sales, String channelName, String columnName)
+    {
+        QueryLowering branch = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(nullableColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(sales, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_qoy", ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true));
+        branch.where(new Plan.IsNull(branch.position(nullableColumn)))
+                .groupBy("d_year", "d_qoy", "i_category")
+                .count()
+                .aggregate("sum", sales);
+        // grouped result: year(0), qoy(1), category(2), count(3), sum(4).
+        branch.select(new Plan.LitStr(channelName), new Plan.LitStr(columnName),
+                new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4));
+        return branch;
+    }
+
     public static Union query33()
     {
         // UNION ALL of store/catalog/web sales, each grouped by i_manufact_id with sum(ext_sales_price) over
