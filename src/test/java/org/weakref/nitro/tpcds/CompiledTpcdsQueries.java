@@ -3017,6 +3017,65 @@ public final class CompiledTpcdsQueries
         return customers;
     }
 
+    public static Composite query86()
+    {
+        // Q86: web-sale net paid per (i_category, i_class) ROLLUP for a 12-month window, ranked DESCENDING within each
+        // rollup level by the sales total, top 100. Q36's sibling -- same ranking-over-rollup shape, but a single sum
+        // ranked directly (no margin ratio) and ranked high-to-low. Three stages: the ROLLUP aggregate; a projection
+        // deriving the rollup level and the per-detail category rank key; the RANK window plus the final order.
+        QueryLowering rollup = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_net_paid", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ws_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .join("item", "ws_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true));
+        rollup.where(new Plan.Predicate(">", rollup.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", rollup.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("i_category", "i_class")
+                .groupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", "ws_net_paid");
+        // rollup result: category(0), class(1), sum_net_paid(2), grouping_id(3).
+
+        QueryLowering derived = QueryLowering.scan("q86_rollup",
+                        new QueryLowering.Column("g_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_sum", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_grouping_id", ColumnEncoding.FLAT, false));
+        derived.select(
+                derived.column("g_category"),
+                derived.column("g_class"),
+                derived.column("g_sum"),
+                // lochierarchy: detail(gid 0)->0, grand(gid 3)->2, category-subtotal->1.
+                new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(0)), new Plan.Lit(0))),
+                        new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(3)), new Plan.Lit(2))), new Plan.Lit(1))),
+                // categoryForRank: the category's dictionary id for detail rows, else -1 (a LONG case, branch is the string column's slot).
+                new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(0)), derived.column("g_category"))), new Plan.Lit(-1)));
+        // derived result: category(0), class(1), sum(2), lochierarchy(3), category_rank_key(4).
+
+        QueryLowering ranked = QueryLowering.scan("q86_derived",
+                        new QueryLowering.Column("r_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_sum", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_lochierarchy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_category_rank_key", ColumnEncoding.FLAT, true));
+        ranked.window(new Plan.Window(new int[] {3, 4}, List.of(new Plan.SortKey(2, true)), Plan.RankFunction.RANK, 100));
+        // after window: r_category(0), r_class(1), r_sum(2), r_lochierarchy(3), r_category_rank_key(4), rank(5).
+        ranked.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(3, true), new Plan.SortKey(4, false), new Plan.SortKey(5, false)), 100))
+                .select(new Plan.Col(2), new Plan.Col(0), new Plan.Col(1), new Plan.Col(3), new Plan.Col(5));
+
+        return new Composite(
+                List.of(new Stage(rollup, "q86_rollup", List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 1))),
+                        new Stage(derived, "q86_derived", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1)))),
+                ranked,
+                List.of(new DictRef(1, 0, 0), new DictRef(2, 0, 1)));
+    }
+
     public static Composite query36()
     {
         // Q36: store-sale gross margin (net_profit/ext_sales) per (category, class) ROLLUP for 2001 TN stores, ranked
