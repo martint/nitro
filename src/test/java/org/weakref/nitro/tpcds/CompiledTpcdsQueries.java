@@ -2188,6 +2188,89 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 0, 0)));
     }
 
+    /** Q04 per-customer "year total" (sum of (list-wholesale-discount+sales_price)) for one channel and year. */
+    private static QueryLowering query04ChannelYearTotal(String table, String customerColumn, String soldDateColumn,
+            String listPriceColumn, String wholesaleColumn, String discountColumn, String salesPriceColumn, int year)
+    {
+        QueryLowering channel = QueryLowering.scan(table,
+                        new QueryLowering.Column(customerColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldDateColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(listPriceColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(wholesaleColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(discountColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesPriceColumn, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDateColumn, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"));
+        channel.where(new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(year)))
+                .groupBy(customerColumn)
+                .aggregate("sum", new Plan.Bin("+",
+                        new Plan.Bin("-", new Plan.Bin("-", channel.column(listPriceColumn), channel.column(wholesaleColumn)), channel.column(discountColumn)),
+                        channel.column(salesPriceColumn)));
+        // result: customer_sk(0), year_total(1).
+        return channel;
+    }
+
+    public static Composite query04()
+    {
+        // Q04: customers whose CATALOG year-over-year spend grew faster than BOTH their store and web spend. Six
+        // per-customer year-total pre-aggregates (store/catalog/web × 2001/2002) self-join on c_customer_sk (a LONG
+        // surrogate -- no string-keyed join); keep customers with positive 2001 totals on all three channels whose
+        // catalog growth ratio exceeds store's and web's (cross-multiplied). Then join customer for id/name/flag;
+        // ORDER BY those, top 100.
+        QueryLowering s1 = query04ChannelYearTotal("store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2001);
+        QueryLowering s2 = query04ChannelYearTotal("store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2002);
+        QueryLowering c1 = query04ChannelYearTotal("catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2001);
+        QueryLowering c2 = query04ChannelYearTotal("catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2002);
+        QueryLowering w1 = query04ChannelYearTotal("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2001);
+        QueryLowering w2 = query04ChannelYearTotal("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2002);
+
+        QueryLowering main = QueryLowering.scan("q04_store_1",
+                        new QueryLowering.Column("s1_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s1_total", ColumnEncoding.FLAT, true))
+                .join("q04_store_2", "s1_customer", "s2_customer",
+                        new QueryLowering.Column("s2_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s2_total", ColumnEncoding.FLAT, true))
+                .join("q04_catalog_1", "s1_customer", "c1_customer",
+                        new QueryLowering.Column("c1_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c1_total", ColumnEncoding.FLAT, true))
+                .join("q04_catalog_2", "s1_customer", "c2_customer",
+                        new QueryLowering.Column("c2_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c2_total", ColumnEncoding.FLAT, true))
+                .join("q04_web_1", "s1_customer", "w1_customer",
+                        new QueryLowering.Column("w1_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w1_total", ColumnEncoding.FLAT, true))
+                .join("q04_web_2", "s1_customer", "w2_customer",
+                        new QueryLowering.Column("w2_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w2_total", ColumnEncoding.FLAT, true))
+                .join("customer", "s1_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_preferred_cust_flag", ColumnEncoding.STRING, true));
+        main.where(
+                        new Plan.Predicate(">", main.column("s1_total"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("c1_total"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("w1_total"), new Plan.Lit(0)),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("s2_total"), main.column("c1_total")),
+                                new Plan.Bin("*", main.column("c2_total"), main.column("s1_total"))),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("w2_total"), main.column("c1_total")),
+                                new Plan.Bin("*", main.column("c2_total"), main.column("w1_total"))))
+                .select(main.column("c_customer_id"), main.column("c_first_name"), main.column("c_last_name"), main.column("c_preferred_cust_flag"))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(s1, "q04_store_1"), new Stage(s2, "q04_store_2"),
+                        new Stage(c1, "q04_catalog_1"), new Stage(c2, "q04_catalog_2"),
+                        new Stage(w1, "q04_web_1"), new Stage(w2, "q04_web_2")),
+                main,
+                List.of(new DictRef(0, 6, 1), new DictRef(1, 6, 2), new DictRef(2, 6, 3), new DictRef(3, 6, 4)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
