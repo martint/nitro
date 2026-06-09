@@ -3394,6 +3394,103 @@ public final class CompiledTpcdsQueries
         return variation;
     }
 
+    public static Composite query78()
+    {
+        // Q78: for each (year, item, customer), the ratio of store-channel quantity to the combined web+catalog quantity,
+        // over sales that were NOT returned (an anti-join to the channel's returns), in 1998. The store channel is the
+        // base; web and catalog are LEFT-joined (their measures null when absent, coalesced to 0); rows are kept where
+        // the other-channel quantity is positive, ordered by store metrics, top 100. Three channel stages (each an
+        // anti-join + group), a join stage producing the ordered top 100, and a final projection. All keys numeric.
+        QueryLowering store = query78Channel("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_customer_sk", "ss_ticket_number", "ss_quantity", "ss_wholesale_cost", "ss_sales_price", "store_returns", "sr_ticket_number");
+        QueryLowering web = query78Channel("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_bill_customer_sk", "ws_order_number", "ws_quantity", "ws_wholesale_cost", "ws_sales_price", "web_returns", "wr_order_number");
+        QueryLowering catalog = query78Channel("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_customer_sk", "cs_order_number", "cs_quantity", "cs_wholesale_cost", "cs_sales_price", "catalog_returns", "cr_order_number");
+
+        QueryLowering joined = QueryLowering.scan("q78_store",
+                        new QueryLowering.Column("s_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("s_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("s_customer", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("s_qty", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_wholesale", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_sales", ColumnEncoding.FLAT, true))
+                .leftJoin("q78_web",
+                        new String[] {"s_year", "s_item", "s_customer"},
+                        new String[] {"w_year", "w_item", "w_customer"},
+                        new QueryLowering.Column("w_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_item", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_qty", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_wholesale", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_sales", ColumnEncoding.FLAT, true))
+                .leftJoin("q78_catalog",
+                        new String[] {"s_year", "s_item", "s_customer"},
+                        new String[] {"c_year", "c_item", "c_customer"},
+                        new QueryLowering.Column("c_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_item", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_qty", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_wholesale", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_sales", ColumnEncoding.FLAT, true));
+        // combined: store(year0,item1,customer2,qty3,wholesale4,sales5), web(year6,item7,customer8,qty9,wholesale10,
+        // sales11), catalog(year12,item13,customer14,qty15,wholesale16,sales17).
+        Plan.Expr otherQty = new Plan.Bin("+", new Plan.Coalesce(new Plan.Col(9), new Plan.Lit(0)), new Plan.Coalesce(new Plan.Col(15), new Plan.Lit(0)));
+        Plan.Expr otherWholesale = new Plan.Bin("+", new Plan.Coalesce(new Plan.Col(10), new Plan.Lit(0)), new Plan.Coalesce(new Plan.Col(16), new Plan.Lit(0)));
+        Plan.Expr otherSales = new Plan.Bin("+", new Plan.Coalesce(new Plan.Col(11), new Plan.Lit(0)), new Plan.Coalesce(new Plan.Col(17), new Plan.Lit(0)));
+        joined.where(new Plan.Predicate(">", otherQty, new Plan.Lit(0)))
+                .select(new Plan.Col(2), new Plan.Call("divide_scale_round_i64", new Plan.Col(3), otherQty, new Plan.Lit(100)),
+                        new Plan.Col(3), new Plan.Col(4), new Plan.Col(5), otherQty, otherWholesale, otherSales,
+                        new Plan.Col(0), new Plan.Col(1))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(2, true), new Plan.SortKey(3, true), new Plan.SortKey(4, true),
+                        new Plan.SortKey(5, false), new Plan.SortKey(6, false), new Plan.SortKey(7, false), new Plan.SortKey(1, false),
+                        new Plan.SortKey(8, false), new Plan.SortKey(9, false)), 100));
+        // q78_joined output: customer(0), ratio(1), s_qty(2), s_wholesale(3), s_sales(4), other_qty(5),
+        // other_wholesale(6), other_sales(7), year(8), item(9).
+
+        QueryLowering main = QueryLowering.scan("q78_joined",
+                        new QueryLowering.Column("j_customer", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_ratio", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("j_sqty", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("j_swholesale", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("j_ssales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("j_oqty", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_owholesale", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_osales", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_item", ColumnEncoding.FLAT, false));
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3),
+                new Plan.Col(4), new Plan.Col(5), new Plan.Col(6), new Plan.Col(7));
+
+        return new Composite(
+                List.of(new Stage(store, "q78_store"), new Stage(web, "q78_web"), new Stage(catalog, "q78_catalog"),
+                        new Stage(joined, "q78_joined")),
+                main,
+                List.of());
+    }
+
+    private static QueryLowering query78Channel(String salesTable, String soldDate, String item, String customer,
+            String order, String quantity, String wholesale, String salesPrice, String returnsTable, String returnOrder)
+    {
+        QueryLowering channel = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(customer, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(order, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(wholesale, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesPrice, ColumnEncoding.FLAT, true))
+                .antiJoin(returnsTable, order, returnOrder,
+                        new QueryLowering.Column(returnOrder, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true));
+        channel.where(new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(1998)))
+                .groupBy("d_year", item, customer)
+                .aggregate("sum", quantity)
+                .aggregate("sum", wholesale)
+                .aggregate("sum", salesPrice);
+        return channel;
+    }
+
     public static Composite query70()
     {
         // Q70: store-sale net profit per (s_state, s_county) ROLLUP for a 12-month window, restricted to states that had
