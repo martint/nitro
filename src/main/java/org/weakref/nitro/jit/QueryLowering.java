@@ -192,6 +192,22 @@ public final class QueryLowering
         return this;
     }
 
+    /**
+     * Cross / nested-loop join: pair every probe row with every row of {@code table}, no key. For a scalar subquery
+     * (the build is a single global-aggregate row), this broadcasts that row onto each probe row -- e.g. comparing a
+     * per-group total against a global average, or combining two scalar counts.
+     */
+    public QueryLowering crossJoin(String table, Column... columns)
+    {
+        Input build = new Input(table, List.of(columns));
+        for (Column column : columns) {
+            assign(column.name());
+        }
+        builds.add(build);
+        joins.add(Plan.Join.cross(new Plan.Build(columns.length, new int[0])));
+        return this;
+    }
+
     private QueryLowering join(String table, String probeKey, String buildKey, boolean outer, Column... columns)
     {
         Input build = new Input(table, List.of(columns));

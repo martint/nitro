@@ -2836,6 +2836,48 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 2, 1)));
     }
 
+    public static Composite query90()
+    {
+        // Q90: ratio of web-sale counts in a morning vs an evening time window, for one household profile and web-page
+        // size band. Two global-count subqueries (each a web_sales star joined to time_dim/household/web_page) are
+        // cross-joined (1x1) and divided -- a scalar-broadcast nested-loop join.
+        QueryLowering main = QueryLowering.scan("q90_morning",
+                        new QueryLowering.Column("morning_count", ColumnEncoding.FLAT, false))
+                .crossJoin("q90_evening", new QueryLowering.Column("evening_count", ColumnEncoding.FLAT, false));
+        main.select(new Plan.Call("divide_i64_to_f64", new Plan.Col(0), new Plan.Col(1)));
+
+        return new Composite(
+                List.of(new Stage(query90Count(7, 10), "q90_morning"),
+                        new Stage(query90Count(18, 21), "q90_evening")),
+                main,
+                List.of());
+    }
+
+    private static QueryLowering query90Count(long hourLowExclusive, long hourHighExclusive)
+    {
+        QueryLowering count = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_sold_time_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_ship_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_web_page_sk", ColumnEncoding.FLAT, true))
+                .join("time_dim", "ws_sold_time_sk", "t_time_sk",
+                        new QueryLowering.Column("t_time_sk"),
+                        new QueryLowering.Column("t_hour", ColumnEncoding.FLAT, true))
+                .join("household_demographics", "ws_ship_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_dep_count", ColumnEncoding.FLAT, true))
+                .join("web_page", "ws_web_page_sk", "wp_web_page_sk",
+                        new QueryLowering.Column("wp_web_page_sk"),
+                        new QueryLowering.Column("wp_char_count", ColumnEncoding.FLAT, true));
+        count.where(
+                        new Plan.Predicate(">", count.column("t_hour"), new Plan.Lit(hourLowExclusive)),
+                        new Plan.Predicate("<", count.column("t_hour"), new Plan.Lit(hourHighExclusive)),
+                        new Plan.Predicate("=", count.column("hd_dep_count"), new Plan.Lit(6)),
+                        new Plan.Predicate(">", count.column("wp_char_count"), new Plan.Lit(4999)),
+                        new Plan.Predicate("<", count.column("wp_char_count"), new Plan.Lit(5201)))
+                .count();
+        return count;
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
