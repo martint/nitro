@@ -2104,6 +2104,90 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2)));
     }
 
+    /** Q31 per-county revenue for one channel and quarter of 2000; the grouped pre-aggregate (keyed by ca_county). */
+    private static QueryLowering query31CountyQuarter(String table, String soldDateColumn, String addressColumn, String salesColumn, int quarter)
+    {
+        QueryLowering channel = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDateColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(addressColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumn, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDateColumn, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"),
+                        new QueryLowering.Column("d_qoy"))
+                .join("customer_address", addressColumn, "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_county", ColumnEncoding.STRING, true));
+        channel.where(
+                        new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.Predicate("=", channel.column("d_qoy"), new Plan.Lit(quarter)))
+                .groupBy("ca_county")
+                .aggregate("sum", salesColumn);
+        // result: ca_county(0), revenue(1). customer_address is input 2 in this stage.
+        return channel;
+    }
+
+    public static Composite query31()
+    {
+        // Q31: counties where web-sales grew faster than store-sales across the first three quarters of 2000. Six
+        // per-county revenue pre-aggregates (store and web, qoy 1/2/3) self-join on ca_county (a nullable dictionary
+        // string key -- null counties are dropped by the null-key-skip in the build); keep counties with positive
+        // store/web q1+q2 revenue whose store quarter-over-quarter growth is below web's (cross-multiplied). Report the
+        // county, year, and the four growth ratios; ordered by county.
+        QueryLowering storeQ1 = query31CountyQuarter("store_sales", "ss_sold_date_sk", "ss_addr_sk", "ss_ext_sales_price", 1);
+        QueryLowering storeQ2 = query31CountyQuarter("store_sales", "ss_sold_date_sk", "ss_addr_sk", "ss_ext_sales_price", 2);
+        QueryLowering storeQ3 = query31CountyQuarter("store_sales", "ss_sold_date_sk", "ss_addr_sk", "ss_ext_sales_price", 3);
+        QueryLowering webQ1 = query31CountyQuarter("web_sales", "ws_sold_date_sk", "ws_bill_addr_sk", "ws_ext_sales_price", 1);
+        QueryLowering webQ2 = query31CountyQuarter("web_sales", "ws_sold_date_sk", "ws_bill_addr_sk", "ws_ext_sales_price", 2);
+        QueryLowering webQ3 = query31CountyQuarter("web_sales", "ws_sold_date_sk", "ws_bill_addr_sk", "ws_ext_sales_price", 3);
+
+        QueryLowering main = QueryLowering.scan("q31_store_q1",
+                        new QueryLowering.Column("sc1_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sc1_rev", ColumnEncoding.FLAT, true))
+                .join("q31_store_q2", "sc1_county", "sc2_county",
+                        new QueryLowering.Column("sc2_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sc2_rev", ColumnEncoding.FLAT, true))
+                .join("q31_store_q3", "sc1_county", "sc3_county",
+                        new QueryLowering.Column("sc3_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sc3_rev", ColumnEncoding.FLAT, true))
+                .join("q31_web_q1", "sc1_county", "wc1_county",
+                        new QueryLowering.Column("wc1_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wc1_rev", ColumnEncoding.FLAT, true))
+                .join("q31_web_q2", "sc1_county", "wc2_county",
+                        new QueryLowering.Column("wc2_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wc2_rev", ColumnEncoding.FLAT, true))
+                .join("q31_web_q3", "sc1_county", "wc3_county",
+                        new QueryLowering.Column("wc3_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wc3_rev", ColumnEncoding.FLAT, true));
+        main.where(
+                        new Plan.Predicate(">", main.column("sc1_rev"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("sc2_rev"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("wc1_rev"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("wc2_rev"), new Plan.Lit(0)),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("sc2_rev"), main.column("wc1_rev")),
+                                new Plan.Bin("*", main.column("wc2_rev"), main.column("sc1_rev"))),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("sc3_rev"), main.column("wc2_rev")),
+                                new Plan.Bin("*", main.column("wc3_rev"), main.column("sc2_rev"))))
+                .select(main.column("sc1_county"), new Plan.Lit(2000L),
+                        new Plan.Call("divide_scale_round_i64", main.column("wc2_rev"), main.column("wc1_rev"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("sc2_rev"), main.column("sc1_rev"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("wc3_rev"), main.column("wc2_rev"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("sc3_rev"), main.column("sc2_rev"), new Plan.Lit(1_000_000L)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(storeQ1, "q31_store_q1", List.of(new DictRef(0, 2, 1))),
+                        new Stage(storeQ2, "q31_store_q2", List.of(new DictRef(0, 2, 1))),
+                        new Stage(storeQ3, "q31_store_q3", List.of(new DictRef(0, 2, 1))),
+                        new Stage(webQ1, "q31_web_q1", List.of(new DictRef(0, 2, 1))),
+                        new Stage(webQ2, "q31_web_q2", List.of(new DictRef(0, 2, 1))),
+                        new Stage(webQ3, "q31_web_q3", List.of(new DictRef(0, 2, 1)))),
+                main,
+                List.of(new DictRef(0, 0, 0)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
