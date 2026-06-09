@@ -120,6 +120,39 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesNullCarryingCaseProjection()
+    {
+        // SELECT CASE WHEN k = 0 THEN v ELSE -1 END FROM t -- v nullable. The selected branch's null-ness must flow to
+        // the result mask: a taken branch that reads a null column yields NULL, while the non-null ELSE yields a value.
+        // Without this the projection would emit no mask and a later stage reading the column as nullable would NPE.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of())
+                .withProjections(List.of(new Plan.Case(
+                        List.of(new Plan.Case.Branch(new Plan.Predicate("=", new Plan.Col(0), new Plan.Lit(0)), new Plan.Col(1))),
+                        new Plan.Lit(-1))));
+
+        long[] k = {0, 0, 1};
+        long[] v = {100, 0, 200};
+        boolean[] vNull = {false, true, false};   // row 1: v is NULL
+
+        boolean[][] nullable = {{false, true}};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {k.length});
+
+        assertThat(result.rowCount()).isEqualTo(3);
+        assertThat(result.nulls()[0]).isNotNull();
+        assertThat(result.nulls()[0][0]).isFalse();
+        assertThat(result.columns()[0][0]).isEqualTo(100L);   // k=0 -> v=100
+        assertThat(result.nulls()[0][1]).isTrue();            // k=0 -> v is NULL, so CASE is NULL
+        assertThat(result.nulls()[0][2]).isFalse();
+        assertThat(result.columns()[0][2]).isEqualTo(-1L);    // k!=0 -> ELSE -1
+    }
+
+    @Test
     void compilesProjectionOnlyPipeline()
     {
         // SELECT v, k FROM t WHERE k > 50 ORDER BY v DESC LIMIT 5 -- no GROUP BY and no aggregates: one output row

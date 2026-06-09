@@ -748,11 +748,28 @@ public final class PipelineCompiler
      */
     private static boolean projectionCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, int p)
     {
-        Plan.Expr projection = pipeline.projections().get(p);
-        if (projection instanceof Plan.Col col) {
-            return combinedNullable(pipeline, nullable, col.index());
-        }
-        return projection instanceof Plan.Call call && NULL_ON_ZERO_DENOMINATOR.contains(call.name());
+        return exprCarriesNull(pipeline, nullable, pipeline.projections().get(p));
+    }
+
+    /**
+     * Whether {@code expr} can evaluate to SQL null, structurally -- the static counterpart of {@link #nullExpr}: a
+     * nullable column reference, a divide that is null on a zero denominator, or any compound expression with a
+     * null-bearing operand (for CASE, a null-bearing branch value or default; for COALESCE, only when every argument
+     * is null-bearing). Drives whether a projection emits a null mask, so the value and null paths stay in lockstep.
+     */
+    private static boolean exprCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, Plan.Expr expr)
+    {
+        return switch (expr) {
+            case Plan.Col col -> combinedNullable(pipeline, nullable, col.index());
+            case Plan.Lit ignored -> false;
+            case Plan.LitStr ignored -> false;
+            case Plan.Bin bin -> exprCarriesNull(pipeline, nullable, bin.left()) || exprCarriesNull(pipeline, nullable, bin.right());
+            case Plan.Call call -> NULL_ON_ZERO_DENOMINATOR.contains(call.name())
+                    || call.arguments().stream().anyMatch(argument -> exprCarriesNull(pipeline, nullable, argument));
+            case Plan.Case kase -> exprCarriesNull(pipeline, nullable, kase.defaultValue())
+                    || kase.branches().stream().anyMatch(branch -> exprCarriesNull(pipeline, nullable, branch.value()));
+            case Plan.Coalesce coalesce -> coalesce.arguments().stream().allMatch(argument -> exprCarriesNull(pipeline, nullable, argument));
+        };
     }
 
     /** Declare the growable output arrays (one per projection, plus a null mask per nullable column reference) before the row loop. */
