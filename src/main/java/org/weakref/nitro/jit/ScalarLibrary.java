@@ -70,6 +70,18 @@ public final class ScalarLibrary
         register("divide_i64_to_f64", arguments ->
                 "((double) " + arguments.get(0) + " / (double) " + arguments.get(1) + ")");
         DOUBLE_RESULTS.add("divide_i64_to_f64");
+        // True double / double division (IEEE), mirroring the interpreted divide_f64 primitive. Both operands arrive
+        // already decoded to doubles (the projection resolver decodes a DOUBLE column), so this is a plain division;
+        // the projection re-encodes the double result. Used for the coefficient of variation (stddev_samp / avg).
+        register("divide_f64", arguments ->
+                "(" + arguments.get(0) + " / " + arguments.get(1) + ")");
+        DOUBLE_RESULTS.add("divide_f64");
+        // Reinterpret a long column holding raw double bits as a DOUBLE. A DOUBLE value materialized by an earlier
+        // stage is stored as a flat long[] of bits; the consuming stage scans it as a long, so this names it back to a
+        // DOUBLE for output and double-typed comparison. (Ordering still runs on the raw bits, which for positive
+        // doubles is the same order.) The argument is the raw bits; decoding then DOUBLE-result re-encoding round-trips.
+        register("reinterpret_f64", arguments -> "Double.longBitsToDouble(" + arguments.get(0) + ")");
+        DOUBLE_RESULTS.add("reinterpret_f64");
     }
 
     private ScalarLibrary() {}

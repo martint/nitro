@@ -184,6 +184,66 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesDoubleDivideOverAggregateResults()
+    {
+        // SELECT k, avg(a) / avg(b) FROM t GROUP BY k -- divide_f64 divides two DOUBLE aggregate results (their slots
+        // hold raw double bits), so it must decode both operands, divide, and re-encode; the column is typed DOUBLE.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("avg", new Plan.Col(1)), new Plan.Aggregate("avg", new Plan.Col(2))))
+                .withProjections(List.of(new Plan.Col(0), new Plan.Call("divide_f64", new Plan.Col(1), new Plan.Col(2))));
+
+        int rows = 50_000;
+        long[] k = new long[rows];
+        long[] a = new long[rows];
+        long[] b = new long[rows];
+        Map<Long, long[]> reference = new HashMap<>();   // k -> [sumA, sumB, count]
+        for (int i = 0; i < rows; i++) {
+            k[i] = i % 5;
+            a[i] = (i % 7) + 1;
+            b[i] = (i % 11) + 1;
+            long[] acc = reference.computeIfAbsent(k[i], ignored -> new long[3]);
+            acc[0] += a[i];
+            acc[1] += b[i];
+            acc[2] += 1;
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+                .execute(new long[][][] {{k, a, b}}, new int[] {rows});
+
+        assertThat(result.rowCount()).isEqualTo(reference.size());
+        assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
+        for (int g = 0; g < result.rowCount(); g++) {
+            long[] acc = reference.get(result.columns()[0][g]);
+            double expected = ((double) acc[0] / (double) acc[2]) / ((double) acc[1] / (double) acc[2]);
+            assertThat(Double.longBitsToDouble(result.columns()[1][g])).isEqualTo(expected);
+        }
+    }
+
+    @Test
+    void compilesReinterpretDoubleBits()
+    {
+        // SELECT reinterpret_f64(v) FROM t -- v is a long column holding raw double bits (a double materialized by an
+        // earlier stage); reinterpret_f64 names it back to a DOUBLE so the output is typed and valued as the double.
+        Plan.Pipeline pipeline = new Plan.Pipeline(1, List.of(), List.of(), List.of())
+                .withProjections(List.of(new Plan.Call("reinterpret_f64", new Plan.Col(0))));
+
+        double[] values = {0.5, 1.25, 3.0, 1234.5, 0.0009765625};
+        long[] bits = new long[values.length];
+        for (int i = 0; i < values.length; i++) {
+            bits[i] = Double.doubleToRawLongBits(values[i]);
+        }
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{bits}}, new int[] {values.length});
+        assertThat(result.types()[0]).isEqualTo(Types.DOUBLE);
+        for (int r = 0; r < values.length; r++) {
+            assertThat(Double.longBitsToDouble(result.columns()[0][r])).isEqualTo(values[r]);
+        }
+    }
+
+    @Test
     void compilesProjectionOnlyPipeline()
     {
         // SELECT v, k FROM t WHERE k > 50 ORDER BY v DESC LIMIT 5 -- no GROUP BY and no aggregates: one output row
