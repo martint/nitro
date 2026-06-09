@@ -2890,6 +2890,72 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 2, 1)));
     }
 
+    public static Composite query88()
+    {
+        // Q88: a single row of eight store-sale counts, one per half-hour time bucket from 8:30 to 12:30, for one
+        // household profile at the 'ese' store. Each count is a global-aggregate subquery (store_sales joined to
+        // time_dim / household_demographics / store); the eight are cross-joined (1x1 each) into one row. Q90's
+        // scalar-broadcast shape, eight-wide.
+        QueryLowering main = QueryLowering.scan("q88_b0",
+                        new QueryLowering.Column("c0", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b1", new QueryLowering.Column("c1", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b2", new QueryLowering.Column("c2", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b3", new QueryLowering.Column("c3", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b4", new QueryLowering.Column("c4", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b5", new QueryLowering.Column("c5", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b6", new QueryLowering.Column("c6", ColumnEncoding.FLAT, false))
+                .crossJoin("q88_b7", new QueryLowering.Column("c7", ColumnEncoding.FLAT, false));
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3),
+                new Plan.Col(4), new Plan.Col(5), new Plan.Col(6), new Plan.Col(7));
+
+        return new Composite(
+                List.of(new Stage(query88Count(8, false), "q88_b0"),
+                        new Stage(query88Count(9, true), "q88_b1"),
+                        new Stage(query88Count(9, false), "q88_b2"),
+                        new Stage(query88Count(10, true), "q88_b3"),
+                        new Stage(query88Count(10, false), "q88_b4"),
+                        new Stage(query88Count(11, true), "q88_b5"),
+                        new Stage(query88Count(11, false), "q88_b6"),
+                        new Stage(query88Count(12, true), "q88_b7")),
+                main,
+                List.of());
+    }
+
+    private static QueryLowering query88Count(int hour, boolean firstHalf)
+    {
+        QueryLowering count = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_time_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true))
+                .join("time_dim", "ss_sold_time_sk", "t_time_sk",
+                        new QueryLowering.Column("t_time_sk"),
+                        new QueryLowering.Column("t_hour", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("t_minute", ColumnEncoding.FLAT, true))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_dep_count", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("hd_vehicle_count", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, true));
+        // The half-hour bucket: a fixed hour, then minute < 30 (first half) or minute >= 30 (second half).
+        Plan.Predicate minute = firstHalf
+                ? new Plan.Predicate("<", count.column("t_minute"), new Plan.Lit(30))
+                : new Plan.Predicate(">", count.column("t_minute"), new Plan.Lit(29));
+        count.where(
+                        new Plan.Predicate("=", count.column("t_hour"), new Plan.Lit(hour)),
+                        minute,
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", count.column("hd_dep_count"), new Plan.Lit(4)),
+                                new Plan.Predicate("=", count.column("hd_dep_count"), new Plan.Lit(2)),
+                                new Plan.Predicate("=", count.column("hd_dep_count"), new Plan.Lit(0)))),
+                        new Plan.Predicate("<", count.column("hd_vehicle_count"),
+                                new Plan.Bin("+", count.column("hd_dep_count"), new Plan.Lit(3))),
+                        new Plan.StringMatch(count.position("s_store_name"), List.of("ese"), false))
+                .count();
+        return count;
+    }
+
     public static Composite query90()
     {
         // Q90: ratio of web-sale counts in a morning vs an evening time window, for one household profile and web-page
