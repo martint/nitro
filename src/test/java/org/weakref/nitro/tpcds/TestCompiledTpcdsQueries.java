@@ -538,6 +538,12 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
     }
 
+    @Test
+    void query38()
+    {
+        assertUnionCompositeMatchesHarness(CompiledTpcdsQueries.query38(), TpcdsParquetSupport::query38);
+    }
+
     /**
      * Run a UNION-feeding-aggregate query: materialize the union into a virtual table, then run the downstream stages
      * (each materialized under its virtual name) and the main, exactly as a {@link CompiledTpcdsQueries.Composite} but

@@ -689,6 +689,70 @@ public final class CompiledTpcdsQueries
     public record UnionComposite(List<QueryLowering> branches, String unionVirtualName, List<DictRef> branchStringColumns,
             List<Stage> stages, QueryLowering main, List<DictRef> stringColumns) {}
 
+    public static UnionComposite query38()
+    {
+        // Q38: count the customers who bought through all three channels within the same month-sequence window. Each
+        // channel emits one row per sale carrying (last_name, first_name, sale_date) plus a one-hot channel marker;
+        // the union is grouped by that customer/date identity, kept only when every channel contributed (each marker
+        // sums to > 0), and the surviving identities are counted. The union feeds the grouping stage, which feeds the
+        // count -- a union materialized into a virtual table that downstream stages consume.
+        List<QueryLowering> branches = List.of(
+                customerChannelPresenceBranch("store_sales", "ss_sold_date_sk", "ss_customer_sk", 1, 0, 0),
+                customerChannelPresenceBranch("catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", 0, 1, 0),
+                customerChannelPresenceBranch("web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", 0, 0, 1));
+        // Branch output last/first are dictionary strings (from customer, input 2, dict cols 2/1), unified across
+        // branches at concatenation; the sale date is a numeric DATE (epoch days), so it groups as a plain column.
+        List<DictRef> branchStrings = List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 1));
+
+        // The materialized union's numeric columns (the sale date and the one-hot markers) are non-null, so declare
+        // them non-nullable: the eager grouping reads a null-flag array only for nullable columns, and a materialized
+        // null-free column carries no such array.
+        QueryLowering grouped = QueryLowering.scan("q38_channels",
+                        new QueryLowering.Column("g_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_date", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_store", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_catalog", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_web", ColumnEncoding.FLAT, false))
+                .groupBy("g_last", "g_first", "g_date")
+                .aggregate("sum", "g_store")
+                .aggregate("sum", "g_catalog")
+                .aggregate("sum", "g_web");
+        grouped.having(new Plan.And(List.of(
+                        new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(0)),
+                        new Plan.Predicate(">", new Plan.Col(4), new Plan.Lit(0)),
+                        new Plan.Predicate(">", new Plan.Col(5), new Plan.Lit(0)))))
+                .select(new Plan.Col(3));   // drop the string keys; only the surviving-group count matters
+
+        QueryLowering main = QueryLowering.scan("q38_grouped",
+                        new QueryLowering.Column("survivor", ColumnEncoding.FLAT, true))
+                .count();
+
+        return new UnionComposite(branches, "q38_channels", branchStrings,
+                List.of(new Stage(grouped, "q38_grouped")), main, List.of());
+    }
+
+    private static QueryLowering customerChannelPresenceBranch(String fact, String soldDate, String customer, long store, long catalog, long web)
+    {
+        QueryLowering channel = QueryLowering.scan(fact,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(customer, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .join("customer", customer, "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true));
+        channel.where(
+                        new Plan.Predicate(">", channel.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", channel.column("d_month_seq"), new Plan.Lit(1212)))
+                .select(channel.column("c_last_name"), channel.column("c_first_name"), channel.column("d_date"),
+                        new Plan.Lit(store), new Plan.Lit(catalog), new Plan.Lit(web));
+        return channel;
+    }
+
     public static Composite query65()
     {
         // Per-store low-revenue items: items whose store revenue is <= 10% of that store's average item revenue.
