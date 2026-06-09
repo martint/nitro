@@ -921,7 +921,11 @@ public final class PipelineCompiler
         for (int column = 0; column < pipeline.columnCount(); column++) {
             types.add(combinedEncoding(pipeline, encodings, column) == ColumnEncoding.STRING ? Types.STRING : Types.LONG);
         }
-        types.add(Types.LONG);
+        // A ranking or partition-aggregate window appends one trailing column; a running window appends one per aggregate.
+        int trailing = pipeline.window().runningAggregates().isEmpty() ? 1 : pipeline.window().runningAggregates().size();
+        for (int t = 0; t < trailing; t++) {
+            types.add(Types.LONG);
+        }
         return types;
     }
 
@@ -1040,6 +1044,10 @@ public final class PipelineCompiler
     private static void emitWindowRankAndGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         Plan.Window window = pipeline.window();
+        if (!window.runningAggregates().isEmpty()) {
+            emitWindowRunningGather(out, pipeline, nullable, resultTypes);
+            return;
+        }
         if (window.aggregate() != null) {
             emitWindowAggregateGather(out, pipeline, nullable, resultTypes);
             return;
@@ -1217,6 +1225,100 @@ public final class PipelineCompiler
         }
         out.append("    resultNulls[").append(columnCount).append("] = outAggNull;\n");
         out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
+    }
+
+    /**
+     * Running (cumulative) window: sort the rows by (partition, ORDER BY), then for each running aggregate walk each
+     * partition keeping a running value over its non-null inputs (reset at every partition boundary; a null partition
+     * column is a singleton) and assign every row its value up to and including itself. Every row is kept; the result is
+     * the input columns plus one trailing column per running aggregate (NULL until the partition's first non-null).
+     */
+    private static void emitWindowRunningGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        Plan.Window window = pipeline.window();
+        int columnCount = pipeline.columnCount();
+        List<Plan.WindowAggregate> aggregates = window.runningAggregates();
+
+        for (int column = 0; column < columnCount; column++) {
+            out.append("    final long[] fw").append(column).append(" = w").append(column).append(";\n");
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append("    final boolean[] fwN").append(column).append(" = wN").append(column).append(";\n");
+            }
+        }
+
+        // Sort by (partition columns ascending, then the ORDER BY keys): partitions become contiguous, in cumulative order.
+        out.append("    Integer[] order = new Integer[rows];\n");
+        out.append("    for (int i = 0; i < rows; i++) { order[i] = i; }\n");
+        out.append("    java.util.Arrays.sort(order, (pa, pb) -> {\n");
+        out.append("      int c;\n");
+        for (int partitionColumn : window.partitionColumns()) {
+            emitWindowCompare(out, pipeline, nullable, resultTypes, partitionColumn, false);
+        }
+        for (Plan.SortKey key : window.orderBy()) {
+            emitWindowCompare(out, pipeline, nullable, resultTypes, key.column(), key.descending());
+        }
+        out.append("      return 0;\n");
+        out.append("    });\n");
+
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("    long[] outRun").append(a).append(" = new long[rows]; boolean[] outRunNull").append(a).append(" = new boolean[rows];\n");
+            out.append("    long run").append(a).append(" = 0; boolean has").append(a).append(" = false;\n");
+        }
+        out.append("    int prev = -1;\n");
+        out.append("    for (int oi = 0; oi < rows; oi++) {\n");
+        out.append("      int r = order[oi];\n");
+        out.append("      boolean nullPartition = ").append(windowNullPartitionTest(window, pipeline, nullable, resultTypes, "r")).append(";\n");
+        out.append("      if (prev == -1 || nullPartition || ").append(windowPartitionChanged(window, pipeline, nullable, resultTypes)).append(") {\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("        has").append(a).append(" = false;\n");
+        }
+        out.append("      }\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            int valueColumn = aggregates.get(a).inputColumn();
+            boolean valueNullable = windowColumnNullable(pipeline, nullable, valueColumn, resultTypes);
+            String guard = valueNullable ? "!wN" + valueColumn + "[r]" : "true";
+            String combine = runningCombine(aggregates.get(a).function(), "run" + a, "w" + valueColumn + "[r]", "has" + a);
+            out.append("      if (").append(guard).append(") { run").append(a).append(" = ").append(combine).append("; has").append(a).append(" = true; }\n");
+            out.append("      outRun").append(a).append("[oi] = has").append(a).append(" ? run").append(a).append(" : 0; outRunNull").append(a).append("[oi] = !has").append(a).append(";\n");
+        }
+        out.append("      prev = r;\n");
+        out.append("    }\n");
+
+        int resultColumnCount = columnCount + aggregates.size();
+        out.append("    long[][] result = new long[").append(resultColumnCount).append("][rows];\n");
+        out.append("    for (int g = 0; g < rows; g++) {\n");
+        out.append("      int s = order[g];\n");
+        for (int column = 0; column < columnCount; column++) {
+            out.append("      result[").append(column).append("][g] = w").append(column).append("[s];\n");
+        }
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("      result[").append(columnCount + a).append("][g] = outRun").append(a).append("[g];\n");
+        }
+        out.append("    }\n");
+        emitResultTypes(out, "    ", resultTypes);
+        out.append("    boolean[][] resultNulls = new boolean[").append(resultColumnCount).append("][];\n");
+        for (int column = 0; column < columnCount; column++) {
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                out.append("    boolean[] rn").append(column).append(" = new boolean[rows];\n");
+                out.append("    for (int g = 0; g < rows; g++) { rn").append(column).append("[g] = wN").append(column).append("[order[g]]; }\n");
+                out.append("    resultNulls[").append(column).append("] = rn").append(column).append(";\n");
+            }
+        }
+        for (int a = 0; a < aggregates.size(); a++) {
+            out.append("    resultNulls[").append(columnCount + a).append("] = outRunNull").append(a).append(";\n");
+        }
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(rows, result, types, resultNulls))));\n");
+    }
+
+    /** The running-aggregate combine of {@code accumulator} with {@code value}: the new value for the first row, else folded. */
+    private static String runningCombine(String function, String accumulator, String value, String has)
+    {
+        return switch (function) {
+            case "max" -> has + " ? Math.max(" + accumulator + ", " + value + ") : " + value;
+            case "min" -> has + " ? Math.min(" + accumulator + ", " + value + ") : " + value;
+            case "sum" -> has + " ? " + accumulator + " + " + value + " : " + value;
+            default -> throw new UnsupportedOperationException("running window aggregate: " + function);
+        };
     }
 
     /** A window output column carries nulls when its (nullable) source column does -- the rank column never does. */

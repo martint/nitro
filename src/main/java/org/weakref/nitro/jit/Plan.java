@@ -373,17 +373,35 @@ public final class Plan
      * every {@code orderBy} key) the same rank and skips the next; {@link RankFunction#ROW_NUMBER} numbers rows
      * 1, 2, 3, ... within the partition with no ties.
      */
-    public record Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit, WindowAggregate aggregate)
+    public record Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit, WindowAggregate aggregate, List<WindowAggregate> runningAggregates)
     {
         public Window
         {
             partitionColumns = partitionColumns.clone();
             orderBy = List.copyOf(orderBy);
+            runningAggregates = List.copyOf(runningAggregates);
+        }
+
+        public Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit, WindowAggregate aggregate)
+        {
+            this(partitionColumns, orderBy, function, rankLimit, aggregate, List.of());
         }
 
         public Window(int[] partitionColumns, List<SortKey> orderBy, RankFunction function, int rankLimit)
         {
-            this(partitionColumns, orderBy, function, rankLimit, null);
+            this(partitionColumns, orderBy, function, rankLimit, null, List.of());
+        }
+
+        /**
+         * A running (cumulative) aggregate window: each {@link WindowAggregate} {@code f(inputColumn) OVER (PARTITION BY
+         * partitionColumns ORDER BY orderBy ROWS UNBOUNDED PRECEDING)} -- the aggregate over the partition rows from its
+         * start up to and including the current row (in {@code orderBy} order), appended as a trailing column per
+         * aggregate. Nulls are skipped; the running value is NULL until the first non-null. Used for cumulative
+         * comparisons (Q51: running max of web vs store sales by item over date).
+         */
+        public static Window running(int[] partitionColumns, List<SortKey> orderBy, List<WindowAggregate> runningAggregates)
+        {
+            return new Window(partitionColumns, orderBy, null, -1, null, runningAggregates);
         }
 
         /**

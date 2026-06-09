@@ -1607,6 +1607,31 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesRunningMaxWindow()
+    {
+        // SELECT p, d, v, max(v) OVER (PARTITION BY p ORDER BY d ROWS UNBOUNDED PRECEDING) -- the running (cumulative)
+        // maximum within each partition in date order, appended. Columns: 0 = p, 1 = d, 2 = v.
+        Plan.Pipeline pipeline = new Plan.Pipeline(3, List.of(), List.of(), List.of())
+                .withWindow(Plan.Window.running(new int[] {0}, List.of(new Plan.SortKey(1, false)),
+                        List.of(new Plan.WindowAggregate("max", 2))));
+
+        long[] p = {1, 1, 1, 2, 2};
+        long[] d = {1, 2, 3, 1, 2};
+        long[] v = {10, 5, 12, 100, 7};
+        // sorted by (p, d): (1,1,10),(1,2,5),(1,3,12),(2,1,100),(2,2,7); running max: 10,10,12,100,100.
+        Map<Long, Long> expected = Map.of(11L, 10L, 12L, 10L, 13L, 12L, 21L, 100L, 22L, 100L);
+
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{p, d, v}}, new int[] {p.length});
+
+        assertThat(result.rowCount()).isEqualTo(p.length);
+        assertThat(result.types().length).isEqualTo(4);
+        for (int g = 0; g < result.rowCount(); g++) {
+            long key = result.columns()[0][g] * 10 + result.columns()[1][g];
+            assertThat(result.columns()[3][g]).as("running max at p=%d d=%d", result.columns()[0][g], result.columns()[1][g]).isEqualTo(expected.get(key));
+        }
+    }
+
+    @Test
     void compilesPartitionAverageWindow()
     {
         // SELECT p, v, avg(v) OVER (PARTITION BY p) FROM t -- the whole-partition average appended to every row,
