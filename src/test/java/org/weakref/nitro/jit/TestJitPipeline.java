@@ -1234,6 +1234,71 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesStringKeyedJoin()
+    {
+        // SELECT count(*) FROM probe JOIN build ON probe.k = build.k -- the join key is a dictionary STRING on both
+        // sides with INDEPENDENT dictionaries (different entries and id order), so a raw dict-id join is wrong; the
+        // compiler must remap the probe key id into the build's id space by value.
+        Plan.Build build = new Plan.Build(1, 0);   // [build.k], key column 0
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,                                 // probe: [probe.k]
+                List.of(new Plan.Join(build, 0)),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        byte[][] probeDict = {bytes("alpha"), bytes("beta"), bytes("gamma")};   // alpha=0, beta=1, gamma=2
+        int[] probeIds = {0, 1, 2, 0, 1};                                       // alpha, beta, gamma, alpha, beta
+        byte[][] buildDict = {bytes("gamma"), bytes("delta"), bytes("alpha")};  // gamma=0, delta=1, alpha=2 (unique keys)
+        int[] buildIds = {0, 1, 2};
+        // probe values present in the build: alpha(yes), beta(no), gamma(yes), alpha(yes), beta(no) -> 3 matches.
+        long expected = 3;
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING}, {ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {{new Column.StringColumn(probeIds, probeDict)}, {new Column.StringColumn(buildIds, buildDict)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {probeIds.length, buildIds.length});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
+    void compilesMultiKeyStringJoin()
+    {
+        // SELECT count(*) FROM probe JOIN build ON probe.a = build.a AND probe.b = build.b -- TWO dictionary string
+        // keys, each side with independent dictionaries. Each key is remapped separately into the build's id space.
+        Plan.Build build = new Plan.Build(2, new int[] {0, 1});   // [build.a, build.b], keys 0 and 1
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                               // probe: [probe.a, probe.b]
+                List.of(new Plan.Join(build, new int[] {0, 1})),
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+
+        byte[][] probeA = {bytes("X"), bytes("Y")};                 // X=0, Y=1
+        int[] probeAIds = {0, 1, 0};                                // X, Y, X
+        byte[][] probeB = {bytes("P"), bytes("Q")};                 // P=0, Q=1
+        int[] probeBIds = {0, 1, 1};                                // P, Q, Q   -> rows (X,P), (Y,Q), (X,Q)
+        byte[][] buildA = {bytes("Z"), bytes("X")};                 // Z=0, X=1  (different id order than probe)
+        int[] buildAIds = {1, 1, 0};                                // X, X, Z
+        byte[][] buildB = {bytes("Q"), bytes("P")};                 // Q=0, P=1  (different id order than probe)
+        int[] buildBIds = {1, 0, 1};                                // P, Q, P   -> build pairs (X,P), (X,Q), (Z,P)
+        // probe rows matched in build: (X,P) yes, (Y,Q) no, (X,Q) yes -> 2.
+        long expected = 2;
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}, {ColumnEncoding.STRING, ColumnEncoding.STRING}};
+        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        Column[][] inputs = {
+                {new Column.StringColumn(probeAIds, probeA), new Column.StringColumn(probeBIds, probeB)},
+                {new Column.StringColumn(buildAIds, buildA), new Column.StringColumn(buildBIds, buildB)}};
+        CompiledPipeline.Result result = compiled.execute(inputs, new int[] {probeAIds.length, buildAIds.length});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(expected);
+    }
+
+    @Test
     void compilesStringColumnCompare()
     {
         // SELECT count(*) FROM t WHERE s0 <> s1 -- two dictionary-encoded string columns carrying INDEPENDENT

@@ -1524,7 +1524,7 @@ public final class PipelineCompiler
      * brace per probe and per interleaved filter group; returns the number opened so the caller can close them.
      */
     private static int emitProbesWithFilters(StringBuilder out, String baseIndent, Plan.Pipeline pipeline, List<Plan.Join> joins,
-            int[] buildOffset, int probeColumns, int joinCount, IntFunction<String> resolver, IntFunction<String> nullResolver,
+            int[] buildOffset, int probeColumns, int joinCount, ColumnEncoding[][] encodings, IntFunction<String> resolver, IntFunction<String> nullResolver,
             Map<Plan.Condition, Integer> stringMaskIds)
     {
         Map<Integer, List<Plan.Condition>> filtersByLevel = new java.util.LinkedHashMap<>();
@@ -1554,7 +1554,7 @@ public final class PipelineCompiler
                 }
                 continue;
             }
-            emitProbeLookup(out, indent, k, joins.get(k), resolver, nullResolver);
+            emitProbeLookup(out, indent, k, joins.get(k), pipeline, encodings, resolver, nullResolver);
             // An inner join drops a probe row with no match; a left join keeps it (build columns read NULL); an
             // anti-join (NOT EXISTS) keeps only the rows with no match (its build contributes no columns).
             if (joins.get(k).anti()) {
@@ -1605,6 +1605,13 @@ public final class PipelineCompiler
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
         int joinCount = joins.size();
+
+        // String-keyed joins are remapped against a once-materialized probe dictionary; the streaming probe delivers a
+        // fresh (possibly re-dictionarized) batch each advance, so the remap is not yet valid there. Only the eager
+        // (fully-materialized probe) path supports them today -- every current consumer joins materialized stages.
+        if (streaming && hasStringJoinKey(pipeline, encodings)) {
+            throw new UnsupportedOperationException("string-keyed join is not supported on the streaming probe path");
+        }
 
         // Where each build's columns begin in the combined column space (probe columns first, then each build).
         int[] buildOffset = new int[joinCount];
@@ -1722,7 +1729,7 @@ public final class PipelineCompiler
                 }
             }
             if (!join.cross()) {
-                emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k]);
+                emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k], pipeline, encodings, buildOffset);
             }
         }
 
@@ -1845,7 +1852,7 @@ public final class PipelineCompiler
                 }
             }
             out.append("        for (int i = 0; i < probeRows; i++) {\n");
-            int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, resolver, nullResolver, stringMaskIds);
+            int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
             String indent = "          " + "  ".repeat(openBraces);
             // A cross join, or an inner/left join over a non-unique build, pairs one probe row with many build rows,
             // so survivors can exceed the probe-row count; grow the selection arrays when full. Only an anti-join is
@@ -1930,11 +1937,14 @@ public final class PipelineCompiler
                     emitStringMaskPrelude(out, match, s, probeVars(column).stringDict());
                 }
             }
+            // Both key dictionaries are materialized now (the builds above, the probe just loaded), so emit each
+            // string join key's probe-id -> build-id value remap before the probe loop consumes it.
+            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns);
 
             out.append("    for (int i = 0; i < probeRows; i++) {\n");
             // Filters are interleaved with the probes (early-out); the body then runs without re-checking them.
             // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
-            int openBraces = emitProbesWithFilters(out, "      ", pipeline, joins, buildOffset, probeColumns, joinCount, resolver, nullResolver, stringMaskIds);
+            int openBraces = emitProbesWithFilters(out, "      ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
             String indent = "      " + "  ".repeat(openBraces);
             emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false, true);
             for (int brace = 0; brace < openBraces; brace++) {
@@ -1981,7 +1991,15 @@ public final class PipelineCompiler
      * downstream nested join, the same early pruning an operator engine gets by filtering the dimension before the
      * build. (The filter remains in the probe WHERE too; for survivors that is a redundant, always-true re-check.)
      */
-    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter)
+    /** The build key's hash/array value array: a string (or dictionary) key is keyed by its dense dict ids, else flat longs. */
+    private static String buildKeyArray(int k, int localKey, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
+    {
+        ColumnEncoding encoding = combinedEncoding(pipeline, encodings, buildOffset[k] + localKey);
+        ColumnVars vars = buildVars(k, localKey);
+        return encoding == ColumnEncoding.STRING || encoding == ColumnEncoding.DICTIONARY ? vars.ids() : vars.flat();
+    }
+
+    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
@@ -1992,7 +2010,7 @@ public final class PipelineCompiler
         // join) populates it so the probe emits every matching build row. The compiler does not assume uniqueness.
         out.append("    int[] buildNext").append(k).append(" = null;\n");
         if (keyCount == 1) {
-            String buildKey = "b" + k + "_" + buildKeys[0];
+            String buildKey = buildKeyArray(k, buildKeys[0], pipeline, encodings, buildOffset);
             out.append("    long minKey").append(k).append(" = Long.MAX_VALUE, maxKey").append(k).append(" = Long.MIN_VALUE;\n");
             out.append("    for (int r = 0; r < ").append(rows).append("; r++) { long key = ").append(buildKey)
                     .append("[r]; if (key < minKey").append(k).append(") { minKey").append(k).append(" = key; } if (key > maxKey").append(k).append(") { maxKey").append(k).append(" = key; } }\n");
@@ -2010,7 +2028,7 @@ public final class PipelineCompiler
                     .append(" if (buildRowByKey").append(k).append("[idx] != -1) { if (buildNext").append(k).append(" == null) { buildNext").append(k).append(" = new int[").append(rows).append("]; java.util.Arrays.fill(buildNext").append(k).append(", -1); } buildNext").append(k).append("[r] = buildRowByKey").append(k).append("[idx]; }")
                     .append(" buildRowByKey").append(k).append("[idx] = r; }\n");
             out.append("    }\n    else {\n");
-            emitHashBuild(out, "      ", k, buildKeys, buildFilter);
+            emitHashBuild(out, "      ", k, buildKeys, buildFilter, pipeline, encodings, buildOffset);
             out.append("    }\n");
         }
         else {
@@ -2019,7 +2037,7 @@ public final class PipelineCompiler
             }
             out.append("    int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
             out.append("    {\n");
-            emitHashBuild(out, "      ", k, buildKeys, buildFilter);
+            emitHashBuild(out, "      ", k, buildKeys, buildFilter, pipeline, encodings, buildOffset);
             out.append("    }\n");
         }
     }
@@ -2030,7 +2048,7 @@ public final class PipelineCompiler
      * duplicate) with the latest row as the chain head in {@code jRow<k>[slot]}. A unique build never collides on key,
      * so {@code buildNext<k>} stays null and the probe runs a single iteration -- byte-identical to a unique-key table.
      */
-    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter)
+    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
@@ -2048,7 +2066,7 @@ public final class PipelineCompiler
             out.append(indent).append("  if (!(").append(buildFilter).append(")) { continue; }\n");
         }
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("  long bk").append(kx).append(" = b").append(k).append("_").append(buildKeys[kx]).append("[r];\n");
+            out.append(indent).append("  long bk").append(kx).append(" = ").append(buildKeyArray(k, buildKeys[kx], pipeline, encodings, buildOffset)).append("[r];\n");
         }
         out.append(indent).append("  int slot = mix(").append(hashFold("bk", "", keyCount)).append(") & jMask").append(k).append(";\n");
         out.append(indent).append("  while (jRow").append(k).append("[slot] != -1 && !(").append(keyMatch).append(")) { slot = (slot + 1) & jMask").append(k).append("; }\n");
@@ -2066,7 +2084,52 @@ public final class PipelineCompiler
     }
 
     /** Per-row lookup for join {@code k}, leaving {@code int buildRow<k>} in scope (-1 = no match). */
-    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    /** Whether any join's probe key column is a dictionary string (needing the value remap before matching). */
+    private static boolean hasStringJoinKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    {
+        for (Plan.Join join : pipeline.joins()) {
+            for (int probeKey : join.probeKeyColumns()) {
+                if (combinedEncoding(pipeline, encodings, probeKey) == ColumnEncoding.STRING) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * For each string join key, emit {@code int[] jRemap<k>_<kx>} translating a probe-key dictionary id into the
+     * build-key dictionary id of the entry with the same bytes (or {@code -1} when the value is absent from the build).
+     * Probe and build carry independent dictionaries, so the join must match by value; the remap reduces that to the
+     * existing integer-keyed hash/array probe (the build is keyed by its own dense dict ids).
+     */
+    private static void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns)
+    {
+        for (int k = 0; k < joins.size(); k++) {
+            Plan.Join join = joins.get(k);
+            int[] probeKeys = join.probeKeyColumns();
+            int[] buildKeys = join.build().keyColumns();
+            for (int kx = 0; kx < probeKeys.length; kx++) {
+                if (combinedEncoding(pipeline, encodings, probeKeys[kx]) != ColumnEncoding.STRING) {
+                    continue;
+                }
+                String probeDictionary = probeVars(probeKeys[kx]).stringDict();
+                String buildDictionary = buildVars(k, buildKeys[kx]).stringDict();
+                String id = k + "_" + kx;
+                out.append("    java.util.HashMap<String, Integer> jBuildIdx").append(id).append(" = new java.util.HashMap<>();\n");
+                out.append("    for (int e = 0; e < ").append(buildDictionary).append(".length; e++) {\n");
+                out.append("      jBuildIdx").append(id).append(".putIfAbsent(new String(").append(buildDictionary).append("[e], java.nio.charset.StandardCharsets.UTF_8), e);\n");
+                out.append("    }\n");
+                out.append("    int[] jRemap").append(id).append(" = new int[").append(probeDictionary).append(".length];\n");
+                out.append("    for (int e = 0; e < ").append(probeDictionary).append(".length; e++) {\n");
+                out.append("      Integer b = jBuildIdx").append(id).append(".get(new String(").append(probeDictionary).append("[e], java.nio.charset.StandardCharsets.UTF_8));\n");
+                out.append("      jRemap").append(id).append("[e] = b == null ? -1 : b;\n");
+                out.append("    }\n");
+            }
+        }
+    }
+
+    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         int[] probeKeys = join.probeKeyColumns();
         int keyCount = probeKeys.length;
@@ -2081,7 +2144,13 @@ public final class PipelineCompiler
             }
         }
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(indent).append("long pk").append(k).append("_").append(kx).append(" = ").append(resolver.apply(probeKeys[kx])).append(";\n");
+            // A string key carries the probe's dictionary id; remap it into the build's dictionary id space (by value)
+            // so it matches the build hash/array, which is keyed by the build dict id. An absent value remaps to -1,
+            // which never matches (array: below minKey; hash: build ids are non-negative).
+            String key = combinedEncoding(pipeline, encodings, probeKeys[kx]) == ColumnEncoding.STRING
+                    ? "jRemap" + k + "_" + kx + "[(int) (" + resolver.apply(probeKeys[kx]) + ")]"
+                    : resolver.apply(probeKeys[kx]);
+            out.append(indent).append("long pk").append(k).append("_").append(kx).append(" = ").append(key).append(";\n");
         }
         out.append(indent).append("int buildRow").append(k).append(";\n");
         if (keyNull.length() > 0) {
