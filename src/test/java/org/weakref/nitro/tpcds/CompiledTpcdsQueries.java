@@ -2655,6 +2655,123 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 0, 3, 1, 30)));
     }
 
+    public static Union query66()
+    {
+        // Q66: per-warehouse monthly shipping revenue and net for the web and catalog channels, on a time-of-day band
+        // via carriers DHL/BARIAN in 2001. Each channel rolls sales (price*qty) and net (net_paid*qty) into twelve
+        // per-month buckets grouped by warehouse identity; the two channels are unioned and re-summed, then twelve
+        // sales-per-square-foot ratios are emitted alongside. The constant ship-mode label is a string literal.
+        List<QueryLowering> branches = List.of(
+                query66ChannelRollup("web_sales", "ws_sold_date_sk", "ws_sold_time_sk", "ws_ship_mode_sk", "ws_warehouse_sk",
+                        "ws_quantity", "ws_ext_sales_price", "ws_net_paid"),
+                query66ChannelRollup("catalog_sales", "cs_sold_date_sk", "cs_sold_time_sk", "cs_ship_mode_sk", "cs_warehouse_sk",
+                        "cs_quantity", "cs_sales_price", "cs_net_paid_inc_tax"));
+        // branch result: name(0), sqft(1), city(2), county(3), state(4), country(5), year(6), 12 sales sums(7..18),
+        // 12 net sums(19..30). The five warehouse strings come from the warehouse build (input 1).
+        List<DictRef> branchStrings = List.of(
+                new DictRef(0, 1, 1), new DictRef(2, 1, 3), new DictRef(3, 1, 4), new DictRef(4, 1, 5), new DictRef(5, 1, 6));
+
+        QueryLowering main = QueryLowering.scan("__q66_union__",
+                        new QueryLowering.Column("g_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_sqft", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_city", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_county", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_state", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_country", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("s1"), new QueryLowering.Column("s2"), new QueryLowering.Column("s3"),
+                        new QueryLowering.Column("s4"), new QueryLowering.Column("s5"), new QueryLowering.Column("s6"),
+                        new QueryLowering.Column("s7"), new QueryLowering.Column("s8"), new QueryLowering.Column("s9"),
+                        new QueryLowering.Column("s10"), new QueryLowering.Column("s11"), new QueryLowering.Column("s12"),
+                        new QueryLowering.Column("n1"), new QueryLowering.Column("n2"), new QueryLowering.Column("n3"),
+                        new QueryLowering.Column("n4"), new QueryLowering.Column("n5"), new QueryLowering.Column("n6"),
+                        new QueryLowering.Column("n7"), new QueryLowering.Column("n8"), new QueryLowering.Column("n9"),
+                        new QueryLowering.Column("n10"), new QueryLowering.Column("n11"), new QueryLowering.Column("n12"))
+                .groupBy("g_name", "g_sqft", "g_city", "g_county", "g_state", "g_country", "g_year");
+        for (int s = 1; s <= 12; s++) {
+            main.aggregate("sum", "s" + s);
+        }
+        for (int n = 1; n <= 12; n++) {
+            main.aggregate("sum", "n" + n);
+        }
+        // main result: keys 0..6 (name,sqft,city,county,state,country,year), 12 sales sums 7..18, 12 net sums 19..30.
+        List<Plan.Expr> outputs = new java.util.ArrayList<>();
+        outputs.add(new Plan.Col(0));   // name
+        outputs.add(new Plan.Col(1));   // sqft
+        outputs.add(new Plan.Col(2));   // city
+        outputs.add(new Plan.Col(3));   // county
+        outputs.add(new Plan.Col(4));   // state
+        outputs.add(new Plan.Col(5));   // country
+        outputs.add(new Plan.LitStr("DHL,BARIAN"));   // constant ship-mode label (reconstructed via the literal DictRef)
+        outputs.add(new Plan.Col(6));   // year
+        for (int m = 0; m < 12; m++) {
+            outputs.add(new Plan.Col(7 + m));   // sales sum for month m+1
+        }
+        for (int m = 0; m < 12; m++) {
+            outputs.add(new Plan.Call("divide_round_i64", new Plan.Col(7 + m), new Plan.Col(1)));   // sales / sqft
+        }
+        for (int m = 0; m < 12; m++) {
+            outputs.add(new Plan.Col(19 + m));  // net sum for month m+1
+        }
+        main.select(outputs.toArray(new Plan.Expr[0]))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        List<DictRef> mainStrings = List.of(
+                new DictRef(0, 0, 0), new DictRef(2, 0, 2), new DictRef(3, 0, 3), new DictRef(4, 0, 4), new DictRef(5, 0, 5),
+                DictRef.literal(6, "DHL,BARIAN"));
+        return new Union(branches, main, "__q66_union__", branchStrings, mainStrings);
+    }
+
+    private static QueryLowering query66ChannelRollup(String fact, String soldDate, String soldTime, String shipMode, String warehouse,
+            String quantity, String salesPrice, String netPaid)
+    {
+        QueryLowering channel = QueryLowering.scan(fact,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldTime, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(shipMode, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(warehouse, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesPrice, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(netPaid, ColumnEncoding.FLAT, true))
+                .join("warehouse", warehouse, "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"),
+                        new QueryLowering.Column("w_warehouse_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("w_warehouse_sq_ft", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_city", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("w_county", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("w_state", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("w_country", ColumnEncoding.STRING, false))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, false))
+                .join("time_dim", soldTime, "t_time_sk",
+                        new QueryLowering.Column("t_time_sk"),
+                        new QueryLowering.Column("t_time", ColumnEncoding.FLAT, false))
+                .join("ship_mode", shipMode, "sm_ship_mode_sk",
+                        new QueryLowering.Column("sm_ship_mode_sk"),
+                        new QueryLowering.Column("sm_carrier", ColumnEncoding.STRING, false));
+        channel.where(
+                        new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Predicate(">", channel.column("t_time"), new Plan.Lit(30837)),
+                        new Plan.Predicate("<", channel.column("t_time"), new Plan.Lit(59639)),
+                        new Plan.StringMatch(channel.position("sm_carrier"), List.of("DHL", "BARIAN"), false))
+                .groupBy("w_warehouse_name", "w_warehouse_sq_ft", "w_city", "w_county", "w_state", "w_country", "d_year");
+        for (int m = 1; m <= 12; m++) {
+            channel.aggregate("sum", new Plan.Case(
+                    List.of(new Plan.Case.Branch(new Plan.Predicate("=", channel.column("d_moy"), new Plan.Lit(m)),
+                            new Plan.Bin("*", channel.column(salesPrice), channel.column(quantity)))),
+                    new Plan.Lit(0)));
+        }
+        for (int m = 1; m <= 12; m++) {
+            channel.aggregate("sum", new Plan.Case(
+                    List.of(new Plan.Case.Branch(new Plan.Predicate("=", channel.column("d_moy"), new Plan.Lit(m)),
+                            new Plan.Bin("*", channel.column(netPaid), channel.column(quantity)))),
+                    new Plan.Lit(0)));
+        }
+        return channel;
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
