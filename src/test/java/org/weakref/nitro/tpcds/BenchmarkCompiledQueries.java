@@ -158,6 +158,32 @@ public class BenchmarkCompiledQueries
         runners.put(name, () -> CompiledQuerySupport.runUnion(allocator, tables, branches, main, virtualTable, branchStringColumns));
     }
 
+    /** A UNION ALL materialized into a virtual table that downstream stages then consume (union feeding an aggregate). */
+    private void unionComposite(String name, CompiledTpcdsQueries.UnionComposite composite)
+    {
+        record StagePlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
+
+        List<Lowered> branches = new ArrayList<>();
+        for (org.weakref.nitro.jit.QueryLowering branch : composite.branches()) {
+            branches.add(branch.lower());
+        }
+        String unionVirtualName = composite.unionVirtualName();
+        List<CompiledTpcdsQueries.DictRef> branchStringColumns = composite.branchStringColumns();
+        List<StagePlan> stages = new ArrayList<>();
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            stages.add(new StagePlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
+        }
+        Lowered main = composite.main().lower();
+        runners.put(name, () -> {
+            Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+            virtuals.put(unionVirtualName, CompiledQuerySupport.materializeUnion(allocator, tables, branches, branchStringColumns));
+            for (StagePlan stage : stages) {
+                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
+            }
+            return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
+        });
+    }
+
     /** A multi-stage query expressed as a tree of pipelines (each stage materialized under a virtual table name). */
     private void composite(String name, CompiledTpcdsQueries.Composite composite)
     {

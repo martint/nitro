@@ -680,6 +680,15 @@ public final class CompiledTpcdsQueries
      */
     public record Composite(List<Stage> stages, QueryLowering main, List<DictRef> stringColumns) {}
 
+    /**
+     * A UNION ALL materialized into a virtual table that a tree of downstream stages then consumes -- the shape behind
+     * "union feeding an aggregate" (e.g. the customers-in-all-channels count). {@code branches} are concatenated under
+     * {@code unionVirtualName} (string branch outputs unified per {@code branchStringColumns}); {@code stages} then run
+     * in order over that relation exactly as in a {@link Composite}, and {@code main} produces the final result.
+     */
+    public record UnionComposite(List<QueryLowering> branches, String unionVirtualName, List<DictRef> branchStringColumns,
+            List<Stage> stages, QueryLowering main, List<DictRef> stringColumns) {}
+
     public static Composite query65()
     {
         // Per-store low-revenue items: items whose store revenue is <= 10% of that store's average item revenue.

@@ -850,14 +850,15 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * As {@link #runUnion}, but {@code branchStringColumns} names the branch-result columns that are dictionary
-     * strings (the union's group key may be a string, e.g. Q56/Q60 group by {@code i_item_id}). Each branch carries
-     * its own (filtered) source dictionary, so the branch string columns are merged into one ordered unified
-     * dictionary during concatenation -- ids consistent across branches, and id order = value order for ORDER BY.
+     * Materialize a UNION ALL into a virtual relation: stream each branch, materialize its (filtered) output, and
+     * concatenate the same-schema branch results row-wise -- merging branch string columns into one ordered unified
+     * dictionary (per {@code branchStringColumns}). The result is a {@link Materialized} relation that can be registered
+     * as a virtual table and consumed by a downstream stage (e.g. a grouping/HAVING/count over the union, or a join),
+     * exactly as a single materialized stage is. Branches are computed once each (not replayed); concatenation is the
+     * union.
      */
-    public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
-            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main,
-            String virtualTable, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
+    public static Materialized materializeUnion(Allocator allocator, TpcdsParquetTables tables,
+            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
         List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
         int[] counts = new int[branches.size()];
@@ -883,7 +884,22 @@ public final class CompiledQuerySupport
         for (int count : counts) {
             total += count;
         }
-        org.weakref.nitro.jit.Column[] union = concatenateColumns(parts, counts, total, width);
+        return new Materialized(concatenateColumns(parts, counts, total, width), total);
+    }
+
+    /**
+     * As {@link #runUnion}, but {@code branchStringColumns} names the branch-result columns that are dictionary
+     * strings (the union's group key may be a string, e.g. Q56/Q60 group by {@code i_item_id}). Each branch carries
+     * its own (filtered) source dictionary, so the branch string columns are merged into one ordered unified
+     * dictionary during concatenation -- ids consistent across branches, and id order = value order for ORDER BY.
+     */
+    public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
+            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main,
+            String virtualTable, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
+    {
+        Materialized unionRelation = materializeUnion(allocator, tables, branches, branchStringColumns);
+        org.weakref.nitro.jit.Column[] union = unionRelation.columns();
+        int total = unionRelation.rows();
 
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
         org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];

@@ -538,6 +538,31 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
     }
 
+    /**
+     * Run a UNION-feeding-aggregate query: materialize the union into a virtual table, then run the downstream stages
+     * (each materialized under its virtual name) and the main, exactly as a {@link CompiledTpcdsQueries.Composite} but
+     * with the union pre-registered as the first virtual relation.
+     */
+    private static void assertUnionCompositeMatchesHarness(CompiledTpcdsQueries.UnionComposite composite, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.jit.QueryLowering.Lowered> branches = new ArrayList<>();
+        for (org.weakref.nitro.jit.QueryLowering branch : composite.branches()) {
+            branches.add(branch.lower());
+        }
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        virtuals.put(composite.unionVirtualName(),
+                CompiledQuerySupport.materializeUnion(allocator, tables, branches, composite.branchStringColumns()));
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+        assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
+    }
+
     @Test
     void query37()
     {
