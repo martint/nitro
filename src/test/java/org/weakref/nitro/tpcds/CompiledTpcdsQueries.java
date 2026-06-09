@@ -43,12 +43,27 @@ public final class CompiledTpcdsQueries
      * is applied to each dictionary entry at reconstruction, matching a trailing {@code substring(col, start, length)}
      * output projection. NOTE: ordering still runs on the un-truncated dictionary ids, so this is only byte-exact when
      * the substring preserves the columns' relative order (it does whenever distinct values keep distinct prefixes).
+     *
+     * <p>When {@code literal} is non-null the result column is a constant string: the pipeline emits a placeholder LONG
+     * column (e.g. {@code Lit(0)}) and reconstruction maps every row to {@code literal}, matching a constant string
+     * projection. The {@code dictInput}/{@code dictColumn} are then ignored.
      */
-    public record DictRef(int resultColumn, int dictInput, int dictColumn, int substringStart, int substringLength)
+    public record DictRef(int resultColumn, int dictInput, int dictColumn, int substringStart, int substringLength, String literal)
     {
         public DictRef(int resultColumn, int dictInput, int dictColumn)
         {
-            this(resultColumn, dictInput, dictColumn, 1, -1);
+            this(resultColumn, dictInput, dictColumn, 1, -1, null);
+        }
+
+        public DictRef(int resultColumn, int dictInput, int dictColumn, int substringStart, int substringLength)
+        {
+            this(resultColumn, dictInput, dictColumn, substringStart, substringLength, null);
+        }
+
+        /** A constant string result column (backed by a placeholder numeric column in the pipeline). */
+        public static DictRef literal(int resultColumn, String value)
+        {
+            return new DictRef(resultColumn, 0, 0, 1, -1, value);
         }
     }
 

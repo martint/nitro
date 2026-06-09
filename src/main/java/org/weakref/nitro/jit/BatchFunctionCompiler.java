@@ -131,6 +131,7 @@ public final class BatchFunctionCompiler
         return switch (expression) {
             case Plan.Col col -> "in" + col.index() + "[i]";
             case Plan.Lit lit -> lit.value() + "L";
+            case Plan.LitStr ignored -> throw new UnsupportedOperationException("string literal projection is JIT-only");
             case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(java.util.List.of(expr(bin.left()), expr(bin.right())));
             case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(BatchFunctionCompiler::expr).toList());
             case Plan.Case ignored -> throw new UnsupportedOperationException("CASE not yet supported in batch functions");
@@ -174,6 +175,7 @@ public final class BatchFunctionCompiler
         switch (expression) {
             case Plan.Col col -> into.add(col.index());
             case Plan.Lit ignored -> {}
+            case Plan.LitStr ignored -> {}
             case Plan.Bin bin -> {
                 collectColumns(bin.left(), into);
                 collectColumns(bin.right(), into);

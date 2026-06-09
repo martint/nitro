@@ -27,7 +27,7 @@ public final class Plan
 
     /** Scalar expression over input columns. */
     public sealed interface Expr
-            permits Col, Lit, Bin, Call, Case, Coalesce
+            permits Col, Lit, LitStr, Bin, Call, Case, Coalesce
     {}
 
     /** Reference to input column {@code index}. */
@@ -37,6 +37,14 @@ public final class Plan
 
     /** Literal long. */
     public record Lit(long value)
+            implements Expr
+    {}
+
+    /**
+     * Constant string projection. Typed STRING; the pipeline emits the dictionary id 0 for every row, and the consumer
+     * supplies the single-entry dictionary (e.g. via a literal {@code DictRef}) that maps id 0 to {@code value}.
+     */
+    public record LitStr(String value)
             implements Expr
     {}
 

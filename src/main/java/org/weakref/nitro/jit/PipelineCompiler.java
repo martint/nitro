@@ -693,6 +693,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> inputTypes.get(col.index());
             case Plan.Lit ignored -> Types.LONG;
+            case Plan.LitStr ignored -> Types.STRING;
             case Plan.Bin bin -> projectionType(bin.left(), inputTypes) == Types.DOUBLE || projectionType(bin.right(), inputTypes) == Types.DOUBLE ? Types.DOUBLE : Types.LONG;
             case Plan.Call call -> ScalarLibrary.isDoubleResult(call.name()) || call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
             case Plan.Coalesce coalesce -> coalesce.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
@@ -1374,6 +1375,7 @@ public final class PipelineCompiler
             case Plan.Coalesce coalesce -> coalesce.arguments().forEach(argument -> collectStringMatchesInExpr(argument, into));
             case Plan.Col ignored -> {}
             case Plan.Lit ignored -> {}
+            case Plan.LitStr ignored -> {}
         }
     }
 
@@ -3156,6 +3158,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
+            case Plan.LitStr ignored -> "0L";   // constant string: emit dictionary id 0 (the value comes from the consumer's single-entry dictionary)
             case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
             case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
             case Plan.Case kase -> caseExpression(kase, resolver, nullResolver, stringMaskIds);
@@ -3214,6 +3217,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> nullResolver.apply(col.index());
             case Plan.Lit ignored -> "false";
+            case Plan.LitStr ignored -> "false";
             case Plan.Bin bin -> orNull(nullExpr(bin.left(), resolver, nullResolver, stringMaskIds), nullExpr(bin.right(), resolver, nullResolver, stringMaskIds));
             case Plan.Call call -> {
                 String nulls = "false";

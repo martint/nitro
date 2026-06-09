@@ -1034,6 +1034,10 @@ public final class CompiledQuerySupport
      */
     static byte[][] dictionaryFor(org.weakref.nitro.jit.Column[][] dictInputs, CompiledTpcdsQueries.DictRef ref)
     {
+        if (ref.literal() != null) {
+            // Constant string column: a single-entry dictionary the placeholder column's all-zero ids map onto.
+            return new byte[][] {ref.literal().getBytes(java.nio.charset.StandardCharsets.UTF_8)};
+        }
         byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
         if (ref.substringLength() < 0) {
             return dictionary;
