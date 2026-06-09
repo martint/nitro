@@ -2588,6 +2588,73 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ws_net_profit"), new Plan.Lit(profitHighExclusive))));
     }
 
+    public static Composite query79()
+    {
+        // Q79: per (customer, store-visit) store-sale coupon and net-profit totals on a chosen weekday in 1999-2001,
+        // for stores of a certain size and households with six dependents or more than two vehicles; then the customer's
+        // name, the store city, the ticket, and the totals, top 100 ordered by name, the city prefix, and the profit.
+        // The coupon/profit are summed over coalesce(x, 0): a group whose values are all null must total 0, not null
+        // (a bare sum returns null for an all-null group), so the coalesce is required, not redundant.
+        QueryLowering grouped = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number"),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_dow", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_number_employees", ColumnEncoding.FLAT, true))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_dep_count", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("hd_vehicle_count", ColumnEncoding.FLAT, true));
+        grouped.where(
+                        new Plan.Predicate("=", grouped.column("d_dow"), new Plan.Lit(1)),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(1999)),
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2000)),
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2001)))),
+                        new Plan.Predicate(">", grouped.column("s_number_employees"), new Plan.Lit(199)),
+                        new Plan.Predicate("<", grouped.column("s_number_employees"), new Plan.Lit(296)),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate("=", grouped.column("hd_dep_count"), new Plan.Lit(6)),
+                                new Plan.Predicate(">", grouped.column("hd_vehicle_count"), new Plan.Lit(2)))))
+                .groupBy("ss_ticket_number", "ss_customer_sk", "ss_addr_sk", "s_city")
+                .aggregate("sum", new Plan.Coalesce(grouped.column("ss_coupon_amt"), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Coalesce(grouped.column("ss_net_profit"), new Plan.Lit(0)));
+        // grouped result: ticket(0), customer(1), addr(2), city(3), sum_coupon(4), sum_profit(5).
+
+        QueryLowering main = QueryLowering.scan("q79_grouped",
+                        new QueryLowering.Column("g_ticket"),
+                        new QueryLowering.Column("g_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_addr", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_coupon", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_profit", ColumnEncoding.FLAT, true))
+                .join("customer", "g_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true));
+        main.select(main.column("c_last_name"), main.column("c_first_name"), main.column("g_city"),
+                        main.column("g_ticket"), main.column("g_coupon"), main.column("g_profit"))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false),
+                        new Plan.SortKey(2, false), new Plan.SortKey(5, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(grouped, "q79_grouped", List.of(new DictRef(3, 2, 1)))),
+                main,
+                List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 0, 3, 1, 30)));
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
