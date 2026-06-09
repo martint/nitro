@@ -335,6 +335,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query51()
+    {
+        assertRunningCumulativeMatchesHarness(CompiledTpcdsQueries.query51(), TpcdsParquetSupport::query51);
+    }
+
+    @Test
     void query39()
     {
         assertCompositeMatchesHarness(CompiledTpcdsQueries.query39(), TpcdsParquetSupport::query39);
@@ -668,6 +674,27 @@ public class TestCompiledTpcdsQueries
             lowered.add(branch.lower());
         }
         return lowered;
+    }
+
+    /**
+     * Run the Q51 cumulative web-vs-store shape: each channel grouped then running-summed (two stages), the two windowed
+     * channels concatenated, re-grouped to merge them, then a running-max window + filter + order in the main.
+     */
+    private static void assertRunningCumulativeMatchesHarness(CompiledTpcdsQueries.RunningCumulative query, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        virtuals.put("q51_web_grouped", CompiledQuerySupport.materializeStage(allocator, tables, query.webGrouped().lower(), virtuals, List.of()));
+        virtuals.put("q51_web_window", CompiledQuerySupport.materializeStage(allocator, tables, query.webWindow().lower(), virtuals, List.of()));
+        virtuals.put("q51_store_grouped", CompiledQuerySupport.materializeStage(allocator, tables, query.storeGrouped().lower(), virtuals, List.of()));
+        virtuals.put("q51_store_window", CompiledQuerySupport.materializeStage(allocator, tables, query.storeWindow().lower(), virtuals, List.of()));
+        virtuals.put("q51_union", CompiledQuerySupport.concatenate(virtuals.get("q51_web_window"), virtuals.get("q51_store_window")));
+        virtuals.put("q51_merged", CompiledQuerySupport.materializeStage(allocator, tables, query.merged().lower(), virtuals, List.of()));
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, query.main().lower(), virtuals);
+        assertBridgedRowsMatch(run, List.of(), harness, tables);
     }
 
     @Test

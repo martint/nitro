@@ -769,6 +769,97 @@ public final class CompiledTpcdsQueries
             QueryLowering currentGroup, String currentVirtual, QueryLowering previousGroup, String previousVirtual,
             QueryLowering main, List<DictRef> stringColumns) {}
 
+    /**
+     * The Q51 cumulative web-vs-store shape: each channel's weekly sales are grouped per (item, date) and running-summed
+     * over date ({@code webGrouped}/{@code webWindow}, {@code storeGrouped}/{@code storeWindow}); the two windowed,
+     * channel-tagged relations are concatenated, re-grouped per (item, date) to merge the channels ({@code merged}),
+     * running-maxed to forward-fill each channel's latest cumulative, then filtered and ordered ({@code main}).
+     */
+    public record RunningCumulative(QueryLowering webGrouped, QueryLowering webWindow,
+            QueryLowering storeGrouped, QueryLowering storeWindow, QueryLowering merged, QueryLowering main) {}
+
+    public static RunningCumulative query51()
+    {
+        // Q51: the items whose cumulative web sales overtake their cumulative store sales over a 12-month window. Each
+        // channel's per-(item, date) sales are running-summed over date; the two channels are merged per (item, date);
+        // each cumulative is forward-filled with a running max (so a date with no sale carries the latest total); rows
+        // where the store cumulative is below the web cumulative are kept, ordered by (item, date), top 100.
+        return new RunningCumulative(
+                query51Grouped("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price"),
+                query51Window("q51_web_grouped", true),
+                query51Grouped("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price"),
+                query51Window("q51_store_grouped", false),
+                query51Merged(),
+                query51Main());
+    }
+
+    private static QueryLowering query51Grouped(String salesTable, String soldDate, String item, String price)
+    {
+        QueryLowering grouped = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(price, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true));
+        grouped.where(
+                        new Plan.IsNull(grouped.position(item), true),
+                        new Plan.Predicate(">", grouped.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", grouped.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy(item, "d_date")
+                .aggregate("sum", price);
+        // grouped result: item(0), d_date(1), sum_price(2).
+        return grouped;
+    }
+
+    private static QueryLowering query51Window(String groupedVirtual, boolean web)
+    {
+        QueryLowering window = QueryLowering.scan(groupedVirtual,
+                        new QueryLowering.Column("g_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_date", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_sum", ColumnEncoding.FLAT, true));
+        window.window(Plan.Window.running(new int[] {0}, List.of(new Plan.SortKey(1, false)),
+                List.of(new Plan.WindowAggregate("sum", 2))));
+        // after window: item(0), date(1), sum(2), cumulative(3). Tag the cumulative into web/store and null the other.
+        if (web) {
+            window.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(3), new Plan.NullLit());
+        }
+        else {
+            window.select(new Plan.Col(0), new Plan.Col(1), new Plan.NullLit(), new Plan.Col(3));
+        }
+        return window;
+    }
+
+    private static QueryLowering query51Merged()
+    {
+        QueryLowering merged = QueryLowering.scan("q51_union",
+                        new QueryLowering.Column("u_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_date", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_web", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_store", ColumnEncoding.FLAT, true));
+        merged.groupBy("u_item", "u_date")
+                .aggregate("max", "u_web")
+                .aggregate("max", "u_store");
+        // merged result: item(0), date(1), web_cume(2), store_cume(3).
+        return merged;
+    }
+
+    private static QueryLowering query51Main()
+    {
+        QueryLowering main = QueryLowering.scan("q51_merged",
+                        new QueryLowering.Column("m_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("m_date", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("m_web", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_store", ColumnEncoding.FLAT, true));
+        main.window(Plan.Window.running(new int[] {0}, List.of(new Plan.SortKey(1, false)),
+                List.of(new Plan.WindowAggregate("max", 2), new Plan.WindowAggregate("max", 3))));
+        // after window: item(0), date(1), web(2), store(3), running_web(4), running_store(5). Keep store < web cumulative.
+        main.having(new Plan.Predicate("<", new Plan.Col(5), new Plan.Col(4)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+        return main;
+    }
+
     public static UnionSelfJoin query75()
     {
         // Q75: year-over-year change in Books unit sales per (brand, class, category, manufacturer). Each channel's

@@ -727,6 +727,21 @@ public final class CompiledQuerySupport
     }
 
     /**
+     * Row-wise concatenation (UNION ALL) of two already-materialized, same-schema relations. Unlike
+     * {@link #materializeUnion}, the inputs are stages that scanned VIRTUAL relations (so they cannot be re-streamed
+     * from Parquet); this concatenates their materialized columns directly. Used to union two windowed channels.
+     */
+    public static Materialized concatenate(Materialized first, Materialized second)
+    {
+        List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
+        parts.add(first.columns());
+        parts.add(second.columns());
+        int[] counts = {first.rows(), second.rows()};
+        int total = first.rows() + second.rows();
+        return new Materialized(concatenateColumns(parts, counts, total, first.columns().length), total);
+    }
+
+    /**
      * As {@link #materializeStage(Allocator, TpcdsParquetTables, org.weakref.nitro.jit.QueryLowering.Lowered, Map)} but
      * reconstructing the stage's STRING output columns (per {@code stringColumns}, resolved against the stage's own
      * loaded inputs) into dictionary columns, so the virtual relation carries their dictionaries for a downstream stage
