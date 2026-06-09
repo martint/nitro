@@ -1729,7 +1729,7 @@ public final class PipelineCompiler
                 }
             }
             if (!join.cross()) {
-                emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k], pipeline, encodings, buildOffset);
+                emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k], pipeline, encodings, nullable, buildOffset);
             }
         }
 
@@ -1999,11 +1999,32 @@ public final class PipelineCompiler
         return encoding == ColumnEncoding.STRING || encoding == ColumnEncoding.DICTIONARY ? vars.ids() : vars.flat();
     }
 
-    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
+    /**
+     * Per-row guard that drops a build row whose join key is null: an equi-join never matches on a null key (SQL
+     * three-valued), and a null string key canonicalizes to dictionary id 0 -- colliding with the real entry 0 -- so a
+     * null build row must not enter the table. Returns the OR of the nullable keys' null masks, or {@code null} when no
+     * key is nullable.
+     */
+    private static String buildKeyNullGuard(int k, int[] buildKeys, Plan.Pipeline pipeline, boolean[][] nullable, int[] buildOffset)
+    {
+        List<String> terms = new ArrayList<>();
+        for (int localKey : buildKeys) {
+            if (combinedNullable(pipeline, nullable, buildOffset[k] + localKey)) {
+                terms.add(buildVars(k, localKey).nulls() + "[r]");
+            }
+        }
+        return terms.isEmpty() ? null : String.join(" || ", terms);
+    }
+
+    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] buildOffset)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
-        String skip = buildFilter == null ? "" : "if (!(" + buildFilter + ")) { continue; } ";
+        String nullGuard = buildKeyNullGuard(k, buildKeys, pipeline, nullable, buildOffset);
+        String skip = nullGuard == null ? "" : "if (" + nullGuard + ") { continue; } ";
+        if (buildFilter != null) {
+            skip += "if (!(" + buildFilter + ")) { continue; } ";
+        }
         // buildNext<k> chains build rows sharing a join key (lazily allocated on the first duplicate key). It stays
         // null when every key is unique -- the common dimension-PK case -- so the probe loop runs exactly once per
         // match and unique-build queries are byte-identical with no chain overhead. A non-unique build (a one-to-many
@@ -2028,7 +2049,7 @@ public final class PipelineCompiler
                     .append(" if (buildRowByKey").append(k).append("[idx] != -1) { if (buildNext").append(k).append(" == null) { buildNext").append(k).append(" = new int[").append(rows).append("]; java.util.Arrays.fill(buildNext").append(k).append(", -1); } buildNext").append(k).append("[r] = buildRowByKey").append(k).append("[idx]; }")
                     .append(" buildRowByKey").append(k).append("[idx] = r; }\n");
             out.append("    }\n    else {\n");
-            emitHashBuild(out, "      ", k, buildKeys, buildFilter, pipeline, encodings, buildOffset);
+            emitHashBuild(out, "      ", k, buildKeys, buildFilter, pipeline, encodings, nullable, buildOffset);
             out.append("    }\n");
         }
         else {
@@ -2037,7 +2058,7 @@ public final class PipelineCompiler
             }
             out.append("    int[] jRow").append(k).append(" = null; int jMask").append(k).append(" = 0;\n");
             out.append("    {\n");
-            emitHashBuild(out, "      ", k, buildKeys, buildFilter, pipeline, encodings, buildOffset);
+            emitHashBuild(out, "      ", k, buildKeys, buildFilter, pipeline, encodings, nullable, buildOffset);
             out.append("    }\n");
         }
     }
@@ -2048,10 +2069,11 @@ public final class PipelineCompiler
      * duplicate) with the latest row as the chain head in {@code jRow<k>[slot]}. A unique build never collides on key,
      * so {@code buildNext<k>} stays null and the probe runs a single iteration -- byte-identical to a unique-key table.
      */
-    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
+    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] buildOffset)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
+        String nullGuard = buildKeyNullGuard(k, buildKeys, pipeline, nullable, buildOffset);
         StringBuilder keyMatch = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
             keyMatch.append(kx == 0 ? "" : " && ").append("jKey").append(k).append("_").append(kx).append("[slot] == bk").append(kx);
@@ -2062,6 +2084,9 @@ public final class PipelineCompiler
         }
         out.append(indent).append("jRow").append(k).append(" = new int[jcap]; java.util.Arrays.fill(jRow").append(k).append(", -1); jMask").append(k).append(" = jcap - 1;\n");
         out.append(indent).append("for (int r = 0; r < ").append(rows).append("; r++) {\n");
+        if (nullGuard != null) {
+            out.append(indent).append("  if (").append(nullGuard).append(") { continue; }\n");
+        }
         if (buildFilter != null) {
             out.append(indent).append("  if (!(").append(buildFilter).append(")) { continue; }\n");
         }
