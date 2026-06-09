@@ -18,7 +18,6 @@ import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.jit.Column;
 import org.weakref.nitro.operator.CompiledOperator;
 import org.weakref.nitro.operator.Operator;
 
@@ -571,7 +570,7 @@ public class TestCompiledTpcdsQueries
     {
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
         for (CompiledTpcdsQueries.DictRef ref : stringColumns) {
-            dictionaries[ref.resultColumn()] = ((Column.StringColumn) run.inputs()[ref.dictInput()][ref.dictColumn()]).dictionary();
+            dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
 

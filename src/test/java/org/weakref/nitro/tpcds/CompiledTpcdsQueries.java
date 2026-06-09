@@ -36,7 +36,21 @@ public final class CompiledTpcdsQueries
      * compiled result; {@code dictInput}/{@code dictColumn} address the loaded {@link QueryLowering.Input} whose
      * {@code StringColumn} holds the (ordered) dictionary used to reconstruct it.
      */
-    public record DictRef(int resultColumn, int dictInput, int dictColumn) {}
+    /**
+     * Locates a string result column's source dictionary: result column {@code resultColumn} stores a dictionary id
+     * into build {@code dictInput}'s scanned column {@code dictColumn}. An optional UTF-8 {@code substring}
+     * ({@code substringStart} 1-based, {@code substringLength} code points; {@code substringLength < 0} = whole value)
+     * is applied to each dictionary entry at reconstruction, matching a trailing {@code substring(col, start, length)}
+     * output projection. NOTE: ordering still runs on the un-truncated dictionary ids, so this is only byte-exact when
+     * the substring preserves the columns' relative order (it does whenever distinct values keep distinct prefixes).
+     */
+    public record DictRef(int resultColumn, int dictInput, int dictColumn, int substringStart, int substringLength)
+    {
+        public DictRef(int resultColumn, int dictInput, int dictColumn)
+        {
+            this(resultColumn, dictInput, dictColumn, 1, -1);
+        }
+    }
 
     /** A ported query: its name-based lowering and where to find each string result column's dictionary. */
     public record Ported(QueryLowering query, List<DictRef> stringColumns)

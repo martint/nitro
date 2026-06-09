@@ -997,7 +997,7 @@ public final class CompiledQuerySupport
                 if (ref == null || dictInputs == null || dictInputs[ref.dictInput()] == null) {
                     throw new UnsupportedOperationException("string result column " + c + " has no resolvable source dictionary");
                 }
-                byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
+                byte[][] dictionary = dictionaryFor(dictInputs, ref);
                 int[] ids = new int[rowCount];
                 for (int r = 0; r < rowCount; r++) {
                     ids[r] = (int) columns[c][r];
@@ -1009,6 +1009,45 @@ public final class CompiledQuerySupport
             }
         }
         return materialized;
+    }
+
+    /**
+     * The source dictionary for a {@link CompiledTpcdsQueries.DictRef}, with its optional UTF-8 substring applied to
+     * every entry. Each entry is reconstructed with the query's trailing {@code substring(col, start, length)}
+     * projection so the output strings match the harness exactly.
+     */
+    static byte[][] dictionaryFor(org.weakref.nitro.jit.Column[][] dictInputs, CompiledTpcdsQueries.DictRef ref)
+    {
+        byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
+        if (ref.substringLength() < 0) {
+            return dictionary;
+        }
+        byte[][] truncated = new byte[dictionary.length][];
+        for (int i = 0; i < dictionary.length; i++) {
+            truncated[i] = utf8Substring(dictionary[i], ref.substringStart(), ref.substringLength());
+        }
+        return truncated;
+    }
+
+    /** UTF-8 substring by code point: {@code start} is 1-based, {@code length} a code-point count. */
+    private static byte[] utf8Substring(byte[] value, int start, int length)
+    {
+        int begin = codePointOffset(value, start - 1);
+        int end = codePointOffset(value, start - 1 + length);
+        return java.util.Arrays.copyOfRange(value, begin, end);
+    }
+
+    /** Byte offset of the {@code codePoints}-th code-point boundary (clamped to the array length). */
+    private static int codePointOffset(byte[] value, int codePoints)
+    {
+        int offset = 0;
+        for (int seen = 0; offset < value.length && seen < codePoints; seen++) {
+            offset++;
+            while (offset < value.length && (value[offset] & 0xC0) == 0x80) {
+                offset++;
+            }
+        }
+        return offset;
     }
 
     private record DrainedInput(org.weakref.nitro.jit.Column[] columns, int rows) {}
