@@ -1871,6 +1871,12 @@ public final class PipelineCompiler
                     emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
                 }
             }
+            // The join key dictionaries are all materialized now (builds before the batch loop, eager probe columns
+            // -- which include every join key -- just above), so emit each string join key's probe-id -> build-id value
+            // remap before Phase 1's probe loop consumes it. The non-lazy path emits this once after the probe loads;
+            // the lazy path rebuilds it per batch (the probe dictionary can change batch to batch).
+            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns);
+
             out.append("        for (int i = 0; i < probeRows; i++) {\n");
             int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
             String indent = "          " + "  ".repeat(openBraces);

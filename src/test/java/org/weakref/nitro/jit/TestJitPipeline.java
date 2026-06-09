@@ -837,6 +837,55 @@ public class TestJitPipeline
         assertThat(groupSums(streamed)).isEqualTo(groupSums(eager));
     }
 
+    @Test
+    void streamsBuildOriginatedStringKeyJoinWithPayloadInBatches()
+    {
+        // SELECT s, sum(v) FROM p JOIN d ON p.pk = d.dk JOIN r ON d.s = r.rs GROUP BY s -- the second join's key is a
+        // dictionary STRING carried in from an earlier build (d.s, a snowflake), not the streamed fact, and the probe
+        // also carries a numeric payload (v) deferred to the late-materialize phase, so this takes the lazy streaming
+        // path. d and r hold s under different dictionaries, so the probe-id -> build-id remap must be emitted on that
+        // path (it was previously emitted only on the non-lazy path); the result must equal the eager run.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,                                                    // probe [pk, v]
+                List.of(
+                        new Plan.Join(new Plan.Build(2, 0), 0),       // d [dk, s], join probe pk (col 0) = dk
+                        new Plan.Join(new Plan.Build(1, 0), 3)),      // r [rs], join d.s (combined col 3) = rs
+                List.of(),
+                List.of(new Plan.Col(3)),                             // group by d.s
+                List.of(new Plan.Aggregate("sum", new Plan.Col(1)))); // sum(v)
+
+        byte[][] dDict = {utf8("alpha"), utf8("beta"), utf8("gamma")};
+        byte[][] rDict = {utf8("gamma"), utf8("alpha"), utf8("beta")};   // different id order -> non-trivial remap
+        int rows = 60_000;
+        long[] pk = new long[rows];
+        long[] v = new long[rows];
+        for (int i = 0; i < rows; i++) {
+            pk[i] = i % 3;
+            v[i] = i % 13;
+        }
+        long[] dKey = {0, 1, 2};
+        int[] dStateIds = {0, 1, 2};      // d row k maps to dictionary entry k
+        int[] rKey = {0, 1, 2};           // r holds every state, so every d.s matches
+
+        ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.FLAT}, {ColumnEncoding.FLAT, ColumnEncoding.STRING}, {ColumnEncoding.STRING}};
+        Column[][] builds = {
+                {new Column.FlatColumn(dKey), new Column.StringColumn(dStateIds, dDict)},
+                {new Column.StringColumn(rKey, rDict)}};
+        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline, encodings)
+                .execute(new Column[][] {{new Column.FlatColumn(pk), new Column.FlatColumn(v)}, builds[0], builds[1]},
+                        new int[] {rows, dKey.length, rKey.length});
+        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, encodings, null)
+                .execute(flatBatches(4096, rows, pk, v), builds, new int[] {dKey.length, rKey.length});
+
+        assertThat(streamed.rowCount()).isEqualTo(eager.rowCount());
+        assertThat(groupSums(streamed)).isEqualTo(groupSums(eager));
+    }
+
+    private static byte[] utf8(String value)
+    {
+        return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     /** A streaming source whose batches strictly grow (512, 1024, 1536, ...), so a reused scratch buffer must grow mid-stream. */
     private static StreamingPipeline.Source growingBatches(int rows, long[]... columns)
     {
