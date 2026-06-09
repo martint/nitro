@@ -1966,6 +1966,72 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2)));
     }
 
+    /** Q21 inventory-on-hand per (warehouse name, item id); reproduces a high-cardinality multi-key grouping bug. */
+    public static QueryLowering query21Inventory(boolean before)
+    {
+        LocalDate cutoff = LocalDate.of(2000, 3, 11);
+        QueryLowering inventory = QueryLowering.scan("inventory",
+                        new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
+                .join("item", "inv_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("warehouse", "inv_warehouse_sk", "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"),
+                        new QueryLowering.Column("w_warehouse_name", ColumnEncoding.STRING, true))
+                .join("date_dim", "inv_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        inventory.where(
+                        new Plan.Predicate(">=", inventory.column("i_current_price"), new Plan.Lit(99L)),
+                        new Plan.Predicate("<=", inventory.column("i_current_price"), new Plan.Lit(149L)),
+                        before
+                                ? new Plan.Predicate(">=", inventory.column("d_date"), new Plan.Lit(cutoff.minusDays(30).toEpochDay()))
+                                : new Plan.Predicate(">=", inventory.column("d_date"), new Plan.Lit(cutoff.toEpochDay())),
+                        before
+                                ? new Plan.Predicate("<", inventory.column("d_date"), new Plan.Lit(cutoff.toEpochDay()))
+                                : new Plan.Predicate("<=", inventory.column("d_date"), new Plan.Lit(cutoff.plusDays(30).toEpochDay())))
+                .groupBy("w_warehouse_name", "i_item_id")
+                .aggregate("sum", "inv_quantity_on_hand");
+        return inventory;
+    }
+
+    public static Composite query21()
+    {
+        // Q21: per (warehouse, item) inventory-on-hand 30 days before vs after 2000-03-11, items priced 99..149; keep
+        // pairs whose after/before ratio is within [2/3, 3/2] (fraction-free). The before/after pre-aggregates
+        // self-join on (w_warehouse_name, i_item_id) -- two dictionary STRING keys (string-keyed join).
+        QueryLowering before = query21Inventory(true);
+        QueryLowering after = query21Inventory(false);
+
+        QueryLowering main = QueryLowering.scan("q21_before",
+                        new QueryLowering.Column("b_warehouse", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("b_qty", ColumnEncoding.FLAT, true))
+                .join("q21_after", new String[] {"b_warehouse", "b_item"}, new String[] {"a_warehouse", "a_item"},
+                        new QueryLowering.Column("a_warehouse", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("a_qty", ColumnEncoding.FLAT, true));
+        main.where(
+                        new Plan.Predicate(">=",
+                                new Plan.Bin("*", main.column("a_qty"), new Plan.Lit(3)),
+                                new Plan.Bin("*", main.column("b_qty"), new Plan.Lit(2))),
+                        new Plan.Predicate(">=",
+                                new Plan.Bin("*", main.column("b_qty"), new Plan.Lit(3)),
+                                new Plan.Bin("*", main.column("a_qty"), new Plan.Lit(2))))
+                .select(main.column("b_warehouse"), main.column("b_item"), main.column("b_qty"), main.column("a_qty"))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(before, "q21_before", List.of(new DictRef(0, 2, 1), new DictRef(1, 1, 2))),
+                        new Stage(after, "q21_after", List.of(new DictRef(0, 2, 1), new DictRef(1, 1, 2)))),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
