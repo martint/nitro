@@ -1883,6 +1883,89 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2), new DictRef(3, 0, 3)));
     }
 
+    /** Q59 weekly per-(week, store) day-of-week sales buckets over a month-sequence window; the grouped pre-aggregate. */
+    private static QueryLowering query59Weekly(int minMonthSeq, int maxMonthSeq)
+    {
+        QueryLowering weekly = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_day_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true));
+        weekly.where(
+                        new Plan.Predicate(">=", weekly.column("d_month_seq"), new Plan.Lit(minMonthSeq)),
+                        new Plan.Predicate("<=", weekly.column("d_month_seq"), new Plan.Lit(maxMonthSeq)))
+                .groupBy("d_week_seq", "ss_store_sk");
+        for (String day : List.of("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) {
+            weekly.aggregate("sum", new Plan.Case(
+                    List.of(new Plan.Case.Branch(
+                            new Plan.StringMatch(weekly.position("d_day_name"), List.of(day), false),
+                            weekly.column("ss_sales_price"))),
+                    new Plan.Lit(0)));
+        }
+        // grouped result: week_seq(0), store(1), sun(2), mon(3), tue(4), wed(5), thu(6), fri(7), sat(8).
+        return weekly;
+    }
+
+    public static Composite query59()
+    {
+        // Q59: compare each store's per-weekday store_sales between a year and the next, week-aligned. Two weekly
+        // pre-aggregates (this year d_month_seq 1212..1223, next year 1224..1235), each summing sales into the seven
+        // days of the week; self-join them on (this.week_seq + 52, store) = (next.week_seq, store); join store; report
+        // the seven day-over-day ratios. All join keys are LONG (week_seq + store), so no string-keyed join is needed.
+        // A weekday with no next-year sales makes that ratio's denominator 0 -> NULL (the computed-null divide).
+        QueryLowering current = query59Weekly(1212, 1223)
+                .select(new Plan.Bin("+", new Plan.Col(0), new Plan.Lit(52)),   // adjusted week = week_seq + 52
+                        new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4),
+                        new Plan.Col(5), new Plan.Col(6), new Plan.Col(7), new Plan.Col(8));
+        // current result: adjusted(0), week_seq(1), store(2), sun(3), mon(4), tue(5), wed(6), thu(7), fri(8), sat(9).
+        QueryLowering next = query59Weekly(1224, 1235);
+
+        QueryLowering main = QueryLowering.scan("q59_current",
+                        new QueryLowering.Column("c_adjusted", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_week_seq", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_store", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_sun", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_mon", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_tue", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_wed", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_thu", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_fri", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_sat", ColumnEncoding.FLAT, false))
+                .join("q59_next", new String[] {"c_adjusted", "c_store"}, new String[] {"n_week_seq", "n_store"},
+                        new QueryLowering.Column("n_week_seq", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_store", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_sun", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_mon", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_tue", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_wed", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_thu", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_fri", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("n_sat", ColumnEncoding.FLAT, false))
+                .join("store", "c_store", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_store_id", ColumnEncoding.STRING, true));
+        main.select(main.column("s_store_name"), main.column("s_store_id"), main.column("c_week_seq"),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_sun"), main.column("n_sun"), new Plan.Lit(100L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_mon"), main.column("n_mon"), new Plan.Lit(100L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_tue"), main.column("n_tue"), new Plan.Lit(100L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_wed"), main.column("n_wed"), new Plan.Lit(100L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_thu"), main.column("n_thu"), new Plan.Lit(100L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_fri"), main.column("n_fri"), new Plan.Lit(100L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_sat"), main.column("n_sat"), new Plan.Lit(100L)))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(current, "q59_current"), new Stage(next, "q59_next")),
+                main,
+                List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
