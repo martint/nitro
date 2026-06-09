@@ -2948,6 +2948,75 @@ public final class CompiledTpcdsQueries
         return customers;
     }
 
+    public static UnionComposite query35()
+    {
+        // Q35: like Q10 but per (state + demographic profile) and with count/min/max/avg of the three dependent counts.
+        // Customers who bought from the store channel AND from web or catalog in a year-quarter window, joined to state
+        // and demographics, grouped, top 100 ordered by the six grouping columns.
+        List<QueryLowering> otherBranches = List.of(
+                query35Customers("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk"),
+                query35Customers("catalog_sales", "cs_ship_customer_sk", "cs_sold_date_sk"));
+
+        QueryLowering main = QueryLowering.scan("customer",
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_cdemo_sk", ColumnEncoding.FLAT, true))
+                .semiJoin("q35_store", "c_customer_sk", "qs_customer",
+                        new QueryLowering.Column("qs_customer", ColumnEncoding.FLAT, false))
+                .semiJoin("q35_other", "c_customer_sk", "qo_customer",
+                        new QueryLowering.Column("qo_customer", ColumnEncoding.FLAT, false))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true))
+                .join("customer_demographics", "c_current_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_purchase_estimate", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cd_credit_rating", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_dep_count", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cd_dep_employed_count", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cd_dep_college_count", ColumnEncoding.FLAT, true));
+        main.groupBy("ca_state", "cd_gender", "cd_marital_status", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count")
+                .count()
+                .aggregate("min", "cd_dep_count").aggregate("max", "cd_dep_count").aggregate("avg", "cd_dep_count")
+                .count()
+                .aggregate("min", "cd_dep_employed_count").aggregate("max", "cd_dep_employed_count").aggregate("avg", "cd_dep_employed_count")
+                .count()
+                .aggregate("min", "cd_dep_college_count").aggregate("max", "cd_dep_college_count").aggregate("avg", "cd_dep_college_count");
+        // result: 6 keys (0..5), then count/min/max/avg per dep column (6..17). ORDER BY pre-projection on the 6 keys.
+        main.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false), new Plan.SortKey(5, false)), 100))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3),
+                        new Plan.Col(6), new Plan.Col(7), new Plan.Col(8), new Plan.Col(9),
+                        new Plan.Col(4), new Plan.Col(10), new Plan.Col(11), new Plan.Col(12), new Plan.Col(13),
+                        new Plan.Col(5), new Plan.Col(14), new Plan.Col(15), new Plan.Col(16), new Plan.Col(17));
+
+        return new UnionComposite(otherBranches, "q35_other", List.of(),
+                List.of(new Stage(query35Customers("store_sales", "ss_customer_sk", "ss_sold_date_sk"), "q35_store")),
+                main,
+                List.of(new DictRef(0, 3, 1), new DictRef(1, 4, 1), new DictRef(2, 4, 2)));
+    }
+
+    private static QueryLowering query35Customers(String fact, String customerColumn, String dateColumn)
+    {
+        QueryLowering customers = QueryLowering.scan(fact,
+                        new QueryLowering.Column(customerColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(dateColumn, ColumnEncoding.FLAT, true))
+                .join("date_dim", dateColumn, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_qoy", ColumnEncoding.FLAT, true));
+        customers.where(
+                        new Plan.Predicate("=", customers.column("d_year"), new Plan.Lit(2002)),
+                        new Plan.Predicate(">", customers.column("d_qoy"), new Plan.Lit(0)),
+                        new Plan.Predicate("<", customers.column("d_qoy"), new Plan.Lit(4)))
+                .select(customers.column(customerColumn));
+        return customers;
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
