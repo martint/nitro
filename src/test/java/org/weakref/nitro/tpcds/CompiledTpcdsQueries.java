@@ -2032,6 +2032,78 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1)));
     }
 
+    /** Q74 per-customer net-paid total for one channel and year; the grouped pre-aggregate (keyed by customer business id/name). */
+    private static QueryLowering query74ChannelYearTotal(String table, String customerColumn, String soldDateColumn, String netPaidColumn, int year)
+    {
+        QueryLowering channel = QueryLowering.scan(table,
+                        new QueryLowering.Column(customerColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldDateColumn, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(netPaidColumn, ColumnEncoding.FLAT, true))
+                .join("customer", customerColumn, "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true))
+                .join("date_dim", soldDateColumn, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year"));
+        channel.where(new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(year)))
+                .groupBy("c_customer_id", "c_first_name", "c_last_name")
+                .aggregate("sum", netPaidColumn);
+        // result: customer_id(0), first_name(1), last_name(2), year_total(3). customer is input 1 in this stage.
+        return channel;
+    }
+
+    public static Composite query74()
+    {
+        // Q74: customers whose store-sales grew slower year-over-year than their web-sales did. Four per-customer
+        // net-paid pre-aggregates (store 2001/2002, web 2001/2002), self-joined on c_customer_id (a dictionary string
+        // key -- 1:1 and non-null, so clean); keep customers with positive first-year totals on both channels whose
+        // store growth ratio is below their web growth ratio (cross-multiplied). Report id + name; top 100.
+        QueryLowering storeFirst = query74ChannelYearTotal("store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2001);
+        QueryLowering storeSecond = query74ChannelYearTotal("store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2002);
+        QueryLowering webFirst = query74ChannelYearTotal("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2001);
+        QueryLowering webSecond = query74ChannelYearTotal("web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2002);
+
+        QueryLowering main = QueryLowering.scan("q74_store_first",
+                        new QueryLowering.Column("sf_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("sf_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("sf_total", ColumnEncoding.FLAT, true))
+                .join("q74_store_second", "sf_customer_id", "ss_customer_id",
+                        new QueryLowering.Column("ss_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ss_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ss_total", ColumnEncoding.FLAT, true))
+                .join("q74_web_first", "sf_customer_id", "wf_customer_id",
+                        new QueryLowering.Column("wf_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("wf_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("wf_total", ColumnEncoding.FLAT, true))
+                .join("q74_web_second", "sf_customer_id", "ws_customer_id",
+                        new QueryLowering.Column("ws_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("ws_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ws_total", ColumnEncoding.FLAT, true));
+        main.where(
+                        new Plan.Predicate(">", main.column("sf_total"), new Plan.Lit(0)),
+                        new Plan.Predicate(">", main.column("wf_total"), new Plan.Lit(0)),
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", main.column("ss_total"), main.column("wf_total")),
+                                new Plan.Bin("*", main.column("ws_total"), main.column("sf_total"))))
+                .select(main.column("sf_customer_id"), main.column("sf_first"), main.column("sf_last"))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(storeFirst, "q74_store_first", List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3))),
+                        new Stage(storeSecond, "q74_store_second", List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3))),
+                        new Stage(webFirst, "q74_web_first", List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3))),
+                        new Stage(webSecond, "q74_web_second", List.of(new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3)))),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2)));
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
