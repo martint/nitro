@@ -527,10 +527,11 @@ public final class PipelineCompiler
             out.append("    return result;\n  }\n");
             return;
         }
-        out.append("    int n = result.rowCount(); long[][] cols = result.columns();\n");
+        out.append("    int n = result.rowCount(); long[][] cols = result.columns(); boolean[][] hn = result.nulls();\n");
         out.append("    int[] keep = new int[n]; int w = 0;\n");
         out.append("    for (int r = 0; r < n; r++) {\n");
-        out.append("      if (").append(condition(having, index -> resultColumnAccess(index, types, "r"))).append(") { keep[w++] = r; }\n");
+        IntFunction<String> havingNull = index -> "(hn != null && hn[" + index + "] != null && hn[" + index + "][r])";
+        out.append("      if (").append(condition(having, index -> resultColumnAccess(index, types, "r"), havingNull)).append(") { keep[w++] = r; }\n");
         out.append("    }\n");
         out.append("    long[][] kept = new long[cols.length][w];\n");
         out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
@@ -674,6 +675,10 @@ public final class PipelineCompiler
      */
     private static String computedProjectionNull(Plan.Expr projection, IntFunction<String> decode, IntFunction<String> columnNull)
     {
+        if (projection instanceof Plan.NullLit) {
+            // A NULL literal projection is unconditionally SQL null -- its value slot is a placeholder 0.
+            return "true";
+        }
         if (!(projection instanceof Plan.Call call) || !NULL_ON_ZERO_DENOMINATOR.contains(call.name())) {
             return null;
         }
@@ -694,6 +699,7 @@ public final class PipelineCompiler
             case Plan.Col col -> inputTypes.get(col.index());
             case Plan.Lit ignored -> Types.LONG;
             case Plan.LitStr ignored -> Types.STRING;
+            case Plan.NullLit ignored -> Types.LONG;
             case Plan.Bin bin -> projectionType(bin.left(), inputTypes) == Types.DOUBLE || projectionType(bin.right(), inputTypes) == Types.DOUBLE ? Types.DOUBLE : Types.LONG;
             case Plan.Call call -> ScalarLibrary.isDoubleResult(call.name()) || call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
             case Plan.Coalesce coalesce -> coalesce.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
@@ -763,6 +769,7 @@ public final class PipelineCompiler
             case Plan.Col col -> combinedNullable(pipeline, nullable, col.index());
             case Plan.Lit ignored -> false;
             case Plan.LitStr ignored -> false;
+            case Plan.NullLit ignored -> true;
             case Plan.Bin bin -> exprCarriesNull(pipeline, nullable, bin.left()) || exprCarriesNull(pipeline, nullable, bin.right());
             case Plan.Call call -> NULL_ON_ZERO_DENOMINATOR.contains(call.name())
                     || call.arguments().stream().anyMatch(argument -> exprCarriesNull(pipeline, nullable, argument));
@@ -1495,6 +1502,7 @@ public final class PipelineCompiler
             case Plan.Col ignored -> {}
             case Plan.Lit ignored -> {}
             case Plan.LitStr ignored -> {}
+            case Plan.NullLit ignored -> {}
         }
     }
 
@@ -3269,7 +3277,14 @@ public final class PipelineCompiler
     private static String condition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return switch (condition) {
-            case Plan.Predicate predicate -> "(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+            case Plan.Predicate predicate -> {
+                // SQL three-valued logic: a comparison with a null operand is NULL, which a filter treats as false.
+                // Guard the value comparison with the operands' not-null tests. Under NEVER_NULL the guard collapses
+                // away (nullExpr -> "false"), so callers without null information emit the bare comparison unchanged.
+                String comparison = "(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+                String guard = notNullGuard(orNull(nullExpr(predicate.left(), resolver, nullResolver), nullExpr(predicate.right(), resolver, nullResolver)));
+                yield guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
+            }
             case Plan.And and -> and.conditions().isEmpty() ? "true"
                     : "(" + and.conditions().stream().map(child -> condition(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
             case Plan.Or or -> or.conditions().isEmpty() ? "false"
@@ -3301,6 +3316,7 @@ public final class PipelineCompiler
             case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
             case Plan.LitStr ignored -> "0L";   // constant string: emit dictionary id 0 (the value comes from the consumer's single-entry dictionary)
+            case Plan.NullLit ignored -> "0L";   // null long: a placeholder value; the null mask (below) is what matters
             case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
             case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
             case Plan.Case kase -> caseExpression(kase, resolver, nullResolver, stringMaskIds);
@@ -3360,6 +3376,7 @@ public final class PipelineCompiler
             case Plan.Col col -> nullResolver.apply(col.index());
             case Plan.Lit ignored -> "false";
             case Plan.LitStr ignored -> "false";
+            case Plan.NullLit ignored -> "true";
             case Plan.Bin bin -> orNull(nullExpr(bin.left(), resolver, nullResolver, stringMaskIds), nullExpr(bin.right(), resolver, nullResolver, stringMaskIds));
             case Plan.Call call -> {
                 String nulls = "false";

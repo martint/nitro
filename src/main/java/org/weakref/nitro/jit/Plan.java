@@ -27,7 +27,7 @@ public final class Plan
 
     /** Scalar expression over input columns. */
     public sealed interface Expr
-            permits Col, Lit, LitStr, Bin, Call, Case, Coalesce
+            permits Col, Lit, LitStr, NullLit, Bin, Call, Case, Coalesce
     {}
 
     /** Reference to input column {@code index}. */
@@ -37,6 +37,15 @@ public final class Plan
 
     /** Literal long. */
     public record Lit(long value)
+            implements Expr
+    {}
+
+    /**
+     * A NULL long literal: the value is always SQL null. Used to tag one side of a discriminated union (e.g. the store
+     * cumulative column on a web-channel row) where null -- not zero -- is required, because a downstream max() skips it
+     * and a comparison against it is UNKNOWN. Emits a 0 placeholder value with its null mask always set.
+     */
+    public record NullLit()
             implements Expr
     {}
 

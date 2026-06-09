@@ -1607,6 +1607,84 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesNullLongLiteral()
+    {
+        // SELECT v, NULL FROM t -- the NULL long literal projects an always-null column (value placeholder 0, mask set).
+        Plan.Pipeline pipeline = new Plan.Pipeline(1, List.of(), List.of(), List.of())
+                .withProjections(List.of(new Plan.Col(0), new Plan.NullLit()));
+
+        long[] v = {3, 4, 5};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{v}}, new int[] {v.length});
+
+        assertThat(result.types()[1]).isEqualTo(Types.LONG);
+        assertThat(result.nulls()[1]).isNotNull();
+        for (int r = 0; r < v.length; r++) {
+            assertThat(result.columns()[0][r]).isEqualTo(v[r]);
+            assertThat(result.nulls()[1][r]).as("row %d is null", r).isTrue();
+        }
+    }
+
+    @Test
+    void compilesMaxOverAllNullGroupAsNull()
+    {
+        // SELECT k, max(v) GROUP BY k -- a group whose every v is NULL has no value to take, so max is SQL NULL (the
+        // accumulator never leaves its identity sentinel), matching the operator engine; a group with values takes the max.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("max", new Plan.Col(1))));
+
+        long[] k = {0, 0, 1, 1};
+        long[] v = {0, 0, 7, 3};
+        boolean[] vNull = {true, true, false, false};   // group 0 is all-null, group 1 has values
+
+        boolean[][] nullable = {{false, true}};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {k.length});
+
+        assertThat(result.rowCount()).isEqualTo(2);
+        assertThat(result.nulls()[1]).isNotNull();
+        long[] keys = result.columns()[0];
+        long[] maxes = result.columns()[1];
+        for (int g = 0; g < 2; g++) {
+            if (keys[g] == 0) {
+                assertThat(result.nulls()[1][g]).as("all-null group max is NULL").isTrue();
+            }
+            else {
+                assertThat(result.nulls()[1][g]).isFalse();
+                assertThat(maxes[g]).isEqualTo(7L);
+            }
+        }
+    }
+
+    @Test
+    void dropsHavingRowsWithNullComparand()
+    {
+        // SELECT k, max(a), max(b) GROUP BY k HAVING max(b) < max(a) -- a comparison whose operand is NULL is UNKNOWN,
+        // which the filter drops. Group 0's b is all-null (max(b) NULL), so it is excluded; group 1 (both present) is kept.
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                3,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("max", new Plan.Col(1)), new Plan.Aggregate("max", new Plan.Col(2))))
+                .withHaving(new Plan.Predicate("<", new Plan.Col(2), new Plan.Col(1)));
+
+        long[] k = {0, 1};
+        long[] a = {5, 9};
+        long[] b = {0, 4};
+        boolean[] bNull = {true, false};   // group 0: b NULL -> max(b) NULL -> HAVING UNKNOWN -> dropped
+
+        boolean[][] nullable = {{false, false, true}};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+                .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(a), new Column.FlatColumn(b, bNull)}}, new int[] {k.length});
+
+        assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.columns()[0][0]).isEqualTo(1L);   // only group 1 survives
+        assertThat(result.columns()[2][0]).isEqualTo(4L);   // max(b)
+    }
+
+    @Test
     void compilesRunningMaxWindow()
     {
         // SELECT p, d, v, max(v) OVER (PARTITION BY p ORDER BY d ROWS UNBOUNDED PRECEDING) -- the running (cumulative)

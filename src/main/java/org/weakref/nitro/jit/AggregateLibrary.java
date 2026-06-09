@@ -283,6 +283,14 @@ public final class AggregateLibrary
             {
                 return cells.get(0);
             }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                // The cell still at its identity means no non-null input was seen -- max/min over an empty (all-null)
+                // group is SQL NULL, matching the operator engine. The identity is an out-of-range sentinel that real
+                // values never take, so this never false-positives.
+                return cells.get(0) + " == " + identity;
+            }
         };
     }
 }
