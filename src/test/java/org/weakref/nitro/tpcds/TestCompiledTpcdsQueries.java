@@ -143,6 +143,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query75()
+    {
+        assertUnionSelfJoinMatchesHarness(CompiledTpcdsQueries.query75(), TpcdsParquetSupport::query75);
+    }
+
+    @Test
     void query66()
     {
         assertUnionMatchesHarness(CompiledTpcdsQueries.query66(), TpcdsParquetSupport::query66);
@@ -627,6 +633,35 @@ public class TestCompiledTpcdsQueries
         }
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
         assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
+    }
+
+    /**
+     * Run a year-over-year union self-join (Q75): the union-aggregate subquery is assembled TWICE (current/previous),
+     * each materialized into its own grouped virtual relation, and the two are joined by the main stage.
+     */
+    private static void assertUnionSelfJoinMatchesHarness(CompiledTpcdsQueries.UnionSelfJoin query, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        // Assemble the union subquery independently for each year (no reuse), then group and filter each to its year.
+        virtuals.put(query.currentUnion(), CompiledQuerySupport.materializeUnion(allocator, tables, lowerBranches(query.branches()), List.of()));
+        virtuals.put(query.currentVirtual(), CompiledQuerySupport.materializeStage(allocator, tables, query.currentGroup().lower(), virtuals, List.of()));
+        virtuals.put(query.previousUnion(), CompiledQuerySupport.materializeUnion(allocator, tables, lowerBranches(query.branches()), List.of()));
+        virtuals.put(query.previousVirtual(), CompiledQuerySupport.materializeStage(allocator, tables, query.previousGroup().lower(), virtuals, List.of()));
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, query.main().lower(), virtuals);
+        assertBridgedRowsMatch(run, query.stringColumns(), harness, tables);
+    }
+
+    private static List<org.weakref.nitro.jit.QueryLowering.Lowered> lowerBranches(List<org.weakref.nitro.jit.QueryLowering> branches)
+    {
+        List<org.weakref.nitro.jit.QueryLowering.Lowered> lowered = new ArrayList<>();
+        for (org.weakref.nitro.jit.QueryLowering branch : branches) {
+            lowered.add(branch.lower());
+        }
+        return lowered;
     }
 
     @Test

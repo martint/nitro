@@ -758,6 +758,127 @@ public final class CompiledTpcdsQueries
     public record UnionComposite(List<QueryLowering> branches, String unionVirtualName, List<DictRef> branchStringColumns,
             List<Stage> stages, QueryLowering main, List<DictRef> stringColumns) {}
 
+    /**
+     * A year-over-year self-join of one union-aggregate subquery (Q75/Q02): the same {@code branches} (per-channel
+     * sales-minus-returns) are unioned and grouped TWICE -- once for the current year, once for the previous -- and the
+     * two grouped relations are joined by {@code main}. The subquery is assembled twice (no reuse), matching the
+     * operator harness. The {@code currentGroup}/{@code previousGroup} pipelines scan {@code currentUnion}/
+     * {@code previousUnion}; they materialize under {@code currentVirtual}/{@code previousVirtual} for {@code main}.
+     */
+    public record UnionSelfJoin(List<QueryLowering> branches, String currentUnion, String previousUnion,
+            QueryLowering currentGroup, String currentVirtual, QueryLowering previousGroup, String previousVirtual,
+            QueryLowering main, List<DictRef> stringColumns) {}
+
+    public static UnionSelfJoin query75()
+    {
+        // Q75: year-over-year change in Books unit sales per (brand, class, category, manufacturer). Each channel's
+        // net sales (sold quantity/amount minus returns, via a LEFT join) for 2001 and 2002 are unioned and grouped;
+        // the grouped relation is assembled twice (current year 2002, previous 2001) and self-joined on the four item
+        // ids, kept where the current count dropped more than 10% (10*current < 9*previous), and the count/amount
+        // differences are reported, top 100. All keys are numeric item ids -- no dictionary strings.
+        List<QueryLowering> branches = List.of(
+                query75Channel("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number", "cs_quantity", "cs_ext_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount"),
+                query75Channel("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_ext_sales_price", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt"),
+                query75Channel("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_ext_sales_price", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt"));
+
+        QueryLowering currentGroup = query75YearGroup("q75_current_union", 2002);
+        QueryLowering previousGroup = query75YearGroup("q75_previous_union", 2001);
+
+        QueryLowering main = QueryLowering.scan("q75_current",
+                        new QueryLowering.Column("c_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_category", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_manufact", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_qty", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("c_amt", ColumnEncoding.FLAT, false))
+                .join("q75_previous",
+                        new String[] {"c_brand", "c_class", "c_category", "c_manufact"},
+                        new String[] {"p_brand", "p_class", "p_category", "p_manufact"},
+                        new QueryLowering.Column("p_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("p_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("p_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("p_category", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("p_manufact", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("p_qty", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("p_amt", ColumnEncoding.FLAT, false));
+        // after the join: current {year(0), brand(1), class(2), category(3), manufact(4), qty(5), amt(6)},
+        // previous {year(7), brand(8), class(9), category(10), manufact(11), qty(12), amt(13)}.
+        main.where(new Plan.Predicate("<",
+                        new Plan.Bin("*", new Plan.Col(5), new Plan.Lit(10)),
+                        new Plan.Bin("*", new Plan.Col(12), new Plan.Lit(9))))
+                .select(new Plan.Col(7), new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4),
+                        new Plan.Col(12), new Plan.Col(5),
+                        new Plan.Bin("-", new Plan.Col(5), new Plan.Col(12)),
+                        new Plan.Bin("-", new Plan.Col(6), new Plan.Col(13)))
+                // ORDER BY runs over the projected output: the count and amount differences (columns 8 and 9).
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(8, false), new Plan.SortKey(9, false)), 100));
+
+        return new UnionSelfJoin(branches, "q75_current_union", "q75_previous_union",
+                currentGroup, "q75_current", previousGroup, "q75_previous", main, List.of());
+    }
+
+    private static QueryLowering query75YearGroup(String unionVirtual, int year)
+    {
+        QueryLowering group = QueryLowering.scan(unionVirtual,
+                        new QueryLowering.Column("u_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_category", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_manufact", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_qty", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_amt", ColumnEncoding.FLAT, true));
+        group.groupBy("u_year", "u_brand", "u_class", "u_category", "u_manufact")
+                .aggregate("sum", "u_qty")
+                .aggregate("sum", "u_amt");
+        // grouped: year(0), brand(1), class(2), category(3), manufact(4), sum_qty(5), sum_amt(6).
+        group.having(new Plan.Predicate("=", new Plan.Col(0), new Plan.Lit(year)));
+        return group;
+    }
+
+    private static QueryLowering query75Channel(String salesTable, String soldDate, String item, String order,
+            String quantity, String amount, String returnsTable, String returnItem, String returnOrder,
+            String returnQuantity, String returnAmount)
+    {
+        QueryLowering branch = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(order, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(amount, ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_class_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_manufact_id", ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .leftJoin(returnsTable,
+                        new String[] {order, item},
+                        new String[] {returnOrder, returnItem},
+                        new QueryLowering.Column(returnOrder, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnItem, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnQuantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnAmount, ColumnEncoding.FLAT, true));
+        branch.where(
+                        new Plan.StringMatch(branch.position("i_category"), List.of("Books"), false),
+                        new Plan.Or(
+                                new Plan.Predicate("=", branch.column("d_year"), new Plan.Lit(2001)),
+                                new Plan.Predicate("=", branch.column("d_year"), new Plan.Lit(2002))));
+        branch.select(
+                branch.column("d_year"),
+                branch.column("i_brand_id"),
+                branch.column("i_class_id"),
+                branch.column("i_category_id"),
+                branch.column("i_manufact_id"),
+                new Plan.Bin("-", branch.column(quantity), new Plan.Coalesce(branch.column(returnQuantity), new Plan.Lit(0))),
+                new Plan.Bin("-", branch.column(amount), new Plan.Coalesce(branch.column(returnAmount), new Plan.Lit(0))));
+        return branch;
+    }
+
     public static UnionComposite query38()
     {
         // Q38: count the customers who bought through all three channels within the same month-sequence window. Each

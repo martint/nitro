@@ -56,7 +56,7 @@ import java.util.function.Supplier;
 public class BenchmarkCompiledQueries
 {
     @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "38", "87", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
-            "60", "62", "66", "63", "65", "71", "73", "76", "79", "82", "85", "89", "91", "04", "11", "12", "16", "19", "20", "21", "31", "36", "46", "59", "68", "69", "70", "74", "86", "92", "93", "94", "95", "96", "99"})
+            "60", "62", "66", "63", "65", "71", "73", "75", "76", "79", "82", "85", "89", "91", "04", "11", "12", "16", "19", "20", "21", "31", "36", "46", "59", "68", "69", "70", "74", "86", "92", "93", "94", "95", "96", "99"})
     public String query;
 
     private Allocator allocator;
@@ -110,6 +110,7 @@ public class BenchmarkCompiledQueries
         unionComposite("87", CompiledTpcdsQueries.query87());
         union("33", CompiledTpcdsQueries.query33());
         union("76", CompiledTpcdsQueries.query76());
+        unionSelfJoin("75", CompiledTpcdsQueries.query75());
         union("56", CompiledTpcdsQueries.query56());
         union("60", CompiledTpcdsQueries.query60());
         union("71", CompiledTpcdsQueries.query71());
@@ -195,6 +196,35 @@ public class BenchmarkCompiledQueries
             for (StagePlan stage : stages) {
                 virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
             }
+            return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
+        });
+    }
+
+    /** A year-over-year union self-join (Q75): the union-aggregate subquery assembled twice and self-joined. */
+    private void unionSelfJoin(String name, CompiledTpcdsQueries.UnionSelfJoin query)
+    {
+        List<org.weakref.nitro.jit.QueryLowering> branchPlans = query.branches();
+        String currentUnion = query.currentUnion();
+        String previousUnion = query.previousUnion();
+        Lowered currentGroup = query.currentGroup().lower();
+        Lowered previousGroup = query.previousGroup().lower();
+        String currentVirtual = query.currentVirtual();
+        String previousVirtual = query.previousVirtual();
+        Lowered main = query.main().lower();
+        runners.put(name, () -> {
+            Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+            List<Lowered> branchesCurrent = new ArrayList<>();
+            for (org.weakref.nitro.jit.QueryLowering branch : branchPlans) {
+                branchesCurrent.add(branch.lower());
+            }
+            virtuals.put(currentUnion, CompiledQuerySupport.materializeUnion(allocator, tables, branchesCurrent, List.of()));
+            virtuals.put(currentVirtual, CompiledQuerySupport.materializeStage(allocator, tables, currentGroup, virtuals, List.of()));
+            List<Lowered> branchesPrevious = new ArrayList<>();
+            for (org.weakref.nitro.jit.QueryLowering branch : branchPlans) {
+                branchesPrevious.add(branch.lower());
+            }
+            virtuals.put(previousUnion, CompiledQuerySupport.materializeUnion(allocator, tables, branchesPrevious, List.of()));
+            virtuals.put(previousVirtual, CompiledQuerySupport.materializeStage(allocator, tables, previousGroup, virtuals, List.of()));
             return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
         });
     }
