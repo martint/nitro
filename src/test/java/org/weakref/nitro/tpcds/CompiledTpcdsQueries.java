@@ -732,6 +732,43 @@ public final class CompiledTpcdsQueries
                 List.of(new Stage(grouped, "q38_grouped")), main, List.of());
     }
 
+    public static UnionComposite query87()
+    {
+        // Q87: count the customers who bought in the store channel but in neither catalog nor web within the same
+        // month-sequence window (a set difference). Same per-channel presence union as Q38, but the surviving
+        // identities are those present in store (its marker sums > 0) and absent from catalog and web (those markers
+        // sum to 0).
+        List<QueryLowering> branches = List.of(
+                customerChannelPresenceBranch("store_sales", "ss_sold_date_sk", "ss_customer_sk", 1, 0, 0),
+                customerChannelPresenceBranch("catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", 0, 1, 0),
+                customerChannelPresenceBranch("web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", 0, 0, 1));
+        List<DictRef> branchStrings = List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 1));
+
+        QueryLowering grouped = QueryLowering.scan("q87_channels",
+                        new QueryLowering.Column("g_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_date", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_store", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_catalog", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_web", ColumnEncoding.FLAT, false))
+                .groupBy("g_last", "g_first", "g_date")
+                .aggregate("sum", "g_store")
+                .aggregate("sum", "g_catalog")
+                .aggregate("sum", "g_web");
+        grouped.having(new Plan.And(List.of(
+                        new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(0)),
+                        new Plan.Predicate("=", new Plan.Col(4), new Plan.Lit(0)),
+                        new Plan.Predicate("=", new Plan.Col(5), new Plan.Lit(0)))))
+                .select(new Plan.Col(3));   // drop the string keys; only the surviving-group count matters
+
+        QueryLowering main = QueryLowering.scan("q87_grouped",
+                        new QueryLowering.Column("survivor", ColumnEncoding.FLAT, false))
+                .count();
+
+        return new UnionComposite(branches, "q87_channels", branchStrings,
+                List.of(new Stage(grouped, "q87_grouped")), main, List.of());
+    }
+
     private static QueryLowering customerChannelPresenceBranch(String fact, String soldDate, String customer, long store, long catalog, long web)
     {
         QueryLowering channel = QueryLowering.scan(fact,
