@@ -3133,6 +3133,80 @@ public final class CompiledTpcdsQueries
         return customers;
     }
 
+    public static Composite query39()
+    {
+        // Q39: inventory items whose monthly quantity-on-hand is volatile (coefficient of variation > 1) in two
+        // consecutive months, joined month-to-month. Each month's variation is a stage: inventory ⋈ item ⋈ warehouse ⋈
+        // date_dim(2001, that month), grouped by (warehouse, item, month) with count / sample stddev / average of
+        // quantity-on-hand, kept where count > 1 AND avg > 0 AND stddev/avg > 1 (the cov threshold, as the harness's
+        // exact divide_f64 form), emitting (warehouse, item, month, mean, cov). The two months self-join on
+        // (warehouse, item); the (unlimited) output is ordered by both months' (month, mean, cov). The mean and cov are
+        // DOUBLE, carried across the stage boundary as raw bits and named back via reinterpret_f64 in the final select.
+        QueryLowering january = query39InventoryVariation(1);
+        QueryLowering february = query39InventoryVariation(2);
+
+        QueryLowering main = QueryLowering.scan("q39_january",
+                        new QueryLowering.Column("j_warehouse", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_month", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_mean", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("j_cov", ColumnEncoding.FLAT, false))
+                .join("q39_february",
+                        new String[] {"j_warehouse", "j_item"},
+                        new String[] {"f_warehouse", "f_item"},
+                        new QueryLowering.Column("f_warehouse", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("f_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("f_month", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("f_mean", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("f_cov", ColumnEncoding.FLAT, false));
+        // after the join: j {warehouse(0), item(1), month(2), mean(3), cov(4)}, f {warehouse(5), item(6), month(7), mean(8), cov(9)}.
+        main.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false),
+                        new Plan.SortKey(7, false), new Plan.SortKey(8, false), new Plan.SortKey(9, false)), -1))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2),
+                        new Plan.Call("reinterpret_f64", new Plan.Col(3)), new Plan.Call("reinterpret_f64", new Plan.Col(4)),
+                        new Plan.Col(5), new Plan.Col(6), new Plan.Col(7),
+                        new Plan.Call("reinterpret_f64", new Plan.Col(8)), new Plan.Call("reinterpret_f64", new Plan.Col(9)));
+
+        return new Composite(
+                List.of(new Stage(january, "q39_january"), new Stage(february, "q39_february")),
+                main,
+                List.of());
+    }
+
+    private static QueryLowering query39InventoryVariation(int month)
+    {
+        QueryLowering variation = QueryLowering.scan("inventory",
+                        new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
+                .join("item", "inv_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"))
+                .join("warehouse", "inv_warehouse_sk", "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"))
+                .join("date_dim", "inv_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true));
+        variation.where(
+                        new Plan.Predicate("=", variation.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Predicate("=", variation.column("d_moy"), new Plan.Lit(month)))
+                .groupBy("w_warehouse_sk", "inv_item_sk", "d_moy")
+                .aggregate("count", "inv_quantity_on_hand")
+                .aggregate("stddev", "inv_quantity_on_hand")
+                .aggregate("avg", "inv_quantity_on_hand");
+        // grouped result: warehouse(0), item(1), month(2), count(3), stddev(4), avg(5).
+        variation.having(new Plan.And(List.of(
+                        new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(1)),
+                        new Plan.Predicate(">", new Plan.Col(5), new Plan.Lit(0)),
+                        new Plan.Predicate(">", new Plan.Call("divide_f64", new Plan.Col(4), new Plan.Col(5)), new Plan.Lit(1)))));
+        variation.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2),
+                new Plan.Col(5), new Plan.Call("divide_f64", new Plan.Col(4), new Plan.Col(5)));
+        return variation;
+    }
+
     public static Composite query70()
     {
         // Q70: store-sale net profit per (s_state, s_county) ROLLUP for a 12-month window, restricted to states that had
