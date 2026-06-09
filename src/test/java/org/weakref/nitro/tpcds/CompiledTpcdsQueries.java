@@ -3017,6 +3017,75 @@ public final class CompiledTpcdsQueries
         return customers;
     }
 
+    public static Composite query36()
+    {
+        // Q36: store-sale gross margin (net_profit/ext_sales) per (category, class) ROLLUP for 2001 TN stores, ranked
+        // within each level by margin; the rollup level (lochierarchy), a per-detail category rank-key, and the rank
+        // are emitted. Three stages: the ROLLUP aggregate; a projection deriving margin/level/rank-key; the ranking
+        // window + final order. categoryForRank is a numeric: a Case typed LONG (Lit(-1) default) whose detail branch
+        // is the category column -- emitting its dictionary id -- so the window partitions on it without a string CASE.
+        QueryLowering rollup = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true));
+        rollup.where(new Plan.Predicate("=", rollup.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.StringMatch(rollup.position("s_state"), List.of("TN"), false))
+                .groupBy("i_category", "i_class")
+                .groupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", "ss_ext_sales_price")
+                .aggregate("sum", "ss_net_profit");
+        // rollup result: category(0), class(1), sum_ext_sales(2), sum_net_profit(3), grouping_id(4).
+        // grouping_id: detail {cat,class}=0, category-subtotal {cat}=2, grand {}=3.
+
+        QueryLowering derived = QueryLowering.scan("q36_rollup",
+                        new QueryLowering.Column("g_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_ext_sales", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_net_profit", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("g_grouping_id", ColumnEncoding.FLAT, false));
+        derived.select(
+                derived.column("g_category"),
+                derived.column("g_class"),
+                new Plan.Call("divide_scale_round_i64", derived.column("g_net_profit"), derived.column("g_ext_sales"), new Plan.Lit(1_000_000)),
+                // lochierarchy: detail(gid 0)->0, grand(gid 3)->2, category-subtotal->1.
+                new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(0)), new Plan.Lit(0))),
+                        new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(3)), new Plan.Lit(2))), new Plan.Lit(1))),
+                // categoryForRank: the category's dictionary id for detail rows, else -1 (a LONG case, branch is the string column's slot).
+                new Plan.Case(List.of(new Plan.Case.Branch(new Plan.Predicate("=", derived.column("g_grouping_id"), new Plan.Lit(0)), derived.column("g_category"))), new Plan.Lit(-1)));
+        // derived result: category(0), class(1), gross_margin(2), lochierarchy(3), category_rank_key(4).
+
+        QueryLowering ranked = QueryLowering.scan("q36_derived",
+                        new QueryLowering.Column("r_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_margin", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_lochierarchy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_category_rank_key", ColumnEncoding.FLAT, true));
+        ranked.window(new Plan.Window(new int[] {3, 4}, List.of(new Plan.SortKey(2, false)), Plan.RankFunction.RANK, 100));
+        // after window: r_category(0), r_class(1), r_margin(2), r_lochierarchy(3), r_category_rank_key(4), rank(5).
+        ranked.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(3, true), new Plan.SortKey(4, false), new Plan.SortKey(5, false),
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100))
+                .select(new Plan.Col(2), new Plan.Col(0), new Plan.Col(1), new Plan.Col(3), new Plan.Col(5));
+
+        return new Composite(
+                List.of(new Stage(rollup, "q36_rollup", List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 1))),
+                        new Stage(derived, "q36_derived", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1)))),
+                ranked,
+                List.of(new DictRef(1, 0, 0), new DictRef(2, 0, 1)));
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
