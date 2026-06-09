@@ -2364,6 +2364,45 @@ public final class CompiledTpcdsQueries
                         new DictRef(3, 0, 3), new DictRef(4, 0, 4), new DictRef(5, 0, 5)));
     }
 
+    public static Composite query93()
+    {
+        // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
+        // filtered returns are BUILT first as a small relation, then probed by store_sales (rather than a left-deep chain
+        // that builds the full store_returns and filters the reason late). Stage q93_returns: store_returns joined to
+        // reason (filter 'reason 28'), output (item, ticket, return_quantity). Main: store_sales joined to that on
+        // (item, ticket); each surviving sale contributes sales_price * (quantity - return_quantity); GROUP BY customer;
+        // ORDER BY the total then customer; top 100. (The INNER join makes return_quantity non-null, so the SQL CASE on a
+        // null return quantity lowers to the direct subtract.)
+        QueryLowering returns = QueryLowering.scan("store_returns",
+                        new QueryLowering.Column("sr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_reason_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_return_quantity", ColumnEncoding.FLAT, true))
+                .join("reason", "sr_reason_sk", "r_reason_sk",
+                        new QueryLowering.Column("r_reason_sk"),
+                        new QueryLowering.Column("r_reason_desc", ColumnEncoding.STRING, false));
+        returns.where(new Plan.StringMatch(returns.position("r_reason_desc"), List.of("reason 28"), false))
+                .select(returns.column("sr_item_sk"), returns.column("sr_ticket_number"), returns.column("sr_return_quantity"));
+        // q93_returns: item(0), ticket(1), return_quantity(2).
+
+        QueryLowering main = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("q93_returns", new String[] {"ss_item_sk", "ss_ticket_number"}, new String[] {"qr_item", "qr_ticket"},
+                        new QueryLowering.Column("qr_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("qr_ticket", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("qr_return_quantity", ColumnEncoding.FLAT, false));
+        main.groupBy("ss_customer_sk")
+                .aggregate("sum", new Plan.Bin("*", main.column("ss_sales_price"),
+                        new Plan.Bin("-", main.column("ss_quantity"), main.column("qr_return_quantity"))))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, false), new Plan.SortKey(0, false)), 100));
+
+        return new Composite(List.of(new Stage(returns, "q93_returns")), main, List.of());
+    }
+
     public static Ported query29()
     {
         // Q29: store_sales ⋈ date_dim(sold: d_moy=9, d_year=1999) ⋈ item ⋈ store ⋈ store_returns (multi-key on
