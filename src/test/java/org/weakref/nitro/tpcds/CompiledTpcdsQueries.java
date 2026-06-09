@@ -2378,6 +2378,91 @@ public final class CompiledTpcdsQueries
                         new DictRef(3, 0, 3), new DictRef(4, 0, 4), new DictRef(5, 0, 5)));
     }
 
+    public static Ported query85()
+    {
+        // Q85: average return metrics by reason for the web channel. web_sales joined to web_page, to its web_returns
+        // (item + order), to date_dim (year 2000), twice to customer_demographics (the refunded and the returning
+        // customer's marital/education), to customer_address, and to reason; kept only where the two demographics
+        // agree and a per-marital price band holds, and a per-state net-profit band holds; GROUP BY reason; average
+        // quantity, refunded cash, and fee; top 100 ordered by the reason and the three averages. The reason text is
+        // emitted via the substring(r_reason_desc, 1, 20) projection carried on the DictRef.
+        QueryLowering query = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_web_page_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_sales_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_net_profit", ColumnEncoding.FLAT, true))
+                .join("web_page", "ws_web_page_sk", "wp_web_page_sk",
+                        new QueryLowering.Column("wp_web_page_sk"))
+                .join("web_returns", new String[] {"ws_item_sk", "ws_order_number"}, new String[] {"wr_item_sk", "wr_order_number"},
+                        new QueryLowering.Column("wr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_refunded_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_returning_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_refunded_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_reason_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_refunded_cash", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_fee", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ws_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("customer_demographics", "wr_refunded_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, false))
+                .join("customer_demographics", "wr_returning_cdemo_sk", "cd_demo_sk_returning",
+                        new QueryLowering.Column("cd_demo_sk_returning", "cd_demo_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("cd_marital_status_returning", "cd_marital_status", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cd_education_status_returning", "cd_education_status", ColumnEncoding.STRING, false))
+                .join("customer_address", "wr_refunded_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true))
+                .join("reason", "wr_reason_sk", "r_reason_sk",
+                        new QueryLowering.Column("r_reason_sk"),
+                        new QueryLowering.Column("r_reason_desc", ColumnEncoding.STRING, false));
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.Or(List.of(
+                                query85DemographicsBranch(query, "M", "Advanced Degree", 9_999, 15_001),
+                                query85DemographicsBranch(query, "S", "College", 4_999, 10_001),
+                                query85DemographicsBranch(query, "W", "2 yr Degree", 14_999, 20_001))),
+                        new Plan.Or(List.of(
+                                query85AddressBranch(query, List.of("IN", "OH", "NJ"), 9_999, 20_001),
+                                query85AddressBranch(query, List.of("WI", "CT", "KY"), 14_999, 30_001),
+                                query85AddressBranch(query, List.of("LA", "IA", "AR"), 4_999, 25_001))))
+                .groupBy("r_reason_desc")
+                .aggregate("avg", "ws_quantity")
+                .aggregate("avg", "wr_refunded_cash")
+                .aggregate("avg", "wr_fee")
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false),
+                        new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+        return new Ported(query, List.of(new DictRef(0, 7, 1, 1, 20)));
+    }
+
+    private static Plan.And query85DemographicsBranch(QueryLowering query, String marital, String education, long priceLowExclusive, long priceHighExclusive)
+    {
+        return new Plan.And(List.of(
+                new Plan.StringMatch(query.position("cd_marital_status"), List.of(marital), false),
+                new Plan.StringColumnCompare(query.position("cd_marital_status"), query.position("cd_marital_status_returning"), false),
+                new Plan.StringMatch(query.position("cd_education_status"), List.of(education), false),
+                new Plan.StringColumnCompare(query.position("cd_education_status"), query.position("cd_education_status_returning"), false),
+                new Plan.Predicate(">", query.column("ws_sales_price"), new Plan.Lit(priceLowExclusive)),
+                new Plan.Predicate("<", query.column("ws_sales_price"), new Plan.Lit(priceHighExclusive))));
+    }
+
+    private static Plan.And query85AddressBranch(QueryLowering query, List<String> states, long profitLowExclusive, long profitHighExclusive)
+    {
+        return new Plan.And(List.of(
+                new Plan.StringMatch(query.position("ca_country"), List.of("United States"), false),
+                new Plan.StringMatch(query.position("ca_state"), states, false),
+                new Plan.Predicate(">", query.column("ws_net_profit"), new Plan.Lit(profitLowExclusive)),
+                new Plan.Predicate("<", query.column("ws_net_profit"), new Plan.Lit(profitHighExclusive))));
+    }
+
     public static Composite query93()
     {
         // Q93: per-customer net store-sales value after returns of "reason 28". Mirrors the harness operator tree -- the
