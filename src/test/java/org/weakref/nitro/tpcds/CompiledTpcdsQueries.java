@@ -1050,6 +1050,82 @@ public final class CompiledTpcdsQueries
                 List.of(new Stage(grouped, "q87_grouped")), main, List.of());
     }
 
+    public static UnionComposite query97()
+    {
+        // Q97: count the (customer, item) pairs bought only from store, only from catalog, or from both, in a
+        // one-year month-seq window. The harness emulates the FULL OUTER JOIN as a union of per-channel presence
+        // rows: each channel joins the date window, drops null customers, dedups (customer, item) and tags the pair
+        // with a one-hot channel marker plus a null-key discriminator (a null key never joins, so such rows must stay
+        // distinct per channel); the union re-groups per (customer, item, discriminator) summing the markers, each
+        // group classifies as store-only / catalog-only / both, and the three classes are counted globally.
+        List<QueryLowering> branches = List.of(
+                query97PresenceBranch("store_sales", "ss_customer_sk", "ss_item_sk", "ss_sold_date_sk", 1),
+                query97PresenceBranch("catalog_sales", "cs_bill_customer_sk", "cs_item_sk", "cs_sold_date_sk", 2));
+
+        QueryLowering presence = QueryLowering.scan("q97_channels",
+                        new QueryLowering.Column("u_customer", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_discriminator", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_store", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("u_catalog", ColumnEncoding.FLAT, false))
+                .groupBy("u_customer", "u_item", "u_discriminator")
+                .aggregate("sum", "u_store")
+                .aggregate("sum", "u_catalog");
+        // presence result: customer(0), item(1), discriminator(2), store_marker_sum(3), catalog_marker_sum(4).
+
+        QueryLowering main = QueryLowering.scan("q97_presence",
+                        new QueryLowering.Column("p_customer", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("p_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("p_discriminator", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("p_store", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("p_catalog", ColumnEncoding.FLAT, true))
+                .aggregate("sum", query97Indicator(true, false))
+                .aggregate("sum", query97Indicator(false, true))
+                .aggregate("sum", query97Indicator(true, true));
+
+        return new UnionComposite(branches, "q97_channels", List.of(),
+                List.of(new Stage(presence, "q97_presence")), main, List.of());
+    }
+
+    /** One row per distinct (customer, item) the channel sold in the window, with the discriminator and one-hot markers. */
+    private static QueryLowering query97PresenceBranch(String fact, String customer, String item, String soldDate, long channelId)
+    {
+        QueryLowering channel = QueryLowering.scan(fact,
+                        new QueryLowering.Column(customer, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true));
+        channel.where(
+                        new Plan.IsNull(channel.position(customer), true),
+                        new Plan.Predicate(">", channel.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", channel.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy(customer, item)
+                .count();
+        // post-distinct: customer(0), item(1), count(2). The discriminator keeps a null-keyed pair a distinct group
+        // per channel (channelId when either key is null, else 0), mirroring the harness's FULL OUTER emulation.
+        channel.select(new Plan.Col(0), new Plan.Col(1),
+                new Plan.Case(
+                        List.of(new Plan.Case.Branch(
+                                new Plan.Or(List.of(new Plan.IsNull(0), new Plan.IsNull(1))),
+                                new Plan.Lit(channelId))),
+                        new Plan.Lit(0)),
+                new Plan.Lit(channelId == 1 ? 1 : 0),
+                new Plan.Lit(channelId == 1 ? 0 : 1));
+        return channel;
+    }
+
+    /** 1 when the pair's presence matches (store bought?, catalog bought?), else 0 -- summed into the class count. */
+    private static Plan.Expr query97Indicator(boolean store, boolean catalog)
+    {
+        Plan.Condition storeTest = new Plan.Predicate(store ? ">" : "=", new Plan.Col(3), new Plan.Lit(0));
+        Plan.Condition catalogTest = new Plan.Predicate(catalog ? ">" : "=", new Plan.Col(4), new Plan.Lit(0));
+        return new Plan.Case(
+                List.of(new Plan.Case.Branch(new Plan.And(List.of(storeTest, catalogTest)), new Plan.Lit(1))),
+                new Plan.Lit(0));
+    }
+
     private static QueryLowering customerChannelPresenceBranch(String fact, String soldDate, String customer, long store, long catalog, long web)
     {
         QueryLowering channel = QueryLowering.scan(fact,

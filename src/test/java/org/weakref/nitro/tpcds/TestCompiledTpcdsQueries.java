@@ -622,6 +622,12 @@ public class TestCompiledTpcdsQueries
         assertUnionCompositeMatchesHarness(CompiledTpcdsQueries.query87(), TpcdsParquetSupport::query87);
     }
 
+    @Test
+    void query97()
+    {
+        assertUnionCompositeMatchesHarness(CompiledTpcdsQueries.query97(), TpcdsParquetSupport::query97);
+    }
+
     /**
      * Run a UNION-feeding-aggregate query: materialize the union into a virtual table, then run the downstream stages
      * (each materialized under its virtual name) and the main, exactly as a {@link CompiledTpcdsQueries.Composite} but
