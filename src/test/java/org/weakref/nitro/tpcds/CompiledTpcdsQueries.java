@@ -19,6 +19,7 @@ import org.weakref.nitro.jit.QueryLowering;
 import org.weakref.nitro.jit.Types;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -3242,6 +3243,84 @@ public final class CompiledTpcdsQueries
                         new Plan.StringMatch(count.position("s_store_name"), List.of("ese"), false))
                 .count();
         return count;
+    }
+
+    public static Composite query61()
+    {
+        // Q61: the share of November 1998 Jewelry revenue in one GMT zone sold through a promotion channel (direct
+        // mail, email, or TV). Promotional and total revenue are each a global sum over the same store-sales star
+        // (store, date, customer, current address, item; the promotional side adds the promotion join); the two
+        // single-row aggregates are cross-joined (1x1) and the percentage is a scaled rounding divide. Q90's
+        // scalar-broadcast shape with sum subqueries.
+        QueryLowering main = QueryLowering.scan("q61_promotional",
+                        new QueryLowering.Column("promotional", ColumnEncoding.FLAT, true))
+                .crossJoin("q61_total", new QueryLowering.Column("total", ColumnEncoding.FLAT, true));
+        main.select(new Plan.Col(0), new Plan.Col(1),
+                        new Plan.Call("divide_scale_round_i64", new Plan.Col(0), new Plan.Col(1), new Plan.Lit(100_000_000_000_000L)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(query61Sales(true), "q61_promotional"),
+                        new Stage(query61Sales(false), "q61_total")),
+                main,
+                List.of());
+    }
+
+    /** Global Jewelry revenue for November 1998 in the -5.00 GMT zone, optionally restricted to promoted sales. */
+    private static QueryLowering query61Sales(boolean promotionalOnly)
+    {
+        QueryLowering sales = promotionalOnly
+                ? QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_promo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
+                : QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true));
+        sales = sales.join("store", "ss_store_sk", "s_store_sk",
+                new QueryLowering.Column("s_store_sk"),
+                new QueryLowering.Column("s_gmt_offset", ColumnEncoding.FLAT, true));
+        if (promotionalOnly) {
+            sales = sales.join("promotion", "ss_promo_sk", "p_promo_sk",
+                    new QueryLowering.Column("p_promo_sk"),
+                    new QueryLowering.Column("p_channel_dmail", ColumnEncoding.STRING, true),
+                    new QueryLowering.Column("p_channel_email", ColumnEncoding.STRING, true),
+                    new QueryLowering.Column("p_channel_tv", ColumnEncoding.STRING, true));
+        }
+        sales = sales.join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true))
+                .join("customer", "ss_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_gmt_offset", ColumnEncoding.FLAT, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true));
+        List<Plan.Condition> conditions = new ArrayList<>();
+        conditions.add(new Plan.Predicate("=", sales.column("s_gmt_offset"), new Plan.Lit(-500)));
+        if (promotionalOnly) {
+            conditions.add(new Plan.Or(List.of(
+                    new Plan.StringMatch(sales.position("p_channel_dmail"), List.of("Y"), false),
+                    new Plan.StringMatch(sales.position("p_channel_email"), List.of("Y"), false),
+                    new Plan.StringMatch(sales.position("p_channel_tv"), List.of("Y"), false))));
+        }
+        conditions.add(new Plan.Predicate("=", sales.column("d_year"), new Plan.Lit(1998)));
+        conditions.add(new Plan.Predicate("=", sales.column("d_moy"), new Plan.Lit(11)));
+        conditions.add(new Plan.Predicate("=", sales.column("ca_gmt_offset"), new Plan.Lit(-500)));
+        conditions.add(new Plan.StringMatch(sales.position("i_category"), List.of("Jewelry"), false));
+        sales.where(conditions.toArray(Plan.Condition[]::new))
+                .aggregate("sum", "ss_ext_sales_price");
+        return sales;
     }
 
     public static Composite query90()
