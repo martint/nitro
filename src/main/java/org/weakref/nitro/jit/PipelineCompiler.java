@@ -721,11 +721,14 @@ public final class PipelineCompiler
         }
         out.append("      return 0;\n");
         out.append("    });\n");
-        String limit = ordering.limit() < 0 ? "n" : "Math.min(" + ordering.limit() + ", n)";
+        // OFFSET skips the first rows of the sorted order; LIMIT then bounds what remains (SQL OFFSET/LIMIT).
+        int offset = ordering.offset();
+        out.append("    int skip = Math.min(").append(offset).append(", n);\n");
+        String limit = ordering.limit() < 0 ? "(n - skip)" : "Math.min(" + ordering.limit() + ", n - skip)";
         out.append("    int outN = ").append(limit).append(";\n");
         out.append("    long[][] sorted = new long[cols.length][outN];\n");
-        out.append("    for (int w = 0; w < outN; w++) { int s = order[w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
-        emitGatherNulls(out, "order[g]");
+        out.append("    for (int w = 0; w < outN; w++) { int s = order[skip + w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
+        emitGatherNulls(out, "order[skip + g]");
         out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types(), outNulls);\n");
         out.append("  }\n");
     }

@@ -441,11 +441,17 @@ public final class Plan
      * Post-aggregation ORDER BY / LIMIT applied to the pipeline's result columns. {@code limit < 0} means no
      * limit. Sort keys index the result columns (group keys first, then aggregates).
      */
-    public record Ordering(List<SortKey> keys, int limit)
+    public record Ordering(List<SortKey> keys, int limit, int offset)
     {
         public Ordering
         {
             keys = List.copyOf(keys);
+        }
+
+        /** ORDER BY with a LIMIT and no OFFSET ({@code limit < 0} = unlimited). */
+        public Ordering(List<SortKey> keys, int limit)
+        {
+            this(keys, limit, 0);
         }
     }
 
