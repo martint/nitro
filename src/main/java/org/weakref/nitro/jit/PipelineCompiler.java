@@ -1963,6 +1963,12 @@ public final class PipelineCompiler
             }
         }
 
+        // A string join key sourced from an earlier build (e.g. item.i_category) has a constant dictionary once the
+        // builds are materialized -- emit its value remap here, OUTSIDE any batch loop. Rebuilding a large remap per
+        // streamed batch dominated string-keyed fact scans. Fact-sourced string keys (eager path only) remap after
+        // the probe loads.
+        emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, true);
+
         boolean grouped = !pipeline.groupKeys().isEmpty();
         boolean projection = projectionOnly(pipeline);
         if (projection) {
@@ -2070,11 +2076,10 @@ public final class PipelineCompiler
                     emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
                 }
             }
-            // The join key dictionaries are all materialized now (builds before the batch loop, eager probe columns
-            // -- which include every join key -- just above), so emit each string join key's probe-id -> build-id value
-            // remap before Phase 1's probe loop consumes it. The non-lazy path emits this once after the probe loads;
-            // the lazy path rebuilds it per batch (the probe dictionary can change batch to batch).
-            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns);
+            // Build-sourced string keys remapped once after the builds loaded (above, outside the batch loop); a
+            // fact-sourced string key's dictionary arrives with the probe, so its remap is per batch (the streaming
+            // guard rejects that shape, leaving this a no-op when streaming).
+            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, false);
 
             out.append("        for (int i = 0; i < probeRows; i++) {\n");
             int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
@@ -2162,9 +2167,9 @@ public final class PipelineCompiler
                     emitStringMaskPrelude(out, match, s, probeVars(column).stringDict());
                 }
             }
-            // Both key dictionaries are materialized now (the builds above, the probe just loaded), so emit each
-            // string join key's probe-id -> build-id value remap before the probe loop consumes it.
-            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns);
+            // Build-sourced string keys remapped once after the builds loaded (above); a fact-sourced key's
+            // dictionary is materialized with the probe, so its remap belongs here.
+            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, false);
 
             out.append("    for (int i = 0; i < probeRows; i++) {\n");
             // Filters are interleaved with the probes (early-out); the body then runs without re-checking them.
@@ -2361,12 +2366,23 @@ public final class PipelineCompiler
      */
     private static void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns)
     {
+        emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, null);
+    }
+
+    /** {@code buildOriginated} selects which keys to emit: TRUE for build-sourced probe keys only (their dictionaries
+     * are constant once the builds load, so the remap hoists out of the streaming batch loop), FALSE for fact-sourced
+     * keys only (the probe dictionary loads with the probe), {@code null} for all. */
+    private static void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
+    {
         for (int k = 0; k < joins.size(); k++) {
             Plan.Join join = joins.get(k);
             int[] probeKeys = join.probeKeyColumns();
             int[] buildKeys = join.build().keyColumns();
             for (int kx = 0; kx < probeKeys.length; kx++) {
                 if (combinedEncoding(pipeline, encodings, probeKeys[kx]) != ColumnEncoding.STRING) {
+                    continue;
+                }
+                if (buildOriginated != null && buildOriginated != (probeKeys[kx] >= probeColumns)) {
                     continue;
                 }
                 // The probe key may be a fact column (probe dictionary) or an earlier-joined build column (e.g.
