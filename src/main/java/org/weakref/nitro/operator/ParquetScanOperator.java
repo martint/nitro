@@ -1380,7 +1380,10 @@ public final class ParquetScanOperator
         if (primitiveType.getPrimitiveTypeName() != BINARY) {
             return Set.of();
         }
-        if (stringType().equals(primitiveType.getLogicalTypeAnnotation())) {
+        // A BINARY column with the String annotation is UTF-8 by declaration; an UNANNOTATED one is treated as
+        // UTF-8 too -- the ClickBench athena-partitioned hits files carry their string columns as plain BINARY
+        // with no logical type, and refusing the trait makes every UTF-8 primitive reject them.
+        if (primitiveType.getLogicalTypeAnnotation() == null || stringType().equals(primitiveType.getLogicalTypeAnnotation())) {
             return Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         }
         return Set.of();
