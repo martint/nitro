@@ -4416,6 +4416,160 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static LabeledUnion query23()
+    {
+        // Q23: February 2000 catalog + web sales restricted to frequently-sold items (sold on more than four
+        // distinct days of 1999-2003) and best customers (store total above half the maximum year-windowed
+        // customer total), summed across both channels. Each channel assembles its own frequent-item and
+        // best-customer subqueries, mirroring the harness; the channels union and the main reduces to one row.
+        record Channel(String name, String table, String soldDate, String customer, String item, String quantity, String price) {}
+
+        List<Stage> stages = new ArrayList<>();
+        List<Stage> branches = new ArrayList<>();
+        for (Channel channel : List.of(
+                new Channel("catalog", "catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk", "cs_quantity", "cs_list_price"),
+                new Channel("web", "web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_item_sk", "ws_quantity", "ws_list_price"))) {
+            String suffix = channel.name();
+            stages.add(new Stage(query23FrequentItemDays(), "q23_item_days_" + suffix));
+            stages.add(new Stage(query23FrequentItems("q23_item_days_" + suffix), "q23_frequent_" + suffix));
+            stages.add(new Stage(query23CustomerSales(false), "q23_customers_" + suffix));
+            stages.add(new Stage(query23CustomerSales(true), "q23_window_customers_" + suffix));
+            stages.add(new Stage(query23MaxSales("q23_window_customers_" + suffix), "q23_max_" + suffix));
+            stages.add(new Stage(query23BestCustomers("q23_customers_" + suffix, "q23_max_" + suffix), "q23_best_" + suffix));
+            branches.add(new Stage(query23Channel(channel.table(), channel.soldDate(), channel.customer(),
+                    channel.item(), channel.quantity(), channel.price(), suffix), "q23_channel_" + suffix));
+        }
+
+        QueryLowering main = QueryLowering.scan("q23_sales",
+                        new QueryLowering.Column("u_sales", ColumnEncoding.FLAT, false))
+                .aggregate("sum", "u_sales");
+
+        return new LabeledUnion(stages, branches, "q23_sales", main, List.of());
+    }
+
+    /** Q23's (item, sold day) pairs occurring more than four times in 1999-2003: the frequent-item raw counts. */
+    private static QueryLowering query23FrequentItemDays()
+    {
+        QueryLowering pairs = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, false))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"));
+        pairs.where(
+                        new Plan.Predicate(">", pairs.column("d_year"), new Plan.Lit(1999)),
+                        new Plan.Predicate("<", pairs.column("d_year"), new Plan.Lit(2004)))
+                .groupBy("ss_item_sk", "d_date")
+                .count();
+        pairs.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(4)));
+        pairs.select(new Plan.Col(0));
+        return pairs;
+    }
+
+    /** Q23's distinct frequent items, deduplicated from the per-day pairs (the harness's mark-distinct). */
+    private static QueryLowering query23FrequentItems(String pairsVirtual)
+    {
+        QueryLowering frequent = QueryLowering.scan(pairsVirtual,
+                        new QueryLowering.Column("f_item", ColumnEncoding.FLAT, true))
+                .groupBy("f_item")
+                .count();
+        frequent.select(new Plan.Col(0));
+        return frequent;
+    }
+
+    /**
+     * Q23's per-customer store-sales total (null quantity or price counts as zero), optionally restricted to the
+     * 1999-2003 window for the maximum-total side.
+     */
+    private static QueryLowering query23CustomerSales(boolean filterYears)
+    {
+        QueryLowering sales;
+        if (filterYears) {
+            sales = QueryLowering.scan("store_sales",
+                            new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                    .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                            new QueryLowering.Column("d_date_sk"),
+                            new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true));
+        }
+        else {
+            sales = QueryLowering.scan("store_sales",
+                    new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true));
+        }
+        sales = sales.join("customer", "ss_customer_sk", "c_customer_sk",
+                new QueryLowering.Column("c_customer_sk"));
+        if (filterYears) {
+            sales.where(
+                    new Plan.Predicate(">", sales.column("d_year"), new Plan.Lit(1999)),
+                    new Plan.Predicate("<", sales.column("d_year"), new Plan.Lit(2004)));
+        }
+        sales.groupBy("ss_customer_sk")
+                .aggregate("sum", new Plan.Coalesce(
+                        new Plan.Bin("*", sales.column("ss_sales_price"), sales.column("ss_quantity")),
+                        new Plan.Lit(0)));
+        return sales;
+    }
+
+    /** Q23's maximum year-windowed customer total: a global max over the windowed per-customer sums. */
+    private static QueryLowering query23MaxSales(String windowedCustomersVirtual)
+    {
+        return QueryLowering.scan(windowedCustomersVirtual,
+                        new QueryLowering.Column("mc_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("mc_sales", ColumnEncoding.FLAT, true))
+                .aggregate("max", "mc_sales");
+    }
+
+    /** Q23's best customers: store total above half the broadcast maximum. */
+    private static QueryLowering query23BestCustomers(String customersVirtual, String maxVirtual)
+    {
+        QueryLowering best = QueryLowering.scan(customersVirtual,
+                        new QueryLowering.Column("bc_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("bc_sales", ColumnEncoding.FLAT, true))
+                .crossJoin(maxVirtual,
+                        new QueryLowering.Column("max_sales", ColumnEncoding.FLAT, true));
+        best.where(
+                        new Plan.IsNull(best.position("bc_sales"), true),
+                        new Plan.IsNull(best.position("max_sales"), true),
+                        new Plan.Predicate("<", best.column("max_sales"),
+                                new Plan.Bin("*", best.column("bc_sales"), new Plan.Lit(2))))
+                .select(new Plan.Col(0));
+        return best;
+    }
+
+    /** One Q23 channel: February 2000 sales of frequent items by best customers, as the null-as-zero sale value. */
+    private static QueryLowering query23Channel(String table, String soldDate, String customer, String item,
+            String quantity, String price, String suffix)
+    {
+        QueryLowering channel = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(customer, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(price, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true))
+                .semiJoin("q23_frequent_" + suffix, item, "fi_item",
+                        new QueryLowering.Column("fi_item", ColumnEncoding.FLAT, true))
+                .semiJoin("q23_best_" + suffix, customer, "bc_customer",
+                        new QueryLowering.Column("bc_customer", ColumnEncoding.FLAT, true));
+        channel.where(
+                        new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(2000)),
+                        new Plan.Predicate("=", channel.column("d_moy"), new Plan.Lit(2)))
+                .select(new Plan.Coalesce(
+                        new Plan.Bin("*", channel.column(price), channel.column(quantity)),
+                        new Plan.Lit(0)));
+        return channel;
+    }
+
     public static Composite query24()
     {
         // Q24: pale-colored store sales by customer name and store, kept when the customer's per-store-and-item
