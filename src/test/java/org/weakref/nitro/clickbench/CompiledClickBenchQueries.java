@@ -20,6 +20,7 @@ import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Composite;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Ported;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Stage;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -29,6 +30,9 @@ import java.util.List;
  */
 public final class CompiledClickBenchQueries
 {
+    private static final LocalDate JULY_2013_START = LocalDate.of(2013, 7, 1);
+    private static final LocalDate JULY_2013_END = LocalDate.of(2013, 8, 1);
+
     private CompiledClickBenchQueries() {}
 
     /** SELECT COUNT(*) FROM hits */
@@ -86,6 +90,29 @@ public final class CompiledClickBenchQueries
         return new Composite(List.of(new Stage(distinct, "cb05_users")), main, List.of());
     }
 
+    /**
+     * SELECT RegionID, COUNT(DISTINCT UserID) FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10: the distinct
+     * (RegionID, UserID) pairs as a stage (the harness's MarkDistinctOperator), counted per region by the main.
+     */
+    public static Composite query09()
+    {
+        QueryLowering pairs = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("RegionID"),
+                new QueryLowering.Column("UserID"));
+        pairs.groupBy("RegionID", "UserID")
+                .count();
+        pairs.select(new Plan.Col(0), new Plan.Col(1));
+
+        QueryLowering main = QueryLowering.scan("cb09_pairs",
+                new QueryLowering.Column("p_region"),
+                new QueryLowering.Column("p_user"));
+        main.groupBy("p_region")
+                .count();
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+
+        return new Composite(List.of(new Stage(pairs, "cb09_pairs")), main, List.of());
+    }
+
     /** SELECT MIN(EventDate), MAX(EventDate) FROM hits */
     public static Ported query07()
     {
@@ -116,6 +143,123 @@ public final class CompiledClickBenchQueries
         query.groupBy("UserID")
                 .count();
         query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+        return new Ported(query, List.of());
+    }
+
+    /** SELECT UserID FROM hits WHERE UserID = 435090932899640449 */
+    public static Ported query20()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("UserID"));
+        query.where(new Plan.Predicate("=", query.column("UserID"), new Plan.Lit(ClickBenchHitsSupport.QUERY20_USER_ID)))
+                .select(query.column("UserID"));
+        return new Ported(query, List.of());
+    }
+
+    /** SELECT COUNT(*) FROM hits WHERE URL LIKE '%google%' */
+    public static Ported query21()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false));
+        query.where(new Plan.LikeMatch(query.position("URL"), "%google%", false))
+                .count();
+        return new Ported(query, List.of());
+    }
+
+    /** SELECT SUM(ResolutionWidth), SUM(ResolutionWidth + 1), ..., SUM(ResolutionWidth + 89) FROM hits */
+    public static Ported query30()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("ResolutionWidth"));
+        query.aggregate("sum", "ResolutionWidth");
+        for (int offset = 1; offset < 90; offset++) {
+            query.aggregate("sum", new Plan.Bin("+", query.column("ResolutionWidth"), new Plan.Lit(offset)));
+        }
+        return new Ported(query, List.of());
+    }
+
+    /**
+     * SELECT URLHash, EventDate, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in July 2013 AND
+     * IsRefresh = 0 AND TraficSourceID IN (-1, 6) AND RefererHash = ... GROUP BY 1, 2 ORDER BY 3 DESC
+     * LIMIT 10 OFFSET 100. The EventDate literals depend on the file's date encoding, so the lowering
+     * takes the data location.
+     */
+    public static Ported query41(java.nio.file.Path hits)
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("URLHash"),
+                new QueryLowering.Column("EventDate"),
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("IsRefresh"),
+                new QueryLowering.Column("TraficSourceID"),
+                new QueryLowering.Column("RefererHash"));
+        query.where(
+                new Plan.Predicate("=", query.column("CounterID"), new Plan.Lit(62)),
+                new Plan.Predicate("=", query.column("IsRefresh"), new Plan.Lit(0)),
+                new Plan.Predicate(">", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_START) - 1)),
+                new Plan.Predicate("<", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_END))),
+                new Plan.Or(List.of(
+                        new Plan.Predicate("=", query.column("TraficSourceID"), new Plan.Lit(-1)),
+                        new Plan.Predicate("=", query.column("TraficSourceID"), new Plan.Lit(6)))),
+                new Plan.Predicate("=", query.column("RefererHash"), new Plan.Lit(ClickBenchHitsSupport.QUERY41_REFERER_HASH)));
+        query.groupBy("URLHash", "EventDate")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10, 100));
+        return new Ported(query, List.of());
+    }
+
+    /**
+     * SELECT WindowClientWidth, WindowClientHeight, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in
+     * July 2013 AND IsRefresh = 0 AND DontCountHits = 0 AND URLHash = ... GROUP BY 1, 2 ORDER BY 3 DESC
+     * LIMIT 10 OFFSET 10000
+     */
+    public static Ported query42(java.nio.file.Path hits)
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("WindowClientWidth"),
+                new QueryLowering.Column("WindowClientHeight"),
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("EventDate"),
+                new QueryLowering.Column("IsRefresh"),
+                new QueryLowering.Column("DontCountHits"),
+                new QueryLowering.Column("URLHash"));
+        query.where(
+                new Plan.Predicate("=", query.column("CounterID"), new Plan.Lit(62)),
+                new Plan.Predicate("=", query.column("IsRefresh"), new Plan.Lit(0)),
+                new Plan.Predicate(">", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_START) - 1)),
+                new Plan.Predicate("<", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_END))),
+                new Plan.Predicate("=", query.column("DontCountHits"), new Plan.Lit(0)),
+                new Plan.Predicate("=", query.column("URLHash"), new Plan.Lit(ClickBenchHitsSupport.QUERY42_URL_HASH)));
+        query.groupBy("WindowClientWidth", "WindowClientHeight")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10, 10_000));
+        return new Ported(query, List.of());
+    }
+
+    /**
+     * SELECT EventTime / 60 * 60 AS minute, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate between
+     * 2013-07-14 and 2013-07-15 AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY 1 ORDER BY 1 LIMIT 10
+     * OFFSET 1000
+     */
+    public static Ported query43(java.nio.file.Path hits)
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("EventTime"),
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("EventDate"),
+                new QueryLowering.Column("DontCountHits"),
+                new QueryLowering.Column("IsRefresh"));
+        query.where(
+                new Plan.Predicate("=", query.column("CounterID"), new Plan.Lit(62)),
+                new Plan.Predicate("=", query.column("IsRefresh"), new Plan.Lit(0)),
+                new Plan.Predicate(">", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, LocalDate.of(2013, 7, 14)) - 1)),
+                new Plan.Predicate("<", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, LocalDate.of(2013, 7, 16)))),
+                new Plan.Predicate("=", query.column("DontCountHits"), new Plan.Lit(0)));
+        query.groupBy(new Plan.Bin("*",
+                        new Plan.Bin("/", query.column("EventTime"), new Plan.Lit(60)),
+                        new Plan.Lit(60)))
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 10, 1_000));
         return new Ported(query, List.of());
     }
 

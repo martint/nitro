@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -113,14 +114,62 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query09()
+    {
+        assertCompositeMatchesHarness(CompiledClickBenchQueries.query09(), (allocator, registry, hits) -> ClickBenchHitsSupport.query09(allocator, hits));
+    }
+
+    @Test
+    void query20()
+    {
+        assertMatchesHarness(CompiledClickBenchQueries.query20(), ClickBenchHitsSupport::query20);
+    }
+
+    @Test
+    void query21()
+    {
+        assertMatchesHarness(CompiledClickBenchQueries.query21(), ClickBenchHitsSupport::query21);
+    }
+
+    @Test
+    void query30()
+    {
+        assertMatchesHarness(CompiledClickBenchQueries.query30(), ClickBenchHitsSupport::query30);
+    }
+
+    @Test
     void query36()
     {
         assertCompositeMatchesHarness(CompiledClickBenchQueries.query36(), ClickBenchHitsSupport::query36);
     }
 
+    @Test
+    void query41()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries::query41, ClickBenchHitsSupport::query41, 2, true);
+    }
+
+    @Test
+    void query42()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries::query42, ClickBenchHitsSupport::query42, 2, true);
+    }
+
+    @Test
+    void query43()
+    {
+        assertMatchesHarness(CompiledClickBenchQueries::query43, ClickBenchHitsSupport::query43);
+    }
+
     private static void assertMatchesHarness(CompiledTpcdsQueries.Ported ported, HarnessChain harness)
     {
+        assertMatchesHarness(hits -> ported, harness);
+    }
+
+    private static void assertMatchesHarness(Function<Path, CompiledTpcdsQueries.Ported> portedForData, HarnessChain harness)
+    {
         ClickBenchParquetTables tables = requireHits();
+        CompiledTpcdsQueries.Ported ported = portedForData.apply(tables.directory());
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
     }
@@ -133,7 +182,13 @@ public class TestCompiledClickBenchQueries
      */
     private static void assertTopKMatchesHarness(CompiledTpcdsQueries.Ported ported, HarnessChain harness, int sortColumn)
     {
+        assertTopKMatchesHarness(hits -> ported, harness, sortColumn, false);
+    }
+
+    private static void assertTopKMatchesHarness(Function<Path, CompiledTpcdsQueries.Ported> portedForData, HarnessChain harness, int sortColumn, boolean offsetCut)
+    {
         ClickBenchParquetTables tables = requireHits();
+        CompiledTpcdsQueries.Ported ported = portedForData.apply(tables.directory());
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, ported.query().lower());
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
         for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
@@ -143,10 +198,10 @@ public class TestCompiledClickBenchQueries
         Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).isNotEmpty();
-        assertTopKRows(actual, expected, sortColumn);
+        assertTopKRows(actual, expected, sortColumn, offsetCut);
     }
 
-    private static void assertTopKRows(List<Row> actual, List<Row> expected, int sortColumn)
+    private static void assertTopKRows(List<Row> actual, List<Row> expected, int sortColumn, boolean offsetCut)
     {
         assertThat(actual).hasSameSizeAs(expected);
         for (int i = 0; i < actual.size(); i++) {
@@ -159,7 +214,10 @@ public class TestCompiledClickBenchQueries
             while (end < expected.size() && key.equals(expected.get(end).values()[sortColumn])) {
                 end++;
             }
-            if (end < expected.size()) {
+            // OFFSET can cut into the window's first tie run just like LIMIT cuts the last; both ends'
+            // incomplete runs are checked on sort key only (above), complete runs on exact rows.
+            boolean cutByOffset = offsetCut && start == 0;
+            if (end < expected.size() && !cutByOffset) {
                 // A complete tie run: the same rows in some order.
                 assertThat(actual.subList(start, end)).as("tie run [%d, %d)", start, end)
                         .containsExactlyInAnyOrderElementsOf(expected.subList(start, end));

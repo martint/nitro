@@ -1150,7 +1150,7 @@ public final class ClickBenchHitsSupport
         return timeRange(inputIndex, eventDateLiteral(file, inclusiveLowerBound), eventDateLiteral(file, exclusiveUpperBound));
     }
 
-    private static int eventDateLiteral(Path file, LocalDate date)
+    static int eventDateLiteral(Path file, LocalDate date)
     {
         if (eventDateUsesEpochDays(file)) {
             return toIntExact(date.toEpochDay());
