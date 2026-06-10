@@ -1855,6 +1855,17 @@ public final class PipelineCompiler
     private static void emitStringMaskFill(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String from, String to)
     {
         if (match instanceof Plan.LikeMatch like) {
+            String containsLiteral = likeContainsLiteral(like.pattern());
+            if (containsLiteral != null) {
+                // LIKE '%literal%' is byte-level containment -- a regex pays an order of magnitude more per value.
+                out.append("    byte[] sLikeLit").append(id).append(" = ").append(javaStringLiteral(containsLiteral))
+                        .append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
+                out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
+                String matches = "org.weakref.nitro.jit.StringMatching.containsBytes(" + dictionaryVar + "[e], sLikeLit" + id + ")";
+                out.append("      sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+                out.append("    }\n");
+                return;
+            }
             out.append("    java.util.regex.Pattern sLikePat").append(id).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
                     .append(javaStringLiteral(like.pattern())).append(");\n");
             out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
@@ -1891,6 +1902,19 @@ public final class PipelineCompiler
         String matches = values.isEmpty() ? "false" : member.toString();
         out.append("      sMask").append(id).append("[e] = ").append(negated ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
         out.append("    }\n");
+    }
+
+    /** The literal of a pure-containment pattern ({@code %literal%}, no other wildcards/escapes), or null. */
+    private static String likeContainsLiteral(String pattern)
+    {
+        if (pattern.length() < 2 || !pattern.startsWith("%") || !pattern.endsWith("%")) {
+            return null;
+        }
+        String inner = pattern.substring(1, pattern.length() - 1);
+        if (inner.isEmpty() || inner.contains("%") || inner.contains("_") || inner.contains("\\")) {
+            return null;
+        }
+        return inner;
     }
 
     /** Render a Java double-quoted string literal, escaping backslashes and quotes. */

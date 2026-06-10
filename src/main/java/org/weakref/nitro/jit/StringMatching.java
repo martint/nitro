@@ -28,6 +28,24 @@ public final class StringMatching
      * Translate a SQL {@code LIKE} pattern into a {@link Pattern}: {@code %} -> {@code .*}, {@code _} -> {@code .},
      * with all other characters quoted. {@code DOTALL} so {@code %} also spans newlines, as SQL requires.
      */
+    /** Byte-level substring containment (the {@code LIKE '%literal%'} fast path; UTF-8 substrings align on bytes). */
+    public static boolean containsBytes(byte[] value, byte[] target)
+    {
+        if (target.length == 0) {
+            return true;
+        }
+        outer:
+        for (int from = 0; from <= value.length - target.length; from++) {
+            for (int i = 0; i < target.length; i++) {
+                if (value[from + i] != target[i]) {
+                    continue outer;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
     /** The number of code points in UTF-8 bytes (continuation bytes don't start a code point). */
     public static int codePointCount(byte[] utf8)
     {
