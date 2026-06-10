@@ -341,6 +341,69 @@ public final class CompiledClickBenchQueries
     }
 
     /**
+     * SELECT URL, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in July 2013 AND DontCountHits = 0
+     * AND IsRefresh = 0 AND URL <> '' GROUP BY 1 ORDER BY 2 DESC LIMIT 10. The EventDate literals depend on
+     * the file's date encoding, so the lowering takes the data location.
+     */
+    public static Ported query37(java.nio.file.Path hits)
+    {
+        return topCountedInJuly2013(hits, "URL");
+    }
+
+    /** q37 over Title. */
+    public static Ported query38(java.nio.file.Path hits)
+    {
+        return topCountedInJuly2013(hits, "Title");
+    }
+
+    private static Ported topCountedInJuly2013(java.nio.file.Path hits, String groupColumn)
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column(groupColumn, ColumnEncoding.STRING, false),
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("EventDate"),
+                new QueryLowering.Column("DontCountHits"),
+                new QueryLowering.Column("IsRefresh"));
+        query.where(
+                new Plan.StringMatch(query.position(groupColumn), List.of(""), true),
+                new Plan.Predicate("=", query.column("CounterID"), new Plan.Lit(62)),
+                new Plan.Predicate("=", query.column("IsRefresh"), new Plan.Lit(0)),
+                new Plan.Predicate(">", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_START) - 1)),
+                new Plan.Predicate("<", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_END))),
+                new Plan.Predicate("=", query.column("DontCountHits"), new Plan.Lit(0)));
+        query.groupBy(groupColumn)
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+        return new Ported(query, 0, 0, 0);
+    }
+
+    /**
+     * SELECT URL, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in July 2013 AND IsRefresh = 0
+     * AND IsLink <> 0 AND IsDownload = 0 GROUP BY 1 ORDER BY 2 DESC LIMIT 10 OFFSET 1000
+     */
+    public static Ported query39(java.nio.file.Path hits)
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("EventDate"),
+                new QueryLowering.Column("IsRefresh"),
+                new QueryLowering.Column("IsLink"),
+                new QueryLowering.Column("IsDownload"));
+        query.where(
+                new Plan.Predicate("=", query.column("CounterID"), new Plan.Lit(62)),
+                new Plan.Predicate("=", query.column("IsRefresh"), new Plan.Lit(0)),
+                new Plan.Predicate(">", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_START) - 1)),
+                new Plan.Predicate("<", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_END))),
+                new Plan.Not(new Plan.Predicate("=", query.column("IsLink"), new Plan.Lit(0))),
+                new Plan.Predicate("=", query.column("IsDownload"), new Plan.Lit(0)));
+        query.groupBy("URL")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10, 1_000));
+        return new Ported(query, 0, 0, 0);
+    }
+
+    /**
      * SELECT URLHash, EventDate, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in July 2013 AND
      * IsRefresh = 0 AND TraficSourceID IN (-1, 6) AND RefererHash = ... GROUP BY 1, 2 ORDER BY 3 DESC
      * LIMIT 10 OFFSET 100. The EventDate literals depend on the file's date encoding, so the lowering

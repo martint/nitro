@@ -204,6 +204,24 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query37()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries::query37, ClickBenchHitsSupport::query37, 1, false);
+    }
+
+    @Test
+    void query38()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries::query38, ClickBenchHitsSupport::query38, 1, false);
+    }
+
+    @Test
+    void query39()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries::query39, ClickBenchHitsSupport::query39, 1, true);
+    }
+
+    @Test
     void query41()
     {
         assertTopKMatchesHarness(CompiledClickBenchQueries::query41, ClickBenchHitsSupport::query41, 2, true);
