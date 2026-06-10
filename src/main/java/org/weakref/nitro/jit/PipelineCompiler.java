@@ -4299,12 +4299,33 @@ public final class PipelineCompiler
      */
     private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id)
     {
-        if (!(match instanceof Plan.StringColumnCompare) && stringIdsCrossBatches(pipeline, stringMatchColumn(match))) {
-            int column = stringMatchColumn(match);
+        if (match instanceof Plan.StringColumnCompare) {
+            emitStringConditionPrelude(out, match, id, column -> "cStr" + column);
+            return;
+        }
+        int column = stringMatchColumn(match);
+        if (stringIdsCrossBatches(pipeline, column)) {
             emitIncrementalStringMaskPrelude(out, body, match, id, "cStr" + column, "cStrLen" + column);
             return;
         }
-        emitStringConditionPrelude(out, match, id, column -> "cStr" + column);
+        emitIdentityCachedStringMaskPrelude(out, body, match, id, "cStr" + column);
+    }
+
+    /**
+     * Per-batch (page-local) mask, cached by dictionary identity: the source hands out the same converted page
+     * dictionary across the batches that share it, so the mask is rebuilt only when the page dictionary actually
+     * changes (once per row-group chunk) rather than once per batch -- a LIKE over a fact's URL column was paying
+     * its regex over the whole page dictionary thousands of times.
+     */
+    private static void emitIdentityCachedStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, String dictionaryVar)
+    {
+        body.field("boolean[]", "sMask" + id);
+        body.field("byte[][]", "sMaskDict" + id);
+        out.append("    if (sMaskDict").append(id).append(" != ").append(dictionaryVar).append(") {\n");
+        out.append("      sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
+        emitStringMaskFill(out, match, id, dictionaryVar, "0", dictionaryVar + ".length");
+        out.append("      sMaskDict").append(id).append(" = ").append(dictionaryVar).append(";\n");
+        out.append("    }\n");
     }
 
     /** With a {@code body}, the remap / class arrays become instance fields (read from out-of-line stage methods). */

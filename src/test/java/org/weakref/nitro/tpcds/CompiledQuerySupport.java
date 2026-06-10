@@ -382,6 +382,7 @@ public final class CompiledQuerySupport
             private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
             private final long[][] valueBuffers = new long[width][];
             private final boolean[][] nullBuffers = new boolean[width][];
+            private final java.util.IdentityHashMap<Object, byte[][]> pageDictionaries = new java.util.IdentityHashMap<>();
             private int[] identityBuffer = new int[0];
 
             @Override
@@ -623,11 +624,17 @@ public final class CompiledQuerySupport
                 byte[][] dictionary;
                 if (vector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector
                         && dictionaryVector.values() instanceof org.weakref.nitro.data.BinaryVector entries) {
-                    int dictionarySize = entries.length();
-                    dictionary = new byte[dictionarySize][];
-                    for (int entry = 0; entry < dictionarySize; entry++) {
-                        dictionary[entry] = stringBytes(entries, entry);
-                    }
+                    // Convert each distinct page dictionary once and hand out the SAME array across the batches
+                    // that share it, so the generated per-batch masks can cache by dictionary identity instead of
+                    // re-evaluating their predicates every batch.
+                    dictionary = pageDictionaries.computeIfAbsent(entries, ignored -> {
+                        int dictionarySize = entries.length();
+                        byte[][] converted = new byte[dictionarySize][];
+                        for (int entry = 0; entry < dictionarySize; entry++) {
+                            converted[entry] = stringBytes(entries, entry);
+                        }
+                        return converted;
+                    });
                     int[] vectorIds = dictionaryVector.ids();
                     for (int j = 0; j < count; j++) {
                         int position = batchMask == null ? selection[j] : batchMask.position(selection[j]);
