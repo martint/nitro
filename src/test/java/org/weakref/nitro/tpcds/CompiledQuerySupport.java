@@ -723,10 +723,11 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * Replace each loaded string column whose spec declares a substring with its derived form: every dictionary
-     * entry truncated, the truncated values deduped and re-sorted into a new ordered dictionary, and the ids
-     * remapped -- two sources sharing the substring share an id, so grouping/filtering/joining all see the derived
-     * values. Identity when no spec declares a substring (the loaded columns are returned as-is, not copied).
+     * Adapt loaded (or materialized virtual) string columns to their specs: a substring spec derives the truncated
+     * canonical column; otherwise the spec's {@link org.weakref.nitro.jit.QueryLowering.LoadMode} decides how much
+     * dictionary canonicalization the consumer needs -- ORDERED re-canonicalizes (an upstream stage may have
+     * materialized an unsorted or duplicate-laden dictionary), DEDUPED dedupes without sorting (id equality for
+     * keys), VERBATIM passes through. Identity when nothing needs adapting (the columns are returned as-is).
      */
     private static org.weakref.nitro.jit.Column[] withDerivedColumns(org.weakref.nitro.jit.Column[] columns,
             List<org.weakref.nitro.jit.QueryLowering.Column> specs)
@@ -734,15 +735,108 @@ public final class CompiledQuerySupport
         org.weakref.nitro.jit.Column[] out = columns;
         for (int c = 0; c < specs.size(); c++) {
             org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
-            if (spec.substringLength() < 0 || !(columns[c] instanceof org.weakref.nitro.jit.Column.StringColumn source)) {
+            if (!(columns[c] instanceof org.weakref.nitro.jit.Column.StringColumn source)) {
                 continue;
+            }
+            org.weakref.nitro.jit.Column adapted;
+            if (spec.substringLength() >= 0) {
+                adapted = substringColumn(source, spec.substringStart(), spec.substringLength());
+            }
+            else if (spec.loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.VERBATIM) {
+                continue;
+            }
+            else {
+                adapted = canonicalStringColumn(source, spec.loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.ORDERED);
             }
             if (out == columns) {
                 out = columns.clone();
             }
-            out[c] = substringColumn(source, spec.substringStart(), spec.substringLength());
+            out[c] = adapted;
         }
         return out;
+    }
+
+    /**
+     * Dictionaries known to be duplicate-free (and the subset also known byte-sorted), tracked by identity so a
+     * downstream stage's adaptation check is O(1) instead of re-probing a multi-million-entry dictionary on every
+     * load. Weak keys: registration must not keep a dictionary alive.
+     */
+    private static final java.util.Map<byte[][], Boolean> DEDUPED_DICTIONARIES =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final java.util.Map<byte[][], Boolean> SORTED_DICTIONARIES =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    private static void registerCanonical(byte[][] dictionary, boolean sorted)
+    {
+        DEDUPED_DICTIONARIES.put(dictionary, Boolean.TRUE);
+        if (sorted) {
+            SORTED_DICTIONARIES.put(dictionary, Boolean.TRUE);
+        }
+    }
+
+    /**
+     * Dedupe (and for {@code sorted}, byte-order) a string column's dictionary, remapping the ids. Identity when the
+     * dictionary is already canonical for the requested level, so repeated adaptation is cheap.
+     */
+    private static org.weakref.nitro.jit.Column.StringColumn canonicalStringColumn(org.weakref.nitro.jit.Column.StringColumn source, boolean sorted)
+    {
+        byte[][] dictionary = source.dictionary();
+        if (dictionary.length == 0) {
+            return source;
+        }
+        if (SORTED_DICTIONARIES.containsKey(dictionary) || (!sorted && DEDUPED_DICTIONARIES.containsKey(dictionary))) {
+            return source;
+        }
+        java.util.TreeMap<byte[], Integer> ordered = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        for (byte[] value : dictionary) {
+            ordered.putIfAbsent(value, 0);
+        }
+        boolean deduped = ordered.size() == dictionary.length;
+        if (deduped) {
+            boolean alreadySorted = true;
+            for (int i = 1; alreadySorted && i < dictionary.length; i++) {
+                alreadySorted = java.util.Arrays.compareUnsigned(dictionary[i - 1], dictionary[i]) < 0;
+            }
+            if (alreadySorted || !sorted) {
+                registerCanonical(dictionary, alreadySorted);
+                return source;
+            }
+        }
+        int[] remap = new int[dictionary.length];
+        byte[][] canonical;
+        if (sorted) {
+            canonical = new byte[ordered.size()][];
+            int next = 0;
+            for (java.util.Map.Entry<byte[], Integer> entry : ordered.entrySet()) {
+                entry.setValue(next);
+                canonical[next] = entry.getKey();
+                next++;
+            }
+            for (int i = 0; i < dictionary.length; i++) {
+                remap[i] = ordered.get(dictionary[i]);
+            }
+        }
+        else {
+            // Dedupe preserving first-seen order: enough for id equality without paying the sort.
+            java.util.Map<byte[], Integer> firstSeen = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+            List<byte[]> entries = new ArrayList<>();
+            for (int i = 0; i < dictionary.length; i++) {
+                Integer id = firstSeen.putIfAbsent(dictionary[i], entries.size());
+                if (id == null) {
+                    id = entries.size();
+                    entries.add(dictionary[i]);
+                }
+                remap[i] = id;
+            }
+            canonical = entries.toArray(new byte[0][]);
+        }
+        int[] sourceIds = source.ids();
+        int[] ids = new int[sourceIds.length];
+        for (int r = 0; r < ids.length; r++) {
+            ids[r] = remap[sourceIds[r]];
+        }
+        registerCanonical(canonical, sorted);
+        return new org.weakref.nitro.jit.Column.StringColumn(ids, canonical, source.nulls());
     }
 
     private static org.weakref.nitro.jit.Column.StringColumn substringColumn(org.weakref.nitro.jit.Column.StringColumn source, int start, int length)
@@ -1224,8 +1318,12 @@ public final class CompiledQuerySupport
         boolean[][] nulls = new boolean[width][16];
         List<java.util.Map<String, Integer>> dictionaryIndex = new ArrayList<>();
         List<List<byte[]>> dictionaries = new ArrayList<>();
+        boolean[] verbatim = new boolean[width];
         for (int c = 0; c < width; c++) {
             string[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
+            // A verbatim column appends dictionary entries as they arrive (no interning): nothing observes its id
+            // equality or order, so the per-entry hash lookups are pure overhead.
+            verbatim[c] = string[c] && specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.VERBATIM;
             values[c] = string[c] ? emptyLong : new long[16];
             ids[c] = string[c] ? new int[16] : emptyInt;
             dictionaryIndex.add(new java.util.LinkedHashMap<>());
@@ -1269,7 +1367,13 @@ public final class CompiledQuerySupport
                             int dictionarySize = dictionary.length();
                             int[] localToGlobal = new int[dictionarySize];
                             for (int entry = 0; entry < dictionarySize; entry++) {
-                                localToGlobal[entry] = intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(dictionary, entry));
+                                if (verbatim[c]) {
+                                    localToGlobal[entry] = dictionaries.get(c).size();
+                                    dictionaries.get(c).add(stringBytes(dictionary, entry));
+                                }
+                                else {
+                                    localToGlobal[entry] = intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(dictionary, entry));
+                                }
                             }
                             for (int index = 0; index < count; index++) {
                                 boolean isNull = isNull(nullVector, index);
@@ -1285,7 +1389,16 @@ public final class CompiledQuerySupport
                             int slot = size + index;
                             nulls[c][slot] = isNull;
                             if (string[c]) {
-                                ids[c][slot] = isNull ? 0 : intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(valueVector, position));
+                                if (isNull) {
+                                    ids[c][slot] = 0;
+                                }
+                                else if (verbatim[c]) {
+                                    ids[c][slot] = dictionaries.get(c).size();
+                                    dictionaries.get(c).add(stringBytes(valueVector, position));
+                                }
+                                else {
+                                    ids[c][slot] = intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(valueVector, position));
+                                }
                             }
                             else {
                                 values[c][slot] = isNull ? 0 : longValue(valueVector, position);
@@ -1301,7 +1414,17 @@ public final class CompiledQuerySupport
             boolean nullable = specs.get(c).nullable();
             boolean[] nullMask = nullable ? java.util.Arrays.copyOf(nulls[c], size) : null;
             if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
-                columns[c] = orderedStringColumn(ids[c], dictionaries.get(c), size, nullMask);
+                if (specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.ORDERED) {
+                    columns[c] = orderedStringColumn(ids[c], dictionaries.get(c), size, nullMask);
+                }
+                else {
+                    byte[][] dictionary = dictionaries.get(c).toArray(new byte[0][]);
+                    if (specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.DEDUPED) {
+                        registerCanonical(dictionary, false);   // interned: duplicate-free by construction
+                    }
+                    columns[c] = new org.weakref.nitro.jit.Column.StringColumn(
+                            java.util.Arrays.copyOf(ids[c], size), dictionary, nullMask);
+                }
             }
             else {
                 columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
@@ -1344,6 +1467,7 @@ public final class CompiledQuerySupport
         for (int r = 0; r < size; r++) {
             remapped[r] = remap[ids[r]];
         }
+        registerCanonical(sorted, true);
         return new org.weakref.nitro.jit.Column.StringColumn(remapped, sorted, nullMask);
     }
 

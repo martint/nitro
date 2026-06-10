@@ -32,16 +32,40 @@ import java.util.Map;
 public final class QueryLowering
 {
     /**
+     * How much dictionary canonicalization a string column's load must perform, derived from how the plan uses it.
+     * {@code ORDERED} builds the full ordered dictionary (deduplicated, byte-sorted, ids remapped) -- required when
+     * an id's ORDER is observed (window partition/sort columns, ids escaping into numeric expressions).
+     * {@code DEDUPED} interns into one consistent dictionary without sorting -- enough for group, join, and filter
+     * keys, which need id equality but no order. {@code VERBATIM} appends dictionary entries as they arrive (no
+     * interning) -- enough for columns that only flow to the output and the value-ordered sort.
+     */
+    public enum LoadMode
+    {
+        ORDERED, DEDUPED, VERBATIM
+    }
+
+    /**
      * A physical source column: its logical {@code name} (unique within a query, used to wire keys/filters/outputs),
      * the {@code sourceName} to read from the table (defaults to {@code name}), and how it is encoded / nullable.
      * An explicit {@code sourceName} lets the same physical column be loaded under distinct logical names -- needed to
-     * join one table more than once in a query (e.g. {@code date_dim} for both a sold and a returned date).
+     * join one table more than once in a query (e.g. {@code date_dim} for both a sold and a returned date). The
+     * {@code loadMode} is derived by {@link #lower()}, not declared.
      */
-    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength)
+    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength, LoadMode loadMode)
     {
+        public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength)
+        {
+            this(name, sourceName, encoding, nullable, substringStart, substringLength, LoadMode.ORDERED);
+        }
+
         public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable)
         {
             this(name, sourceName, encoding, nullable, 1, -1);
+        }
+
+        public Column withLoadMode(LoadMode mode)
+        {
+            return new Column(name, sourceName, encoding, nullable, substringStart, substringLength, mode);
         }
 
         public Column(String name, ColumnEncoding encoding, boolean nullable)
@@ -376,7 +400,144 @@ public final class QueryLowering
         List<Input> inputs = new ArrayList<>();
         inputs.add(probe);
         inputs.addAll(builds);
-        return new Lowered(pipeline, inputs);
+        return new Lowered(pipeline, stampLoadModes(pipeline, inputs));
+    }
+
+    /**
+     * Derive each string column's {@link LoadMode} from how the plan uses it. Order is observed by window
+     * partition/sort columns and by any column nested inside a non-trivial expression (its dictionary id can escape
+     * into a numeric value, e.g. a rolled-up rank key, where downstream comparisons assume id order = value order);
+     * those stay {@code ORDERED}. Group, join, and filter keys need consistent ids but no order ({@code DEDUPED}).
+     * Everything else only flows to the output or the value-ordered sort ({@code VERBATIM}).
+     */
+    private static List<Input> stampLoadModes(Plan.Pipeline pipeline, List<Input> inputs)
+    {
+        int total = 0;
+        for (Input input : inputs) {
+            total += input.columns().size();
+        }
+        boolean[] ordered = new boolean[total];
+        boolean[] deduped = new boolean[total];
+
+        for (Plan.Join join : pipeline.joins()) {
+            for (int key : join.probeKeyColumns()) {
+                deduped[key] = true;
+            }
+        }
+        // Build join keys are local to each build; translate them to combined positions.
+        int offset = pipeline.columnCount();
+        for (Plan.Join join : pipeline.joins()) {
+            for (int key : join.build().keyColumns()) {
+                deduped[offset + key] = true;
+            }
+            offset += join.build().columnCount();
+        }
+        for (Plan.Expr key : pipeline.groupKeys()) {
+            if (key instanceof Plan.Col col) {
+                deduped[col.index()] = true;
+            }
+            else {
+                markColumns(key, ordered);
+            }
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null) {
+                markColumns(aggregate.input(), deduped);
+            }
+        }
+        for (Plan.Condition filter : pipeline.filters()) {
+            markColumns(filter, deduped);
+        }
+        if (pipeline.window() != null) {
+            for (int column : pipeline.window().partitionColumns()) {
+                ordered[column] = true;
+            }
+            for (Plan.SortKey key : pipeline.window().orderBy()) {
+                ordered[key.column()] = true;
+            }
+        }
+        // Projections reference the INPUT space only in projection-only pipelines. After aggregation (or a window)
+        // they reference RESULT columns: a nested reference to a string group key is the id-escapes-as-a-number
+        // pattern (e.g. a rolled-up rank key), so the key's SOURCE column must stay ordered; references to
+        // aggregate/window outputs are numeric and carry no dictionary.
+        boolean inputSpaceProjections = pipeline.groupKeys().isEmpty() && pipeline.aggregates().isEmpty() && pipeline.window() == null;
+        for (Plan.Expr projection : pipeline.projections()) {
+            if (projection instanceof Plan.Col) {
+                continue;
+            }
+            if (inputSpaceProjections) {
+                markColumns(projection, ordered);
+            }
+            else {
+                boolean[] resultRefs = new boolean[total + pipeline.groupKeys().size() + pipeline.aggregates().size() + 8];
+                markColumns(projection, resultRefs);
+                for (int result = 0; result < pipeline.groupKeys().size(); result++) {
+                    if (resultRefs[result] && pipeline.groupKeys().get(result) instanceof Plan.Col col) {
+                        ordered[col.index()] = true;
+                    }
+                }
+            }
+        }
+
+        List<Input> stamped = new ArrayList<>(inputs.size());
+        int position = 0;
+        for (Input input : inputs) {
+            List<Column> columns = new ArrayList<>(input.columns().size());
+            for (Column column : input.columns()) {
+                if (column.encoding() == ColumnEncoding.STRING) {
+                    LoadMode mode = ordered[position] ? LoadMode.ORDERED : deduped[position] ? LoadMode.DEDUPED : LoadMode.VERBATIM;
+                    column = column.withLoadMode(mode);
+                }
+                columns.add(column);
+                position++;
+            }
+            stamped.add(new Input(input.table(), columns));
+        }
+        return stamped;
+    }
+
+    private static void markColumns(Plan.Expr expr, boolean[] marks)
+    {
+        switch (expr) {
+            case Plan.Col col -> marks[col.index()] = true;
+            case Plan.Lit ignored -> {}
+            case Plan.LitStr ignored -> {}
+            case Plan.NullLit ignored -> {}
+            case Plan.Bin bin -> {
+                markColumns(bin.left(), marks);
+                markColumns(bin.right(), marks);
+            }
+            case Plan.Call call -> call.arguments().forEach(argument -> markColumns(argument, marks));
+            case Plan.Coalesce coalesce -> coalesce.arguments().forEach(argument -> markColumns(argument, marks));
+            case Plan.Case kase -> {
+                for (Plan.Case.Branch branch : kase.branches()) {
+                    markColumns(branch.condition(), marks);
+                    markColumns(branch.value(), marks);
+                }
+                markColumns(kase.defaultValue(), marks);
+            }
+        }
+    }
+
+    private static void markColumns(Plan.Condition condition, boolean[] marks)
+    {
+        switch (condition) {
+            case Plan.Predicate predicate -> {
+                markColumns(predicate.left(), marks);
+                markColumns(predicate.right(), marks);
+            }
+            case Plan.And and -> and.conditions().forEach(child -> markColumns(child, marks));
+            case Plan.Or or -> or.conditions().forEach(child -> markColumns(child, marks));
+            case Plan.Not not -> markColumns(not.condition(), marks);
+            case Plan.StringMatch match -> marks[match.column()] = true;
+            case Plan.LikeMatch match -> marks[match.column()] = true;
+            case Plan.SubstringMatch match -> marks[match.column()] = true;
+            case Plan.StringColumnCompare compare -> {
+                marks[compare.left()] = true;
+                marks[compare.right()] = true;
+            }
+            case Plan.IsNull isNull -> marks[isNull.column()] = true;
+        }
     }
 
     private void assign(String columnName)
