@@ -256,6 +256,10 @@ public final class PipelineCompiler
             for (Plan.Condition match : aggregateMatches) {
                 emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
             }
+            for (Plan.Call derivation : collectStringDerivations(pipeline)) {
+                int column = stringDerivationColumn(derivation);
+                emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
+            }
             out.append("        for (int i = 0; i < selected; i++) {\n");
             if (grouped) {
                 emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
@@ -280,6 +284,10 @@ public final class PipelineCompiler
             emitProbeOrderingDictionaryCapture(out, probeOrderingSources, referencedColumns(pipeline));
             for (Plan.Condition match : stringMatches) {
                 emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
+            }
+            for (Plan.Call derivation : collectStringDerivations(pipeline)) {
+                int column = stringDerivationColumn(derivation);
+                emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
             }
             out.append("      for (int i = 0; i < rowCount; i++) {\n");
             emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
@@ -1015,6 +1023,9 @@ public final class PipelineCompiler
             stringMaskIds.put(match, s);
             emitStringConditionPrelude(out, match, s, column -> "cStr" + column);
         }
+        for (Plan.Call derivation : collectStringDerivations(pipeline)) {
+            emitStringDerivationPrelude(out, derivation, "cStr" + stringDerivationColumn(derivation));
+        }
         IntFunction<String> resolver = index -> scanAccess(index, encodingOf(encodings, 0, index), "i");
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
         boolean grouped = !pipeline.groupKeys().isEmpty();
@@ -1718,6 +1729,99 @@ public final class PipelineCompiler
      * the predicate's unique index in the query (a column may carry several string predicates -- e.g. one per OR
      * branch -- so masks are keyed per predicate, not per column).
      */
+    /** Per-dictionary-entry numeric derivations: function name -> the java expression deriving one entry's value. */
+    private static final Map<String, java.util.function.UnaryOperator<String>> STRING_DERIVATIONS = Map.of(
+            "length_utf8", entry -> "org.weakref.nitro.jit.StringMatching.codePointCount(" + entry + ")");
+
+    /** The string column a per-entry derivation call reads, or -1 when the call is not a registered derivation over a plain column. */
+    private static int stringDerivationColumn(Plan.Call call)
+    {
+        if (STRING_DERIVATIONS.containsKey(call.name()) && call.arguments().size() == 1
+                && call.arguments().getFirst() instanceof Plan.Col col) {
+            return col.index();
+        }
+        return -1;
+    }
+
+    private static String derivationArray(Plan.Call call)
+    {
+        return "sDrv_" + call.name() + "_" + stringDerivationColumn(call);
+    }
+
+    /** Collect the distinct per-entry derivations the accumulate path evaluates (group keys, aggregate inputs, projection-only projections). */
+    private static List<Plan.Call> collectStringDerivations(Plan.Pipeline pipeline)
+    {
+        Map<String, Plan.Call> distinct = new java.util.LinkedHashMap<>();
+        List<Plan.Expr> roots = new ArrayList<>(pipeline.groupKeys());
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null) {
+                roots.add(aggregate.input());
+            }
+        }
+        if (projectionOnly(pipeline)) {
+            roots.addAll(pipeline.projections());
+        }
+        for (Plan.Expr root : roots) {
+            collectStringDerivationsInExpr(root, distinct);
+        }
+        return new ArrayList<>(distinct.values());
+    }
+
+    private static void collectStringDerivationsInExpr(Plan.Expr expr, Map<String, Plan.Call> into)
+    {
+        switch (expr) {
+            case Plan.Call call -> {
+                if (stringDerivationColumn(call) >= 0) {
+                    into.putIfAbsent(derivationArray(call), call);
+                }
+                else {
+                    call.arguments().forEach(argument -> collectStringDerivationsInExpr(argument, into));
+                }
+            }
+            case Plan.Bin bin -> {
+                collectStringDerivationsInExpr(bin.left(), into);
+                collectStringDerivationsInExpr(bin.right(), into);
+            }
+            case Plan.Case kase -> {
+                kase.branches().forEach(branch -> collectStringDerivationsInExpr(branch.value(), into));
+                collectStringDerivationsInExpr(kase.defaultValue(), into);
+            }
+            case Plan.Coalesce coalesce -> coalesce.arguments().forEach(argument -> collectStringDerivationsInExpr(argument, into));
+            case Plan.Col ignored -> {}
+            case Plan.Lit ignored -> {}
+            case Plan.LitStr ignored -> {}
+            case Plan.NullLit ignored -> {}
+        }
+    }
+
+    /** Fill a derivation array over the whole dictionary (the eager path: the dictionary is complete up front). */
+    private static void emitStringDerivationPrelude(StringBuilder out, Plan.Call call, String dictionaryVar)
+    {
+        String array = derivationArray(call);
+        out.append("    int[] ").append(array).append(" = new int[").append(dictionaryVar).append(".length];\n");
+        out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
+        out.append("      ").append(array).append("[e] = ").append(STRING_DERIVATIONS.get(call.name()).apply(dictionaryVar + "[e]")).append(";\n");
+        out.append("    }\n");
+    }
+
+    /** Incremental (field-held) derivation fill for a globally-interned streamed column, mirroring the incremental masks. */
+    private static void emitIncrementalStringDerivationPrelude(StringBuilder out, ClassBody body, Plan.Call call, String dictionaryVar, String sizeVar)
+    {
+        String array = derivationArray(call);
+        body.field("int[]", array);
+        body.field("int", array + "Len");
+        out.append("    if (").append(array).append(" == null) { ").append(array).append(" = new int[0]; }\n");
+        out.append("    if (").append(sizeVar).append(" > ").append(array).append("Len) {\n");
+        out.append("      if (").append(array).append(".length < ").append(sizeVar).append(") { ").append(array)
+                .append(" = java.util.Arrays.copyOf(").append(array).append(", Math.max(").append(sizeVar)
+                .append(", ").append(array).append(".length * 2)); }\n");
+        out.append("      for (int e = ").append(array).append("Len; e < ").append(sizeVar).append("; e++) {\n");
+        out.append("        ").append(array).append("[e] = ").append(STRING_DERIVATIONS.get(call.name()).apply(dictionaryVar + "[e]")).append(";\n");
+        out.append("      }\n");
+        out.append("      ").append(array).append("Len = ").append(sizeVar).append(";\n");
+        out.append("    }\n");
+    }
+
     private static void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, int id, String dictionaryVar)
     {
         out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
@@ -3832,7 +3936,11 @@ public final class PipelineCompiler
             case Plan.LitStr ignored -> "0L";   // constant string: emit dictionary id 0 (the value comes from the consumer's single-entry dictionary)
             case Plan.NullLit ignored -> "0L";   // null long: a placeholder value; the null mask (below) is what matters
             case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
-            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
+            case Plan.Call call -> stringDerivationColumn(call) >= 0
+                    // A per-dictionary-entry derivation (e.g. length_utf8 over a string column): the prelude filled
+                    // sDrv_<fn>_<col> per entry, so the row value is one array lookup by the row's id.
+                    ? derivationArray(call) + "[(int) (" + resolver.apply(stringDerivationColumn(call)) + ")]"
+                    : ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
             case Plan.Case kase -> caseExpression(kase, resolver, nullResolver, stringMaskIds);
             case Plan.Coalesce coalesce -> coalesceExpression(coalesce, resolver, nullResolver, stringMaskIds);
         };

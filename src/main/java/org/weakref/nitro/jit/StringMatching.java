@@ -28,6 +28,18 @@ public final class StringMatching
      * Translate a SQL {@code LIKE} pattern into a {@link Pattern}: {@code %} -> {@code .*}, {@code _} -> {@code .},
      * with all other characters quoted. {@code DOTALL} so {@code %} also spans newlines, as SQL requires.
      */
+    /** The number of code points in UTF-8 bytes (continuation bytes don't start a code point). */
+    public static int codePointCount(byte[] utf8)
+    {
+        int count = 0;
+        for (byte b : utf8) {
+            if ((b & 0xC0) != 0x80) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     public static Pattern likePattern(String like)
     {
         StringBuilder regex = new StringBuilder();
