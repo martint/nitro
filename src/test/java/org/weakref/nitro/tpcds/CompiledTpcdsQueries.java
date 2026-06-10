@@ -4416,6 +4416,173 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static Composite query24()
+    {
+        // Q24: pale-colored store sales by customer name and store, kept when the customer's per-store-and-item
+        // total exceeds twenty times the overall average. The returned-sales base (sales joined to their returns
+        // and the customer) assembles twice, mirroring the harness; each side joins the market-8 store and the
+        // deduplicated address set on the zip string (zips are zero-padded five-char, so string equality matches
+        // the harness's cast-to-i64 keys) and keeps rows whose birth country equals the uppercased address country.
+        // Combined columns: base(0-5), store(6-10), item(11-16), addresses(17-19). Group keys in the harness's
+        // output order: (last, first, store_name, ca_state, s_state, color, price, manager, units, size).
+        QueryLowering grouped = QueryLowering.scan("q24_base_sales",
+                        new QueryLowering.Column("b_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_store", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("b_item", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("b_paid", ColumnEncoding.FLAT, true))
+                .join("store", "b_store", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_market_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_zip", ColumnEncoding.STRING, true))
+                .join("item", "b_item", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_size", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_color", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_units", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_manager_id", ColumnEncoding.FLAT, true))
+                .join("q24_addresses_sales", "s_zip", "a_zip",
+                        new QueryLowering.Column("a_zip", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_state", ColumnEncoding.STRING, true));
+        grouped.where(
+                        new Plan.Predicate("=", grouped.column("s_market_id"), new Plan.Lit(8)),
+                        new Plan.StringMatch(grouped.position("s_zip"), List.of(""), true),
+                        new Plan.StringMatch(grouped.position("i_color"), List.of("pale"), false),
+                        new Plan.StringColumnCompare(grouped.position("b_country"), grouped.position("a_country"), false))
+                .groupBy("b_last", "b_first", "s_store_name", "a_state", "s_state", "i_color", "i_current_price", "i_manager_id", "i_units", "i_size")
+                .aggregate("sum", "b_paid");
+
+        QueryLowering regrouped = QueryLowering.scan("q24_pale_sales",
+                        new QueryLowering.Column("g_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_store_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("g_ca_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_s_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_color", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_manager", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_units", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_size", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("g_paid", ColumnEncoding.FLAT, true))
+                .groupBy("g_last", "g_first", "g_store_name")
+                .aggregate("sum", "g_paid");
+
+        QueryLowering averageBase = query24ReturnedSales();
+        // Combined columns: base(0-5), store(6-8), addresses(9-11). Group keys in the harness's output order.
+        QueryLowering averaged = QueryLowering.scan("q24_base_average",
+                        new QueryLowering.Column("b_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_store", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("b_item", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("b_paid", ColumnEncoding.FLAT, true))
+                .join("store", "b_store", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_market_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_zip", ColumnEncoding.STRING, true))
+                .join("q24_addresses_average", "s_zip", "a_zip",
+                        new QueryLowering.Column("a_zip", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_state", ColumnEncoding.STRING, true));
+        averaged.where(
+                        new Plan.Predicate("=", averaged.column("s_market_id"), new Plan.Lit(8)),
+                        new Plan.StringMatch(averaged.position("s_zip"), List.of(""), true),
+                        new Plan.StringColumnCompare(averaged.position("b_country"), averaged.position("a_country"), false))
+                .groupBy("b_last", "b_first", "a_state", "b_store", "b_item")
+                .aggregate("sum", "b_paid");
+
+        QueryLowering average = QueryLowering.scan("q24_average_groups",
+                        new QueryLowering.Column("a_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_store", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("a_item", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("a_paid", ColumnEncoding.FLAT, true))
+                .aggregate("sum", "a_paid")
+                .aggregate("count", "a_paid");
+
+        QueryLowering main = QueryLowering.scan("q24_grouped",
+                        new QueryLowering.Column("m_last", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("m_first", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("m_store_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("m_paid", ColumnEncoding.FLAT, true))
+                .crossJoin("q24_average",
+                        new QueryLowering.Column("avg_sum", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("avg_count", ColumnEncoding.FLAT, true));
+        main.where(
+                        new Plan.IsNull(main.position("m_paid"), true),
+                        new Plan.IsNull(main.position("avg_sum"), true),
+                        new Plan.IsNull(main.position("avg_count"), true),
+                        new Plan.Predicate("<", main.column("avg_sum"),
+                                new Plan.Bin("*", new Plan.Bin("*", main.column("avg_count"), main.column("m_paid")), new Plan.Lit(20))))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3))
+                .orderBy(new Plan.Ordering(
+                        List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(query24ReturnedSales(), "q24_base_sales", List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 2, 3))),
+                        new Stage(query24Addresses(), "q24_addresses_sales", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 2), new DictRef(2, 0, 1))),
+                        new Stage(grouped, "q24_pale_sales", List.of(
+                                new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 1, 2), new DictRef(3, 3, 2),
+                                new DictRef(4, 1, 3), new DictRef(5, 2, 3), new DictRef(8, 2, 4), new DictRef(9, 2, 2))),
+                        new Stage(regrouped, "q24_grouped", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2))),
+                        new Stage(averageBase, "q24_base_average", List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 2, 3))),
+                        new Stage(query24Addresses(), "q24_addresses_average", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 2), new DictRef(2, 0, 1))),
+                        new Stage(averaged, "q24_average_groups", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 2, 2))),
+                        new Stage(average, "q24_average")),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2)));
+    }
+
+    /**
+     * Q24's returned-sales base, assembled once per side like the harness: store sales joined to their returns and
+     * the buying customer, summed per (name, birth country, store, item).
+     */
+    private static QueryLowering query24ReturnedSales()
+    {
+        QueryLowering base = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_paid", ColumnEncoding.FLAT, true))
+                .join("store_returns",
+                        new String[] {"ss_ticket_number", "ss_item_sk"},
+                        new String[] {"sr_ticket_number", "sr_item_sk"},
+                        new QueryLowering.Column("sr_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_item_sk", ColumnEncoding.FLAT, true))
+                .join("customer", "ss_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_birth_country", ColumnEncoding.STRING, true));
+        base.groupBy("c_last_name", "c_first_name", "c_birth_country", "ss_store_sk", "ss_item_sk")
+                .aggregate("sum", "ss_net_paid");
+        return base;
+    }
+
+    /**
+     * Q24's deduplicated address set: (zip, uppercased country, state), distinct over the non-empty-zip addresses.
+     * The country uppercases at load so the birth-country comparison operates on the derived values.
+     */
+    private static QueryLowering query24Addresses()
+    {
+        QueryLowering addresses = QueryLowering.scan("customer_address",
+                new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true),
+                QueryLowering.Column.upper("ca_country", true));
+        addresses.where(new Plan.StringMatch(addresses.position("ca_zip"), List.of(""), true))
+                .groupBy("ca_zip", "ca_country", "ca_state")
+                .count();
+        addresses.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
+        return addresses;
+    }
+
     public static Composite query41()
     {
         // Q41: distinct product names of items in a manufacturer-id band whose manufacturer also makes one of eight
