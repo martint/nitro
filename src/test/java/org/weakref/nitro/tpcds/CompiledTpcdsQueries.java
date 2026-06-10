@@ -746,12 +746,23 @@ public final class CompiledTpcdsQueries
      * virtual relation. Empty when the stage emits no strings.
      */
     public record Stage(QueryLowering plan, String virtualName, List<DictRef> stringColumns)
+            implements PreStage
     {
         public Stage(QueryLowering plan, String virtualName)
         {
             this(plan, virtualName, List.of());
         }
     }
+
+    /** A pre-stage of a {@link LabeledUnion}: a single {@link Stage}, or a {@link UnionStage} concatenation. */
+    public sealed interface PreStage permits Stage, UnionStage {}
+
+    /**
+     * A pre-stage materialized as the concatenation of several part pipelines under one virtual name -- a UNION ALL
+     * that later stages consume (e.g. an all-channel average broadcast). Part string outputs unify like any union.
+     */
+    public record UnionStage(List<Stage> parts, String virtualName)
+            implements PreStage {}
 
     /**
      * A multi-stage query as a tree of compiled pipelines (the shape the planner already produced). {@code stages}
@@ -1212,7 +1223,7 @@ public final class CompiledTpcdsQueries
      * {@code main} then consumes. {@code stages} materialize first, under their own virtual names, for branches that
      * join pre-aggregated relations. Unlike {@link UnionComposite}, the branches do not share one DictRef layout.
      */
-    public record LabeledUnion(List<Stage> stages, List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns)
+    public record LabeledUnion(List<PreStage> stages, List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns)
     {
         public LabeledUnion(List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns)
         {
@@ -1227,7 +1238,7 @@ public final class CompiledTpcdsQueries
         // and its returns separately over the window and LEFT-joins the two on the location key, coalescing missing
         // returns to zero; the labeled channels concatenate and the main re-aggregates under the (channel, id)
         // ROLLUP, ordered by channel, id, and sales, top 100.
-        List<Stage> stages = new ArrayList<>();
+        List<PreStage> stages = new ArrayList<>();
         List<Stage> branches = new ArrayList<>();
         record ChannelColumns(String name, String soldDate, String salesId, String amount, String profit,
                 String returnedDate, String returnsId, String returnAmount, String returnLoss) {}
@@ -1320,7 +1331,7 @@ public final class CompiledTpcdsQueries
         // measures per item (returns coalesced to zero, matching the SQL), and derives the scaled ratios; two
         // chained rank windows (no partition) append the ranks, the top-ten filter keeps either rank, and the
         // channel label tags the rows. The labeled channels concatenate and order by channel, ranks, item, top 100.
-        List<Stage> stages = new ArrayList<>();
+        List<PreStage> stages = new ArrayList<>();
         List<Stage> branches = new ArrayList<>();
         record ChannelColumns(String name, String sales, String soldDate, String item, String order, String quantity,
                 String netPaid, String netProfit, String returns, String returnItem, String returnOrder,
@@ -4424,7 +4435,7 @@ public final class CompiledTpcdsQueries
         // best-customer subqueries, mirroring the harness; the channels union and the main reduces to one row.
         record Channel(String name, String table, String soldDate, String customer, String item, String quantity, String price) {}
 
-        List<Stage> stages = new ArrayList<>();
+        List<PreStage> stages = new ArrayList<>();
         List<Stage> branches = new ArrayList<>();
         for (Channel channel : List.of(
                 new Channel("catalog", "catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk", "cs_quantity", "cs_list_price"),

@@ -312,9 +312,21 @@ public class BenchmarkCompiledQueries
     {
         record BranchPlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
 
-        List<BranchPlan> stages = new ArrayList<>();
-        for (CompiledTpcdsQueries.Stage stage : query.stages()) {
-            stages.add(new BranchPlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
+        // A pre-stage is one plan, or several whose outputs concatenate under the virtual name (a union pre-stage).
+        record PreStagePlan(List<BranchPlan> parts, String virtualName) {}
+
+        List<PreStagePlan> stages = new ArrayList<>();
+        for (CompiledTpcdsQueries.PreStage pre : query.stages()) {
+            switch (pre) {
+                case CompiledTpcdsQueries.Stage stage -> stages.add(new PreStagePlan(
+                        List.of(new BranchPlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns())),
+                        stage.virtualName()));
+                case CompiledTpcdsQueries.UnionStage unionStage -> stages.add(new PreStagePlan(
+                        unionStage.parts().stream()
+                                .map(part -> new BranchPlan(part.plan().lower(), part.virtualName(), part.stringColumns()))
+                                .toList(),
+                        unionStage.virtualName()));
+            }
         }
         List<BranchPlan> branches = new ArrayList<>();
         for (CompiledTpcdsQueries.Stage branch : query.branches()) {
@@ -324,8 +336,14 @@ public class BenchmarkCompiledQueries
         Lowered main = query.main().lower();
         runners.put(name, () -> {
             Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
-            for (BranchPlan stage : stages) {
-                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
+            for (PreStagePlan stage : stages) {
+                CompiledQuerySupport.Materialized parts = null;
+                for (BranchPlan part : stage.parts()) {
+                    CompiledQuerySupport.Materialized materialized =
+                            CompiledQuerySupport.materializeStage(allocator, tables, part.plan(), virtuals, part.stringColumns());
+                    parts = parts == null ? materialized : CompiledQuerySupport.concatenate(parts, materialized);
+                }
+                virtuals.put(stage.virtualName(), parts);
             }
             CompiledQuerySupport.Materialized union = null;
             for (BranchPlan branch : branches) {

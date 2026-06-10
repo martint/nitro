@@ -748,9 +748,20 @@ public class TestCompiledTpcdsQueries
 
         Allocator allocator = new Allocator();
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
-        for (CompiledTpcdsQueries.Stage stage : query.stages()) {
-            virtuals.put(stage.virtualName(),
-                    CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        for (CompiledTpcdsQueries.PreStage pre : query.stages()) {
+            switch (pre) {
+                case CompiledTpcdsQueries.Stage stage -> virtuals.put(stage.virtualName(),
+                        CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+                case CompiledTpcdsQueries.UnionStage unionStage -> {
+                    CompiledQuerySupport.Materialized parts = null;
+                    for (CompiledTpcdsQueries.Stage part : unionStage.parts()) {
+                        CompiledQuerySupport.Materialized materialized =
+                                CompiledQuerySupport.materializeStage(allocator, tables, part.plan().lower(), virtuals, part.stringColumns());
+                        parts = parts == null ? materialized : CompiledQuerySupport.concatenate(parts, materialized);
+                    }
+                    virtuals.put(unionStage.virtualName(), parts);
+                }
+            }
         }
         CompiledQuerySupport.Materialized union = null;
         for (CompiledTpcdsQueries.Stage branch : query.branches()) {
