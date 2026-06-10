@@ -4308,6 +4308,88 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static Composite query44()
+    {
+        // Q44: one store's best and worst performing items by rank. Items at store four whose average net profit
+        // beats 90% of the store's null-address baseline average rank by that average ascending and descending; the
+        // two top-ten rankings join on the rank position and each side's product name attaches, ordered by rank and
+        // names, top 100. Each side assembles its own aggregates (no reuse): per-item profit aggregate, the
+        // single-row baseline broadcast by a cross join, the cross-multiplied threshold deriving the rounded
+        // averages, and a top-ten rank window.
+        List<Stage> stages = new ArrayList<>();
+        for (String side : List.of("asc", "desc")) {
+            boolean descending = side.equals("desc");
+
+            QueryLowering items = QueryLowering.scan("store_sales",
+                    new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true));
+            items.where(new Plan.Predicate("=", items.column("ss_store_sk"), new Plan.Lit(4)))
+                    .groupBy("ss_item_sk")
+                    .aggregate("sum", "ss_net_profit")
+                    .aggregate("count", "ss_net_profit");
+            items.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(0)));
+            stages.add(new Stage(items, "q44_items_" + side));
+
+            QueryLowering baseline = QueryLowering.scan("store_sales",
+                    new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_addr_sk", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true));
+            baseline.where(
+                            new Plan.Predicate("=", baseline.column("ss_store_sk"), new Plan.Lit(4)),
+                            new Plan.IsNull(baseline.position("ss_addr_sk"), false))
+                    .groupBy("ss_store_sk")
+                    .aggregate("sum", "ss_net_profit")
+                    .aggregate("count", "ss_net_profit");
+            baseline.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(0)))
+                    .select(new Plan.Col(1), new Plan.Col(2));
+            stages.add(new Stage(baseline, "q44_baseline_" + side));
+
+            // Combined: items(0-2: item, sum, count), baseline(3-4: sum, count). Keep items whose rounded average
+            // beats 90% of the baseline average (cross-multiplied), carrying (item, average) to the rank window.
+            QueryLowering averages = QueryLowering.scan("q44_items_" + side,
+                            new QueryLowering.Column("i_item", ColumnEncoding.FLAT, false),
+                            new QueryLowering.Column("i_sum", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("i_count", ColumnEncoding.FLAT, false))
+                    .crossJoin("q44_baseline_" + side,
+                            new QueryLowering.Column("b_sum", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("b_count", ColumnEncoding.FLAT, false));
+            averages.where(new Plan.Predicate(">",
+                            new Plan.Bin("*", new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)), new Plan.Lit(10)),
+                            new Plan.Bin("*", new Plan.Call("divide_round_i64", new Plan.Col(3), new Plan.Col(4)), new Plan.Lit(9))))
+                    .select(new Plan.Col(0),
+                            new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)));
+            stages.add(new Stage(averages, "q44_averages_" + side));
+
+            QueryLowering ranked = QueryLowering.scan("q44_averages_" + side,
+                    new QueryLowering.Column("a_item_" + side, ColumnEncoding.FLAT, false),
+                    new QueryLowering.Column("a_average_" + side, ColumnEncoding.FLAT, true));
+            ranked.window(new Plan.Window(new int[0], List.of(new Plan.SortKey(1, descending)), Plan.RankFunction.RANK, 10));
+            ranked.select(new Plan.Col(0), new Plan.Col(2));
+            stages.add(new Stage(ranked, "q44_ranked_" + side));
+        }
+
+        // Combined main: asc(0-1: item, rank), desc(2-3), item names for each side (4-5, 6-7).
+        QueryLowering main = QueryLowering.scan("q44_ranked_asc",
+                        new QueryLowering.Column("best_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("best_rank", ColumnEncoding.FLAT, false))
+                .join("q44_ranked_desc", "best_rank", "worst_rank",
+                        new QueryLowering.Column("worst_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("worst_rank", ColumnEncoding.FLAT, false))
+                .join("item", "best_item", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_product_name", ColumnEncoding.STRING, true))
+                .join("item", "worst_item", "i_item_sk_2",
+                        new QueryLowering.Column("i_item_sk_2", "i_item_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("i_product_name_2", "i_product_name", ColumnEncoding.STRING, true));
+        main.select(new Plan.Col(1), new Plan.Col(5), new Plan.Col(7))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+
+        return new Composite(stages, main,
+                List.of(new DictRef(1, 2, 1), new DictRef(2, 3, 1)));
+    }
+
     public static Composite query28()
     {
         // Q28: six bucket statistics in one row -- for each store-sales quantity band (each with its own
