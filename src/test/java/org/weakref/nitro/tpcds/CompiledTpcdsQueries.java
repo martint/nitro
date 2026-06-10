@@ -1206,6 +1206,101 @@ public final class CompiledTpcdsQueries
         return grouped;
     }
 
+    /**
+     * A union of independently-materialized branch stages (each with its OWN string reconstruction, e.g. a
+     * channel-specific id prefix) concatenated -- dictionaries unified -- under {@code unionVirtual}, which
+     * {@code main} then consumes. Unlike {@link UnionComposite}, the branches do not share one DictRef layout.
+     */
+    public record LabeledUnion(List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns) {}
+
+    public static LabeledUnion query80()
+    {
+        // Q80: a month of net sales, returns, and profit per channel and dimension id with channel subtotals and a
+        // grand total. Each channel: sales LEFT-joined to returns on (item, ticket/order) -- unreturned rows
+        // contribute zero return and full profit -- filtered to the window, items over $50, untelevised promotions,
+        // grouped by the dimension id and labeled. The labeled channels concatenate and the main re-aggregates under
+        // a (channel, id) ROLLUP, ordered by channel and id, top 100.
+        List<Stage> branches = List.of(
+                query80Branch("store_sales",
+                        new String[] {"ss_sold_date_sk", "ss_item_sk", "ss_promo_sk", "ss_store_sk", "ss_ticket_number", "ss_ext_sales_price", "ss_net_profit"},
+                        "store_returns", new String[] {"sr_item_sk", "sr_ticket_number", "sr_return_amt", "sr_net_loss"},
+                        "store", "s_store_sk", "s_store_id", "store channel", "store"),
+                query80Branch("catalog_sales",
+                        new String[] {"cs_sold_date_sk", "cs_item_sk", "cs_promo_sk", "cs_catalog_page_sk", "cs_order_number", "cs_ext_sales_price", "cs_net_profit"},
+                        "catalog_returns", new String[] {"cr_item_sk", "cr_order_number", "cr_return_amount", "cr_net_loss"},
+                        "catalog_page", "cp_catalog_page_sk", "cp_catalog_page_id", "catalog channel", "catalog_page"),
+                query80Branch("web_sales",
+                        new String[] {"ws_sold_date_sk", "ws_item_sk", "ws_promo_sk", "ws_web_site_sk", "ws_order_number", "ws_ext_sales_price", "ws_net_profit"},
+                        "web_returns", new String[] {"wr_item_sk", "wr_order_number", "wr_return_amt", "wr_net_loss"},
+                        "web_site", "web_site_sk", "web_site_id", "web channel", "web_site"));
+
+        QueryLowering main = QueryLowering.scan("q80_channels",
+                        new QueryLowering.Column("m_channel", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("m_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("m_sales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_returns", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_profit", ColumnEncoding.FLAT, true))
+                .groupBy("m_channel", "m_id")
+                .groupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", "m_sales")
+                .aggregate("sum", "m_returns")
+                .aggregate("sum", "m_profit");
+        // Grouping-sets output: channel(0), id(1), sums(2-4), grouping_id(5) -- the select drops the grouping id.
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new LabeledUnion(branches, "q80_channels", main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1)));
+    }
+
+    /** One Q80 channel: net sales/returns/profit per dimension id over the windowed star, labeled with the channel. */
+    private static Stage query80Branch(String salesTable, String[] salesColumns, String returnsTable,
+            String[] returnsColumns, String dimensionTable, String dimensionSk, String dimensionId,
+            String channelName, String idPrefix)
+    {
+        QueryLowering branch = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(salesColumns[0], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumns[1], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumns[2], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumns[3], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumns[4], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumns[5], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(salesColumns[6], ColumnEncoding.FLAT, true))
+                // LEFT join: every column read from the build is NULL on unreturned rows, so all are nullable.
+                .leftJoin(returnsTable,
+                        new String[] {salesColumns[1], salesColumns[4]},
+                        new String[] {returnsColumns[0], returnsColumns[1]},
+                        new QueryLowering.Column(returnsColumns[0], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnsColumns[1], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnsColumns[2], ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnsColumns[3], ColumnEncoding.FLAT, true))
+                .join("date_dim", salesColumns[0], "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join(dimensionTable, salesColumns[3], dimensionSk,
+                        new QueryLowering.Column(dimensionSk),
+                        new QueryLowering.Column(dimensionId, ColumnEncoding.STRING, false))
+                .join("item", salesColumns[1], "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true))
+                .join("promotion", salesColumns[2], "p_promo_sk",
+                        new QueryLowering.Column("p_promo_sk"),
+                        new QueryLowering.Column("p_channel_tv", ColumnEncoding.STRING, true));
+        branch.where(
+                        new Plan.Predicate(">=", branch.column("d_date"), new Plan.Lit(LocalDate.of(2000, 8, 23).toEpochDay())),
+                        new Plan.Predicate("<=", branch.column("d_date"), new Plan.Lit(LocalDate.of(2000, 9, 22).toEpochDay())),
+                        new Plan.Predicate(">", branch.column("i_current_price"), new Plan.Lit(5_000)),
+                        new Plan.StringMatch(branch.position("p_channel_tv"), List.of("N"), false))
+                .groupBy(dimensionId)
+                .aggregate("sum", branch.column(salesColumns[5]))
+                .aggregate("sum", new Plan.Coalesce(branch.column(returnsColumns[2]), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Bin("-", branch.column(salesColumns[6]),
+                        new Plan.Coalesce(branch.column(returnsColumns[3]), new Plan.Lit(0))));
+        branch.select(new Plan.LitStr(channelName), new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3));
+        return new Stage(branch, "q80_" + idPrefix,
+                List.of(DictRef.literal(0, channelName), DictRef.prefixed(1, 3, 1, idPrefix)));
+    }
+
     public static UnionComposite query97()
     {
         // Q97: count the (customer, item) pairs bought only from store, only from catalog, or from both, in a

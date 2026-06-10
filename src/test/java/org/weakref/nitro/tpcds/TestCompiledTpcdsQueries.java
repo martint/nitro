@@ -737,6 +737,34 @@ public class TestCompiledTpcdsQueries
         assertChannelUnionMatchesHarness(CompiledTpcdsQueries.query05(), TpcdsParquetSupport::query05);
     }
 
+    /**
+     * Run a {@link CompiledTpcdsQueries.LabeledUnion}: each branch stage materialized with its own string
+     * reconstruction, concatenated (dictionaries unified) under the union's virtual name, then the main.
+     */
+    private static void assertLabeledUnionMatchesHarness(CompiledTpcdsQueries.LabeledUnion query, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        CompiledQuerySupport.Materialized union = null;
+        for (CompiledTpcdsQueries.Stage branch : query.branches()) {
+            CompiledQuerySupport.Materialized part =
+                    CompiledQuerySupport.materializeStage(allocator, tables, branch.plan().lower(), virtuals, branch.stringColumns());
+            union = union == null ? part : CompiledQuerySupport.concatenate(union, part);
+        }
+        virtuals.put(query.unionVirtual(), union);
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, query.main().lower(), virtuals);
+        assertBridgedRowsMatch(run, query.stringColumns(), harness, tables);
+    }
+
+    @Test
+    void query80()
+    {
+        assertLabeledUnionMatchesHarness(CompiledTpcdsQueries.query80(), TpcdsParquetSupport::query80);
+    }
+
     @Test
     void query79()
     {
