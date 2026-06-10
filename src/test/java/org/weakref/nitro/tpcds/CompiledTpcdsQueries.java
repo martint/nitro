@@ -4477,6 +4477,86 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static Ported query18()
+    {
+        // Q18: seven integer-rounded catalog-sale averages per (item id, country, state, county) ROLLUP for one
+        // demographic cohort (gender F, Unknown education, six birth months, six states) in 1998. A single rollup
+        // pipeline; quantity, birth year, and dependent count are scaled by 100 before the sum/count pairs, and the
+        // select divides each pair round-half-up. The cohort is EMPTY at sf10 -- the test permits the empty oracle.
+        QueryLowering query = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_list_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_coupon_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sales_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("item", "cs_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("customer_demographics", "cs_bill_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_gender", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_education_status", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("cd_dep_count", ColumnEncoding.FLAT, true))
+                .join("customer", "cs_bill_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_birth_month", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_birth_year", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_county", ColumnEncoding.STRING, true));
+        List<Plan.Condition> birthMonths = new ArrayList<>();
+        for (long month : new long[] {1, 2, 6, 8, 9, 12}) {
+            birthMonths.add(new Plan.Predicate("=", query.column("c_birth_month"), new Plan.Lit(month)));
+        }
+        query.where(
+                        new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.StringMatch(query.position("cd_gender"), List.of("F"), false),
+                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Unknown             "), false),
+                        new Plan.Or(birthMonths),
+                        new Plan.StringMatch(query.position("ca_state"), List.of("MS", "IN", "ND", "OK", "NM", "VA"), false))
+                .groupBy("i_item_id", "ca_country", "ca_state", "ca_county")
+                .groupingSets(List.of(new int[] {0, 1, 2, 3}, new int[] {0, 1, 2}, new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", new Plan.Bin("*", query.column("cs_quantity"), new Plan.Lit(100)))
+                .aggregate("count", new Plan.Bin("*", query.column("cs_quantity"), new Plan.Lit(100)))
+                .aggregate("sum", "cs_list_price")
+                .aggregate("count", "cs_list_price")
+                .aggregate("sum", "cs_coupon_amt")
+                .aggregate("count", "cs_coupon_amt")
+                .aggregate("sum", "cs_sales_price")
+                .aggregate("count", "cs_sales_price")
+                .aggregate("sum", "cs_net_profit")
+                .aggregate("count", "cs_net_profit")
+                .aggregate("sum", new Plan.Bin("*", query.column("c_birth_year"), new Plan.Lit(100)))
+                .aggregate("count", new Plan.Bin("*", query.column("c_birth_year"), new Plan.Lit(100)))
+                .aggregate("sum", new Plan.Bin("*", query.column("cd_dep_count"), new Plan.Lit(100)))
+                .aggregate("count", new Plan.Bin("*", query.column("cd_dep_count"), new Plan.Lit(100)));
+        // Grouped columns: keys 0-3, the seven sum/count pairs at 4-17, grouping id last.
+        query.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(1, false), new Plan.SortKey(2, false), new Plan.SortKey(3, false), new Plan.SortKey(0, false)), 100));
+        Plan.Expr[] outputs = new Plan.Expr[11];
+        outputs[0] = new Plan.Col(0);
+        outputs[1] = new Plan.Col(1);
+        outputs[2] = new Plan.Col(2);
+        outputs[3] = new Plan.Col(3);
+        for (int measure = 0; measure < 7; measure++) {
+            outputs[4 + measure] = new Plan.Call("divide_round_i64", new Plan.Col(4 + 2 * measure), new Plan.Col(5 + 2 * measure));
+        }
+        query.select(outputs);
+
+        return new Ported(query, List.of(
+                new DictRef(0, 2, 1), new DictRef(1, 5, 1), new DictRef(2, 5, 2), new DictRef(3, 5, 3)));
+    }
+
     public static Composite query67()
     {
         // Q67: store-sale revenue (null quantity or price counting as zero) per eight-level item/date/store ROLLUP

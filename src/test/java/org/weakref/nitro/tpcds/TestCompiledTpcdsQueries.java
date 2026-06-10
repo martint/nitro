@@ -911,6 +911,18 @@ public class TestCompiledTpcdsQueries
         assertUnionCompositeMatchesHarness(CompiledTpcdsQueries.query54(), TpcdsParquetSupport::query54);
     }
 
+    /** Q18's cohort filter is empty at sf10: both engines must agree at zero rows (the empty oracle is permitted). */
+    @Test
+    void query18()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledTpcdsQueries.Ported ported = CompiledTpcdsQueries.query18();
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        assertBridgedRowsMatch(run, ported.stringColumns(), TpcdsParquetSupport::query18, tables, true);
+    }
+
     @Test
     void query67()
     {
@@ -1094,6 +1106,17 @@ public class TestCompiledTpcdsQueries
     private static void assertBridgedRowsMatch(CompiledQuerySupport.LoweredResult run, List<CompiledTpcdsQueries.DictRef> stringColumns,
             HarnessChain harness, TpcdsParquetTables tables)
     {
+        assertBridgedRowsMatch(run, stringColumns, harness, tables, false);
+    }
+
+    /**
+     * As {@link #assertBridgedRowsMatch(CompiledQuerySupport.LoweredResult, List, HarnessChain, TpcdsParquetTables)},
+     * but {@code allowEmptyOracle} skips the non-empty guard -- for queries whose filter combination is genuinely
+     * empty at this scale (Q17/Q18), where exact agreement at zero rows is the strongest available check.
+     */
+    private static void assertBridgedRowsMatch(CompiledQuerySupport.LoweredResult run, List<CompiledTpcdsQueries.DictRef> stringColumns,
+            HarnessChain harness, TpcdsParquetTables tables, boolean allowEmptyOracle)
+    {
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
         for (CompiledTpcdsQueries.DictRef ref : stringColumns) {
             dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
@@ -1103,7 +1126,9 @@ public class TestCompiledTpcdsQueries
         Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
-        assertThat(expected).isNotEmpty();
+        if (!allowEmptyOracle) {
+            assertThat(expected).isNotEmpty();
+        }
         assertThat(actual).containsExactlyElementsOf(expected);
     }
 
