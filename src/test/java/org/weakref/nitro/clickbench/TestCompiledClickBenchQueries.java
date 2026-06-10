@@ -126,6 +126,12 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query10()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query10(), (allocator, registry, hits) -> ClickBenchHitsSupport.query10(allocator, hits), 2);
+    }
+
+    @Test
     void query11()
     {
         assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query11(), ClickBenchHitsSupport::query11, 1);
@@ -201,6 +207,12 @@ public class TestCompiledClickBenchQueries
     void query22()
     {
         assertTopKMatchesHarness(CompiledClickBenchQueries.query22(), ClickBenchHitsSupport::query22, 2);
+    }
+
+    @Test
+    void query23()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query23(), ClickBenchHitsSupport::query23, 3);
     }
 
     @Test

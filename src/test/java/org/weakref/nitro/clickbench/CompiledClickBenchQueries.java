@@ -147,6 +147,27 @@ public final class CompiledClickBenchQueries
         return new Ported(query, List.of());
     }
 
+    /**
+     * SELECT RegionID, SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth), COUNT(DISTINCT UserID) FROM hits
+     * GROUP BY 1 ORDER BY 3 DESC LIMIT 10: the mixed distinct/plain aggregation runs single-pass, the
+     * distinct count fused into the grouping (the harness's DistinctCount accumulator).
+     */
+    public static Ported query10()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("RegionID"),
+                new QueryLowering.Column("AdvEngineID"),
+                new QueryLowering.Column("ResolutionWidth"),
+                new QueryLowering.Column("UserID"));
+        query.groupBy("RegionID")
+                .aggregate("sum", "AdvEngineID")
+                .count()
+                .aggregate("avg", "ResolutionWidth")
+                .aggregate("count_distinct", "UserID");
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
+        return new Ported(query, List.of());
+    }
+
     /** SELECT COUNT(DISTINCT SearchPhrase) FROM hits: the distinct phrases as a stage, counted by the main. */
     public static Composite query06()
     {
@@ -329,6 +350,34 @@ public final class CompiledClickBenchQueries
                 .count();
         query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(3, true)), 10));
         return new Ported(query, 2, 0, 2);
+    }
+
+    /**
+     * SELECT SearchPhrase, MIN(URL), MIN(Title), COUNT(*), COUNT(DISTINCT UserID) FROM hits
+     * WHERE Title LIKE '%Google%' AND URL NOT LIKE '%.google.%' AND SearchPhrase <> '' GROUP BY 1
+     * ORDER BY 4 DESC LIMIT 10
+     */
+    public static Ported query23()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("Title", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("UserID"));
+        query.where(
+                new Plan.StringMatch(query.position("SearchPhrase"), List.of(""), true),
+                new Plan.LikeMatch(query.position("Title"), "%Google%", false),
+                new Plan.LikeMatch(query.position("URL"), "%.google.%", true))
+                .groupBy("SearchPhrase")
+                .aggregate("min_utf8", "URL")
+                .aggregate("min_utf8", "Title")
+                .count()
+                .aggregate("count_distinct", "UserID");
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(3, true)), 10));
+        return new Ported(query, List.of(
+                new CompiledTpcdsQueries.DictRef(0, 0, 0),
+                new CompiledTpcdsQueries.DictRef(1, 0, 1),
+                new CompiledTpcdsQueries.DictRef(2, 0, 2)));
     }
 
     /** SELECT UserID FROM hits WHERE UserID = 435090932899640449 */
