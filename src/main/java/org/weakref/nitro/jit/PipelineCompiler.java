@@ -144,6 +144,7 @@ public final class PipelineCompiler
         Map<Integer, int[]> orderingSources = orderingStringSources(pipeline, resultTypes);
         orderingSources.values().removeIf(source -> source[0] == 0);
         emitOrderingDictionaryFields(out, orderingSources);
+        ClassBody body = new ClassBody();
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
                 + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
         emitOrderingDictionaryCapture(out, orderingSources, input -> "builds[" + (input - 1) + "]");
@@ -160,12 +161,14 @@ public final class PipelineCompiler
         }
 
         if (!pipeline.joins().isEmpty()) {
-            emitJoinBody(out, pipeline, encodings, nullable, resultTypes, true);
+            emitJoinBody(out, body, pipeline, encodings, nullable, resultTypes, true);
             out.append("  }\n");
             emitApplyHaving(out, pipeline.having(), resultTypes);
             emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
             // A projection-only pipeline applied its projections inline (they define the output); no post step.
             emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
+            out.append(body.fields());
+            out.append(body.methods());
             out.append("}\n");
             return out.toString();
         }
@@ -174,7 +177,7 @@ public final class PipelineCompiler
         // State lives across batches: initialize it once, before the batch loop. A join-less projection-only
         // pipeline (a plain scan-and-project, e.g. a raw union branch) appends to projection output arrays.
         if (grouped) {
-            emitGroupedState(out, pipeline, nullable, false);
+            emitGroupedState(out, body, pipeline, nullable, false);
         }
         else if (projectionOnly) {
             emitProjectionState(out, pipeline, nullable);
@@ -247,7 +250,7 @@ public final class PipelineCompiler
             }
             out.append("        for (int i = 0; i < selected; i++) {\n");
             if (grouped) {
-                emitGroupedAccumulate(out, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
+                emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
             }
             else if (projectionOnly) {
                 emitProjectionAppend(out, "          ", pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
@@ -270,7 +273,7 @@ public final class PipelineCompiler
                 emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
             }
             out.append("      for (int i = 0; i < rowCount; i++) {\n");
-            emitRowBody(out, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+            emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
             out.append("      }\n");
             out.append("    }\n");
         }
@@ -289,6 +292,8 @@ public final class PipelineCompiler
         emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
         // A projection-only pipeline applied its projections inline (they define the output); no post step.
         emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
+        out.append(body.fields());
+        out.append(body.methods());
         out.append("}\n");
         return out.toString();
     }
@@ -396,6 +401,29 @@ public final class PipelineCompiler
     }
 
     /** The candidate generated-variable names for a join column, selected by encoding (flat array, dictionary ids/values, string dictionary, constant) plus its null mask. */
+    /**
+     * Out-of-line code for the class being rendered: instance fields and helper methods the body emitters add.
+     * HotSpot refuses to compile methods beyond {@code HugeMethodLimit} (8000 bytecodes) -- and force-compiling
+     * such a method produces deopt-churning code -- so each join's build construction and each grouping
+     * find-or-create moves into its own small method, with the state they share with the probe loop held in
+     * instance fields. Every emitted method then compiles cleanly at C2.
+     */
+    private record ClassBody(StringBuilder fields, StringBuilder methods)
+    {
+        ClassBody()
+        {
+            this(new StringBuilder(), new StringBuilder());
+        }
+
+        void field(String type, String name)
+        {
+            String declaration = "  private " + type + " " + name + ";\n";
+            if (fields.indexOf(declaration) < 0) {
+                fields.append(declaration);
+            }
+        }
+    }
+
     private record ColumnVars(String flat, String ids, String dict, String stringDict, String constant, String nulls) {}
 
     private static ColumnVars probeVars(int column)
@@ -487,16 +515,17 @@ public final class PipelineCompiler
         }
         Map<Integer, int[]> orderingSources = orderingStringSources(pipeline, resultTypes);
         emitOrderingDictionaryFields(out, orderingSources);
+        ClassBody body = new ClassBody();
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
         emitOrderingDictionaryCapture(out, orderingSources, input -> "inputs[" + input + "]");
         if (pipeline.window() != null) {
             emitWindowBody(out, pipeline, encodings, nullable, resultTypes);
         }
         else if (!pipeline.joins().isEmpty()) {
-            emitJoinBody(out, pipeline, encodings, nullable, resultTypes);
+            emitJoinBody(out, body, pipeline, encodings, nullable, resultTypes);
         }
         else {
-            emitScanBody(out, pipeline, encodings, nullable, resultTypes);
+            emitScanBody(out, body, pipeline, encodings, nullable, resultTypes);
         }
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having(), resultTypes);
@@ -504,6 +533,8 @@ public final class PipelineCompiler
         // A projection-only pipeline applies its projections inline (they define the output), so there is no
         // separate post-aggregation projection step.
         emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
+        out.append(body.fields());
+        out.append(body.methods());
         out.append("}\n");
         return out.toString();
     }
@@ -946,7 +977,7 @@ public final class PipelineCompiler
 
     // ---- single-input scan -> filter -> aggregate ----
 
-    private static void emitScanBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    private static void emitScanBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         TreeSet<Integer> referenced = referencedColumns(pipeline);
@@ -990,13 +1021,13 @@ public final class PipelineCompiler
             emitProjectionState(out, pipeline, nullable);
         }
         else if (grouped) {
-            emitGroupedState(out, pipeline, nullable, speculate);
+            emitGroupedState(out, body, pipeline, nullable, speculate);
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
         }
         out.append("    for (int i = 0; i < rowCount; i++) {\n");
-        emitRowBody(out, "      ", pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate);
+        emitRowBody(out, body, "      ", pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate);
         out.append("    }\n");
         if (projection) {
             emitProjectionResult(out, pipeline, nullable, resultTypes);
@@ -1851,7 +1882,7 @@ public final class PipelineCompiler
      * then swap in. Probe-only filters run in the first stage before any join. A selective early join prunes the
      * decode of every later join key and filter column.
      */
-    private static void emitStagedSelection(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable,
+    private static void emitStagedSelection(StringBuilder execute, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable,
             List<Plan.Join> joins, int[] buildOffset, int probeColumns, List<Plan.Condition> filterMatches, Map<Plan.Condition, Integer> stringMaskIds)
     {
         int joinCount = joins.size();
@@ -1910,7 +1941,11 @@ public final class PipelineCompiler
             // this stage's columns for nothing. On a clustered fact most batches die at the first selective stage,
             // so the later joins' key columns are never decoded for them -- the actual decode save, since a
             // selection-gathered materialize still decodes the full batch column before gathering.
-            out.append(first ? "      {\n" : "      if (selected > 0) {\n");
+            execute.append(first ? "      joinStage" + k + "(source, probeRows);\n"
+                    : "      if (selected > 0) { joinStage" + k + "(source, probeRows); }\n");
+            StringBuilder out = body.methods();
+            out.append("  private void joinStage").append(k)
+                    .append("(org.weakref.nitro.jit.StreamingPipeline.Source source, int probeRows) {\n");
             if (!stageColumns.isEmpty()) {
                 if (first) {
                     out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(");\n");
@@ -2000,7 +2035,7 @@ public final class PipelineCompiler
                 out.append("        { int[] t = bsel").append(m).append("; bsel").append(m).append(" = bsel").append(m).append("Next; bsel").append(m).append("Next = t; }\n");
             }
             out.append("        selected = kept;\n");
-            out.append("      }\n");
+            out.append("  }\n");
         }
     }
 
@@ -2016,9 +2051,9 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    private static void emitJoinBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
-        emitJoinBody(out, pipeline, encodings, nullable, resultTypes, false);
+        emitJoinBody(out, body, pipeline, encodings, nullable, resultTypes, false);
     }
 
     /**
@@ -2028,7 +2063,7 @@ public final class PipelineCompiler
      * {@code inputs}/{@code rowCounts}. Build-side string-filter masks build once; probe-side masks rebuild per
      * batch (the probe's per-batch dictionary).
      */
-    private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes, boolean streaming)
+    private static void emitJoinBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes, boolean streaming)
     {
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
@@ -2129,6 +2164,8 @@ public final class PipelineCompiler
         }
 
         // Builds (dimensions) are materialized once into hash tables: eager from inputs[k+1], streaming from builds[k].
+        // Each join's construction compiles into its own method writing instance fields (a seventeen-join build
+        // section alone exceeds HotSpot's huge-method limit inline); the probe code reads the same names as fields.
         String buildsArray = streaming ? "builds" : "inputs";
         String buildCounts = streaming ? "buildRowCounts" : "rowCounts";
         int buildBase = streaming ? 0 : 1;
@@ -2138,11 +2175,34 @@ public final class PipelineCompiler
             if (join.probeKeyColumns().length != keyCount) {
                 throw new IllegalArgumentException("join " + k + " key count mismatch: probe " + join.probeKeyColumns().length + " vs build " + keyCount);
             }
+            body.field("int", "build" + k + "Rows");
             out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = ").append(buildsArray).append("[").append(k + buildBase)
-                    .append("]; int build").append(k).append("Rows = ").append(buildCounts).append("[").append(k + buildBase).append("];\n");
+                    .append("]; build").append(k).append("Rows = ").append(buildCounts).append("[").append(k + buildBase).append("];\n");
+            out.append("    buildJoin").append(k).append("(build").append(k).append(", build").append(k).append("Rows);\n");
+
+            StringBuilder buildCode = new StringBuilder();
+            List<String[]> exports = new ArrayList<>();
             for (int column : buildReferenced.get(k)) {
                 int combinedIndex = buildOffset[k] + column;
-                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, combinedIndex), combinedNullable(pipeline, nullable, combinedIndex), "build" + k + "[" + column + "]", buildVars(k, column));
+                ColumnEncoding encoding = combinedEncoding(pipeline, encodings, combinedIndex);
+                boolean columnNullable = combinedNullable(pipeline, nullable, combinedIndex);
+                emitJoinColumnLoad(buildCode, encoding, columnNullable, "build" + k + "[" + column + "]", buildVars(k, column));
+                ColumnVars vars = buildVars(k, column);
+                switch (encoding) {
+                    case FLAT -> exports.add(new String[] {"long[]", vars.flat()});
+                    case STRING -> {
+                        exports.add(new String[] {"int[]", vars.ids()});
+                        exports.add(new String[] {"byte[][]", vars.stringDict()});
+                    }
+                    case DICTIONARY -> {
+                        exports.add(new String[] {"int[]", vars.ids()});
+                        exports.add(new String[] {"long[]", vars.dict()});
+                    }
+                    case CONSTANT -> exports.add(new String[] {"long", vars.constant()});
+                }
+                if (columnNullable) {
+                    exports.add(new String[] {encoding == ColumnEncoding.CONSTANT ? "boolean" : "boolean[]", vars.nulls()});
+                }
             }
             // Build-side predicate-over-dictionary masks for this dimension, emitted before its structures so a
             // pushed string-match filter can read them (their dictionary is now materialized). Includes masks for
@@ -2154,12 +2214,33 @@ public final class PipelineCompiler
                 }
                 int column = stringMatchColumn(match);
                 if (column >= buildOffset[k] && column < buildOffset[k] + join.build().columnCount()) {
-                    emitStringMaskPrelude(out, match, s, buildVars(k, column - buildOffset[k]).stringDict());
+                    emitStringMaskPrelude(buildCode, match, s, buildVars(k, column - buildOffset[k]).stringDict());
+                    exports.add(new String[] {"boolean[]", "sMask" + s});
                 }
             }
             if (!join.cross()) {
-                emitBuildStructures(out, k, join.build().keyColumns(), buildFilter[k], pipeline, encodings, nullable, buildOffset);
+                emitBuildStructures(buildCode, k, join.build().keyColumns(), buildFilter[k], pipeline, encodings, nullable, buildOffset);
+                exports.add(new String[] {"int[]", "buildNext" + k});
+                if (keyCount == 1) {
+                    exports.add(new String[] {"long", "minKey" + k});
+                    exports.add(new String[] {"long", "maxKey" + k});
+                    exports.add(new String[] {"boolean", "useArray" + k});
+                    exports.add(new String[] {"int[]", "buildRowByKey" + k});
+                }
+                for (int kx = 0; kx < keyCount; kx++) {
+                    exports.add(new String[] {"long[]", "jKey" + k + "_" + kx});
+                }
+                exports.add(new String[] {"int[]", "jRow" + k});
+                exports.add(new String[] {"int", "jMask" + k});
             }
+            body.methods().append("  private void buildJoin").append(k)
+                    .append("(org.weakref.nitro.jit.Column[] build").append(k).append(", int build").append(k).append("Rows) {\n");
+            body.methods().append(buildCode);
+            for (String[] export : exports) {
+                body.field(export[0], export[1]);
+                body.methods().append("    this.").append(export[1]).append(" = ").append(export[1]).append(";\n");
+            }
+            body.methods().append("  }\n");
         }
 
         // A column-vs-column string compare whose BOTH operands are build (dimension) columns can be remapped now that
@@ -2168,7 +2249,7 @@ public final class PipelineCompiler
         for (int s = 0; s < stringMatches.size(); s++) {
             if (stringMatches.get(s) instanceof Plan.StringColumnCompare compare
                     && compare.left() >= probeColumns && compare.right() >= probeColumns) {
-                emitStringConditionPrelude(out, compare, s, column ->
+                emitStringConditionPrelude(out, streaming ? body : null, compare, s, column ->
                         buildVars(buildOf(joins, buildOffset, column), column - buildOffset[buildOf(joins, buildOffset, column)]).stringDict());
             }
         }
@@ -2177,7 +2258,7 @@ public final class PipelineCompiler
         // builds are materialized -- emit its value remap here, OUTSIDE any batch loop. Rebuilding a large remap per
         // streamed batch dominated string-keyed fact scans. Fact-sourced string keys (eager path only) remap after
         // the probe loads.
-        emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, true);
+        emitJoinKeyRemaps(out, streaming ? body : null, pipeline, encodings, joins, buildOffset, probeColumns, true);
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
         boolean projection = projectionOnly(pipeline);
@@ -2185,7 +2266,7 @@ public final class PipelineCompiler
             emitProjectionState(out, pipeline, nullable);
         }
         else if (grouped) {
-            emitGroupedState(out, pipeline, nullable, false);
+            emitGroupedState(out, body, pipeline, nullable, false);
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
@@ -2259,9 +2340,14 @@ public final class PipelineCompiler
             // advance(), so last-batch's buffer is free to be the next batch's. Each ping-pongs with a Next buffer
             // that the per-join stages compact into; the fan-out grow path reassigns these same locals when one
             // probe row yields more survivors than rows.
-            out.append("    int[] selection = new int[0]; int[] selectionNext = new int[0];\n");
+            body.field("int[]", "selection");
+            body.field("int[]", "selectionNext");
+            body.field("int", "selected");
+            out.append("    selection = new int[0]; selectionNext = new int[0];\n");
             for (int k = 0; k < joinCount; k++) {
-                out.append("    int[] bsel").append(k).append(" = new int[0]; int[] bsel").append(k).append("Next = new int[0];\n");
+                body.field("int[]", "bsel" + k);
+                body.field("int[]", "bsel" + k + "Next");
+                out.append("    bsel").append(k).append(" = new int[0]; bsel").append(k).append("Next = new int[0];\n");
             }
             out.append("    while (source.advance()) {\n");
             out.append("      int probeRows = source.rows();\n");
@@ -2272,12 +2358,13 @@ public final class PipelineCompiler
                 out.append("        bsel").append(k).append(" = new int[grown]; bsel").append(k).append("Next = new int[grown];\n");
             }
             out.append("      }\n");
-            out.append("      int selected = 0;\n");
+            out.append("      selected = 0;\n");
             // Phase 1, staged per join: each stage materializes only its own probe columns -- gathered by the
             // selection the earlier joins left -- probes, and compacts the surviving (row, build rows) tuples.
             // A selective early join thus prunes the decode of every later join key and filter column, the
-            // compiled analogue of the operator scan's constrain() pushback.
-            emitStagedSelection(out, pipeline, encodings, nullable, joins, buildOffset, probeColumns, filterMatches, stringMaskIds);
+            // compiled analogue of the operator scan's constrain() pushback. Each stage compiles into its own
+            // method over the field-held selection (seventeen inline stages exceed the huge-method limit).
+            emitStagedSelection(out, body, pipeline, encodings, nullable, joins, buildOffset, probeColumns, filterMatches, stringMaskIds);
             // Phase 2: payload probe columns materialized for the survivors only, then folded in. Skip the whole
             // phase when the batch has no survivors -- materializing would borrow (and so decode) the payload columns
             // over the batch for nothing. This is how an operator scan avoids decoding payload for batches a selective
@@ -2297,7 +2384,7 @@ public final class PipelineCompiler
                 emitProjectionAppend(out, "          ", pipeline, encodings, nullable, lazyResolver, lazyNullResolver, stringMaskIds);
             }
             else if (grouped) {
-                emitGroupedAccumulate(out, "          ", pipeline, nullable, lazyResolver, lazyResolver, lazyNullResolver, stringMaskIds, false);
+                emitGroupedAccumulate(out, body, "          ", pipeline, nullable, lazyResolver, lazyResolver, lazyNullResolver, stringMaskIds, false);
             }
             else {
                 emitGlobalAccumulate(out, "          ", pipeline.aggregates(), lazyResolver, lazyNullResolver, stringMaskIds);
@@ -2345,7 +2432,7 @@ public final class PipelineCompiler
             // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
             int openBraces = emitProbesWithFilters(out, "      ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
             String indent = "      " + "  ".repeat(openBraces);
-            emitRowBody(out, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false, true);
+            emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false, true);
             for (int brace = 0; brace < openBraces; brace++) {
                 indent = indent.substring(2);
                 out.append(indent).append("}\n");
@@ -2543,6 +2630,11 @@ public final class PipelineCompiler
      * keys only (the probe dictionary loads with the probe), {@code null} for all. */
     private static void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
     {
+        emitJoinKeyRemaps(out, null, pipeline, encodings, joins, buildOffset, probeColumns, buildOriginated);
+    }
+
+    private static void emitJoinKeyRemaps(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
+    {
         for (int k = 0; k < joins.size(); k++) {
             Plan.Join join = joins.get(k);
             int[] probeKeys = join.probeKeyColumns();
@@ -2566,7 +2658,13 @@ public final class PipelineCompiler
                 out.append("    for (int e = 0; e < ").append(buildDictionary).append(".length; e++) {\n");
                 out.append("      jBuildIdx").append(id).append(".putIfAbsent(new String(").append(buildDictionary).append("[e], java.nio.charset.StandardCharsets.UTF_8), e);\n");
                 out.append("    }\n");
-                out.append("    int[] jRemap").append(id).append(" = new int[").append(probeDictionary).append(".length];\n");
+                if (body != null) {
+                    body.field("int[]", "jRemap" + id);
+                    out.append("    jRemap").append(id).append(" = new int[").append(probeDictionary).append(".length];\n");
+                }
+                else {
+                    out.append("    int[] jRemap").append(id).append(" = new int[").append(probeDictionary).append(".length];\n");
+                }
                 out.append("    for (int e = 0; e < ").append(probeDictionary).append(".length; e++) {\n");
                 out.append("      Integer b = jBuildIdx").append(id).append(".get(new String(").append(probeDictionary).append("[e], java.nio.charset.StandardCharsets.UTF_8));\n");
                 out.append("      jRemap").append(id).append("[e] = b == null ? -1 : b;\n");
@@ -2643,16 +2741,16 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
+    private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
     {
-        emitRowBody(out, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, false);
+        emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, false);
     }
 
     /**
      * Emit one surviving row's body (filter then projection / group / global accumulate). When {@code filtersApplied}
      * the WHERE was already applied upstream (interleaved with the join probes for early-out), so it is not re-checked.
      */
-    private static void emitRowBody(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied)
+    private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied)
     {
         String bodyIndent = indent;
         boolean emitFilter = !filtersApplied && !pipeline.filters().isEmpty();
@@ -2665,7 +2763,7 @@ public final class PipelineCompiler
             emitProjectionAppend(out, bodyIndent, pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
         }
         else if (grouped) {
-            emitGroupedAccumulate(out, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
+            emitGroupedAccumulate(out, body, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
         }
         else {
             emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
@@ -2748,7 +2846,7 @@ public final class PipelineCompiler
     // group-key columns (null where inactive in the group's set), the aggregate columns, then a trailing
     // grouping_id column (the GROUPING() bitmask: bit i set for each group key i not in the set).
 
-    private static void emitGroupingSetsState(StringBuilder out, Plan.Pipeline pipeline)
+    private static void emitGroupingSetsState(StringBuilder out, ClassBody body, Plan.Pipeline pipeline)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
@@ -2760,17 +2858,25 @@ public final class PipelineCompiler
         // (high int) with the key null bits (low; an inactive key is null by construction), words 2.. hold the
         // canonical key values (null canonicalized to 0, distinguished by its null bit), and the trailing words
         // the aggregate state cells. The result emitters extract the cells into gid-ordered arrays at the end.
-        out.append("    int cap = 1024;\n");
-        out.append("    long[] gsT = new long[cap * ").append(keyCount + 2 + total).append("];\n");
-        out.append("    int gsMask = cap - 1; int gsFill = (int) (cap * 0.75f); int groupCount = 0;\n");
-        out.append("    int[] setByGid = new int[16];\n");
+        body.field("long[]", "gsT");
+        body.field("int", "gsCap");
+        body.field("int", "gsMask");
+        body.field("int", "gsFill");
+        body.field("int", "groupCount");
+        body.field("int[]", "setByGid");
+        out.append("    gsCap = 1024;\n");
+        out.append("    gsT = new long[gsCap * ").append(keyCount + 2 + total).append("];\n");
+        out.append("    gsMask = gsCap - 1; gsFill = (int) (gsCap * 0.75f); groupCount = 0;\n");
+        out.append("    setByGid = new int[16];\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
-            out.append("    boolean[] nullByGid").append(kx).append(" = new boolean[16];\n");
+            body.field("long[]", "keyByGid" + kx);
+            body.field("boolean[]", "nullByGid" + kx);
+            out.append("    keyByGid").append(kx).append(" = new long[16];\n");
+            out.append("    nullByGid").append(kx).append(" = new boolean[16];\n");
         }
     }
 
-    private static void emitGroupingSetsAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private static void emitGroupingSetsAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
@@ -2787,88 +2893,111 @@ public final class PipelineCompiler
                 out.append(indent).append("long rv").append(kx).append(" = ").append(value).append(";\n");
             }
         }
+        // Each set's find-or-create compiles into its own method over the field-held table (the inlined blocks
+        // for many sets push execute() past the huge-method limit); the aggregate updates stay at the call site,
+        // where the input expressions' row context lives.
         List<int[]> sets = pipeline.groupingSets();
+        StringBuilder arguments = new StringBuilder();
+        StringBuilder parameters = new StringBuilder();
+        for (int kx = 0; kx < keyCount; kx++) {
+            arguments.append(kx == 0 ? "" : ", ").append("rv").append(kx).append(", rvN").append(kx);
+            parameters.append(kx == 0 ? "" : ", ").append("long rv").append(kx).append(", boolean rvN").append(kx);
+        }
         for (int s = 0; s < sets.size(); s++) {
-            int[] set = sets.get(s);
-            java.util.Set<Integer> active = new java.util.HashSet<>();
-            for (int index : set) {
-                active.add(index);
-            }
             out.append(indent).append("{\n");
             String b = indent + "  ";
-            // Canonical per-set key components: an active key keeps its value (null canonicalized to 0); an inactive
-            // key is constant-folded to null.
-            for (int kx = 0; kx < keyCount; kx++) {
-                if (active.contains(kx)) {
-                    out.append(b).append("boolean ckN").append(kx).append(" = rvN").append(kx).append(";\n");
-                    out.append(b).append("long ck").append(kx).append(" = rvN").append(kx).append(" ? 0L : rv").append(kx).append(";\n");
-                }
-                else {
-                    out.append(b).append("boolean ckN").append(kx).append(" = true;\n");
-                    out.append(b).append("long ck").append(kx).append(" = 0L;\n");
-                }
-            }
-            out.append(b).append("int setId = ").append(s).append(";\n");
-            StringBuilder nullBits = new StringBuilder("0L");
-            for (int kx = 0; kx < keyCount; kx++) {
-                nullBits.append(" | (ckN").append(kx).append(" ? ").append(1L << kx).append("L : 0L)");
-            }
-            out.append(b).append("long gMeta = ((long) setId << 32) | (").append(nullBits).append(");\n");
-            out.append(b).append("int gHash = mix(").append(groupingSetsHashFold(keyCount)).append(");\n");
-            out.append(b).append("int gslot = gHash & gsMask;\n");
-            int stride = keyCount + 2 + cellCount(aggregates);
-            out.append(b).append("int gbase = gslot * ").append(stride).append(";\n");
-            out.append(b).append("long gw0 = gsT[gbase];\n");
-            out.append(b).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && gsT[gbase + 1] == gMeta")
-                    .append(groupingSetsKeyCompare(keyCount))
-                    .append(")) { gslot = (gslot + 1) & gsMask; gbase = gslot * ").append(stride).append("; gw0 = gsT[gbase]; }\n");
-            out.append(b).append("int gid = ((int) gw0) - 1;\n");
-            out.append(b).append("if (gid == -1) {\n");
-            String c = b + "  ";
-            out.append(c).append("gid = groupCount++;\n");
-            out.append(c).append("gsT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
-            out.append(c).append("gsT[gbase + 1] = gMeta;\n");
-            for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("gsT[gbase + ").append(kx + 2).append("] = ck").append(kx).append(";\n");
-            }
-            out.append(c).append("if (gid == setByGid.length) {\n");
-            out.append(c).append("  int n = setByGid.length * 2;\n");
-            out.append(c).append("  setByGid = java.util.Arrays.copyOf(setByGid, n);\n");
-            for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
-                out.append(c).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
-            }
-            out.append(c).append("}\n");
-            out.append(c).append("setByGid[gid] = setId;\n");
-            for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("keyByGid").append(kx).append("[gid] = ck").append(kx).append(";\n");
-                out.append(c).append("nullByGid").append(kx).append("[gid] = ckN").append(kx).append(";\n");
-            }
-            for (int a = 0; a < aggregates.size(); a++) {
-                aggregator(aggregates.get(a)).emitIdentity(out, c, slotCells(aggregates, a, "gsT", "gbase", keyCount + 2));
-            }
-            out.append(c).append("if (groupCount > gsFill) {\n");
-            out.append(c).append("  int ncap = cap * 2;\n");
-            out.append(c).append("  long[] nT = new long[ncap * ").append(stride).append("];\n");
-            out.append(c).append("  int nMask = ncap - 1;\n");
-            out.append(c).append("  int gPrev = gslot;\n");
-            out.append(c).append("  for (int t = 0; t < cap; t++) {\n");
-            out.append(c).append("    long w0 = gsT[t * ").append(stride).append("];\n");
-            out.append(c).append("    if ((int) w0 != 0) {\n");
-            out.append(c).append("      int ns = (int) (w0 >>> 32) & nMask; while ((int) nT[ns * ").append(stride).append("] != 0) { ns = (ns + 1) & nMask; }\n");
-            out.append(c).append("      System.arraycopy(gsT, t * ").append(stride).append(", nT, ns * ").append(stride).append(", ").append(stride).append(");\n");
-            // The aggregate update below addresses this row's record through gbase: track where the resize moved it.
-            out.append(c).append("      if (t == gPrev) { gslot = ns; gbase = ns * ").append(stride).append("; }\n");
-            out.append(c).append("    }\n");
-            out.append(c).append("  }\n");
-            out.append(c).append("  gsT = nT; gsMask = nMask; cap = ncap; gsFill = (int) (cap * 0.75f);\n");
-            out.append(c).append("}\n");
-            out.append(b).append("}\n");
+            out.append(b).append("int gbase = findGroupSet").append(s).append("(").append(arguments).append(");\n");
             for (int a = 0; a < aggregates.size(); a++) {
                 emitAggregateUpdate(out, b, aggregates.get(a), slotCells(aggregates, a, "gsT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
             }
             out.append(indent).append("}\n");
+            if (body.methods().indexOf("int findGroupSet" + s + "(") >= 0) {
+                continue;
+            }
+            emitGroupingSetFindMethod(body, s, sets.get(s), parameters.toString(), keyCount, aggregates);
         }
+    }
+
+    /** The find-or-create method for grouping set {@code s}: canonicalize, probe, insert, resize; returns the slot base. */
+    private static void emitGroupingSetFindMethod(ClassBody body, int s, int[] set, String parameters, int keyCount, List<Plan.Aggregate> aggregates)
+    {
+        java.util.Set<Integer> active = new java.util.HashSet<>();
+        for (int index : set) {
+            active.add(index);
+        }
+        StringBuilder out = body.methods();
+        int stride = keyCount + 2 + cellCount(aggregates);
+        out.append("  private int findGroupSet").append(s).append("(").append(parameters).append(") {\n");
+        String b = "    ";
+        // Canonical per-set key components: an active key keeps its value (null canonicalized to 0); an inactive
+        // key is constant-folded to null.
+        for (int kx = 0; kx < keyCount; kx++) {
+            if (active.contains(kx)) {
+                out.append(b).append("boolean ckN").append(kx).append(" = rvN").append(kx).append(";\n");
+                out.append(b).append("long ck").append(kx).append(" = rvN").append(kx).append(" ? 0L : rv").append(kx).append(";\n");
+            }
+            else {
+                out.append(b).append("boolean ckN").append(kx).append(" = true;\n");
+                out.append(b).append("long ck").append(kx).append(" = 0L;\n");
+            }
+        }
+        out.append(b).append("int setId = ").append(s).append(";\n");
+        StringBuilder nullBits = new StringBuilder("0L");
+        for (int kx = 0; kx < keyCount; kx++) {
+            nullBits.append(" | (ckN").append(kx).append(" ? ").append(1L << kx).append("L : 0L)");
+        }
+        out.append(b).append("long gMeta = ((long) setId << 32) | (").append(nullBits).append(");\n");
+        out.append(b).append("int gHash = mix(").append(groupingSetsHashFold(keyCount)).append(");\n");
+        out.append(b).append("int gslot = gHash & gsMask;\n");
+        out.append(b).append("int gbase = gslot * ").append(stride).append(";\n");
+        out.append(b).append("long gw0 = gsT[gbase];\n");
+        out.append(b).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && gsT[gbase + 1] == gMeta")
+                .append(groupingSetsKeyCompare(keyCount))
+                .append(")) { gslot = (gslot + 1) & gsMask; gbase = gslot * ").append(stride).append("; gw0 = gsT[gbase]; }\n");
+        out.append(b).append("int gid = ((int) gw0) - 1;\n");
+        out.append(b).append("if (gid == -1) {\n");
+        String c = b + "  ";
+        out.append(c).append("gid = groupCount++;\n");
+        out.append(c).append("gsT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
+        out.append(c).append("gsT[gbase + 1] = gMeta;\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(c).append("gsT[gbase + ").append(kx + 2).append("] = ck").append(kx).append(";\n");
+        }
+        out.append(c).append("if (gid == setByGid.length) {\n");
+        out.append(c).append("  int n = setByGid.length * 2;\n");
+        out.append(c).append("  setByGid = java.util.Arrays.copyOf(setByGid, n);\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(c).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
+            out.append(c).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
+        }
+        out.append(c).append("}\n");
+        out.append(c).append("setByGid[gid] = setId;\n");
+        for (int kx = 0; kx < keyCount; kx++) {
+            out.append(c).append("keyByGid").append(kx).append("[gid] = ck").append(kx).append(";\n");
+            out.append(c).append("nullByGid").append(kx).append("[gid] = ckN").append(kx).append(";\n");
+        }
+        for (int a = 0; a < aggregates.size(); a++) {
+            aggregator(aggregates.get(a)).emitIdentity(out, c, slotCells(aggregates, a, "gsT", "gbase", keyCount + 2));
+        }
+        out.append(c).append("if (groupCount > gsFill) {\n");
+        out.append(c).append("  int ncap = gsCap * 2;\n");
+        out.append(c).append("  long[] nT = new long[ncap * ").append(stride).append("];\n");
+        out.append(c).append("  int nMask = ncap - 1;\n");
+        out.append(c).append("  int gPrev = gslot;\n");
+        out.append(c).append("  for (int t = 0; t < gsCap; t++) {\n");
+        out.append(c).append("    long w0 = gsT[t * ").append(stride).append("];\n");
+        out.append(c).append("    if ((int) w0 != 0) {\n");
+        out.append(c).append("      int ns = (int) (w0 >>> 32) & nMask; while ((int) nT[ns * ").append(stride).append("] != 0) { ns = (ns + 1) & nMask; }\n");
+        out.append(c).append("      System.arraycopy(gsT, t * ").append(stride).append(", nT, ns * ").append(stride).append(", ").append(stride).append(");\n");
+        // The aggregate update at the call site addresses this row's record through the returned base: track the move.
+        out.append(c).append("      if (t == gPrev) { gslot = ns; gbase = ns * ").append(stride).append("; }\n");
+        out.append(c).append("    }\n");
+        out.append(c).append("  }\n");
+        out.append(c).append("  gsT = nT; gsMask = nMask; gsCap = ncap; gsFill = (int) (gsCap * 0.75f);\n");
+        out.append(c).append("}\n");
+        out.append(b).append("}\n");
+        out.append(b).append("return gbase;\n");
+        out.append("  }\n");
     }
 
     private static void emitGroupingSetsResult(StringBuilder out, Plan.Pipeline pipeline, int reconstructDictColumn, List<Type> resultTypes)
@@ -2952,10 +3081,10 @@ public final class PipelineCompiler
 
     // ---- grouped aggregation (single long key) ----
 
-    private static void emitGroupedState(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate)
+    private static void emitGroupedState(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate)
     {
         if (!pipeline.groupingSets().isEmpty()) {
-            emitGroupingSetsState(out, pipeline);
+            emitGroupingSetsState(out, body, pipeline);
             return;
         }
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
@@ -2978,21 +3107,28 @@ public final class PipelineCompiler
         // hash (high int, the probe fingerprint) with gid + 1 (low int; 0 = empty slot), word 1 holds the key
         // null bits, words 2.. the key values (null canonicalized to 0), and the trailing words the aggregate
         // state cells. The result emitters extract the cells into gid-ordered arrays at the end.
-        out.append("    int cap = 1024;\n");
-        out.append("    long[] htT = new long[cap * ").append(keyCount + 2 + total).append("];\n");
-        out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
+        body.field("long[]", "htT");
+        body.field("int", "htCap");
+        body.field("int", "htMask");
+        body.field("int", "htFill");
+        body.field("int", "groupCount");
+        out.append("    htCap = 1024;\n");
+        out.append("    htT = new long[htCap * ").append(keyCount + 2 + total).append("];\n");
+        out.append("    htMask = htCap - 1; htFill = (int) (htCap * 0.75f); groupCount = 0;\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
+            body.field("long[]", "keyByGid" + kx);
+            out.append("    keyByGid").append(kx).append(" = new long[16];\n");
             if (keyNullable(pipeline, nullable, kx)) {
-                out.append("    boolean[] nullByGid").append(kx).append(" = new boolean[16];\n");
+                body.field("boolean[]", "nullByGid" + kx);
+                out.append("    nullByGid").append(kx).append(" = new boolean[16];\n");
             }
         }
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
+    private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
     {
         if (!pipeline.groupingSets().isEmpty()) {
-            emitGroupingSetsAccumulate(out, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds);
+            emitGroupingSetsAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds);
             return;
         }
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
@@ -3050,68 +3186,90 @@ public final class PipelineCompiler
                 out.append(indent).append("long gk").append(kx).append(" = ").append(value).append(";\n");
             }
         }
+        // The find-or-create compiles into its own method over the field-held table (inlined it pushes a wide
+        // pipeline's execute() past the huge-method limit); the aggregate updates stay at the call site, where the
+        // input expressions' row context lives.
+        StringBuilder arguments = new StringBuilder();
+        StringBuilder parameters = new StringBuilder();
+        for (int kx = 0; kx < keyCount; kx++) {
+            arguments.append(kx == 0 ? "" : ", ").append("gk").append(kx);
+            parameters.append(kx == 0 ? "" : ", ").append("long gk").append(kx);
+            if (keyNullable(pipeline, nullable, kx)) {
+                arguments.append(", gkN").append(kx);
+                parameters.append(", boolean gkN").append(kx);
+            }
+        }
+        out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            emitAggregateUpdate(out, indent, aggregates.get(a), slotCells(aggregates, a, "htT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
+        }
+        if (body.methods().indexOf("int findGroup(") >= 0) {
+            return;
+        }
+        StringBuilder method = body.methods();
+        int stride = keyCount + 2 + cellCount(aggregates);
+        method.append("  private int findGroup(").append(parameters).append(") {\n");
+        String b = "    ";
         StringBuilder nullBits = new StringBuilder("0L");
         for (int kx = 0; kx < keyCount; kx++) {
             if (keyNullable(pipeline, nullable, kx)) {
                 nullBits.append(" | (gkN").append(kx).append(" ? ").append(1L << kx).append("L : 0L)");
             }
         }
-        int stride = keyCount + 2 + cellCount(aggregates);
-        out.append(indent).append("long gMeta = ").append(nullBits).append(";\n");
-        out.append(indent).append("int gHash = mix(").append(hashFold("gk", "", keyCount)).append(");\n");
-        out.append(indent).append("int gslot = gHash & htMask;\n");
-        out.append(indent).append("int gbase = gslot * ").append(stride).append(";\n");
-        out.append(indent).append("long gw0 = htT[gbase];\n");
-        out.append(indent).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && htT[gbase + 1] == gMeta")
+        method.append(b).append("long gMeta = ").append(nullBits).append(";\n");
+        method.append(b).append("int gHash = mix(").append(hashFold("gk", "", keyCount)).append(");\n");
+        method.append(b).append("int gslot = gHash & htMask;\n");
+        method.append(b).append("int gbase = gslot * ").append(stride).append(";\n");
+        method.append(b).append("long gw0 = htT[gbase];\n");
+        method.append(b).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && htT[gbase + 1] == gMeta")
                 .append(keyCompare(keyCount))
                 .append(")) { gslot = (gslot + 1) & htMask; gbase = gslot * ").append(stride).append("; gw0 = htT[gbase]; }\n");
-        out.append(indent).append("int gid = ((int) gw0) - 1;\n");
-        out.append(indent).append("if (gid == -1) {\n");
-        String b = indent + "  ";
-        out.append(b).append("gid = groupCount++;\n");
-        out.append(b).append("htT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
-        out.append(b).append("htT[gbase + 1] = gMeta;\n");
+        method.append(b).append("int gid = ((int) gw0) - 1;\n");
+        method.append(b).append("if (gid == -1) {\n");
+        String c = b + "  ";
+        method.append(c).append("gid = groupCount++;\n");
+        method.append(c).append("htT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
+        method.append(c).append("htT[gbase + 1] = gMeta;\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("htT[gbase + ").append(kx + 2).append("] = gk").append(kx).append(";\n");
+            method.append(c).append("htT[gbase + ").append(kx + 2).append("] = gk").append(kx).append(";\n");
         }
-        out.append(b).append("if (gid == keyByGid0.length) {\n");
-        out.append(b).append("  int n = keyByGid0.length * 2;\n");
+        method.append(c).append("if (gid == keyByGid0.length) {\n");
+        method.append(c).append("  int n = keyByGid0.length * 2;\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
+            method.append(c).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
             if (keyNullable(pipeline, nullable, kx)) {
-                out.append(b).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
+                method.append(c).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
             }
         }
-        out.append(b).append("}\n");
+        method.append(c).append("}\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("keyByGid").append(kx).append("[gid] = gk").append(kx).append(";\n");
+            method.append(c).append("keyByGid").append(kx).append("[gid] = gk").append(kx).append(";\n");
             if (keyNullable(pipeline, nullable, kx)) {
-                out.append(b).append("nullByGid").append(kx).append("[gid] = gkN").append(kx).append(";\n");
+                method.append(c).append("nullByGid").append(kx).append("[gid] = gkN").append(kx).append(";\n");
             }
         }
         for (int a = 0; a < aggregates.size(); a++) {
-            aggregator(aggregates.get(a)).emitIdentity(out, b, slotCells(aggregates, a, "htT", "gbase", keyCount + 2));
+            aggregator(aggregates.get(a)).emitIdentity(method, c, slotCells(aggregates, a, "htT", "gbase", keyCount + 2));
         }
-        out.append(b).append("if (groupCount > htFill) {\n");
-        out.append(b).append("  int ncap = cap * 2;\n");
-        out.append(b).append("  long[] nT = new long[ncap * ").append(stride).append("];\n");
-        out.append(b).append("  int nMask = ncap - 1;\n");
-        out.append(b).append("  int gPrev = gslot;\n");
-        out.append(b).append("  for (int s = 0; s < cap; s++) {\n");
-        out.append(b).append("    long w0 = htT[s * ").append(stride).append("];\n");
-        out.append(b).append("    if ((int) w0 != 0) {\n");
-        out.append(b).append("      int ns = (int) (w0 >>> 32) & nMask; while ((int) nT[ns * ").append(stride).append("] != 0) { ns = (ns + 1) & nMask; }\n");
-        out.append(b).append("      System.arraycopy(htT, s * ").append(stride).append(", nT, ns * ").append(stride).append(", ").append(stride).append(");\n");
-        // The aggregate update below addresses this row's record through gbase: track where the resize moved it.
-        out.append(b).append("      if (s == gPrev) { gslot = ns; gbase = ns * ").append(stride).append("; }\n");
-        out.append(b).append("    }\n");
-        out.append(b).append("  }\n");
-        out.append(b).append("  htT = nT; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
-        out.append(b).append("}\n");
-        out.append(indent).append("}\n");
-        for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, aggregates.get(a), slotCells(aggregates, a, "htT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
-        }
+        method.append(c).append("if (groupCount > htFill) {\n");
+        method.append(c).append("  int ncap = htCap * 2;\n");
+        method.append(c).append("  long[] nT = new long[ncap * ").append(stride).append("];\n");
+        method.append(c).append("  int nMask = ncap - 1;\n");
+        method.append(c).append("  int gPrev = gslot;\n");
+        method.append(c).append("  for (int s = 0; s < htCap; s++) {\n");
+        method.append(c).append("    long w0 = htT[s * ").append(stride).append("];\n");
+        method.append(c).append("    if ((int) w0 != 0) {\n");
+        method.append(c).append("      int ns = (int) (w0 >>> 32) & nMask; while ((int) nT[ns * ").append(stride).append("] != 0) { ns = (ns + 1) & nMask; }\n");
+        method.append(c).append("      System.arraycopy(htT, s * ").append(stride).append(", nT, ns * ").append(stride).append(", ").append(stride).append(");\n");
+        // The aggregate update at the call site addresses this row's record through the returned base: track the move.
+        method.append(c).append("      if (s == gPrev) { gslot = ns; gbase = ns * ").append(stride).append("; }\n");
+        method.append(c).append("    }\n");
+        method.append(c).append("  }\n");
+        method.append(c).append("  htT = nT; htMask = nMask; htCap = ncap; htFill = (int) (htCap * 0.75f);\n");
+        method.append(c).append("}\n");
+        method.append(b).append("}\n");
+        method.append(b).append("return gbase;\n");
+        method.append("  }\n");
     }
 
     private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate, int reconstructDictColumn, List<Type> resultTypes)
@@ -3888,12 +4046,25 @@ public final class PipelineCompiler
     /** Emit the per-dictionary prelude for a string condition: a remap for a column-vs-column compare, else a mask. {@code dictionaryVar} maps a column index to its materialized dictionary variable. */
     private static void emitStringConditionPrelude(StringBuilder out, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
     {
+        emitStringConditionPrelude(out, null, match, id, dictionaryVar);
+    }
+
+    /** With a {@code body}, the remap / class arrays become instance fields (read from out-of-line stage methods). */
+    private static void emitStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
+    {
         if (match instanceof Plan.StringColumnCompare compare) {
             if (compare.hasSubstring()) {
-                emitStringPrefixClassPrelude(out, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()), compare.substringStart(), compare.substringLength());
+                if (body != null) {
+                    body.field("int[]", "sLeftClass" + id);
+                    body.field("int[]", "sRightClass" + id);
+                }
+                emitStringPrefixClassPrelude(out, body != null, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()), compare.substringStart(), compare.substringLength());
             }
             else {
-                emitStringRemapPrelude(out, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()));
+                if (body != null) {
+                    body.field("int[]", "sRemap" + id);
+                }
+                emitStringRemapPrelude(out, body != null, id, dictionaryVar.apply(compare.left()), dictionaryVar.apply(compare.right()));
             }
         }
         else {
@@ -3901,13 +4072,13 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitStringRemapPrelude(StringBuilder out, int id, String leftDictionaryVar, String rightDictionaryVar)
+    private static void emitStringRemapPrelude(StringBuilder out, boolean asField, int id, String leftDictionaryVar, String rightDictionaryVar)
     {
         out.append("    java.util.HashMap<String, Integer> sRightIdx").append(id).append(" = new java.util.HashMap<>();\n");
         out.append("    for (int e = 0; e < ").append(rightDictionaryVar).append(".length; e++) {\n");
         out.append("      sRightIdx").append(id).append(".putIfAbsent(new String(").append(rightDictionaryVar).append("[e], java.nio.charset.StandardCharsets.UTF_8), e);\n");
         out.append("    }\n");
-        out.append("    int[] sRemap").append(id).append(" = new int[").append(leftDictionaryVar).append(".length];\n");
+        out.append(asField ? "    sRemap" : "    int[] sRemap").append(id).append(" = new int[").append(leftDictionaryVar).append(".length];\n");
         out.append("    for (int e = 0; e < ").append(leftDictionaryVar).append(".length; e++) {\n");
         out.append("      Integer r = sRightIdx").append(id).append(".get(new String(").append(leftDictionaryVar).append("[e], java.nio.charset.StandardCharsets.UTF_8));\n");
         out.append("      sRemap").append(id).append("[e] = r == null ? -1 : r;\n");
@@ -3921,16 +4092,16 @@ public final class PipelineCompiler
      * {@code sLeftClass[leftId] == sRightClass[rightId]}. Unlike the whole-value remap, both sides are canonicalized,
      * since two distinct right entries can share a prefix.
      */
-    private static void emitStringPrefixClassPrelude(StringBuilder out, int id, String leftDictionaryVar, String rightDictionaryVar, int start, int length)
+    private static void emitStringPrefixClassPrelude(StringBuilder out, boolean asField, int id, String leftDictionaryVar, String rightDictionaryVar, int start, int length)
     {
         out.append("    java.util.HashMap<String, Integer> sClass").append(id).append(" = new java.util.HashMap<>();\n");
-        emitPrefixClassLoop(out, id, "sLeftClass", leftDictionaryVar, start, length);
-        emitPrefixClassLoop(out, id, "sRightClass", rightDictionaryVar, start, length);
+        emitPrefixClassLoop(out, asField, id, "sLeftClass", leftDictionaryVar, start, length);
+        emitPrefixClassLoop(out, asField, id, "sRightClass", rightDictionaryVar, start, length);
     }
 
-    private static void emitPrefixClassLoop(StringBuilder out, int id, String arrayName, String dictionaryVar, int start, int length)
+    private static void emitPrefixClassLoop(StringBuilder out, boolean asField, int id, String arrayName, String dictionaryVar, int start, int length)
     {
-        out.append("    int[] ").append(arrayName).append(id).append(" = new int[").append(dictionaryVar).append(".length];\n");
+        out.append(asField ? "    " : "    int[] ").append(arrayName).append(id).append(" = new int[").append(dictionaryVar).append(".length];\n");
         out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
         out.append("      byte[] sub = org.weakref.nitro.function.scalar.builtin.Utf8Support.substring(")
                 .append(dictionaryVar).append("[e], 0, ").append(dictionaryVar).append("[e].length, ")
