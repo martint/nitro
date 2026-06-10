@@ -474,6 +474,22 @@ public class TestQueries
     }
 
     @Test
+    void testQuery49OperatorAlignment()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null);
+        List<org.weakref.nitro.data.Row> nitroRows;
+        try (Operator query = TpcdsParquetSupport.query49(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables)) {
+            nitroRows = normalizeNitroRows(OperatorAssertions.OperatorAssert.toRows(query), TestQueries::normalizeDecimalCentsValue);
+        }
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            assertThat(nitroRows)
+                    .as("TPC-DS Q49 Nitro vs Trino operators")
+                    .containsExactlyElementsOf(normalizeTrinoRows(support.query49(tables), TestQueries::normalizeDecimalCentsValue));
+        }
+    }
+
+    @Test
     void testQuery49()
     {
         assertOperatorMatches("49", tables -> TpcdsParquetSupport.query49(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query49(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);

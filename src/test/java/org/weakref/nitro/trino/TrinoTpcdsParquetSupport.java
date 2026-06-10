@@ -42,10 +42,13 @@ import io.trino.operator.join.NestedLoopJoinBridge;
 import io.trino.operator.join.NestedLoopJoinPagesSupplier;
 import io.trino.operator.window.AggregationWindowFunctionSupplier;
 import io.trino.operator.window.FrameInfo;
+import io.trino.operator.window.RankFunction;
 import io.trino.operator.window.RegularPartitionerSupplier;
 import io.trino.spi.Page;
 import io.trino.spi.connector.SortOrder;
 import io.trino.spi.function.OperatorType;
+import io.trino.spi.function.WindowFunction;
+import io.trino.spi.function.WindowFunctionSupplier;
 import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeOperators;
 import io.trino.spiller.SpillerFactory;
@@ -2697,8 +2700,9 @@ public final class TrinoTpcdsParquetSupport
         List<Type> returnTypes = tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn));
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_moy"));
         List<Type> metricTypes = List.of(factTypes.get(1), BIGINT, BIGINT);
+        List<Type> returnRankedTypes = List.of(factTypes.get(1), BIGINT, BIGINT, BIGINT);
         List<Type> rankingTypes = List.of(factTypes.get(1), BIGINT, BIGINT, BIGINT, BIGINT);
-        java.util.function.Supplier<PipelinePlan> metricsPlanSupplier = () -> appendPlan(
+        PipelinePlan metrics = appendPlan(
                 relationPlan(
                         tables,
                         salesTable,
@@ -2734,11 +2738,13 @@ public final class TrinoTpcdsParquetSupport
                         namedFactoryStep(queryName + ".project.measures", filterAndProjectFactory(
                                 49_20 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
+                                // The return quantity/amount coalesce to zero (the SQL's coalesce(...)): an item whose
+                                // matched returns all carry NULL values still produces a zero ratio that ranks first.
                                 List.of(
                                         field(1, factTypes.get(1)),
-                                        cast(field(8, returnTypes.get(2)), returnTypes.get(2), BIGINT),
+                                        coalesce(cast(field(8, returnTypes.get(2)), returnTypes.get(2), BIGINT), constant(0L, BIGINT), BIGINT),
                                         cast(field(3, factTypes.get(3)), factTypes.get(3), BIGINT),
-                                        scaledCents(field(9, returnTypes.get(3)), returnTypes.get(3)),
+                                        coalesce(scaledCents(field(9, returnTypes.get(3)), returnTypes.get(3)), constant(0L, BIGINT), BIGINT),
                                         scaledCents(field(4, factTypes.get(4)), factTypes.get(4))),
                                 List.of(factTypes.get(1), BIGINT, BIGINT, BIGINT, BIGINT))),
                         namedFactoryStep(queryName + ".group.item", hashAggregationFactory(
@@ -2759,62 +2765,66 @@ public final class TrinoTpcdsParquetSupport
                                 metricTypes))),
                 queryName + ".sink.metrics");
 
-        PipelinePlan returnRanked = appendPlan(
-                metricsPlanSupplier.get(),
+        // The two RANK() calls have different ORDER BYs, so they plan as two window nodes chained over ONE metrics
+        // subplan -- the same shape the Nitro harness uses (and what Trino's planner produces); each window appends
+        // its rank as a trailing channel.
+        return appendPlan(
+                metrics,
                 List.of(
-                        namedFactoryStep(queryName + ".rank.return", topNRankingFactory(
+                        namedFactoryStep(queryName + ".window.return_rank", windowFactory(
                                 49_23 + Math.abs(queryName.hashCode() % 100),
                                 metricTypes,
                                 List.of(0, 1, 2),
                                 List.of(),
                                 List.of(1),
                                 List.of(ASC_NULLS_LAST),
-                                10)),
-                        namedFactoryStep(queryName + ".project.return", filterAndProjectFactory(
+                                List.of(rankWindowFunction()))),
+                        namedFactoryStep(queryName + ".window.currency_rank", windowFactory(
                                 49_24 + Math.abs(queryName.hashCode() % 100),
-                                Optional.empty(),
-                                List.of(field(0, factTypes.get(1)), field(1, BIGINT), field(2, BIGINT), field(3, BIGINT), nullConstant(BIGINT)),
-                                rankingTypes))),
-                queryName + ".sink.return_ranked");
-        PipelinePlan currencyRanked = appendPlan(
-                metricsPlanSupplier.get(),
-                List.of(
-                        namedFactoryStep(queryName + ".rank.currency", topNRankingFactory(
-                                49_25 + Math.abs(queryName.hashCode() % 100),
-                                metricTypes,
-                                List.of(0, 1, 2),
+                                returnRankedTypes,
+                                List.of(0, 1, 2, 3),
                                 List.of(),
                                 List.of(2),
                                 List.of(ASC_NULLS_LAST),
-                                10)),
-                        namedFactoryStep(queryName + ".project.currency", filterAndProjectFactory(
+                                List.of(rankWindowFunction()))),
+                        namedFactoryStep(queryName + ".filter.top_ranks", filterAndProjectFactory(
+                                49_25 + Math.abs(queryName.hashCode() % 100),
+                                Optional.of(or(
+                                        lessThan(field(3, BIGINT), constant(11L, BIGINT), BIGINT),
+                                        lessThan(field(4, BIGINT), constant(11L, BIGINT), BIGINT))),
+                                identityProjections(rankingTypes),
+                                rankingTypes)),
+                        namedFactoryStep(queryName + ".project.output", filterAndProjectFactory(
                                 49_26 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
-                                List.of(field(0, factTypes.get(1)), field(1, BIGINT), field(2, BIGINT), nullConstant(BIGINT), field(3, BIGINT)),
-                                rankingTypes))),
-                queryName + ".sink.currency_ranked");
-        return appendPlan(
-                new PipelinePlan(
-                        new UnionPipelineSource(List.of(returnRanked, currencyRanked), queryName + ".union.ranks"),
-                        List.of(
-                                namedFactoryStep(queryName + ".group.ranks", hashAggregationFactory(
-                                        49_27 + Math.abs(queryName.hashCode() % 100),
-                                        rankingTypes.subList(0, 3),
-                                        List.of(0, 1, 2),
-                                        FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                        FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty())))),
-                        queryName + ".sink.ranks"),
-                List.of(namedFactoryStep(queryName + ".project.output", filterAndProjectFactory(
-                        49_28 + Math.abs(queryName.hashCode() % 100),
-                        Optional.empty(),
-                        List.of(
-                                constant(Slices.utf8Slice(channelName), query49OutputTypes(tables).get(0)),
-                                field(0, factTypes.get(1)),
-                                field(1, BIGINT),
-                                field(3, BIGINT),
-                                field(4, BIGINT)),
-                        query49OutputTypes(tables)))),
+                                List.of(
+                                        constant(Slices.utf8Slice(channelName), query49OutputTypes(tables).get(0)),
+                                        field(0, factTypes.get(1)),
+                                        field(1, BIGINT),
+                                        field(3, BIGINT),
+                                        field(4, BIGINT)),
+                                query49OutputTypes(tables)))),
                 queryName + ".sink.output");
+    }
+
+    /** RANK() as a window function definition (the frame is irrelevant to ranking). */
+    private static WindowFunctionDefinition rankWindowFunction()
+    {
+        WindowFunctionSupplier supplier = new WindowFunctionSupplier()
+        {
+            @Override
+            public WindowFunction createWindowFunction(boolean ignoreNulls, List<java.util.function.Supplier<Object>> lambdaProviders)
+            {
+                return new RankFunction();
+            }
+
+            @Override
+            public List<Class<?>> getLambdaInterfaces()
+            {
+                return List.of();
+            }
+        };
+        return window(supplier, BIGINT, PARTITION_ROWS_FRAME, false, List.of(), List.of());
     }
 
     private List<Type> query49OutputTypes(TpcdsParquetTables tables)
