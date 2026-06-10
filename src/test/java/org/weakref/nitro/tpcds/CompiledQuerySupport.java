@@ -73,7 +73,7 @@ public final class CompiledQuerySupport
         }
     }
 
-    public static Loaded load(Allocator allocator, TpcdsParquetTables tables)
+    public static Loaded load(Allocator allocator, ParquetTables tables)
     {
         long[][] sales = drain(scan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity"));
 
@@ -96,7 +96,7 @@ public final class CompiledQuerySupport
      * full {@code date_dim}. Used for the end-to-end three-way comparison (Nitro compiled vs Nitro interpreted
      * vs Trino) where all three read Parquet and do identical work, with no filter anywhere.
      */
-    public static Loaded loadUnfiltered(Allocator allocator, TpcdsParquetTables tables)
+    public static Loaded loadUnfiltered(Allocator allocator, ParquetTables tables)
     {
         long[][] sales = drain(scan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity"));
         long[][] dates = drain(scan(allocator, tables, "date_dim", "d_date_sk"));
@@ -104,7 +104,7 @@ public final class CompiledQuerySupport
     }
 
     /** Interpreted operator tree reading Parquet directly (scan -> HashJoin -> GroupedAggregation), no filter. */
-    public static Operator interpretedFromParquet(Allocator allocator, TpcdsParquetTables tables)
+    public static Operator interpretedFromParquet(Allocator allocator, ParquetTables tables)
     {
         Operator sales = scan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity");
         Operator dates = scan(allocator, tables, "date_dim", "d_date_sk");
@@ -151,7 +151,7 @@ public final class CompiledQuerySupport
         return new GroupedAggregationOperator(allocator, List.of(1), List.of(new Sum(2)), joined);
     }
 
-    private static Operator scan(Allocator allocator, TpcdsParquetTables tables, String table, String... columns)
+    private static Operator scan(Allocator allocator, ParquetTables tables, String table, String... columns)
     {
         return new MultiStageOperator(
                 columns.length,
@@ -167,7 +167,7 @@ public final class CompiledQuerySupport
      * type. A non-numeric (string/dictionary) column reports 64 and is handled by its STRING encoding instead. This
      * is the per-file half of the variant profile; encoding (the per-batch half) is discovered separately.
      */
-    public static int[] discoverNumericWidths(Allocator allocator, TpcdsParquetTables tables, String table, List<String> columns)
+    public static int[] discoverNumericWidths(Allocator allocator, ParquetTables tables, String table, List<String> columns)
     {
         int[] widths = new int[columns.size()];
         java.util.Arrays.fill(widths, 64);
@@ -195,7 +195,7 @@ public final class CompiledQuerySupport
      * null-zeroed). To stay safe against the scan's pooled/recycled vectors, the current batch is held open while
      * the compiled routine processes it and closed only on the next {@code advance()}.
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetColumnarSource(Allocator allocator, TpcdsParquetTables tables, String table, String... columns)
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetColumnarSource(Allocator allocator, ParquetTables tables, String table, String... columns)
     {
         int width = columns.length;
         Operator operator = scan(allocator, tables, table, columns);
@@ -266,7 +266,7 @@ public final class CompiledQuerySupport
      * the eager loader uses). The compiled streaming routine folds each batch without the whole table ever being
      * materialized.
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, TpcdsParquetTables tables, String table, String... columns)
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, ParquetTables tables, String table, String... columns)
     {
         List<org.weakref.nitro.jit.QueryLowering.Column> specs = new ArrayList<>();
         for (String column : columns) {
@@ -281,7 +281,7 @@ public final class CompiledQuerySupport
      * the compiled routine's null handling matches. String probe columns are not supported (they would need a
      * dictionary consistent across batches).
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, TpcdsParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, ParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
     {
         int width = specs.size();
         String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
@@ -350,7 +350,7 @@ public final class CompiledQuerySupport
      * the rows that survived the earlier ones) and once for the payload -- so a column is converted only for the
      * rows that reach the stage that needs it. Flat columns only.
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetLazySource(Allocator allocator, TpcdsParquetTables tables,
+    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetLazySource(Allocator allocator, ParquetTables tables,
             String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
     {
         int width = specs.size();
@@ -657,7 +657,7 @@ public final class CompiledQuerySupport
     public record LoadedInputs(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {}
 
     /** Load a lowered query's inputs from Parquet (flat and dictionary-string columns, with null masks). */
-    public static LoadedInputs loadLoweredInputs(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    public static LoadedInputs loadLoweredInputs(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
         org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
@@ -677,7 +677,7 @@ public final class CompiledQuerySupport
      * (dimension) inputs are materialized once into hash tables; the probe (fact) input is streamed from Parquet
      * batch-by-batch (flat columns). Returns the raw result.
      */
-    public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, TpcdsParquetTables tables,
+    public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming)
     {
         return runStreamingLowered(allocator, tables, lowered, streaming, false);
@@ -688,7 +688,7 @@ public final class CompiledQuerySupport
      * selection-driven lazy source -- so join-driven late materialization converts the probe's payload columns only
      * for rows that survive the dimension joins.
      */
-    public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, TpcdsParquetTables tables,
+    public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
     {
         return streamCapturingBuilds(allocator, tables, lowered, streaming, lazyProbe).result();
@@ -708,7 +708,7 @@ public final class CompiledQuerySupport
      * to any number of materialized inputs, so the harness can wire compiled pipelines into the same tree shape the
      * Trino/Nitro operator trees use (recomputing a shared subtree rather than reusing it).
      */
-    public static LoweredResult runStage(Allocator allocator, TpcdsParquetTables tables,
+    public static LoweredResult runStage(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
@@ -737,7 +737,7 @@ public final class CompiledQuerySupport
     }
 
     /** Resolve input {@code slot} into {@code columns}/{@code rowCounts}[slot]: a materialized virtual relation if named in {@code virtuals}, else a Parquet drain. */
-    private static void resolveInput(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Input source,
+    private static void resolveInput(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Input source,
             java.util.Map<String, Materialized> virtuals, org.weakref.nitro.jit.Column[][] columns, int[] rowCounts, int slot)
     {
         Materialized virtual = virtuals.get(source.table());
@@ -940,7 +940,7 @@ public final class CompiledQuerySupport
     }
 
     /** Run a pipeline stage (via {@link #runStage}) and materialize its result for use as a downstream stage's input. */
-    public static Materialized materializeStage(Allocator allocator, TpcdsParquetTables tables,
+    public static Materialized materializeStage(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
         return materializeStage(allocator, tables, lowered, virtuals, List.of());
@@ -967,7 +967,7 @@ public final class CompiledQuerySupport
      * loaded inputs) into dictionary columns, so the virtual relation carries their dictionaries for a downstream stage
      * that passes the string through rather than re-joining its base table.
      */
-    public static Materialized materializeStage(Allocator allocator, TpcdsParquetTables tables,
+    public static Materialized materializeStage(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals,
             List<CompiledTpcdsQueries.DictRef> stringColumns)
     {
@@ -987,7 +987,7 @@ public final class CompiledQuerySupport
      * compiled pipeline. Unlike {@link #runStage}, the probe is drained rather than streamed, so its column dictionaries
      * are captured in the returned inputs -- letting a probe-side string group key be reconstructed at materialization.
      */
-    public static LoweredResult runStageEager(Allocator allocator, TpcdsParquetTables tables,
+    public static LoweredResult runStageEager(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
@@ -999,7 +999,7 @@ public final class CompiledQuerySupport
         return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
     }
 
-    private static StreamedResult streamCapturingBuilds(Allocator allocator, TpcdsParquetTables tables,
+    private static StreamedResult streamCapturingBuilds(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
     {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
@@ -1021,7 +1021,7 @@ public final class CompiledQuerySupport
     }
 
     /** Load a lowered query's inputs from Parquet and run it. */
-    public static LoweredResult runLowered(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
         LoadedInputs loaded = loadLoweredInputs(allocator, tables, lowered);
         return new LoweredResult(lowered.compile().execute(loaded.inputs(), loaded.rowCounts()), loaded.inputs());
@@ -1032,7 +1032,7 @@ public final class CompiledQuerySupport
      * of drained), returning the result with the build inputs positioned for {@link CompiledTpcdsQueries.DictRef}
      * reconstruction. Needed when the probe is a huge fact (e.g. Q37/Q82 over inventory) that cannot be drained eagerly.
      */
-    public static LoweredResult runStreamingPorted(Allocator allocator, TpcdsParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    public static LoweredResult runStreamingPorted(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
         org.weakref.nitro.jit.StreamingPipeline streaming =
                 PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
@@ -1050,7 +1050,7 @@ public final class CompiledQuerySupport
      * (all other {@code main} inputs are read from Parquet). This is the decorrelated correlated-subquery shape --
      * the subquery's aggregate feeds {@code main} as a join build, exactly as the optimizer produces it.
      */
-    public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
+    public static LoweredResult runMultiStage(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
     {
         org.weakref.nitro.jit.StreamingPipeline subStreaming =
@@ -1062,7 +1062,7 @@ public final class CompiledQuerySupport
      * As {@link #runMultiStage}, but with both stages already compiled -- so a benchmark amortizes the one-time Java
      * compilation (like a query plan) and measures only the per-invocation Parquet read + execution.
      */
-    public static LoweredResult runMultiStage(Allocator allocator, TpcdsParquetTables tables,
+    public static LoweredResult runMultiStage(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.StreamingPipeline subStreaming,
             org.weakref.nitro.jit.QueryLowering.Lowered main, CompiledPipeline mainCompiled, String virtualTable)
     {
@@ -1097,7 +1097,7 @@ public final class CompiledQuerySupport
      * result, concatenate the same-schema branch results row-wise into the {@code virtualTable}, and run {@code main}
      * over the concatenation. Branches are computed once each (not replayed); concatenation is the union.
      */
-    public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
+    public static LoweredResult runUnion(Allocator allocator, ParquetTables tables,
             List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
     {
         return runUnion(allocator, tables, branches, main, virtualTable, List.of());
@@ -1111,7 +1111,7 @@ public final class CompiledQuerySupport
      * exactly as a single materialized stage is. Branches are computed once each (not replayed); concatenation is the
      * union.
      */
-    public static Materialized materializeUnion(Allocator allocator, TpcdsParquetTables tables,
+    public static Materialized materializeUnion(Allocator allocator, ParquetTables tables,
             List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
         List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
@@ -1174,7 +1174,7 @@ public final class CompiledQuerySupport
      * its own (filtered) source dictionary, so the branch string columns are merged into one ordered unified
      * dictionary during concatenation -- ids consistent across branches, and id order = value order for ORDER BY.
      */
-    public static LoweredResult runUnion(Allocator allocator, TpcdsParquetTables tables,
+    public static LoweredResult runUnion(Allocator allocator, ParquetTables tables,
             List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main,
             String virtualTable, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
@@ -1315,7 +1315,7 @@ public final class CompiledQuerySupport
      * every entry. Each entry is reconstructed with the query's trailing {@code substring(col, start, length)}
      * projection so the output strings match the harness exactly.
      */
-    static byte[][] dictionaryFor(org.weakref.nitro.jit.Column[][] dictInputs, CompiledTpcdsQueries.DictRef ref)
+    public static byte[][] dictionaryFor(org.weakref.nitro.jit.Column[][] dictInputs, CompiledTpcdsQueries.DictRef ref)
     {
         if (ref.literal() != null) {
             // Constant string column: a single-entry dictionary the placeholder column's all-zero ids map onto.

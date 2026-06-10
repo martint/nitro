@@ -24,6 +24,7 @@ import java.util.Optional;
 import static java.util.Objects.requireNonNull;
 
 public final class TpcdsParquetTables
+        implements ParquetTables
 {
     public static final String TPCDS_PARQUET_PATH_PROPERTY = "nitro.tpcds.parquet.path";
     public static final String TPCDS_PARQUET_SCHEMA_PROPERTY = "nitro.tpcds.parquet.schema";
@@ -99,6 +100,7 @@ public final class TpcdsParquetTables
         return schemaDirectory().resolve(tableName);
     }
 
+    @Override
     public List<Path> tableFiles(String tableName)
     {
         Path tableDirectory = tableDirectory(tableName);
