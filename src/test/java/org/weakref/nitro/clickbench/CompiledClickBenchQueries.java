@@ -815,6 +815,48 @@ public final class CompiledClickBenchQueries
     }
 
     /**
+     * SELECT TraficSourceID, SearchEngineID, AdvEngineID, CASE WHEN (SearchEngineID = 0 AND AdvEngineID = 0)
+     * THEN Referer ELSE '' END AS Src, URL AS Dst, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in
+     * July 2013 AND IsRefresh = 0 GROUP BY 1..5 ORDER BY 6 DESC LIMIT 10 OFFSET 1000. The string CASE folds
+     * to ids: the value branch is the referer's dictionary id, the else-'' branch the -1 empty-string
+     * sentinel, reconstructed through the referer's dictionary.
+     */
+    public static Ported query40(java.nio.file.Path hits)
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("TraficSourceID"),
+                new QueryLowering.Column("SearchEngineID"),
+                new QueryLowering.Column("AdvEngineID"),
+                new QueryLowering.Column("Referer", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("EventDate"),
+                new QueryLowering.Column("IsRefresh"));
+        query.where(
+                new Plan.Predicate("=", query.column("CounterID"), new Plan.Lit(62)),
+                new Plan.Predicate("=", query.column("IsRefresh"), new Plan.Lit(0)),
+                new Plan.Predicate(">", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_START) - 1)),
+                new Plan.Predicate("<", query.column("EventDate"), new Plan.Lit(ClickBenchHitsSupport.eventDateLiteral(hits, JULY_2013_END))));
+        query.groupBy(
+                query.column("TraficSourceID"),
+                query.column("SearchEngineID"),
+                query.column("AdvEngineID"),
+                new Plan.Case(
+                        List.of(new Plan.Case.Branch(
+                                new Plan.And(List.of(
+                                        new Plan.Predicate("=", query.column("SearchEngineID"), new Plan.Lit(0)),
+                                        new Plan.Predicate("=", query.column("AdvEngineID"), new Plan.Lit(0)))),
+                                query.column("Referer"))),
+                        new Plan.Lit(-1)),
+                query.column("URL"))
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(5, true)), 10, 1_000));
+        return new Ported(query, List.of(
+                new CompiledTpcdsQueries.DictRef(3, 0, 3),
+                new CompiledTpcdsQueries.DictRef(4, 0, 4)));
+    }
+
+    /**
      * SELECT URLHash, EventDate, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in July 2013 AND
      * IsRefresh = 0 AND TraficSourceID IN (-1, 6) AND RefererHash = ... GROUP BY 1, 2 ORDER BY 3 DESC
      * LIMIT 10 OFFSET 100. The EventDate literals depend on the file's date encoding, so the lowering
