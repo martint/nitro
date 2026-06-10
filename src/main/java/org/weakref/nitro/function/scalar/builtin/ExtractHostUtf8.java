@@ -115,12 +115,28 @@ public final class ExtractHostUtf8
 
     private static void applyFlatValues(Vector values, VectorAccess.BooleanValues inputNulls, Mask mask, BinaryVector output)
     {
+        // The mask can be sparse, but the offsets array is a cumulative chain over ALL positions -- fill the
+        // skipped positions' offsets forward (empty values) so positional writes after a gap stay aligned.
+        int currentOffset = 0;
+        int lastPosition = -1;
         for (int position : mask) {
+            fillOffsets(output, lastPosition + 1, position, currentOffset);
             if (inputNulls.value(position)) {
                 output.setNull(position);
-                continue;
             }
-            writeExtracted(values, position, output, position);
+            else {
+                writeExtracted(values, position, output, position);
+                currentOffset = output.endOffset(position);
+            }
+            lastPosition = position;
+        }
+        fillOffsets(output, lastPosition + 1, output.length(), currentOffset);
+    }
+
+    private static void fillOffsets(BinaryVector output, int startInclusive, int endExclusive, int offset)
+    {
+        for (int position = startInclusive; position <= endExclusive; position++) {
+            output.offsets()[position] = offset;
         }
     }
 

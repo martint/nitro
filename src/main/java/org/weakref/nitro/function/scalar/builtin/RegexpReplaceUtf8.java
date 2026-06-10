@@ -138,22 +138,39 @@ public final class RegexpReplaceUtf8
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
 
+        // The mask can be sparse, but the offsets array is a cumulative chain over ALL positions -- a bare
+        // positional setBytes after a gap would inherit a stale start offset and shear every later value.
+        // Fill the skipped positions' offsets forward (empty values) exactly like ConcatUtf8.
         index = 0;
+        int currentOffset = 0;
+        int lastPosition = -1;
         for (int position : mask) {
+            fillOffsets(outputValues, lastPosition + 1, position, currentOffset);
             byte[] bytes = rewritten[index++];
             if (bytes == null) {
                 outputValues.setNull(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = true;
                 }
-                continue;
             }
-            outputValues.setBytes(position, bytes);
-            if (outputNulls != null) {
-                outputNulls.values()[position] = false;
+            else {
+                outputValues.setBytes(position, bytes);
+                currentOffset += bytes.length;
+                if (outputNulls != null) {
+                    outputNulls.values()[position] = false;
+                }
             }
+            lastPosition = position;
         }
+        fillOffsets(outputValues, lastPosition + 1, outputValues.length(), currentOffset);
         return outputValues;
+    }
+
+    private static void fillOffsets(BinaryVector outputValues, int startInclusive, int endExclusive, int offset)
+    {
+        for (int position = startInclusive; position <= endExclusive; position++) {
+            outputValues.offsets()[position] = offset;
+        }
     }
 
     private static void fillNulls(Vector valuesNulls, Vector patternNulls, Vector replacementNulls, Mask mask, BooleanVector outputNulls)

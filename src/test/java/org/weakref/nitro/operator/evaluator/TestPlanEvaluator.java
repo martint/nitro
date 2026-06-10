@@ -454,6 +454,120 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testRegexpReplaceUtf8SparseMaskKeepsOffsetsAligned()
+    {
+        // A sparse mask must not shear the output: the BinaryVector offsets are a cumulative chain over ALL
+        // positions, so skipped positions need their offsets filled forward (regression: masked regexp output
+        // read back rotated bytes of neighboring values).
+        Variable pattern = new Variable(0);
+        Variable replacement = new Variable(1);
+        Variable host = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(pattern, new Literal("^https?://(?:www\\.)?([^/]+)/.*$"), AllMask.ALL),
+                        new Assignment(replacement, new Literal("\\1"), AllMask.ALL),
+                        new Assignment(
+                                host,
+                                new Call("regexp_replace_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(pattern, Stream.VALUES),
+                                        new Reference(replacement, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(host, Stream.VALUES)));
+
+        BinaryVector values = new BinaryVector(5, 200);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(2, "https://example.com/page".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(3, "http://tambov.irr.ru/0/c1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(4, "https://www.wildberries.ru/catalog".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        Mask mask = Mask.sparse(new int[] {1, 3, 4}, 5);
+        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), mask);
+        BinaryVector rewritten = (BinaryVector) result.values();
+        assertThat(utf8(rewritten, 1)).isEqualTo("news.ycombinator.com");
+        assertThat(utf8(rewritten, 3)).isEqualTo("tambov.irr.ru");
+        assertThat(utf8(rewritten, 4)).isEqualTo("wildberries.ru");
+    }
+
+    @Test
+    void testIfUtf8SparseMaskKeepsOffsetsAligned()
+    {
+        // Same sparse-mask offsets-chain regression as regexp_replace: skipped positions must be filled forward.
+        Variable selected = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(selected, new Call("if_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES)));
+
+        BinaryVector trueValues = new BinaryVector(4, 64);
+        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        trueValues.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(1, "bravo".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(2, "charlie".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(3, "delta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        BinaryVector falseValues = new BinaryVector(4, 64);
+        falseValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        falseValues.setBytes(0, "w".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        falseValues.setBytes(1, "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        falseValues.setBytes(2, "y".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        falseValues.setBytes(3, "z".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        org.weakref.nitro.data.BooleanVector conditions = new org.weakref.nitro.data.BooleanVector(new boolean[] {true, false, true, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), conditions,
+                        new Reference(new Input(1), Stream.VALUES), trueValues,
+                        new Reference(new Input(2), Stream.VALUES), falseValues)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(selected, Stream.VALUES), Mask.sparse(new int[] {1, 3}, 4));
+        BinaryVector values = (BinaryVector) result.values();
+        assertThat(utf8(values, 1)).isEqualTo("x");
+        assertThat(utf8(values, 3)).isEqualTo("z");
+    }
+
+    @Test
+    void testExtractHostUtf8SparseMaskKeepsOffsetsAligned()
+    {
+        Variable host = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(host, new Call("extract_host_utf8", List.of(new Reference(new Input(0), Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(host, Stream.VALUES)));
+
+        BinaryVector values = new BinaryVector(4, 160);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(2, "https://example.com/page".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(3, "http://tambov.irr.ru/0/c1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.sparse(new int[] {1, 3}, 4));
+        BinaryVector hosts = (BinaryVector) result.values();
+        assertThat(utf8(hosts, 1)).isEqualTo("news.ycombinator.com");
+        assertThat(utf8(hosts, 3)).isEqualTo("tambov.irr.ru");
+    }
+
+    @Test
     void testRegexpReplaceUtf8SupportsCaptureGroupReplacement()
     {
         Variable pattern = new Variable(0);

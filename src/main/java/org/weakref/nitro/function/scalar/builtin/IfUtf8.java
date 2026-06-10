@@ -109,7 +109,12 @@ public final class IfUtf8
         VectorAccess.BooleanValues conditionNullValues = VectorAccess.booleanValues(conditionNulls);
         VectorAccess.BooleanValues trueNullValues = VectorAccess.booleanValues(trueNulls);
         VectorAccess.BooleanValues falseNullValues = VectorAccess.booleanValues(falseNulls);
+        // The mask can be sparse, but the offsets array is a cumulative chain over ALL positions -- fill the
+        // skipped positions' offsets forward (empty values) so positional writes after a gap stay aligned.
+        int currentOffset = 0;
+        int lastPosition = -1;
         for (int position : mask) {
+            fillOffsets(outputValues, lastPosition + 1, position, currentOffset);
             boolean takeTrue = !conditionNullValues.value(position) && conditionValues.value(position);
             VectorAccess.BinaryValues selectedValues = takeTrue ? trueValues : falseValues;
             VectorAccess.BooleanValues selectedNullValues = takeTrue ? trueNullValues : falseNullValues;
@@ -121,10 +126,20 @@ public final class IfUtf8
             }
             else {
                 copyBytes(selectedValues, position, outputValues, position);
+                currentOffset = outputValues.endOffset(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = false;
                 }
             }
+            lastPosition = position;
+        }
+        fillOffsets(outputValues, lastPosition + 1, outputValues.length(), currentOffset);
+    }
+
+    private static void fillOffsets(BinaryVector outputValues, int startInclusive, int endExclusive, int offset)
+    {
+        for (int position = startInclusive; position <= endExclusive; position++) {
+            outputValues.offsets()[position] = offset;
         }
     }
 
