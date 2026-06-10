@@ -204,7 +204,11 @@ public final class RegexpReplaceUtf8
         };
     }
 
-    private static Slice translateReplacement(Slice replacement)
+    /**
+     * Translate SQL replacement syntax (backslash group references) to RE2J's: public so a dictionary-level
+     * derivation (the compiled loader's regexp-derived columns) applies the exact same replacement semantics.
+     */
+    public static Slice translateReplacement(Slice replacement)
     {
         DynamicSliceOutput translated = new DynamicSliceOutput(replacement.length());
         int index = 0;

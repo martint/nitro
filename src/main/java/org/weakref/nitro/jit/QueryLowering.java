@@ -51,8 +51,13 @@ public final class QueryLowering
      * join one table more than once in a query (e.g. {@code date_dim} for both a sold and a returned date). The
      * {@code loadMode} is derived by {@link #lower()}, not declared.
      */
-    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength, boolean upperCase, LoadMode loadMode)
+    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength, boolean upperCase, LoadMode loadMode, String regexpPattern, String regexpReplacement)
     {
+        public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength, boolean upperCase, LoadMode loadMode)
+        {
+            this(name, sourceName, encoding, nullable, substringStart, substringLength, upperCase, loadMode, null, null);
+        }
+
         public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength)
         {
             this(name, sourceName, encoding, nullable, substringStart, substringLength, false, LoadMode.ORDERED);
@@ -65,7 +70,17 @@ public final class QueryLowering
 
         public Column withLoadMode(LoadMode mode)
         {
-            return new Column(name, sourceName, encoding, nullable, substringStart, substringLength, upperCase, mode);
+            return new Column(name, sourceName, encoding, nullable, substringStart, substringLength, upperCase, mode, regexpPattern, regexpReplacement);
+        }
+
+        /**
+         * A string column derived as {@code regexp_replace(source, pattern, replacement)} (SQL backslash group
+         * references), applied per dictionary entry by the loader, so grouping/filtering operate on the derived
+         * values while the raw source can be loaded alongside under its own name.
+         */
+        public static Column regexpReplace(String name, String sourceName, boolean nullable, String pattern, String replacement)
+        {
+            return new Column(name, sourceName, ColumnEncoding.STRING, nullable, 1, -1, false, LoadMode.ORDERED, pattern, replacement);
         }
 
         public Column(String name, ColumnEncoding encoding, boolean nullable)

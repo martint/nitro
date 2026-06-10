@@ -359,9 +359,13 @@ public final class CompiledQuerySupport
         // are interned into a per-query global dictionary; filter-only strings keep cheap page-local dictionaries.
         GlobalStringDictionary[] globalDictionaries = new GlobalStringDictionary[width];
         for (int c = 0; c < width; c++) {
-            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+            org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
+            if (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
                     && PipelineCompiler.stringIdsCrossBatches(pipeline, c)) {
-                globalDictionaries[c] = new GlobalStringDictionary();
+                globalDictionaries[c] = new GlobalStringDictionary(regexpTransform(spec));
+            }
+            else if (spec.regexpPattern() != null) {
+                throw new UnsupportedOperationException("regexp-derived column " + spec.name() + " requires a globally-interned streamed load");
             }
         }
         Operator operator = scan(allocator, tables, table, names);
@@ -1764,16 +1768,37 @@ public final class CompiledQuerySupport
     {
         private final java.util.HashMap<String, Integer> index = new java.util.HashMap<>();
         private final java.util.IdentityHashMap<Object, int[]> pageRemaps = new java.util.IdentityHashMap<>();
+        // An optional per-value derivation (e.g. a regexp host extraction) applied before interning, so the
+        // dictionary holds the DERIVED values. The derivation runs once per distinct RAW value: a
+        // dictionary-encoded page pays it per distinct page entry, and plain pages dedup raw bytes through
+        // rawIndex first -- a per-row regexp over a 100M-row fact would otherwise dominate the whole query.
+        private final java.util.function.UnaryOperator<byte[]> transform;
+        private final java.util.HashMap<String, Integer> rawIndex;
         private byte[][] entries = new byte[16][];
         private int size;
 
+        GlobalStringDictionary(java.util.function.UnaryOperator<byte[]> transform)
+        {
+            this.transform = transform;
+            this.rawIndex = transform == null ? null : new java.util.HashMap<>();
+        }
+
         int intern(byte[] bytes)
         {
-            return index.computeIfAbsent(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), key -> {
+            if (transform == null) {
+                return internDerived(bytes);
+            }
+            return rawIndex.computeIfAbsent(new String(bytes, java.nio.charset.StandardCharsets.UTF_8),
+                    key -> internDerived(transform.apply(bytes)));
+        }
+
+        private int internDerived(byte[] value)
+        {
+            return index.computeIfAbsent(new String(value, java.nio.charset.StandardCharsets.UTF_8), key -> {
                 if (size == entries.length) {
                     entries = java.util.Arrays.copyOf(entries, size * 2);
                 }
-                entries[size] = bytes;
+                entries[size] = value;
                 return size++;
             });
         }
@@ -1804,6 +1829,18 @@ public final class CompiledQuerySupport
         {
             return java.util.Arrays.copyOf(entries, size);
         }
+    }
+
+    /** The spec's regexp derivation as a per-value transform (null when the column is loaded verbatim), with the exact replacement semantics of regexp_replace_utf8. */
+    private static java.util.function.UnaryOperator<byte[]> regexpTransform(org.weakref.nitro.jit.QueryLowering.Column spec)
+    {
+        if (spec.regexpPattern() == null) {
+            return null;
+        }
+        io.trino.re2j.Pattern pattern = io.trino.re2j.Pattern.compile(spec.regexpPattern());
+        io.airlift.slice.Slice replacement = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
+                io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
+        return value -> pattern.matcher(io.airlift.slice.Slices.wrappedBuffer(value)).replaceAll(replacement).getBytes();
     }
 
     private static int intern(java.util.Map<String, Integer> index, List<byte[]> dictionary, byte[] bytes)
