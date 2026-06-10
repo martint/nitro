@@ -1843,6 +1843,179 @@ public final class PipelineCompiler
         return openBraces;
     }
 
+    /**
+     * Phase 1 of the late-materialize streaming path, staged per join: stage {@code k} materializes only the probe
+     * columns join {@code k} and its same-level filters read -- the first stage over the whole batch, later stages
+     * gathered by the selection the earlier joins left -- probes the build, applies the filters that became
+     * evaluable, and compacts the surviving (probe row, matched build rows) tuples into the Next buffers, which
+     * then swap in. Probe-only filters run in the first stage before any join. A selective early join prunes the
+     * decode of every later join key and filter column.
+     */
+    private static void emitStagedSelection(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable,
+            List<Plan.Join> joins, int[] buildOffset, int probeColumns, List<Plan.Condition> filterMatches, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        int joinCount = joins.size();
+        Map<Integer, List<Plan.Condition>> filtersByLevel = new java.util.LinkedHashMap<>();
+        for (Plan.Condition filter : pipeline.filters()) {
+            filtersByLevel.computeIfAbsent(filterLevel(filter, joins, buildOffset, probeColumns), level -> new ArrayList<>()).add(filter);
+        }
+        for (int k = 0; k < joinCount; k++) {
+            boolean first = k == 0;
+            String loop = first ? "i" : "j";
+            int stage = k;
+
+            // The probe columns this stage decodes: join k's probe-side keys plus the probe columns of the filters
+            // that become evaluable here (probe-only filters fold into the first stage).
+            TreeSet<Integer> stageColumns = new TreeSet<>();
+            for (int key : joins.get(k).probeKeyColumns()) {
+                if (key < probeColumns) {
+                    stageColumns.add(key);
+                }
+            }
+            List<Plan.Condition> stageFilters = new ArrayList<>();
+            if (first && filtersByLevel.containsKey(-1)) {
+                stageFilters.addAll(filtersByLevel.get(-1));
+            }
+            List<Plan.Condition> levelFilters = filtersByLevel.get(k);
+            for (Plan.Condition filter : stageFilters) {
+                collectProbeConditionColumns(filter, probeColumns, stageColumns);
+            }
+            if (levelFilters != null) {
+                for (Plan.Condition filter : levelFilters) {
+                    collectProbeConditionColumns(filter, probeColumns, stageColumns);
+                }
+            }
+
+            IntFunction<String> stageResolver = index -> {
+                if (index < probeColumns) {
+                    return joinAccess(combinedEncoding(pipeline, encodings, index), probeVars(index), loop);
+                }
+                int build = buildOf(joins, buildOffset, index);
+                ColumnEncoding encoding = combinedEncoding(pipeline, encodings, index);
+                String row = build == stage ? "buildRow" + build : "bsel" + build + "[j]";
+                String access = joinAccess(encoding, buildVars(build, index - buildOffset[build]), row);
+                return joins.get(build).outer() ? outerValue(row, encoding, access) : access;
+            };
+            IntFunction<String> stageNullResolver = index -> {
+                if (index < probeColumns) {
+                    return joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), probeVars(index), loop);
+                }
+                int build = buildOf(joins, buildOffset, index);
+                String row = build == stage ? "buildRow" + build : "bsel" + build + "[j]";
+                String nullAccess = joinNullAccess(combinedEncoding(pipeline, encodings, index), combinedNullable(pipeline, nullable, index), buildVars(build, index - buildOffset[build]), row);
+                return joins.get(build).outer() ? outerNull(row, nullAccess) : nullAccess;
+            };
+
+            // Skip the whole stage once a batch's selection is empty: materializing would borrow (and so decode)
+            // this stage's columns for nothing. On a clustered fact most batches die at the first selective stage,
+            // so the later joins' key columns are never decoded for them -- the actual decode save, since a
+            // selection-gathered materialize still decodes the full batch column before gathering.
+            out.append(first ? "      {\n" : "      if (selected > 0) {\n");
+            if (!stageColumns.isEmpty()) {
+                if (first) {
+                    out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(");\n");
+                }
+                else {
+                    out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(", selection, selected);\n");
+                }
+                for (int column : stageColumns) {
+                    emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
+                }
+                for (Plan.Condition match : filterMatches) {
+                    if (match instanceof Plan.StringColumnCompare) {
+                        continue;   // column-vs-column needs both dictionaries; its remap/prefix prelude is emitted once after all builds load
+                    }
+                    if (stringMatchColumn(match) < probeColumns && stageColumns.contains(stringMatchColumn(match))) {
+                        emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
+                    }
+                }
+            }
+            out.append("        int kept = 0;\n");
+            if (first) {
+                out.append("        for (int i = 0; i < probeRows; i++) {\n");
+            }
+            else {
+                out.append("        for (int j = 0; j < selected; j++) {\n");
+            }
+            String indent = "          ";
+            int openBraces = 0;
+            if (!stageFilters.isEmpty()) {
+                out.append(indent).append("if (").append(conjunction(stageFilters, stageResolver, stageNullResolver, stringMaskIds)).append(") {\n");
+                indent += "  ";
+                openBraces++;
+            }
+            if (joins.get(k).cross()) {
+                out.append(indent).append("for (int buildRow").append(k).append(" = 0; buildRow").append(k).append(" < build").append(k).append("Rows; buildRow").append(k).append("++) {\n");
+                indent += "  ";
+                openBraces++;
+            }
+            else {
+                emitProbeLookup(out, indent, k, joins.get(k), pipeline, encodings, stageResolver, stageNullResolver);
+                if (joins.get(k).anti()) {
+                    out.append(indent).append("if (buildRow").append(k).append(" == -1) {\n");
+                    indent += "  ";
+                    openBraces++;
+                }
+                else if (joins.get(k).semi()) {
+                    out.append(indent).append("if (buildRow").append(k).append(" != -1) {\n");
+                    indent += "  ";
+                    openBraces++;
+                }
+                else if (!joins.get(k).outer()) {
+                    out.append(indent).append("for ( ; buildRow").append(k).append(" != -1; buildRow").append(k)
+                            .append(" = (buildNext").append(k).append(" == null ? -1 : buildNext").append(k).append("[buildRow").append(k).append("])) {\n");
+                    indent += "  ";
+                    openBraces++;
+                }
+            }
+            if (levelFilters != null) {
+                out.append(indent).append("if (").append(conjunction(levelFilters, stageResolver, stageNullResolver, stringMaskIds)).append(") {\n");
+                indent += "  ";
+                openBraces++;
+            }
+            // An inner one-to-many or cross join fans one input tuple out to several survivors, so the Next buffers
+            // can outgrow the input; semi/anti/left emit at most one survivor per tuple.
+            if (joins.get(k).cross() || (!joins.get(k).anti() && !joins.get(k).semi() && !joins.get(k).outer())) {
+                out.append(indent).append("if (kept == selectionNext.length) {\n");
+                out.append(indent).append("  int grown = kept * 2;\n");
+                out.append(indent).append("  selectionNext = java.util.Arrays.copyOf(selectionNext, grown);\n");
+                for (int m = 0; m < joinCount; m++) {
+                    out.append(indent).append("  bsel").append(m).append("Next = java.util.Arrays.copyOf(bsel").append(m).append("Next, grown);\n");
+                }
+                out.append(indent).append("}\n");
+            }
+            out.append(indent).append("selectionNext[kept] = ").append(first ? "i" : "selection[j]").append(";\n");
+            for (int m = 0; m < k; m++) {
+                out.append(indent).append("bsel").append(m).append("Next[kept] = bsel").append(m).append("[j];\n");
+            }
+            out.append(indent).append("bsel").append(k).append("Next[kept] = buildRow").append(k).append(";\n");
+            out.append(indent).append("kept++;\n");
+            for (int brace = 0; brace < openBraces; brace++) {
+                indent = indent.substring(2);
+                out.append(indent).append("}\n");
+            }
+            out.append("        }\n");
+            out.append("        { int[] t = selection; selection = selectionNext; selectionNext = t; }\n");
+            for (int m = 0; m <= k; m++) {
+                out.append("        { int[] t = bsel").append(m).append("; bsel").append(m).append(" = bsel").append(m).append("Next; bsel").append(m).append("Next = t; }\n");
+            }
+            out.append("        selected = kept;\n");
+            out.append("      }\n");
+        }
+    }
+
+    /** Add the probe-side ({@code < probeColumns}) columns {@code condition} reads into {@code into}. */
+    private static void collectProbeConditionColumns(Plan.Condition condition, int probeColumns, TreeSet<Integer> into)
+    {
+        TreeSet<Integer> columns = new TreeSet<>();
+        collectConditionColumns(condition, columns);
+        for (int column : columns) {
+            if (column < probeColumns) {
+                into.add(column);
+            }
+        }
+    }
+
     private static void emitJoinBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         emitJoinBody(out, pipeline, encodings, nullable, resultTypes, false);
@@ -2083,69 +2256,28 @@ public final class PipelineCompiler
             // The per-batch survivor index (selection) and matched build-row indices (bsel<k>) are transient scratch
             // reused across batches: allocate them once, grow geometrically when a batch needs more capacity, and
             // reset the logical length (selected = 0) each batch. The whole batch is processed before the next
-            // advance(), so last-batch's buffer is free to be the next batch's. The cross-join grow path below
-            // reassigns these same locals when one probe row yields more survivors than rows.
-            out.append("    int[] selection = new int[0];\n");
+            // advance(), so last-batch's buffer is free to be the next batch's. Each ping-pongs with a Next buffer
+            // that the per-join stages compact into; the fan-out grow path reassigns these same locals when one
+            // probe row yields more survivors than rows.
+            out.append("    int[] selection = new int[0]; int[] selectionNext = new int[0];\n");
             for (int k = 0; k < joinCount; k++) {
-                out.append("    int[] bsel").append(k).append(" = new int[0];\n");
+                out.append("    int[] bsel").append(k).append(" = new int[0]; int[] bsel").append(k).append("Next = new int[0];\n");
             }
             out.append("    while (source.advance()) {\n");
             out.append("      int probeRows = source.rows();\n");
             out.append("      if (selection.length < probeRows) {\n");
             out.append("        int grown = org.weakref.nitro.jit.StreamingScratch.grow(selection.length, probeRows);\n");
-            out.append("        selection = new int[grown];\n");
+            out.append("        selection = new int[grown]; selectionNext = new int[grown];\n");
             for (int k = 0; k < joinCount; k++) {
-                out.append("        bsel").append(k).append(" = new int[grown];\n");
+                out.append("        bsel").append(k).append(" = new int[grown]; bsel").append(k).append("Next = new int[grown];\n");
             }
             out.append("      }\n");
             out.append("      int selected = 0;\n");
-            // Phase 1: eager probe columns -> joins + filters -> selection + matched build rows.
-            out.append("      {\n");
-            out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(eagerProbe)).append(");\n");
-            for (int column : eagerProbe) {
-                emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
-            }
-            for (Plan.Condition match : filterMatches) {
-                if (match instanceof Plan.StringColumnCompare) {
-                    continue;   // column-vs-column needs both dictionaries; its remap/prefix prelude is emitted once after all builds load
-                }
-                if (stringMatchColumn(match) < probeColumns) {
-                    emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
-                }
-            }
-            // Build-sourced string keys remapped once after the builds loaded (above, outside the batch loop); a
-            // fact-sourced string key's dictionary arrives with the probe, so its remap is per batch (the streaming
-            // guard rejects that shape, leaving this a no-op when streaming).
-            emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, false);
-
-            out.append("        for (int i = 0; i < probeRows; i++) {\n");
-            int openBraces = emitProbesWithFilters(out, "          ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
-            String indent = "          " + "  ".repeat(openBraces);
-            // A cross join, or an inner/left join over a non-unique build, pairs one probe row with many build rows,
-            // so survivors can exceed the probe-row count; grow the selection arrays when full. Only an anti-join is
-            // guaranteed at most one survivor per probe row. (Unique builds never actually exceed probeRows, so for
-            // them the guard's branch is simply never taken.)
-            boolean hasFanOut = joins.stream().anyMatch(join -> !join.anti());
-            if (hasFanOut) {
-                out.append(indent).append("if (selected == selection.length) {\n");
-                out.append(indent).append("  int grown = selected * 2;\n");
-                out.append(indent).append("  selection = java.util.Arrays.copyOf(selection, grown);\n");
-                for (int k = 0; k < joinCount; k++) {
-                    out.append(indent).append("  bsel").append(k).append(" = java.util.Arrays.copyOf(bsel").append(k).append(", grown);\n");
-                }
-                out.append(indent).append("}\n");
-            }
-            out.append(indent).append("selection[selected] = i;\n");
-            for (int k = 0; k < joinCount; k++) {
-                out.append(indent).append("bsel").append(k).append("[selected] = buildRow").append(k).append(";\n");
-            }
-            out.append(indent).append("selected++;\n");
-            for (int brace = 0; brace < openBraces; brace++) {
-                indent = indent.substring(2);
-                out.append(indent).append("}\n");
-            }
-            out.append("        }\n");
-            out.append("      }\n");
+            // Phase 1, staged per join: each stage materializes only its own probe columns -- gathered by the
+            // selection the earlier joins left -- probes, and compacts the surviving (row, build rows) tuples.
+            // A selective early join thus prunes the decode of every later join key and filter column, the
+            // compiled analogue of the operator scan's constrain() pushback.
+            emitStagedSelection(out, pipeline, encodings, nullable, joins, buildOffset, probeColumns, filterMatches, stringMaskIds);
             // Phase 2: payload probe columns materialized for the survivors only, then folded in. Skip the whole
             // phase when the batch has no survivors -- materializing would borrow (and so decode) the payload columns
             // over the batch for nothing. This is how an operator scan avoids decoding payload for batches a selective
