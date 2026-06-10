@@ -330,6 +330,15 @@ public final class QueryLowering
         return this;
     }
 
+    /** GROUP BY over computed keys (e.g. a time bucket), not just plain columns. */
+    public QueryLowering groupBy(Plan.Expr... keys)
+    {
+        for (Plan.Expr key : keys) {
+            groupKeys.add(key);
+        }
+        return this;
+    }
+
     /**
      * Aggregate over the given {@code groupingSets} (GROUPING SETS / ROLLUP / CUBE) rather than a single grouping over
      * all {@link #groupBy} keys. Each {@code int[]} is the sorted indices into the group keys that are ACTIVE in that
