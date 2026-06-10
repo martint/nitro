@@ -4308,6 +4308,61 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static Composite query41()
+    {
+        // Q41: distinct product names of items in a manufacturer-id band whose manufacturer also makes one of eight
+        // category/color/unit/size combinations. The eligible manufacturers distinct into a stage (the SQL's EXISTS
+        // as the distinct-then-inner-join shape) and the main joins the banded items to them on the manufacturer
+        // string, then dedups the product names, top 100.
+        record Combination(String category, String colorA, String colorB, String unitA, String unitB, String sizeA, String sizeB) {}
+
+        QueryLowering manufacturers = QueryLowering.scan("item",
+                new QueryLowering.Column("i_manufact", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("i_category", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("i_color", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("i_units", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("i_size", ColumnEncoding.STRING, true));
+        List<Plan.Condition> combinations = new ArrayList<>();
+        for (Combination match : List.of(
+                new Combination("Women", "powder", "khaki", "Ounce", "Oz", "medium", "extra large"),
+                new Combination("Women", "brown", "honeydew", "Bunch", "Ton", "N/A", "small"),
+                new Combination("Men", "floral", "deep", "N/A", "Dozen", "petite", "large"),
+                new Combination("Men", "light", "cornflower", "Box", "Pound", "medium", "extra large"),
+                new Combination("Women", "midnight", "snow", "Pallet", "Gross", "medium", "extra large"),
+                new Combination("Women", "cyan", "papaya", "Cup", "Dram", "N/A", "small"),
+                new Combination("Men", "orange", "frosted", "Each", "Tbl", "petite", "large"),
+                new Combination("Men", "forest", "ghost", "Lb", "Bundle", "medium", "extra large"))) {
+            combinations.add(new Plan.And(List.of(
+                    new Plan.StringMatch(manufacturers.position("i_category"), List.of(match.category()), false),
+                    new Plan.StringMatch(manufacturers.position("i_color"), List.of(match.colorA(), match.colorB()), false),
+                    new Plan.StringMatch(manufacturers.position("i_units"), List.of(match.unitA(), match.unitB()), false),
+                    new Plan.StringMatch(manufacturers.position("i_size"), List.of(match.sizeA(), match.sizeB()), false))));
+        }
+        manufacturers.where(new Plan.Or(combinations))
+                .groupBy("i_manufact")
+                .count();
+        manufacturers.select(new Plan.Col(0));
+
+        QueryLowering main = QueryLowering.scan("item",
+                        new QueryLowering.Column("i_product_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_manufact_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_manufact", ColumnEncoding.STRING, true))
+                .join("q41_manufacturers", "i_manufact", "m_manufact",
+                        new QueryLowering.Column("m_manufact", ColumnEncoding.STRING, true));
+        main.where(
+                        new Plan.Predicate(">", main.column("i_manufact_id"), new Plan.Lit(737)),
+                        new Plan.Predicate("<", main.column("i_manufact_id"), new Plan.Lit(779)))
+                .groupBy("i_product_name")
+                .count();
+        main.select(new Plan.Col(0))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(manufacturers, "q41_manufacturers", List.of(new DictRef(0, 0, 0)))),
+                main,
+                List.of(new DictRef(0, 0, 0)));
+    }
+
     public static Composite query84()
     {
         // Q84: the customer id and "last, first" name for every store return made by an Edgewood customer in one

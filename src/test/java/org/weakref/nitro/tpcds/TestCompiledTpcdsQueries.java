@@ -823,6 +823,12 @@ public class TestCompiledTpcdsQueries
         assertCompositeMatchesHarness(CompiledTpcdsQueries.query09(), TpcdsParquetSupport::query09);
     }
 
+    @Test
+    void query41()
+    {
+        assertCompositeMatchesHarness(CompiledTpcdsQueries.query41(), TpcdsParquetSupport::query41);
+    }
+
     /**
      * Run Q84's composite and concatenate the customer name at the bridge: the pipeline carries (id, last, first)
      * and the output row is (id, last || ", " || first), null when either name part is null -- matching the
