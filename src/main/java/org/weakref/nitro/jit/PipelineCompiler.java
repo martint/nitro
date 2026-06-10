@@ -268,7 +268,7 @@ public final class PipelineCompiler
                 emitProjectionAppend(out, "          ", pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
             }
             else {
-                emitGlobalAccumulate(out, "          ", pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
+                emitGlobalAccumulate(out, body, "          ", pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
             }
             out.append("        }\n");
             out.append("      }\n");
@@ -2543,7 +2543,7 @@ public final class PipelineCompiler
                 emitGroupedAccumulate(out, body, "          ", pipeline, nullable, lazyResolver, lazyResolver, lazyNullResolver, stringMaskIds, false);
             }
             else {
-                emitGlobalAccumulate(out, "          ", pipeline.aggregates(), lazyResolver, lazyNullResolver, stringMaskIds);
+                emitGlobalAccumulate(out, body, "          ", pipeline.aggregates(), lazyResolver, lazyNullResolver, stringMaskIds);
             }
             out.append("        }\n");
             out.append("      }\n");
@@ -2922,7 +2922,7 @@ public final class PipelineCompiler
             emitGroupedAccumulate(out, body, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
         }
         else {
-            emitGlobalAccumulate(out, bodyIndent, pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
+            emitGlobalAccumulate(out, body, bodyIndent, pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
         }
         if (emitFilter) {
             out.append(indent).append("}\n");
@@ -2942,10 +2942,11 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGlobalAccumulate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private static void emitGlobalAccumulate(StringBuilder out, ClassBody body, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "a", null), resolver, nullResolver, stringMaskIds);
+            // A global COUNT(DISTINCT) fuses like the grouped one, with the constant group identity 1.
+            emitAggregateUpdate(out, indent, body, aggregates.get(a), a, cells(aggregates, a, "a", null), "1L", resolver, nullResolver, stringMaskIds);
         }
     }
 
