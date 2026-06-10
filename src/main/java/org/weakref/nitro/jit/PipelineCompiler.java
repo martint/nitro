@@ -1273,17 +1273,16 @@ public final class PipelineCompiler
         out.append("    });\n");
 
         // Walk the ordered rows; close each partition at a boundary, average its non-null values, and back-fill the
-        // average (aligned to the gather position) for every row of the partition. A row with a NULL partition column
-        // is its own singleton partition (boundary both before and after it), matching the ranking window's semantics.
+        // average (aligned to the gather position) for every row of the partition. PARTITION BY groups all null keys
+        // together (two nulls share a partition, a null and a non-null do not), matching the operator harness; the
+        // sort above already made null keys contiguous (nulls compare last and equal).
         out.append("    long[] outAgg = new long[rows]; boolean[] outAggNull = new boolean[rows];\n");
         out.append("    int pStart = 0;\n");
         out.append("    for (int oi = 1; oi <= rows; oi++) {\n");
         out.append("      boolean boundary = oi == rows;\n");
         out.append("      if (!boundary) {\n");
         out.append("        int r = order[oi]; int prev = order[oi - 1];\n");
-        out.append("        boundary = ").append(windowNullPartitionTest(window, pipeline, nullable, resultTypes, "r"))
-                .append(" || ").append(windowNullPartitionTest(window, pipeline, nullable, resultTypes, "prev"))
-                .append(" || ").append(windowPartitionChanged(window, pipeline, nullable, resultTypes)).append(";\n");
+        out.append("        boundary = ").append(windowPartitionChangedNullsEqual(window, pipeline, nullable, resultTypes)).append(";\n");
         out.append("      }\n");
         out.append("      if (boundary) {\n");
         out.append("        long sum = 0; long cnt = 0;\n");
@@ -1469,6 +1468,33 @@ public final class PipelineCompiler
     private static String windowPartitionChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         return windowValuesDiffer(window.partitionColumns(), pipeline, nullable, resultTypes);
+    }
+
+    /**
+     * True when the current row {@code r} is in a different partition than {@code prev} under grouping equality:
+     * two nulls are EQUAL (PARTITION BY groups all null keys together, like the operator harness's window), a null
+     * and a value differ. Used by the partition-aggregate gather; the ranking walk keeps its singleton-null rule.
+     */
+    private static String windowPartitionChangedNullsEqual(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    {
+        int[] columns = window.partitionColumns();
+        if (columns.length == 0) {
+            return "false";
+        }
+        StringBuilder differ = new StringBuilder();
+        for (int column : columns) {
+            if (differ.length() > 0) {
+                differ.append(" || ");
+            }
+            if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
+                differ.append("(wN").append(column).append("[r] != wN").append(column).append("[prev]")
+                        .append(" || (!wN").append(column).append("[r] && w").append(column).append("[r] != w").append(column).append("[prev]))");
+            }
+            else {
+                differ.append("(w").append(column).append("[r] != w").append(column).append("[prev])");
+            }
+        }
+        return "(" + differ + ")";
     }
 
     /** True when the current row {@code r} differs from {@code prev} on any ORDER BY key (drives RANK ties). */
