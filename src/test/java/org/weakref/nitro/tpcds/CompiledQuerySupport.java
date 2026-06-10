@@ -609,6 +609,17 @@ public final class CompiledQuerySupport
                             ids[j] = isNull ? 0 : remap[vectorIds[position]];
                         }
                     }
+                    else if (vector instanceof org.weakref.nitro.data.BinaryVector binary) {
+                        // Plain page: hash the page's bytes in place; the intern copies only first occurrences.
+                        for (int j = 0; j < count; j++) {
+                            int position = batchMask == null ? selection[j] : batchMask.position(selection[j]);
+                            boolean isNull = nulls != null && CompiledQuerySupport.isNull(nulls, position);
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            ids[j] = isNull ? 0 : global.intern(binary.data(), binary.startOffset(position), binary.length(position));
+                        }
+                    }
                     else {
                         for (int j = 0; j < count; j++) {
                             int position = batchMask == null ? selection[j] : batchMask.position(selection[j]);
@@ -616,7 +627,8 @@ public final class CompiledQuerySupport
                             if (nullMask != null) {
                                 nullMask[j] = isNull;
                             }
-                            ids[j] = isNull ? 0 : global.intern(stringBytes(vector, position));
+                            byte[] bytes = isNull ? null : stringBytes(vector, position);
+                            ids[j] = isNull ? 0 : global.intern(bytes, 0, bytes.length);
                         }
                     }
                     return new org.weakref.nitro.jit.Column.StringColumn(ids, global.backing(), nullMask, global.size());
@@ -1769,45 +1781,67 @@ public final class CompiledQuerySupport
      * The per-query global intern for one streamed string column: entries only ever append (ids are stable), and
      * the growing backing array is handed to the pipeline directly (capacity-padded), with
      * {@link org.weakref.nitro.jit.Column.StringColumn#dictionarySize} marking the valid prefix. A dictionary-encoded
-     * page is folded in once per distinct page dictionary (identity-cached remap); plain pages intern per row.
+     * page is folded in once per distinct page dictionary (identity-cached remap); plain pages intern per row
+     * through a byte-keyed open-addressing table -- hashing the page's bytes in place and copying a value only on
+     * first insertion, since a per-row String allocation dominated the string-heavy fact scans.
      */
     private static final class GlobalStringDictionary
     {
-        private final java.util.HashMap<String, Integer> index = new java.util.HashMap<>();
         private final java.util.IdentityHashMap<Object, int[]> pageRemaps = new java.util.IdentityHashMap<>();
         // An optional per-value derivation (e.g. a regexp host extraction) applied before interning, so the
-        // dictionary holds the DERIVED values. The derivation runs once per distinct RAW value: a
-        // dictionary-encoded page pays it per distinct page entry, and plain pages dedup raw bytes through
-        // rawIndex first -- a per-row regexp over a 100M-row fact would otherwise dominate the whole query.
+        // dictionary holds the DERIVED values; it runs once per distinct RAW value (the raw intern dedups first).
         private final java.util.function.UnaryOperator<byte[]> transform;
-        private final java.util.HashMap<String, Integer> rawIndex;
+        private final BytesInternTable index = new BytesInternTable();
+        private final BytesInternTable rawIndex;
         private byte[][] entries = new byte[16][];
         private int size;
+        // The raw-value table maps each distinct raw value to its DERIVED entry id (parallel to its own entries).
+        private byte[][] rawEntries;
+        private int[] rawDerived;
+        private int rawSize;
 
         GlobalStringDictionary(java.util.function.UnaryOperator<byte[]> transform)
         {
             this.transform = transform;
-            this.rawIndex = transform == null ? null : new java.util.HashMap<>();
+            this.rawIndex = transform == null ? null : new BytesInternTable();
+            this.rawEntries = transform == null ? null : new byte[16][];
+            this.rawDerived = transform == null ? null : new int[16];
         }
 
-        int intern(byte[] bytes)
+        int intern(byte[] data, int offset, int length)
         {
             if (transform == null) {
-                return internDerived(bytes);
+                return internDerived(data, offset, length);
             }
-            return rawIndex.computeIfAbsent(new String(bytes, java.nio.charset.StandardCharsets.UTF_8),
-                    key -> internDerived(transform.apply(bytes)));
+            int rawSlot = rawIndex.find(data, offset, length, rawEntries, rawSize);
+            if (rawSlot >= 0) {
+                return rawDerived[rawIndex.idAt(rawSlot)];
+            }
+            byte[] raw = java.util.Arrays.copyOfRange(data, offset, offset + length);
+            byte[] derivedValue = transform.apply(raw);
+            int derived = internDerived(derivedValue, 0, derivedValue.length);
+            if (rawSize == rawEntries.length) {
+                rawEntries = java.util.Arrays.copyOf(rawEntries, rawSize * 2);
+                rawDerived = java.util.Arrays.copyOf(rawDerived, rawSize * 2);
+            }
+            rawEntries[rawSize] = raw;
+            rawDerived[rawSize] = derived;
+            rawIndex.insertAt(rawSlot, rawSize++);
+            return derived;
         }
 
-        private int internDerived(byte[] value)
+        private int internDerived(byte[] data, int offset, int length)
         {
-            return index.computeIfAbsent(new String(value, java.nio.charset.StandardCharsets.UTF_8), key -> {
-                if (size == entries.length) {
-                    entries = java.util.Arrays.copyOf(entries, size * 2);
-                }
-                entries[size] = value;
-                return size++;
-            });
+            int slot = index.find(data, offset, length, entries, size);
+            if (slot >= 0) {
+                return index.idAt(slot);
+            }
+            if (size == entries.length) {
+                entries = java.util.Arrays.copyOf(entries, size * 2);
+            }
+            entries[size] = java.util.Arrays.copyOfRange(data, offset, offset + length);
+            index.insertAt(slot, size);
+            return size++;
         }
 
         /** Map a dictionary page's entries to global ids, computed once per distinct page dictionary. */
@@ -1816,7 +1850,7 @@ public final class CompiledQuerySupport
             return pageRemaps.computeIfAbsent(pageDictionary, ignored -> {
                 int[] remap = new int[pageDictionary.length()];
                 for (int e = 0; e < remap.length; e++) {
-                    remap[e] = intern(stringBytes(pageDictionary, e));
+                    remap[e] = intern(pageDictionary.data(), pageDictionary.startOffset(e), pageDictionary.length(e));
                 }
                 return remap;
             });
@@ -1835,6 +1869,87 @@ public final class CompiledQuerySupport
         byte[][] snapshot()
         {
             return java.util.Arrays.copyOf(entries, size);
+        }
+    }
+
+    /**
+     * Open-addressing index of byte-array values to dense ids, keyed by content without per-lookup allocation:
+     * {@link #find} hashes the queried bytes in place and either returns the matching slot ({@code >= 0},
+     * resolve the id via {@link #idAt}) or the insertion point encoded as {@code -slot - 1} for
+     * {@link #insertAt}. The caller owns the entry storage; this table holds only (hash, id) pairs.
+     */
+    private static final class BytesInternTable
+    {
+        private int[] slotIds = new int[1 << 14];   // entry id + 1; 0 = empty
+        private int[] slotHashes = new int[1 << 14];
+        private int count;
+
+        /** The slot holding {@code data[offset, offset+length)} ({@code >= 0}), or {@code -insertionSlot - 1}. */
+        int find(byte[] data, int offset, int length, byte[][] entries, int size)
+        {
+            if ((count + 1) * 4 >= slotIds.length * 3) {
+                grow(entries, size);
+            }
+            int hash = hashBytes(data, offset, length);
+            int mask = slotIds.length - 1;
+            int slot = hash & mask;
+            while (true) {
+                int id = slotIds[slot];
+                if (id == 0) {
+                    return -slot - 1;
+                }
+                byte[] entry = entries[id - 1];
+                if (slotHashes[slot] == hash && java.util.Arrays.equals(entry, 0, entry.length, data, offset, offset + length)) {
+                    return slot;
+                }
+                slot = (slot + 1) & mask;
+            }
+        }
+
+        int idAt(int slot)
+        {
+            return slotIds[slot] - 1;
+        }
+
+        /** Insert at the point a failed {@link #find} returned; must directly follow that find (it reuses its hash). */
+        void insertAt(int insertionResult, int id)
+        {
+            int slot = -insertionResult - 1;
+            slotIds[slot] = id + 1;
+            slotHashes[slot] = pendingHash;
+            count++;
+        }
+
+        private int pendingHash;
+
+        private void grow(byte[][] entries, int size)
+        {
+            int[] oldIds = slotIds;
+            int[] oldHashes = slotHashes;
+            slotIds = new int[oldIds.length * 2];
+            slotHashes = new int[oldIds.length * 2];
+            int mask = slotIds.length - 1;
+            for (int s = 0; s < oldIds.length; s++) {
+                if (oldIds[s] != 0) {
+                    int slot = oldHashes[s] & mask;
+                    while (slotIds[slot] != 0) {
+                        slot = (slot + 1) & mask;
+                    }
+                    slotIds[slot] = oldIds[s];
+                    slotHashes[slot] = oldHashes[s];
+                }
+            }
+        }
+
+        private int hashBytes(byte[] data, int offset, int length)
+        {
+            long hash = 0x9E3779B97F4A7C15L;
+            for (int i = offset; i < offset + length; i++) {
+                hash = (hash ^ data[i]) * 0x100000001B3L;
+            }
+            int folded = (int) (hash ^ (hash >>> 32));
+            pendingHash = folded;
+            return folded;
         }
     }
 
