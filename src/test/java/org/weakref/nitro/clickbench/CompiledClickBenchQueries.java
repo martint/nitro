@@ -534,6 +534,27 @@ public final class CompiledClickBenchQueries
         return new Ported(query, List.of());
     }
 
+    /**
+     * SELECT SearchPhrase, MIN(URL), COUNT(*) FROM hits WHERE URL LIKE '%google%' AND SearchPhrase <> ''
+     * GROUP BY 1 ORDER BY 3 DESC LIMIT 10
+     */
+    public static Ported query22()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false));
+        query.where(
+                new Plan.StringMatch(query.position("SearchPhrase"), List.of(""), true),
+                new Plan.LikeMatch(query.position("URL"), "%google%", false))
+                .groupBy("SearchPhrase")
+                .aggregate("min_utf8", "URL")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
+        return new Ported(query, List.of(
+                new CompiledTpcdsQueries.DictRef(0, 0, 0),
+                new CompiledTpcdsQueries.DictRef(1, 0, 1)));
+    }
+
     /** SELECT URL, COUNT(*) FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10 */
     public static Ported query34()
     {
