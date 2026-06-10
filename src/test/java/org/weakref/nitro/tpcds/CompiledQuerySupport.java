@@ -511,20 +511,51 @@ public final class CompiledQuerySupport
                 throw new IllegalArgumentException("Unsupported column vector type: " + values.getClass().getName());
             }
 
-            /** Gather {@code column} for the first {@code count} positions of {@code selection} into reusable per-column buffers (see {@link #convertColumn}). */
+            /**
+             * Gather {@code column} for the first {@code count} positions of {@code selection} into reusable
+             * per-column buffers (see {@link #convertColumn}). Dispatches on the vector type once and hoists the
+             * null vector's backing array, so the per-row work is tight typed array access -- per-row virtual
+             * accessor calls dominated filtered global aggregates over wide facts.
+             */
             private org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask batchMask, int c, int count, int[] selection, boolean nullable, int column)
             {
                 Vector vector = batch.output(c).borrow(Stream.VALUES);
                 Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
                 long[] values = valueBuffer(column, count);
                 boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
-                for (int j = 0; j < count; j++) {
-                    int position = batchMask.position(selection[j]);
-                    boolean isNull = nulls != null && isNull(nulls, position);
-                    if (nullMask != null) {
-                        nullMask[j] = isNull;
+                boolean allSelected = batchMask.all();
+                boolean[] nullBacking = nulls instanceof BooleanVector booleans ? booleans.values() : null;
+                if (vector instanceof I64Vector i64) {
+                    long[] backing = i64.values();
+                    for (int j = 0; j < count; j++) {
+                        int position = allSelected ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nullBacking != null && nullBacking[position];
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        values[j] = isNull ? 0 : backing[position];
                     }
-                    values[j] = isNull ? 0 : longValue(vector, position);
+                }
+                else if (vector instanceof I32Vector i32) {
+                    int[] backing = i32.values();
+                    for (int j = 0; j < count; j++) {
+                        int position = allSelected ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nullBacking != null && nullBacking[position];
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        values[j] = isNull ? 0 : backing[position];
+                    }
+                }
+                else {
+                    for (int j = 0; j < count; j++) {
+                        int position = allSelected ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nulls != null && isNull(nulls, position);
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        values[j] = isNull ? 0 : longValue(vector, position);
+                    }
                 }
                 return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
             }
