@@ -4236,6 +4236,78 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 2, 1)));
     }
 
+    public static Composite query09()
+    {
+        // Q09: five bucket statistics in one row -- for each store-sales quantity band, the average discount when the
+        // band's sale count exceeds its literal threshold, else the average net paid. Each band contributes three
+        // global aggregates over the same filtered scan (the count and two rounded averages); the fifteen single-row
+        // relations broadcast onto the single-reason probe through chained cross joins, and five CASE projections
+        // pick each band's value. The Q88/Q90 scalar-broadcast shape, fifteen wide.
+        record Bucket(int minimum, int maximum, long threshold) {}
+
+        List<Bucket> buckets = List.of(
+                new Bucket(1, 20, 74_129L),
+                new Bucket(21, 40, 122_840L),
+                new Bucket(41, 60, 56_580L),
+                new Bucket(61, 80, 10_097L),
+                new Bucket(81, 100, 165_306L));
+
+        List<Stage> stages = new ArrayList<>();
+        QueryLowering main = QueryLowering.scan("reason", new QueryLowering.Column("r_reason_sk", ColumnEncoding.FLAT, false));
+        for (int b = 0; b < buckets.size(); b++) {
+            Bucket bucket = buckets.get(b);
+            stages.add(new Stage(query09Count(bucket.minimum(), bucket.maximum()), "q09_count_" + b));
+            stages.add(new Stage(query09Average(bucket.minimum(), bucket.maximum(), "ss_ext_discount_amt"), "q09_discount_" + b));
+            stages.add(new Stage(query09Average(bucket.minimum(), bucket.maximum(), "ss_net_paid"), "q09_paid_" + b));
+            main = main.crossJoin("q09_count_" + b, new QueryLowering.Column("count_" + b, ColumnEncoding.FLAT, false))
+                    .crossJoin("q09_discount_" + b, new QueryLowering.Column("discount_" + b, ColumnEncoding.FLAT, true))
+                    .crossJoin("q09_paid_" + b, new QueryLowering.Column("paid_" + b, ColumnEncoding.FLAT, true));
+        }
+        main.where(new Plan.Predicate("=", new Plan.Col(0), new Plan.Lit(1)));
+        // Combined columns: r_reason_sk(0), then (count, discount, paid) per bucket at 1 + 3b.
+        Plan.Expr[] values = new Plan.Expr[buckets.size()];
+        for (int b = 0; b < buckets.size(); b++) {
+            values[b] = new Plan.Case(
+                    List.of(new Plan.Case.Branch(
+                            new Plan.Predicate(">", new Plan.Col(1 + 3 * b), new Plan.Lit(buckets.get(b).threshold())),
+                            new Plan.Col(2 + 3 * b))),
+                    new Plan.Col(3 + 3 * b));
+        }
+        main.select(values);
+
+        return new Composite(stages, main, List.of());
+    }
+
+    /** The band's sale count: a global count over the quantity-filtered scan. */
+    private static QueryLowering query09Count(int minimumQuantity, int maximumQuantity)
+    {
+        QueryLowering count = QueryLowering.scan("store_sales",
+                new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true));
+        query09QuantityBand(count, minimumQuantity, maximumQuantity);
+        count.count();
+        return count;
+    }
+
+    /** The band's rounded average of {@code measure}: a global sum/count over the quantity-filtered scan. */
+    private static QueryLowering query09Average(int minimumQuantity, int maximumQuantity, String measure)
+    {
+        QueryLowering average = QueryLowering.scan("store_sales",
+                new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(measure, ColumnEncoding.FLAT, true));
+        query09QuantityBand(average, minimumQuantity, maximumQuantity);
+        average.aggregate("sum", measure)
+                .aggregate("count", measure);
+        average.select(new Plan.Call("divide_round_i64", new Plan.Col(0), new Plan.Col(1)));
+        return average;
+    }
+
+    private static void query09QuantityBand(QueryLowering query, int minimumQuantity, int maximumQuantity)
+    {
+        query.where(
+                new Plan.Predicate(">", query.column("ss_quantity"), new Plan.Lit(minimumQuantity - 1L)),
+                new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
+    }
+
     public static Composite query30()
     {
         // Q30: Georgia customers whose 2002 web-return total exceeds 1.2x their state's average customer return, with
