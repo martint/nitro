@@ -280,13 +280,36 @@ public final class CompiledClickBenchQueries
     /** SELECT UserID, SearchPhrase, COUNT(*) FROM hits GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10 */
     public static Ported query17()
     {
+        QueryLowering query = userPhraseCounts();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
+        return new Ported(query, 1, 0, 1);
+    }
+
+    /**
+     * SELECT UserID, SearchPhrase, COUNT(*) FROM hits GROUP BY 1, 2 LIMIT 10: a LIMIT with no ORDER BY,
+     * so ANY ten groups satisfy the query -- the engines legitimately emit different rows.
+     */
+    public static Ported query18()
+    {
+        QueryLowering query = userPhraseCounts();
+        query.orderBy(new Plan.Ordering(List.of(), 10));
+        return new Ported(query, 1, 0, 1);
+    }
+
+    /** q18 without its LIMIT: the full grouping, used as the validation oracle for q18's underdetermined page. */
+    static Ported query18Unlimited()
+    {
+        return new Ported(userPhraseCounts(), 1, 0, 1);
+    }
+
+    private static QueryLowering userPhraseCounts()
+    {
         QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
                 new QueryLowering.Column("UserID"),
                 new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
         query.groupBy("UserID", "SearchPhrase")
                 .count();
-        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
-        return new Ported(query, 1, 0, 1);
+        return query;
     }
 
     /**

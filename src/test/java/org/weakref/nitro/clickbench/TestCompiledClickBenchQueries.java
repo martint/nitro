@@ -156,6 +156,12 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query18()
+    {
+        assertLimitedGroupsMatchHarness();
+    }
+
+    @Test
     void query19()
     {
         assertTopKMatchesHarness(CompiledClickBenchQueries.query19(), ClickBenchHitsSupport::query19, 3);
@@ -359,6 +365,43 @@ public class TestCompiledClickBenchQueries
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).isNotEmpty();
         assertTopKRows(actual, expected, sortColumn, false);
+    }
+
+    /**
+     * Oracle for q18's LIMIT with no ORDER BY: any ten groups satisfy the query, so the two engines'
+     * pages differ legitimately. Asserts both pages have the limit's size, and that every harness row is a
+     * genuine group of the full compiled grouping (same keys, same count) -- validating the grouping itself
+     * plus the compiled limit, without pretending the page contents are determined.
+     */
+    private static void assertLimitedGroupsMatchHarness()
+    {
+        ClickBenchParquetTables tables = requireHits();
+
+        CompiledTpcdsQueries.Ported limited = CompiledClickBenchQueries.query18();
+        CompiledQuerySupport.LoweredResult limitedRun = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, limited.query().lower());
+        assertThat(limitedRun.result().rowCount()).isEqualTo(10);
+
+        Operator harnessChain = ClickBenchHitsSupport.query18(new Allocator(), tables.directory());
+        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
+        assertThat(expected).hasSize(10);
+
+        CompiledTpcdsQueries.Ported full = CompiledClickBenchQueries.query18Unlimited();
+        CompiledQuerySupport.LoweredResult fullRun = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, full.query().lower());
+        long[] users = fullRun.result().columns()[0];
+        long[] phraseIds = fullRun.result().columns()[1];
+        long[] counts = fullRun.result().columns()[2];
+        byte[][] dictionary = CompiledQuerySupport.dictionaryFor(fullRun.inputs(), full.stringColumns().getFirst());
+        int rows = fullRun.result().rowCount();
+        for (Row row : expected) {
+            long user = (Long) row.values()[0];
+            byte[] phrase = ((String) row.values()[1]).getBytes(UTF_8);
+            long count = (Long) row.values()[2];
+            boolean found = false;
+            for (int r = 0; r < rows && !found; r++) {
+                found = users[r] == user && counts[r] == count && java.util.Arrays.equals(dictionary[(int) phraseIds[r]], phrase);
+            }
+            assertThat(found).as("harness group (%s, %s, %s) in the compiled grouping", user, row.values()[1], count).isTrue();
+        }
     }
 
     private static CompiledQuerySupport.LoweredResult runComposite(ClickBenchParquetTables tables, CompiledTpcdsQueries.Composite composite)
