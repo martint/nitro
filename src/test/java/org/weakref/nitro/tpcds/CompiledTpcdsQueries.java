@@ -3432,6 +3432,151 @@ public final class CompiledTpcdsQueries
                         new Plan.Bin("*", new Plan.Col(right), new Plan.Lit(11))));
     }
 
+    public static Composite query57()
+    {
+        // Q57: call-center/brand months whose catalog sales deviate more than ten percent from that year's monthly
+        // average, with the neighboring months' sales for context. Monthly sales per (category, brand, call center)
+        // are ranked by month over a 14-month window; the ranked relation is assembled three times (no reuse): the
+        // current rows keep 1999 and append the year's partition average, and the previous/next rows shift the rank
+        // by one so an equi-join on (category, brand, call center, rank) aligns each month with its neighbors. Rows
+        // within ten percent of the average are dropped (fraction-free, the Q53 test) and the result orders by the
+        // deviation then the call center, top 100.
+        List<Stage> stages = new ArrayList<>();
+        List<DictRef> groupedStrings = List.of(new DictRef(0, 1, 2), new DictRef(1, 1, 1), new DictRef(2, 3, 1));
+        List<DictRef> passThroughStrings = List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2));
+        for (String assembly : List.of("a", "b", "c")) {
+            stages.add(new Stage(query57MonthlyGroupedSales(), "q57_grouped_" + assembly, groupedStrings));
+            stages.add(new Stage(query57MonthlyRankedSales("q57_grouped_" + assembly), "q57_ranked_" + assembly, passThroughStrings));
+        }
+
+        // Current rows: the 1999 months with the year's average monthly sales appended per (category, brand, call
+        // center, year). Window output appends the average as column 7; the select reorders to
+        // (cat, brand, cc, year, moy, avg, sum, rank).
+        QueryLowering current = query57ScanRanked("q57_ranked_a");
+        current.where(new Plan.Predicate("=", new Plan.Col(3), new Plan.Lit(1999)))
+                .window(Plan.Window.partitionAverage(new int[] {0, 1, 2, 3}, 5));
+        current.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4),
+                new Plan.Col(7), new Plan.Col(5), new Plan.Col(6));
+        stages.add(new Stage(current, "q57_current", passThroughStrings));
+
+        stages.add(new Stage(query57AdjacentRows("q57_ranked_b", true), "q57_previous", passThroughStrings));
+        stages.add(new Stage(query57AdjacentRows("q57_ranked_c", false), "q57_next", passThroughStrings));
+
+        // Combined main columns: current(0-7: cat, brand, cc, year, moy, avg, sum, rank), previous(8-12), next(13-17).
+        QueryLowering main = QueryLowering.scan("q57_current",
+                        new QueryLowering.Column("m_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("m_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("m_call_center", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("m_year", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("m_moy", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("m_avg", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_sum", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_rank", ColumnEncoding.FLAT, false))
+                .join("q57_previous",
+                        new String[] {"m_category", "m_brand", "m_call_center", "m_rank"},
+                        new String[] {"p_category", "p_brand", "p_call_center", "p_rank"},
+                        new QueryLowering.Column("p_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("p_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("p_call_center", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("p_sum", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("p_rank", ColumnEncoding.FLAT, false))
+                .join("q57_next",
+                        new String[] {"m_category", "m_brand", "m_call_center", "m_rank"},
+                        new String[] {"n_category", "n_brand", "n_call_center", "n_rank"},
+                        new QueryLowering.Column("n_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("n_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("n_call_center", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("n_sum", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_rank", ColumnEncoding.FLAT, false));
+        // Keep months deviating > 10% from the year's average: avg > 0 AND |sum - avg| * 10 > avg.
+        main.where(
+                        new Plan.Predicate(">", new Plan.Col(5), new Plan.Lit(0)),
+                        new Plan.Or(List.of(
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(6), new Plan.Col(5)), new Plan.Lit(10)), new Plan.Col(5)),
+                                new Plan.Predicate(">", new Plan.Bin("*", new Plan.Bin("-", new Plan.Col(5), new Plan.Col(6)), new Plan.Lit(10)), new Plan.Col(5)))))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4),
+                        new Plan.Col(5), new Plan.Col(6), new Plan.Col(11), new Plan.Col(16))
+                .orderBy(new Plan.Ordering(List.of(
+                        Plan.SortKey.expression(new Plan.Bin("-", new Plan.Col(6), new Plan.Col(5)), Types.LONG, false),
+                        new Plan.SortKey(2, false)), 100));
+
+        return new Composite(stages, main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2)));
+    }
+
+    /** Monthly catalog sales per (category, brand, call center) over the 14-month window around 1999. */
+    private static QueryLowering query57MonthlyGroupedSales()
+    {
+        QueryLowering grouped = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_call_center_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sales_price", ColumnEncoding.FLAT, true))
+                .join("item", "cs_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true))
+                .join("call_center", "cs_call_center_sk", "cc_call_center_sk",
+                        new QueryLowering.Column("cc_call_center_sk"),
+                        new QueryLowering.Column("cc_name", ColumnEncoding.STRING, false));
+        grouped.where(new Plan.Or(List.of(
+                        new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(1999)),
+                        new Plan.And(List.of(
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(1998)),
+                                new Plan.Predicate("=", grouped.column("d_moy"), new Plan.Lit(12)))),
+                        new Plan.And(List.of(
+                                new Plan.Predicate("=", grouped.column("d_year"), new Plan.Lit(2000)),
+                                new Plan.Predicate("=", grouped.column("d_moy"), new Plan.Lit(1)))))))
+                .groupBy("i_category", "i_brand", "cc_name", "d_year", "d_moy")
+                .aggregate("sum", "cs_sales_price");
+        return grouped;
+    }
+
+    /** RANK() each (category, brand, call center)'s months chronologically over the grouped virtual relation. */
+    private static QueryLowering query57MonthlyRankedSales(String groupedVirtual)
+    {
+        QueryLowering ranked = query57ScanGrouped(groupedVirtual);
+        ranked.window(new Plan.Window(new int[] {0, 1, 2},
+                List.of(new Plan.SortKey(3, false), new Plan.SortKey(4, false)), Plan.RankFunction.RANK, 32));
+        return ranked;
+    }
+
+    /** The neighbor rows: (category, brand, call center, sum, rank shifted by one) so the rank equi-join aligns months. */
+    private static QueryLowering query57AdjacentRows(String rankedVirtual, boolean previous)
+    {
+        QueryLowering adjacent = query57ScanRanked(rankedVirtual);
+        adjacent.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(5),
+                new Plan.Bin(previous ? "+" : "-", new Plan.Col(6), new Plan.Lit(1)));
+        return adjacent;
+    }
+
+    private static QueryLowering query57ScanGrouped(String groupedVirtual)
+    {
+        return QueryLowering.scan(groupedVirtual,
+                new QueryLowering.Column("g_category", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("g_brand", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("g_call_center", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("g_year", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("g_moy", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("g_sum", ColumnEncoding.FLAT, true));
+    }
+
+    private static QueryLowering query57ScanRanked(String rankedVirtual)
+    {
+        return QueryLowering.scan(rankedVirtual,
+                new QueryLowering.Column("r_category", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("r_brand", ColumnEncoding.STRING, true),
+                new QueryLowering.Column("r_call_center", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("r_year", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("r_moy", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("r_sum", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("r_rank", ColumnEncoding.FLAT, false));
+    }
+
     public static Composite query61()
     {
         // Q61: the share of November 1998 Jewelry revenue in one GMT zone sold through a promotion channel (direct
