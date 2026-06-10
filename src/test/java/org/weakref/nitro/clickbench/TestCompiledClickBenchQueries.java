@@ -216,6 +216,13 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query24()
+    {
+        // ORDER BY EventTime can tie at the limit, but the output carries the sort key (column 4).
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query24(), ClickBenchHitsSupport::query24, 4);
+    }
+
+    @Test
     void query25()
     {
         assertHiddenKeyTopKMatchesHarness(CompiledClickBenchQueries.query25(), "cb25_top", ClickBenchHitsSupport::query25);
