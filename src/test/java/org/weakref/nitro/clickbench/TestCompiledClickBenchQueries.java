@@ -90,6 +90,12 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query13()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query13(), ClickBenchHitsSupport::query13, 1);
+    }
+
+    @Test
     void query16()
     {
         assertTopKMatchesHarness(CompiledClickBenchQueries.query16(), (allocator, registry, hits) -> ClickBenchHitsSupport.query16(allocator, hits), 1);
@@ -111,6 +117,60 @@ public class TestCompiledClickBenchQueries
     void query33()
     {
         assertTopKMatchesHarness(CompiledClickBenchQueries.query33(), (allocator, registry, hits) -> ClickBenchHitsSupport.query33(allocator, hits), 2);
+    }
+
+    @Test
+    void query06()
+    {
+        assertCompositeMatchesHarness(CompiledClickBenchQueries.query06(), (allocator, registry, hits) -> ClickBenchHitsSupport.query06(allocator, hits));
+    }
+
+    @Test
+    void query11()
+    {
+        assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query11(), ClickBenchHitsSupport::query11, 1);
+    }
+
+    @Test
+    void query12()
+    {
+        assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query12(), ClickBenchHitsSupport::query12, 2);
+    }
+
+    @Test
+    void query14()
+    {
+        assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query14(), ClickBenchHitsSupport::query14, 1);
+    }
+
+    @Test
+    void query15()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query15(), ClickBenchHitsSupport::query15, 2);
+    }
+
+    @Test
+    void query17()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query17(), (allocator, registry, hits) -> ClickBenchHitsSupport.query17(allocator, hits), 2);
+    }
+
+    @Test
+    void query19()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query19(), ClickBenchHitsSupport::query19, 3);
+    }
+
+    @Test
+    void query34()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query34(), (allocator, registry, hits) -> ClickBenchHitsSupport.query34(allocator, hits), 1);
+    }
+
+    @Test
+    void query35()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query35(), (allocator, registry, hits) -> ClickBenchHitsSupport.query35(allocator, hits), 2);
     }
 
     @Test
@@ -229,13 +289,34 @@ public class TestCompiledClickBenchQueries
     private static void assertCompositeMatchesHarness(CompiledTpcdsQueries.Composite composite, HarnessChain harness)
     {
         ClickBenchParquetTables tables = requireHits();
+        CompiledQuerySupport.LoweredResult run = runComposite(tables, composite);
+        assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
+    }
+
+    /** As {@link #assertCompositeMatchesHarness} but with the tie-aware top-K comparison (see {@link #assertTopKMatchesHarness}). */
+    private static void assertCompositeTopKMatchesHarness(CompiledTpcdsQueries.Composite composite, HarnessChain harness, int sortColumn)
+    {
+        ClickBenchParquetTables tables = requireHits();
+        CompiledQuerySupport.LoweredResult run = runComposite(tables, composite);
+        byte[][][] dictionaries = new byte[run.result().columns().length][][];
+        for (CompiledTpcdsQueries.DictRef ref : composite.stringColumns()) {
+            dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
+        }
+        List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
+        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
+        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
+        assertThat(expected).isNotEmpty();
+        assertTopKRows(actual, expected, sortColumn, false);
+    }
+
+    private static CompiledQuerySupport.LoweredResult runComposite(ClickBenchParquetTables tables, CompiledTpcdsQueries.Composite composite)
+    {
         Allocator allocator = new Allocator();
         Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
         }
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
-        assertBridgedRowsMatch(run, composite.stringColumns(), harness, tables);
+        return CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
     }
 
     private static ClickBenchParquetTables requireHits()

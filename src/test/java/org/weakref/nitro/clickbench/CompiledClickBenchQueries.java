@@ -16,6 +16,7 @@ package org.weakref.nitro.clickbench;
 import org.weakref.nitro.jit.ColumnEncoding;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.jit.QueryLowering;
+import org.weakref.nitro.tpcds.CompiledTpcdsQueries;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Composite;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Ported;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Stage;
@@ -144,6 +145,167 @@ public final class CompiledClickBenchQueries
                 .count();
         query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
         return new Ported(query, List.of());
+    }
+
+    /** SELECT COUNT(DISTINCT SearchPhrase) FROM hits: the distinct phrases as a stage, counted by the main. */
+    public static Composite query06()
+    {
+        QueryLowering distinct = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        distinct.groupBy("SearchPhrase")
+                .count();
+        distinct.select(new Plan.Col(0));
+
+        QueryLowering main = QueryLowering.scan("cb06_phrases",
+                new QueryLowering.Column("p_phrase", ColumnEncoding.STRING, false));
+        main.count();
+
+        return new Composite(
+                List.of(new Stage(distinct, "cb06_phrases", List.of(new CompiledTpcdsQueries.DictRef(0, 0, 0)))),
+                main,
+                List.of());
+    }
+
+    /**
+     * SELECT MobilePhoneModel, COUNT(DISTINCT UserID) FROM hits WHERE MobilePhoneModel <> '' GROUP BY 1
+     * ORDER BY 2 DESC LIMIT 10: the distinct (model, user) pairs as a stage, counted per model by the main.
+     */
+    public static Composite query11()
+    {
+        QueryLowering pairs = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("MobilePhoneModel", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("UserID"));
+        pairs.where(new Plan.StringMatch(pairs.position("MobilePhoneModel"), List.of(""), true))
+                .groupBy("MobilePhoneModel", "UserID")
+                .count();
+        pairs.select(new Plan.Col(0), new Plan.Col(1));
+
+        QueryLowering main = QueryLowering.scan("cb11_pairs",
+                new QueryLowering.Column("p_model", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("p_user"));
+        main.groupBy("p_model")
+                .count();
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+
+        return new Composite(
+                List.of(new Stage(pairs, "cb11_pairs", List.of(new CompiledTpcdsQueries.DictRef(0, 0, 0)))),
+                main,
+                List.of(new CompiledTpcdsQueries.DictRef(0, 0, 0)));
+    }
+
+    /**
+     * SELECT MobilePhone, MobilePhoneModel, COUNT(DISTINCT UserID) FROM hits WHERE MobilePhoneModel <> ''
+     * GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10
+     */
+    public static Composite query12()
+    {
+        QueryLowering triples = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("MobilePhone"),
+                new QueryLowering.Column("MobilePhoneModel", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("UserID"));
+        triples.where(new Plan.StringMatch(triples.position("MobilePhoneModel"), List.of(""), true))
+                .groupBy("MobilePhone", "MobilePhoneModel", "UserID")
+                .count();
+        triples.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
+
+        QueryLowering main = QueryLowering.scan("cb12_triples",
+                new QueryLowering.Column("p_phone"),
+                new QueryLowering.Column("p_model", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("p_user"));
+        main.groupBy("p_phone", "p_model")
+                .count();
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
+
+        return new Composite(
+                List.of(new Stage(triples, "cb12_triples", List.of(new CompiledTpcdsQueries.DictRef(1, 0, 1)))),
+                main,
+                List.of(new CompiledTpcdsQueries.DictRef(1, 0, 1)));
+    }
+
+    /** SELECT SearchPhrase, COUNT(*) FROM hits WHERE SearchPhrase <> '' GROUP BY 1 ORDER BY 2 DESC LIMIT 10 */
+    public static Ported query13()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        query.where(new Plan.StringMatch(query.position("SearchPhrase"), List.of(""), true))
+                .groupBy("SearchPhrase")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+        return new Ported(query, 0, 0, 0);
+    }
+
+    /**
+     * SELECT SearchPhrase, COUNT(DISTINCT UserID) FROM hits WHERE SearchPhrase <> '' GROUP BY 1 ORDER BY 2
+     * DESC LIMIT 10: the distinct (phrase, user) pairs as a stage, counted per phrase by the main.
+     */
+    public static Composite query14()
+    {
+        QueryLowering pairs = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("UserID"));
+        pairs.where(new Plan.StringMatch(pairs.position("SearchPhrase"), List.of(""), true))
+                .groupBy("SearchPhrase", "UserID")
+                .count();
+        pairs.select(new Plan.Col(0), new Plan.Col(1));
+
+        QueryLowering main = QueryLowering.scan("cb14_pairs",
+                new QueryLowering.Column("p_phrase", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("p_user"));
+        main.groupBy("p_phrase")
+                .count();
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+
+        return new Composite(
+                List.of(new Stage(pairs, "cb14_pairs", List.of(new CompiledTpcdsQueries.DictRef(0, 0, 0)))),
+                main,
+                List.of(new CompiledTpcdsQueries.DictRef(0, 0, 0)));
+    }
+
+    /**
+     * SELECT SearchEngineID, SearchPhrase, COUNT(*) FROM hits WHERE SearchPhrase <> '' GROUP BY 1, 2
+     * ORDER BY 3 DESC LIMIT 10
+     */
+    public static Ported query15()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchEngineID"),
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        query.where(new Plan.StringMatch(query.position("SearchPhrase"), List.of(""), true))
+                .groupBy("SearchEngineID", "SearchPhrase")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
+        return new Ported(query, 1, 0, 1);
+    }
+
+    /** SELECT UserID, SearchPhrase, COUNT(*) FROM hits GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10 */
+    public static Ported query17()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("UserID"),
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        query.groupBy("UserID", "SearchPhrase")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
+        return new Ported(query, 1, 0, 1);
+    }
+
+    /**
+     * SELECT UserID, minute(EventTime), SearchPhrase, COUNT(*) FROM hits GROUP BY 1, 2, 3 ORDER BY 4 DESC
+     * LIMIT 10: the minute is EventTime / 60 % 60, the harness's projection folded into a computed group key.
+     */
+    public static Ported query19()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("UserID"),
+                new QueryLowering.Column("EventTime"),
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        query.groupBy(
+                query.column("UserID"),
+                new Plan.Bin("%", new Plan.Bin("/", query.column("EventTime"), new Plan.Lit(60)), new Plan.Lit(60)),
+                query.column("SearchPhrase"))
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(3, true)), 10));
+        return new Ported(query, 2, 0, 2);
     }
 
     /** SELECT UserID FROM hits WHERE UserID = 435090932899640449 */
@@ -307,6 +469,29 @@ public final class CompiledClickBenchQueries
                 .aggregate("avg", "ResolutionWidth");
         query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(2, true)), 10));
         return new Ported(query, List.of());
+    }
+
+    /** SELECT URL, COUNT(*) FROM hits GROUP BY 1 ORDER BY 2 DESC LIMIT 10 */
+    public static Ported query34()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false));
+        query.groupBy("URL")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+        return new Ported(query, 0, 0, 0);
+    }
+
+    /** SELECT 1, URL, COUNT(*) FROM hits GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10 */
+    public static Ported query35()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false));
+        query.groupBy("URL")
+                .count();
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 10));
+        query.select(new Plan.Lit(1), new Plan.Col(0), new Plan.Col(1));
+        return new Ported(query, 1, 0, 0);
     }
 
     /**
