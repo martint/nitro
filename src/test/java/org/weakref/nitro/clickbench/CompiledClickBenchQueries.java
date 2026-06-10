@@ -328,6 +328,52 @@ public final class CompiledClickBenchQueries
         return new Ported(query, List.of());
     }
 
+    /**
+     * SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10: the TopN over
+     * (EventTime, SearchPhrase) as a stage (the harness's TopNOperator), the phrase projected by the main.
+     */
+    public static Composite query25()
+    {
+        return timeOrderedPhrases("cb25_top", List.of(new Plan.SortKey(0, false)));
+    }
+
+    /** q25 with the phrase as secondary sort key: ORDER BY EventTime, SearchPhrase LIMIT 10. */
+    public static Composite query27()
+    {
+        return timeOrderedPhrases("cb27_top", List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)));
+    }
+
+    private static Composite timeOrderedPhrases(String virtualName, List<Plan.SortKey> keys)
+    {
+        QueryLowering top = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("EventTime"),
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        top.where(new Plan.StringMatch(top.position("SearchPhrase"), List.of(""), true))
+                .select(top.column("EventTime"), top.column("SearchPhrase"));
+        top.orderBy(new Plan.Ordering(keys, 10));
+
+        QueryLowering main = QueryLowering.scan(virtualName,
+                new QueryLowering.Column("t_time"),
+                new QueryLowering.Column("t_phrase", ColumnEncoding.STRING, false));
+        main.select(main.column("t_phrase"));
+
+        return new Composite(
+                List.of(new Stage(top, virtualName, List.of(new CompiledTpcdsQueries.DictRef(1, 0, 1)))),
+                main,
+                List.of(new CompiledTpcdsQueries.DictRef(0, 0, 1)));
+    }
+
+    /** SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10 */
+    public static Ported query26()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("SearchPhrase", ColumnEncoding.STRING, false));
+        query.where(new Plan.StringMatch(query.position("SearchPhrase"), List.of(""), true))
+                .select(query.column("SearchPhrase"));
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 10));
+        return new Ported(query, 0, 0, 0);
+    }
+
     /** SELECT SUM(ResolutionWidth), SUM(ResolutionWidth + 1), ..., SUM(ResolutionWidth + 89) FROM hits */
     public static Ported query30()
     {

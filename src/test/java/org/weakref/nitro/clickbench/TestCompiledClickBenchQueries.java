@@ -198,6 +198,28 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query25()
+    {
+        assertHiddenKeyTopKMatchesHarness(CompiledClickBenchQueries.query25(), "cb25_top", ClickBenchHitsSupport::query25);
+    }
+
+    @Test
+    void query26()
+    {
+        // ORDER BY the (duplicated) output value itself: ties at the limit produce identical rows, so the
+        // result is fully determined and compares exactly.
+        assertMatchesHarness(CompiledClickBenchQueries.query26(), ClickBenchHitsSupport::query26);
+    }
+
+    @Test
+    void query27()
+    {
+        // The phrase is itself the secondary sort key, so ties at the limit produce identical output rows
+        // and the result compares exactly.
+        assertCompositeMatchesHarness(CompiledClickBenchQueries.query27(), ClickBenchHitsSupport::query27);
+    }
+
+    @Test
     void query30()
     {
         assertMatchesHarness(CompiledClickBenchQueries.query30(), ClickBenchHitsSupport::query30);
@@ -341,6 +363,54 @@ public class TestCompiledClickBenchQueries
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
         }
         return CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+    }
+
+    /**
+     * Oracle for a top-K whose sort key is dropped from the output (ORDER BY EventTime, SELECT SearchPhrase):
+     * the surviving row set is underdetermined wherever the key ties, and the output does not carry the key.
+     * The compiled stage's key column supplies the run structure -- the key SEQUENCE is determined, so its runs
+     * segment the harness output too: each complete run's value multiset must match; the run the limit cuts is
+     * unverifiable beyond its length. Also asserts the main stage projected exactly the stage's value column.
+     */
+    private static void assertHiddenKeyTopKMatchesHarness(CompiledTpcdsQueries.Composite composite, String stageName, HarnessChain harness)
+    {
+        ClickBenchParquetTables tables = requireHits();
+        Allocator allocator = new Allocator();
+        Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
+        CompiledQuerySupport.Materialized top = virtuals.get(stageName);
+        long[] keys = ((org.weakref.nitro.jit.Column.FlatColumn) top.columns()[0]).values();
+        org.weakref.nitro.jit.Column.StringColumn phrases = (org.weakref.nitro.jit.Column.StringColumn) top.columns()[1];
+        List<String> stageValues = new ArrayList<>();
+        for (int r = 0; r < top.rows(); r++) {
+            stageValues.add(new String(phrases.dictionary()[phrases.ids()[r]], UTF_8));
+        }
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+        byte[][][] dictionaries = new byte[run.result().columns().length][][];
+        for (CompiledTpcdsQueries.DictRef ref : composite.stringColumns()) {
+            dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
+        }
+        List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
+        assertThat(actual.stream().map(row -> (String) row.values()[0]).toList()).isEqualTo(stageValues);
+
+        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
+        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
+        assertThat(expected).hasSameSizeAs(actual);
+        int start = 0;
+        while (start < expected.size()) {
+            int end = start;
+            while (end < expected.size() && keys[end] == keys[start]) {
+                end++;
+            }
+            if (end < expected.size()) {
+                assertThat(actual.subList(start, end)).as("key run [%d, %d)", start, end)
+                        .containsExactlyInAnyOrderElementsOf(expected.subList(start, end));
+            }
+            start = end;
+        }
     }
 
     private static ClickBenchParquetTables requireHits()
