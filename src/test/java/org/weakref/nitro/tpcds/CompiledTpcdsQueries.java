@@ -3607,8 +3607,11 @@ public final class CompiledTpcdsQueries
                 .join("q06_month", "d_month_seq", "qm_month_seq",
                         new QueryLowering.Column("qm_month_seq", ColumnEncoding.FLAT, false),
                         new QueryLowering.Column("qm_count", ColumnEncoding.FLAT, false))
+                // The category aggregate retains a NULL-category group; the build key must be declared nullable so
+                // the null-key build skip drops it (a null never joins) instead of it entering the hash at the null
+                // sentinel id, where it would collide with whichever real entry holds id zero.
                 .join("q06_category", "i_category", "qc_category",
-                        new QueryLowering.Column("qc_category", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("qc_category", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("qc_sum", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("qc_count", ColumnEncoding.FLAT, false));
         main.where(new Plan.Predicate("<",
