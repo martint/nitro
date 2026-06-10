@@ -140,15 +140,20 @@ public final class PipelineCompiler
         else {
             resultTypes = outputColumnTypes(pipeline, encodings);
         }
+        // A streamed probe carries no dictionaries, so only build-sourced string sort keys can value-compare.
+        Map<Integer, int[]> orderingSources = orderingStringSources(pipeline, resultTypes);
+        orderingSources.values().removeIf(source -> source[0] == 0);
+        emitOrderingDictionaryFields(out, orderingSources);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
                 + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
+        emitOrderingDictionaryCapture(out, orderingSources, input -> "builds[" + (input - 1) + "]");
 
         if (pipeline.window() != null) {
             // A window is a pipeline breaker: drain all probe batches into a buffer, then run the eager ranking logic.
             emitWindowBodyStreaming(out, pipeline, encodings, nullable, resultTypes);
             out.append("  }\n");
             emitApplyHaving(out, pipeline.having(), resultTypes);
-            emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+            emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
             emitApplyProjection(out, pipeline.projections(), resultTypes);
             out.append("}\n");
             return out.toString();
@@ -158,7 +163,7 @@ public final class PipelineCompiler
             emitJoinBody(out, pipeline, encodings, nullable, resultTypes, true);
             out.append("  }\n");
             emitApplyHaving(out, pipeline.having(), resultTypes);
-            emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+            emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
             // A projection-only pipeline applied its projections inline (they define the output); no post step.
             emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
             out.append("}\n");
@@ -271,7 +276,7 @@ public final class PipelineCompiler
         }
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having(), resultTypes);
-        emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+        emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
         emitApplyProjection(out, pipeline.projections(), resultTypes);
         out.append("}\n");
         return out.toString();
@@ -469,7 +474,10 @@ public final class PipelineCompiler
         else {
             resultTypes = outputColumnTypes(pipeline, encodings);
         }
+        Map<Integer, int[]> orderingSources = orderingStringSources(pipeline, resultTypes);
+        emitOrderingDictionaryFields(out, orderingSources);
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
+        emitOrderingDictionaryCapture(out, orderingSources, input -> "inputs[" + input + "]");
         if (pipeline.window() != null) {
             emitWindowBody(out, pipeline, encodings, nullable, resultTypes);
         }
@@ -481,7 +489,7 @@ public final class PipelineCompiler
         }
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having(), resultTypes);
-        emitApplyOrdering(out, pipeline.ordering(), resultTypes);
+        emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
         // A projection-only pipeline applies its projections inline (they define the output), so there is no
         // separate post-aggregation projection step.
         emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
@@ -542,11 +550,90 @@ public final class PipelineCompiler
     }
 
     /**
+     * The source input column behind each STRING-typed ordering sort key, as {@code resultColumn -> {input, column}}:
+     * a string result column is either a group key or a passthrough projection, both bare {@code Col} references into
+     * the combined input space, which splits into (probe, build...) positions. Lets the ordering comparator read the
+     * column's dictionary entries instead of relying on id order. Empty for pipelines without an ordering; entries
+     * whose source the execution path cannot reach (a streamed probe carries no dictionaries) are skipped by the
+     * caller.
+     */
+    private static Map<Integer, int[]> orderingStringSources(Plan.Pipeline pipeline, List<Type> resultTypes)
+    {
+        Map<Integer, int[]> sources = new java.util.HashMap<>();
+        if (pipeline.ordering() == null) {
+            return sources;
+        }
+        for (Plan.SortKey key : pipeline.ordering().keys()) {
+            if (key.expr() != null) {
+                continue;
+            }
+            int column = key.column();
+            if (column >= resultTypes.size() || resultTypes.get(column) != Types.STRING) {
+                continue;
+            }
+            Integer combined = null;
+            if (pipeline.window() != null) {
+                // Window pipelines order over the window result: input columns pass through positionally.
+                if (column < pipeline.columnCount()) {
+                    combined = column;
+                }
+            }
+            else if (projectionOnly(pipeline)) {
+                if (column < pipeline.projections().size() && pipeline.projections().get(column) instanceof Plan.Col col) {
+                    combined = col.index();
+                }
+            }
+            else if (column < pipeline.groupKeys().size() && pipeline.groupKeys().get(column) instanceof Plan.Col col) {
+                combined = col.index();
+            }
+            if (combined == null) {
+                continue;
+            }
+            int input = 0;
+            int offset = pipeline.columnCount();
+            int local = combined;
+            for (Plan.Join join : pipeline.joins()) {
+                if (combined < offset) {
+                    break;
+                }
+                input++;
+                local = combined - offset;
+                offset += join.build().columnCount();
+            }
+            sources.put(column, new int[] {input, local});
+        }
+        return sources;
+    }
+
+    /** Emit the per-sort-key dictionary fields and their capture assignments (at the top of {@code execute}). */
+    private static void emitOrderingDictionaryCapture(StringBuilder out, Map<Integer, int[]> sources, java.util.function.IntFunction<String> inputAccess)
+    {
+        for (Map.Entry<Integer, int[]> entry : sources.entrySet()) {
+            int[] source = entry.getValue();
+            out.append("    orderingDictionary").append(entry.getKey()).append(" = ((org.weakref.nitro.jit.Column.StringColumn) ")
+                    .append(inputAccess.apply(source[0])).append("[").append(source[1]).append("]).dictionary();\n");
+        }
+    }
+
+    private static void emitOrderingDictionaryFields(StringBuilder out, Map<Integer, int[]> sources)
+    {
+        for (int column : sources.keySet()) {
+            out.append("  private static byte[][] orderingDictionary").append(column).append(";\n");
+        }
+    }
+
+    /**
      * Post-aggregation ORDER BY / LIMIT applied to the materialized result. Identity when no ordering; otherwise
      * sorts a row-index permutation by the sort keys and gathers (optionally truncated to the limit). A full
-     * sort for now; a bounded top-N heap is the perf refinement.
+     * sort for now; a bounded top-N heap is the perf refinement. A string sort key with a captured source dictionary
+     * compares the entries' bytes (value order without depending on dictionary order); other keys compare slots.
      */
     private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types)
+    {
+        emitApplyOrdering(out, ordering, types, Map.of());
+    }
+
+    private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
     {
         out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyOrdering(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
         if (ordering == null) {
@@ -577,7 +664,9 @@ public final class PipelineCompiler
                 continue;
             }
             int col = key.column();
-            String compare = types.get(col).compare("cols[" + col + "][a]", "cols[" + col + "][b]");
+            String compare = stringSources.containsKey(col)
+                    ? "java.util.Arrays.compareUnsigned(orderingDictionary" + col + "[(int) cols[" + col + "][a]], orderingDictionary" + col + "[(int) cols[" + col + "][b]])"
+                    : types.get(col).compare("cols[" + col + "][a]", "cols[" + col + "][b]");
             // Null ordering mirrors the operator path (OperatorOrderingSemantics): a null compares as greater than
             // any value (so ascending puts nulls last), and the descending flip then yields nulls first for DESC.
             out.append("      { boolean an = on != null && on[").append(col).append("] != null && on[").append(col).append("][a];")
