@@ -766,7 +766,24 @@ public final class CompiledQuerySupport
         org.weakref.nitro.jit.Column[] out = columns;
         for (int c = 0; c < specs.size(); c++) {
             org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
-            if (!(columns[c] instanceof org.weakref.nitro.jit.Column.StringColumn source)) {
+            // A nullable-declared column must carry a null mask -- generated code reads it unconditionally -- but a
+            // materialized virtual column that never saw a null has none (e.g. a non-null relation consumed through
+            // a LEFT join, where only the JOIN introduces nulls). Synthesize the all-false mask.
+            if (spec.nullable()) {
+                if (columns[c] instanceof org.weakref.nitro.jit.Column.FlatColumn flat && flat.nulls() == null) {
+                    if (out == columns) {
+                        out = columns.clone();
+                    }
+                    out[c] = new org.weakref.nitro.jit.Column.FlatColumn(flat.values(), new boolean[flat.values().length]);
+                }
+                else if (columns[c] instanceof org.weakref.nitro.jit.Column.StringColumn text && text.nulls() == null) {
+                    if (out == columns) {
+                        out = columns.clone();
+                    }
+                    out[c] = new org.weakref.nitro.jit.Column.StringColumn(text.ids(), text.dictionary(), new boolean[text.ids().length]);
+                }
+            }
+            if (!(out[c] instanceof org.weakref.nitro.jit.Column.StringColumn source)) {
                 continue;
             }
             org.weakref.nitro.jit.Column adapted;
