@@ -4079,6 +4079,62 @@ public final class CompiledTpcdsQueries
                 new QueryLowering.Column("r_rank", ColumnEncoding.FLAT, false));
     }
 
+    public static Composite query08()
+    {
+        // Q08: Q2/1998 store net profit per store, for stores whose two-digit zip prefix qualifies -- the prefix of a
+        // five-digit zip that is in the literal list AND has more than ten preferred customers. The qualifying
+        // prefixes derive in two stages (preferred customers' zips truncated to five digits, list-filtered, grouped
+        // with a count-over-ten having; then the two-digit prefix of those, distinct); the main joins the store's
+        // own two-digit prefix against that set -- substring-derived string keys on both join sides. Ordered by
+        // store name, top 100.
+        QueryLowering zips = QueryLowering.scan("customer",
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_preferred_cust_flag", ColumnEncoding.STRING, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        QueryLowering.Column.substring("ca_zip", true, 1, 5));
+        zips.where(
+                        new Plan.StringMatch(zips.position("c_preferred_cust_flag"), List.of("Y"), false),
+                        new Plan.StringMatch(zips.position("ca_zip"), TpcdsQueryLiterals.QUERY08_ZIP_VALUES, false))
+                .groupBy("ca_zip")
+                .count();
+        zips.having(new Plan.Predicate(">", new Plan.Col(1), new Plan.Lit(10)));
+
+        QueryLowering prefixes = QueryLowering.scan("q08_zips",
+                        QueryLowering.Column.substring("z_zip", false, 1, 2),
+                        new QueryLowering.Column("z_count", ColumnEncoding.FLAT, false))
+                .groupBy("z_zip")
+                .count();
+        prefixes.select(new Plan.Col(0));
+
+        QueryLowering main = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_net_profit", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_qoy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false),
+                        QueryLowering.Column.substring("s_zip", true, 1, 2))
+                .join("q08_prefixes", "s_zip", "p_zip",
+                        new QueryLowering.Column("p_zip", ColumnEncoding.STRING, false));
+        main.where(
+                        new Plan.Predicate("=", main.column("d_qoy"), new Plan.Lit(2)),
+                        new Plan.Predicate("=", main.column("d_year"), new Plan.Lit(1998)))
+                .groupBy("s_store_name")
+                .aggregate("sum", "ss_net_profit");
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(zips, "q08_zips", List.of(new DictRef(0, 1, 1))),
+                        new Stage(prefixes, "q08_prefixes", List.of(new DictRef(0, 0, 0)))),
+                main,
+                List.of(new DictRef(0, 2, 1)));
+    }
+
     public static Composite query61()
     {
         // Q61: the share of November 1998 Jewelry revenue in one GMT zone sold through a promotion channel (direct
