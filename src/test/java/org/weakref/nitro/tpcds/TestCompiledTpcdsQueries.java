@@ -577,6 +577,77 @@ public class TestCompiledTpcdsQueries
         assertCompositeMatchesHarness(CompiledTpcdsQueries.query65(), TpcdsParquetSupport::query65);
     }
 
+    /**
+     * Q98's full unlimited sort has no unique answer: distinct groups can tie on all five sort keys (category,
+     * class, item id, item description, ratio), so the harness's and the compiled engine's tie orders legitimately
+     * differ. Validate the sort CONTRACT instead: the row multisets match exactly and the compiled output is
+     * non-decreasing under the query's sort keys.
+     */
+    @Test
+    void query98()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledTpcdsQueries.Composite composite = CompiledTpcdsQueries.query98();
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+        byte[][][] dictionaries = new byte[run.result().columns().length][][];
+        for (CompiledTpcdsQueries.DictRef ref : composite.stringColumns()) {
+            dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
+        }
+        List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
+
+        Operator harnessChain = TpcdsParquetSupport.query98(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
+        assertThat(expected).isNotEmpty();
+
+        // The compiled output honors ORDER BY category, class, item id, item description, ratio.
+        java.util.Comparator<Row> sortKeys = rowComparator(2, 3, 0, 1, 6);
+        for (int row = 1; row < actual.size(); row++) {
+            assertThat(sortKeys.compare(actual.get(row - 1), actual.get(row)))
+                    .as("sort contract at row %d", row)
+                    .isLessThanOrEqualTo(0);
+        }
+
+        // The same rows, compared under a total order refining the sort keys (so tie order cannot differ).
+        java.util.Comparator<Row> total = rowComparator(2, 3, 0, 1, 6, 4, 5);
+        List<Row> actualCanonical = new ArrayList<>(actual);
+        actualCanonical.sort(total);
+        List<Row> expectedCanonical = new ArrayList<>(expected);
+        expectedCanonical.sort(total);
+        assertThat(actualCanonical).containsExactlyElementsOf(expectedCanonical);
+    }
+
+    /** Compare normalized rows on {@code columns} in order: longs numerically, strings lexicographically. */
+    private static java.util.Comparator<Row> rowComparator(int... columns)
+    {
+        return (left, right) -> {
+            for (int column : columns) {
+                Object a = left.values()[column];
+                Object b = right.values()[column];
+                int comparison;
+                if (a == null || b == null) {
+                    comparison = Boolean.compare(a == null, b == null);   // nulls last, matching the engines' sort
+                }
+                else if (a instanceof String string) {
+                    comparison = string.compareTo((String) b);
+                }
+                else {
+                    comparison = Long.compare((Long) a, (Long) b);
+                }
+                if (comparison != 0) {
+                    return comparison;
+                }
+            }
+            return 0;
+        };
+    }
+
     /** Run a multi-stage query as a tree of compiled pipelines: each stage materialized under its virtual name, then the main. */
     private static void assertCompositeMatchesHarness(CompiledTpcdsQueries.Composite composite, HarnessChain harness)
     {
