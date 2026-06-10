@@ -74,7 +74,7 @@ public class TestCompiledClickBenchQueries
     @Test
     void query05()
     {
-        assertCompositeMatchesHarness(CompiledClickBenchQueries.query05(), (allocator, registry, hits) -> ClickBenchHitsSupport.query05(allocator, hits));
+        assertMatchesHarness(CompiledClickBenchQueries.query05(), (allocator, registry, hits) -> ClickBenchHitsSupport.query05(allocator, hits));
     }
 
     @Test
@@ -122,7 +122,7 @@ public class TestCompiledClickBenchQueries
     @Test
     void query06()
     {
-        assertCompositeMatchesHarness(CompiledClickBenchQueries.query06(), (allocator, registry, hits) -> ClickBenchHitsSupport.query06(allocator, hits));
+        assertMatchesHarness(CompiledClickBenchQueries.query06(), (allocator, registry, hits) -> ClickBenchHitsSupport.query06(allocator, hits));
     }
 
     @Test
@@ -134,19 +134,19 @@ public class TestCompiledClickBenchQueries
     @Test
     void query11()
     {
-        assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query11(), ClickBenchHitsSupport::query11, 1);
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query11(), ClickBenchHitsSupport::query11, 1);
     }
 
     @Test
     void query12()
     {
-        assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query12(), ClickBenchHitsSupport::query12, 2);
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query12(), ClickBenchHitsSupport::query12, 2);
     }
 
     @Test
     void query14()
     {
-        assertCompositeTopKMatchesHarness(CompiledClickBenchQueries.query14(), ClickBenchHitsSupport::query14, 1);
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query14(), ClickBenchHitsSupport::query14, 1);
     }
 
     @Test
@@ -188,7 +188,7 @@ public class TestCompiledClickBenchQueries
     @Test
     void query09()
     {
-        assertCompositeMatchesHarness(CompiledClickBenchQueries.query09(), (allocator, registry, hits) -> ClickBenchHitsSupport.query09(allocator, hits));
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query09(), (allocator, registry, hits) -> ClickBenchHitsSupport.query09(allocator, hits), 1);
     }
 
     @Test
