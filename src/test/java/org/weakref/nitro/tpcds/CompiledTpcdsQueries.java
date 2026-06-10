@@ -4308,6 +4308,50 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static Composite query84()
+    {
+        // Q84: the customer id and "last, first" name for every store return made by an Edgewood customer in one
+        // income band, once per matching return, ordered by id, top 100. Eligible households (demographics in the
+        // banded income range) materialize as a stage; the main joins customers to their Edgewood address, the
+        // households, and the returns by demographic (a one-to-many fan-out), carrying id/last/first to the output
+        // where the bridge concatenates the name.
+        QueryLowering households = QueryLowering.scan("household_demographics",
+                        new QueryLowering.Column("hd_demo_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("hd_income_band_sk", ColumnEncoding.FLAT, true))
+                .join("income_band", "hd_income_band_sk", "ib_income_band_sk",
+                        new QueryLowering.Column("ib_income_band_sk"),
+                        new QueryLowering.Column("ib_lower_bound", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ib_upper_bound", ColumnEncoding.FLAT, true));
+        households.where(
+                        new Plan.Predicate(">", households.column("ib_lower_bound"), new Plan.Lit(38_127)),
+                        new Plan.Predicate("<", households.column("ib_upper_bound"), new Plan.Lit(88_129)))
+                .select(households.column("hd_demo_sk"));
+
+        // Combined main columns: customer(0-5), address(6-7), households(8), store_returns(9).
+        QueryLowering main = QueryLowering.scan("customer",
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_hdemo_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_city", ColumnEncoding.STRING, true))
+                .join("q84_households", "c_current_hdemo_sk", "h_demo",
+                        new QueryLowering.Column("h_demo", ColumnEncoding.FLAT, false))
+                .join("store_returns", "c_current_cdemo_sk", "sr_cdemo_sk",
+                        new QueryLowering.Column("sr_cdemo_sk", ColumnEncoding.FLAT, true));
+        main.where(new Plan.StringMatch(main.position("ca_city"), List.of("Edgewood"), false))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(households, "q84_households")),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2)));
+    }
+
     public static Composite query45()
     {
         // Q45: Q2/2001 web sales by the customer's city and zip, keeping sales whose customer lives in one of nine

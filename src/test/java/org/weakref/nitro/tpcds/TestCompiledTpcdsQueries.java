@@ -823,6 +823,50 @@ public class TestCompiledTpcdsQueries
         assertCompositeMatchesHarness(CompiledTpcdsQueries.query09(), TpcdsParquetSupport::query09);
     }
 
+    /**
+     * Run Q84's composite and concatenate the customer name at the bridge: the pipeline carries (id, last, first)
+     * and the output row is (id, last || ", " || first), null when either name part is null -- matching the
+     * harness's concat primitive. The name never participates in a comparison, so the concat is purely an
+     * output-edge rendering.
+     */
+    @Test
+    void query84()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledTpcdsQueries.Composite composite = CompiledTpcdsQueries.query84();
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            virtuals.put(stage.virtualName(),
+                    CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+
+        byte[][][] dictionaries = new byte[3][][];
+        for (CompiledTpcdsQueries.DictRef ref : composite.stringColumns()) {
+            dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
+        }
+        org.weakref.nitro.jit.CompiledPipeline.Result result = run.result();
+        List<Row> actual = new ArrayList<>();
+        for (int r = 0; r < result.rowCount(); r++) {
+            String id = new String(dictionaries[0][(int) result.columns()[0][r]], UTF_8);
+            boolean lastNull = result.nulls() != null && result.nulls()[1] != null && result.nulls()[1][r];
+            boolean firstNull = result.nulls() != null && result.nulls()[2] != null && result.nulls()[2][r];
+            String name = lastNull || firstNull
+                    ? null
+                    : new String(dictionaries[1][(int) result.columns()[1][r]], UTF_8) + ", "
+                            + new String(dictionaries[2][(int) result.columns()[2][r]], UTF_8);
+            actual.add(new Row(new Object[] {id, name}));
+        }
+
+        Operator harnessChain = TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
+        assertThat(expected).isNotEmpty();
+        assertThat(normalize(actual)).containsExactlyElementsOf(expected);
+    }
+
     @Test
     void query45()
     {
