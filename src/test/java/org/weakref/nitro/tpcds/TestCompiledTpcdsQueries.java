@@ -748,6 +748,10 @@ public class TestCompiledTpcdsQueries
 
         Allocator allocator = new Allocator();
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : query.stages()) {
+            virtuals.put(stage.virtualName(),
+                    CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
         CompiledQuerySupport.Materialized union = null;
         for (CompiledTpcdsQueries.Stage branch : query.branches()) {
             CompiledQuerySupport.Materialized part =
@@ -763,6 +767,12 @@ public class TestCompiledTpcdsQueries
     void query80()
     {
         assertLabeledUnionMatchesHarness(CompiledTpcdsQueries.query80(), TpcdsParquetSupport::query80);
+    }
+
+    @Test
+    void query77()
+    {
+        assertLabeledUnionMatchesHarness(CompiledTpcdsQueries.query77(), TpcdsParquetSupport::query77);
     }
 
     @Test

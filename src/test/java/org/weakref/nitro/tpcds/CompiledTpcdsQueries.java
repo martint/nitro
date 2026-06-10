@@ -1209,9 +1209,108 @@ public final class CompiledTpcdsQueries
     /**
      * A union of independently-materialized branch stages (each with its OWN string reconstruction, e.g. a
      * channel-specific id prefix) concatenated -- dictionaries unified -- under {@code unionVirtual}, which
-     * {@code main} then consumes. Unlike {@link UnionComposite}, the branches do not share one DictRef layout.
+     * {@code main} then consumes. {@code stages} materialize first, under their own virtual names, for branches that
+     * join pre-aggregated relations. Unlike {@link UnionComposite}, the branches do not share one DictRef layout.
      */
-    public record LabeledUnion(List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns) {}
+    public record LabeledUnion(List<Stage> stages, List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns)
+    {
+        public LabeledUnion(List<Stage> branches, String unionVirtual, QueryLowering main, List<DictRef> stringColumns)
+        {
+            this(List.of(), branches, unionVirtual, main, stringColumns);
+        }
+    }
+
+    public static LabeledUnion query77()
+    {
+        // Q77: a month of sales, returns, and profit per channel and location (numeric keys -- store, call center,
+        // web page; no dimension join), with channel subtotals and a grand total. Each channel aggregates its sales
+        // and its returns separately over the window and LEFT-joins the two on the location key, coalescing missing
+        // returns to zero; the labeled channels concatenate and the main re-aggregates under the (channel, id)
+        // ROLLUP, ordered by channel, id, and sales, top 100.
+        List<Stage> stages = new ArrayList<>();
+        List<Stage> branches = new ArrayList<>();
+        record ChannelColumns(String name, String soldDate, String salesId, String amount, String profit,
+                String returnedDate, String returnsId, String returnAmount, String returnLoss) {}
+
+        for (ChannelColumns channel : List.of(
+                new ChannelColumns("store channel", "ss_sold_date_sk", "ss_store_sk", "ss_ext_sales_price", "ss_net_profit",
+                        "sr_returned_date_sk", "sr_store_sk", "sr_return_amt", "sr_net_loss"),
+                new ChannelColumns("catalog channel", "cs_sold_date_sk", "cs_call_center_sk", "cs_ext_sales_price", "cs_net_profit",
+                        "cr_returned_date_sk", "cr_call_center_sk", "cr_return_amount", "cr_net_loss"),
+                new ChannelColumns("web channel", "ws_sold_date_sk", "ws_web_page_sk", "ws_ext_sales_price", "ws_net_profit",
+                        "wr_returned_date_sk", "wr_web_page_sk", "wr_return_amt", "wr_net_loss"))) {
+            String shortName = channel.name().substring(0, channel.name().indexOf(' '));
+            String fact = switch (shortName) {
+                case "store" -> "store_sales";
+                case "catalog" -> "catalog_sales";
+                default -> "web_sales";
+            };
+            String returnsFact = switch (shortName) {
+                case "store" -> "store_returns";
+                case "catalog" -> "catalog_returns";
+                default -> "web_returns";
+            };
+            String salesVirtual = "q77_" + shortName + "_sales";
+            String returnsVirtual = "q77_" + shortName + "_returns";
+            stages.add(new Stage(query77WindowedAggregate(fact, channel.soldDate(), channel.salesId(), channel.amount(), channel.profit()), salesVirtual));
+            stages.add(new Stage(query77WindowedAggregate(returnsFact, channel.returnedDate(), channel.returnsId(), channel.returnAmount(), channel.returnLoss()), returnsVirtual));
+
+            // Branch combined columns: sales(0-2: id, sales, profit), returns(3-5: id, amount, loss) -- the LEFT
+            // join leaves the returns columns NULL for locations with no returns.
+            // The location keys are nullable fact columns, so a NULL-keyed group is real: it must ride through as
+            // NULL (a distinct rollup group that sorts last), not as the value slot's zero.
+            QueryLowering branch = QueryLowering.scan(salesVirtual,
+                            new QueryLowering.Column("sl_id", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("sl_sales", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("sl_profit", ColumnEncoding.FLAT, true))
+                    .leftJoin(returnsVirtual, "sl_id", "rt_id",
+                            new QueryLowering.Column("rt_id", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("rt_amount", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("rt_loss", ColumnEncoding.FLAT, true));
+            branch.select(new Plan.LitStr(channel.name()), new Plan.Col(0), new Plan.Col(1),
+                    new Plan.Coalesce(new Plan.Col(4), new Plan.Lit(0)),
+                    new Plan.Bin("-", new Plan.Col(2), new Plan.Coalesce(new Plan.Col(5), new Plan.Lit(0))));
+            branches.add(new Stage(branch, "q77_" + shortName, List.of(DictRef.literal(0, channel.name()))));
+        }
+
+        // The returns column is the branches' coalesce-to-zero -- never null, so it materializes without a null mask.
+        QueryLowering main = QueryLowering.scan("q77_channels",
+                        new QueryLowering.Column("m_channel", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("m_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_sales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_returns", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("m_profit", ColumnEncoding.FLAT, true))
+                .groupBy("m_channel", "m_id")
+                .groupingSets(List.of(new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", "m_sales")
+                .aggregate("sum", "m_returns")
+                .aggregate("sum", "m_profit");
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+
+        return new LabeledUnion(stages, branches, "q77_channels", main, List.of(new DictRef(0, 0, 0)));
+    }
+
+    /** A fact's two measures summed per location key over the 30-day window. */
+    private static QueryLowering query77WindowedAggregate(String fact, String date, String id, String first, String second)
+    {
+        QueryLowering aggregate = QueryLowering.scan(fact,
+                        new QueryLowering.Column(date, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(id, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(first, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(second, ColumnEncoding.FLAT, true))
+                .join("date_dim", date, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        aggregate.where(
+                        new Plan.Predicate(">=", aggregate.column("d_date"), new Plan.Lit(LocalDate.of(2000, 8, 23).toEpochDay())),
+                        new Plan.Predicate("<=", aggregate.column("d_date"), new Plan.Lit(LocalDate.of(2000, 9, 22).toEpochDay())))
+                .groupBy(id)
+                .aggregate("sum", first)
+                .aggregate("sum", second);
+        return aggregate;
+    }
 
     public static LabeledUnion query80()
     {

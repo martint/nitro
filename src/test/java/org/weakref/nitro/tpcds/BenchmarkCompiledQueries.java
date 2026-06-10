@@ -55,7 +55,7 @@ import java.util.function.Supplier;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "78", "51", "38", "87", "97", "61", "83", "58", "57", "47", "05", "80", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
+    @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "78", "51", "38", "87", "97", "61", "83", "58", "57", "47", "05", "80", "77", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
             "60", "62", "66", "63", "65", "71", "73", "75", "76", "79", "82", "85", "89", "91", "04", "11", "12", "16", "19", "20", "21", "31", "36", "46", "59", "68", "69", "70", "74", "86", "92", "93", "94", "95", "96", "99"})
     public String query;
 
@@ -95,6 +95,7 @@ public class BenchmarkCompiledQueries
         runningCumulative("51", CompiledTpcdsQueries.query51());
         channelUnion("05", CompiledTpcdsQueries.query05());
         labeledUnion("80", CompiledTpcdsQueries.query80());
+        labeledUnion("77", CompiledTpcdsQueries.query77());
         composite("93", CompiledTpcdsQueries.query93());
         ported("99", CompiledTpcdsQueries.query99());
 
@@ -295,16 +296,23 @@ public class BenchmarkCompiledQueries
     /** A union of independently-materialized branch stages concatenated under one virtual name, then the main. */
     private void labeledUnion(String name, CompiledTpcdsQueries.LabeledUnion query)
     {
-        record BranchPlan(Lowered plan, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
+        record BranchPlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
 
+        List<BranchPlan> stages = new ArrayList<>();
+        for (CompiledTpcdsQueries.Stage stage : query.stages()) {
+            stages.add(new BranchPlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
+        }
         List<BranchPlan> branches = new ArrayList<>();
         for (CompiledTpcdsQueries.Stage branch : query.branches()) {
-            branches.add(new BranchPlan(branch.plan().lower(), branch.stringColumns()));
+            branches.add(new BranchPlan(branch.plan().lower(), branch.virtualName(), branch.stringColumns()));
         }
         String unionVirtual = query.unionVirtual();
         Lowered main = query.main().lower();
         runners.put(name, () -> {
             Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+            for (BranchPlan stage : stages) {
+                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
+            }
             CompiledQuerySupport.Materialized union = null;
             for (BranchPlan branch : branches) {
                 CompiledQuerySupport.Materialized part = CompiledQuerySupport.materializeStage(allocator, tables, branch.plan(), virtuals, branch.stringColumns());
