@@ -51,8 +51,24 @@ public final class AggregateLibrary
         /** Emit the fold of {@code input} into {@code cells}; {@code input} is null for nullary aggregates. */
         void emitUpdate(StringBuilder out, String indent, List<String> cells, String input);
 
+        /**
+         * As {@link #emitUpdate(StringBuilder, String, List, String)}, additionally given the input column's
+         * dictionary variable when the input is a dictionary-string column's id ({@code null} otherwise). Value
+         * aggregates ignore it (the default); a string aggregate (e.g. {@code min_utf8}) compares entries through it.
+         */
+        default void emitUpdate(StringBuilder out, String indent, List<String> cells, String input, String dictionary)
+        {
+            emitUpdate(out, indent, cells, input);
+        }
+
         /** Emit the combine of partial state {@code other} into {@code cells}. */
         void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other);
+
+        /** As {@link #emitMerge(StringBuilder, String, List, List)}, with the input column's dictionary variable (see the update overload). */
+        default void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other, String dictionary)
+        {
+            emitMerge(out, indent, cells, other);
+        }
 
         /** The output value expression (a {@code long}; for {@code DOUBLE} output, its {@code doubleToRawLongBits}). */
         String result(List<String> cells);
@@ -108,6 +124,65 @@ public final class AggregateLibrary
         register("count", additive("1L"));
         register("min", extreme("Math.min", "Long.MAX_VALUE"));
         register("max", extreme("Math.max", "Long.MIN_VALUE"));
+        // Lexicographic minimum of a dictionary-string column: state is the min entry's id (-1 = none yet);
+        // candidates compare through the column's dictionary (UTF-8 lexicographic = unsigned byte order).
+        // The input must be a string column id, so the dictionary-less emit forms reject generation.
+        register("min_utf8", new AggregateCompiler()
+        {
+            @Override public Type outputType()
+            {
+                return Types.STRING;
+            }
+
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
+            {
+                out.append(indent).append(cells.get(0)).append(" = -1L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                throw new IllegalStateException("min_utf8 requires a dictionary-string input column");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input, String dictionary)
+            {
+                if (dictionary == null) {
+                    throw new IllegalStateException("min_utf8 requires a dictionary-string input column");
+                }
+                String cell = cells.get(0);
+                out.append(indent).append("{ long mu = ").append(input).append(";\n");
+                out.append(indent).append("  if (").append(cell).append(" == -1L || java.util.Arrays.compareUnsigned(")
+                        .append(dictionary).append("[(int) mu], ").append(dictionary).append("[(int) ").append(cell).append("]) < 0) { ")
+                        .append(cell).append(" = mu; } }\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                throw new IllegalStateException("min_utf8 requires a dictionary-string input column");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other, String dictionary)
+            {
+                if (dictionary == null) {
+                    throw new IllegalStateException("min_utf8 requires a dictionary-string input column");
+                }
+                String cell = cells.get(0);
+                String candidate = other.get(0);
+                out.append(indent).append("if (").append(candidate).append(" != -1L && (").append(cell).append(" == -1L || java.util.Arrays.compareUnsigned(")
+                        .append(dictionary).append("[(int) ").append(candidate).append("], ").append(dictionary).append("[(int) ").append(cell).append("]) < 0)) { ")
+                        .append(cell).append(" = ").append(candidate).append("; }\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return cells.get(0);
+            }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                return cells.get(0) + " == -1L";   // min over zero non-null inputs is NULL
+            }
+        });
         register("avg", new AggregateCompiler()
         {
             @Override public int cells()

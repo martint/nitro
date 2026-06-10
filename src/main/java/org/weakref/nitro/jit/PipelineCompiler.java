@@ -2827,14 +2827,21 @@ public final class PipelineCompiler
     {
         AggregateLibrary.AggregateCompiler aggregator = aggregator(aggregate);
         String inputExpr = input(aggregate, resolver, nullResolver, stringMaskIds);
+        String dictionary = aggregateInputDictionary(aggregate);
         String guard = aggregate.input() == null ? "false" : nullExpr(aggregate.input(), resolver, nullResolver, stringMaskIds);
         if (guard.equals("false")) {
-            aggregator.emitUpdate(out, indent, cells, inputExpr);
+            aggregator.emitUpdate(out, indent, cells, inputExpr, dictionary);
             return;
         }
         out.append(indent).append("if (!(").append(guard).append(")) {\n");
-        aggregator.emitUpdate(out, indent + "  ", cells, inputExpr);
+        aggregator.emitUpdate(out, indent + "  ", cells, inputExpr, dictionary);
         out.append(indent).append("}\n");
+    }
+
+    /** The dictionary variable for a string aggregate's input: set when the input is a plain scan column (whose string id the row loop works on), else null. */
+    private static String aggregateInputDictionary(Plan.Aggregate aggregate)
+    {
+        return aggregate.input() instanceof Plan.Col col ? "cStr" + col.index() : null;
     }
 
     private static void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates, List<Type> resultTypes)
@@ -3185,7 +3192,7 @@ public final class PipelineCompiler
             out.append(m).append("long hkey = mo + aMin;\n");
             emitSingleKeyHashFindOrCreate(out, m, aggregates);
             for (int a = 0; a < aggregateCount; a++) {
-                aggregator(aggregates.get(a)).emitMerge(out, m, cells(aggregates, a, "agg", "gid"), cells(aggregates, a, "aAgg", "mo"));
+                aggregator(aggregates.get(a)).emitMerge(out, m, cells(aggregates, a, "agg", "gid"), cells(aggregates, a, "aAgg", "mo"), aggregateInputDictionary(aggregates.get(a)));
             }
             out.append(a2).append("  }\n");
             out.append(a2).append("}\n");
