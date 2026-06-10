@@ -4233,6 +4233,78 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 2, 1)));
     }
 
+    public static Composite query30()
+    {
+        // Q30: Georgia customers whose 2002 web-return total exceeds 1.2x their state's average customer return, with
+        // the full customer identity. Per-(customer, state) return totals group over web returns joined to the year
+        // and the return address; the state average divides that relation's total by its customer count (the totals
+        // relation is assembled a second time -- no reuse); the main joins totals to averages on the state, attaches
+        // the customer and their current Georgia address, applies the cross-multiplied threshold, and orders by all
+        // thirteen outputs, top 100. A null returning customer is a real group whose total counts toward the state
+        // average; a null state rides through grouping but never joins.
+        QueryLowering averages = QueryLowering.scan("q30_returns_for_average",
+                        new QueryLowering.Column("a_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("a_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_total", ColumnEncoding.FLAT, true));
+        averages.where(new Plan.IsNull(2, true))
+                .groupBy("a_state")
+                .aggregate("sum", "a_total")
+                .aggregate("count", "a_total");
+        averages.select(new Plan.Col(0), new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)));
+
+        // Combined main columns: totals(0-2: customer, state, total), averages(3-4: state, average),
+        // customer(5-18), address(19-20).
+        QueryLowering main = QueryLowering.scan("q30_returns",
+                        new QueryLowering.Column("m_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("m_total", ColumnEncoding.FLAT, true))
+                .join("q30_averages", "m_state", "v_state",
+                        new QueryLowering.Column("v_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("v_average", ColumnEncoding.FLAT, true))
+                .join("customer", "m_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_salutation", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_preferred_cust_flag", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_birth_day", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_birth_month", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_birth_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_birth_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_login", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_email_address", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_review_date_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true));
+        main.where(
+                        new Plan.StringMatch(main.position("ca_state"), List.of("GA"), false),
+                        new Plan.IsNull(2, true),
+                        new Plan.IsNull(4, true),
+                        new Plan.Predicate(">",
+                                new Plan.Bin("*", new Plan.Col(2), new Plan.Lit(10)),
+                                new Plan.Bin("*", new Plan.Col(4), new Plan.Lit(12))))
+                .select(new Plan.Col(7), new Plan.Col(8), new Plan.Col(9), new Plan.Col(10), new Plan.Col(11),
+                        new Plan.Col(12), new Plan.Col(13), new Plan.Col(14), new Plan.Col(15), new Plan.Col(16),
+                        new Plan.Col(17), new Plan.Col(18), new Plan.Col(2))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false), new Plan.SortKey(5, false),
+                        new Plan.SortKey(6, false), new Plan.SortKey(7, false), new Plan.SortKey(8, false),
+                        new Plan.SortKey(9, false), new Plan.SortKey(10, false), new Plan.SortKey(11, false),
+                        new Plan.SortKey(12, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(query30CustomerTotalReturn(), "q30_returns", List.of(new DictRef(1, 2, 1))),
+                        new Stage(query30CustomerTotalReturn(), "q30_returns_for_average", List.of(new DictRef(1, 2, 1))),
+                        new Stage(averages, "q30_averages", List.of(new DictRef(0, 0, 1)))),
+                main,
+                List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 3), new DictRef(2, 2, 4), new DictRef(3, 2, 5),
+                        new DictRef(4, 2, 6), new DictRef(8, 2, 10), new DictRef(9, 2, 11), new DictRef(10, 2, 12)));
+    }
+
     public static Composite query81()
     {
         // Q81: Q30's catalog sibling -- Georgia customers whose 2000 catalog-return total (including tax) exceeds
@@ -4325,6 +4397,26 @@ public final class CompiledTpcdsQueries
         totals.where(new Plan.Predicate("=", totals.column("d_year"), new Plan.Lit(2000)))
                 .groupBy("cr_returning_customer_sk", "ca_state")
                 .aggregate("sum", "cr_return_amt_inc_tax");
+        return totals;
+    }
+
+    /** 2002 web-return totals per (returning customer, return-address state); both keys may be null. */
+    private static QueryLowering query30CustomerTotalReturn()
+    {
+        QueryLowering totals = QueryLowering.scan("web_returns",
+                        new QueryLowering.Column("wr_returning_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_returning_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_return_amt", ColumnEncoding.FLAT, true))
+                .join("date_dim", "wr_returned_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("customer_address", "wr_returning_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true));
+        totals.where(new Plan.Predicate("=", totals.column("d_year"), new Plan.Lit(2002)))
+                .groupBy("wr_returning_customer_sk", "ca_state")
+                .aggregate("sum", "wr_return_amt");
         return totals;
     }
 

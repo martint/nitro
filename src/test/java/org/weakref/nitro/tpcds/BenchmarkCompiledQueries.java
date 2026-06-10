@@ -55,7 +55,7 @@ import java.util.function.Supplier;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "78", "51", "38", "87", "97", "61", "83", "58", "57", "47", "05", "80", "77", "08", "49", "81", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
+    @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "78", "51", "38", "87", "97", "61", "83", "58", "57", "47", "05", "80", "77", "08", "49", "30", "81", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
             "60", "62", "66", "63", "65", "71", "73", "75", "76", "79", "82", "85", "89", "91", "04", "11", "12", "16", "19", "20", "21", "31", "36", "46", "59", "68", "69", "70", "74", "86", "92", "93", "94", "95", "96", "99"})
     public String query;
 
@@ -128,6 +128,7 @@ public class BenchmarkCompiledQueries
         composite("88", CompiledTpcdsQueries.query88());
         composite("61", CompiledTpcdsQueries.query61());
         composite("08", CompiledTpcdsQueries.query08());
+        composite("30", CompiledTpcdsQueries.query30());
         composite("81", CompiledTpcdsQueries.query81());
         composite("83", CompiledTpcdsQueries.query83());
         composite("58", CompiledTpcdsQueries.query58());
