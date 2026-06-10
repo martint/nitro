@@ -4308,6 +4308,114 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static UnionComposite query54()
+    {
+        // Q54: store revenue of "my customers" (December 1998 catalog/web buyers of women's maternity items),
+        // segmented into fifty-dollar bands over the three months after the purchase month, counting customers per
+        // band. The channel branches carry their joins (the harness joins once over the raw fact union; distributing
+        // them lets the union materialize filtered), dedup into the customer set; the revenue stage joins store
+        // sales to that set, the customer's county/state, the matching store, and the month, brackets the month
+        // between the scalar boundaries, groups revenue per customer, and emits the band (null revenue reads zero,
+        // matching the non-null-propagating divide). The main counts customers per band, top 100.
+        List<QueryLowering> branches = List.of(
+                query54Channel("catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk"),
+                query54Channel("web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_item_sk"));
+
+        QueryLowering customers = QueryLowering.scan("q54_sales",
+                        new QueryLowering.Column("u_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_addr", ColumnEncoding.FLAT, true))
+                .groupBy("u_customer", "u_addr")
+                .count();
+        customers.select(new Plan.Col(0), new Plan.Col(1));
+
+        QueryLowering revenue = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ext_sales_price", ColumnEncoding.FLAT, true))
+                .join("q54_customers", "ss_customer_sk", "mc_customer",
+                        new QueryLowering.Column("mc_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("mc_addr", ColumnEncoding.FLAT, true))
+                .join("customer_address", "mc_addr", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true))
+                .join("store",
+                        new String[] {"ca_county", "ca_state"},
+                        new String[] {"s_county", "s_state"},
+                        new QueryLowering.Column("s_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .crossJoin("q54_lower", new QueryLowering.Column("lower_bound", ColumnEncoding.FLAT, false))
+                .crossJoin("q54_upper", new QueryLowering.Column("upper_bound", ColumnEncoding.FLAT, false));
+        revenue.where(
+                        new Plan.Predicate(">=", revenue.column("d_month_seq"), revenue.column("lower_bound")),
+                        new Plan.Predicate("<=", revenue.column("d_month_seq"), revenue.column("upper_bound")))
+                .groupBy("ss_customer_sk")
+                .aggregate("sum", "ss_ext_sales_price");
+        // The fifty-dollar band: revenue (in cents) / 5000; a null revenue's value slot is zero, matching the
+        // harness's non-null-propagating divide.
+        revenue.select(new Plan.Bin("/", new Plan.Coalesce(new Plan.Col(1), new Plan.Lit(0)), new Plan.Lit(5_000)));
+
+        QueryLowering main = QueryLowering.scan("q54_segments",
+                        new QueryLowering.Column("s_segment", ColumnEncoding.FLAT, false))
+                .groupBy("s_segment")
+                .count();
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Bin("*", new Plan.Col(0), new Plan.Lit(50)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new UnionComposite(branches, "q54_sales", List.of(),
+                List.of(new Stage(customers, "q54_customers"),
+                        new Stage(query54MonthBoundary(1), "q54_lower"),
+                        new Stage(query54MonthBoundary(3), "q54_upper"),
+                        new Stage(revenue, "q54_segments")),
+                main, List.of());
+    }
+
+    /** One channel's December 1998 maternity buyers: (customer, current address). */
+    private static QueryLowering query54Channel(String salesTable, String soldDate, String customer, String item)
+    {
+        QueryLowering channel = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(customer, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("customer", customer, "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true));
+        channel.where(
+                        new Plan.StringMatch(channel.position("i_category"), List.of("Women"), false),
+                        new Plan.StringMatch(channel.position("i_class"), List.of("maternity"), false),
+                        new Plan.Predicate("=", channel.column("d_moy"), new Plan.Lit(12)),
+                        new Plan.Predicate("=", channel.column("d_year"), new Plan.Lit(1998)))
+                .select(channel.column(customer), channel.column("c_current_addr_sk"));
+        return channel;
+    }
+
+    /** The scalar month boundary: the distinct December 1998 month sequence plus {@code offset}. */
+    private static QueryLowering query54MonthBoundary(int offset)
+    {
+        QueryLowering boundary = QueryLowering.scan("date_dim",
+                new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true));
+        boundary.where(
+                        new Plan.Predicate("=", boundary.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.Predicate("=", boundary.column("d_moy"), new Plan.Lit(12)))
+                .groupBy("d_month_seq")
+                .count();
+        boundary.select(new Plan.Bin("+", new Plan.Col(0), new Plan.Lit(offset)));
+        return boundary;
+    }
+
     public static Composite query41()
     {
         // Q41: distinct product names of items in a manufacturer-id band whose manufacturer also makes one of eight
