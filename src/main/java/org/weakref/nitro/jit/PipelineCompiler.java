@@ -181,9 +181,13 @@ public final class PipelineCompiler
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
+        int stringIdKey = streamedStringIdKey(pipeline, encodings, nullable);
         // State lives across batches: initialize it once, before the batch loop. A join-less projection-only
         // pipeline (a plain scan-and-project, e.g. a raw union branch) appends to projection output arrays.
-        if (grouped) {
+        if (grouped && stringIdKey >= 0) {
+            emitStringIdGroupedState(out, pipeline.aggregates());
+        }
+        else if (grouped) {
             emitGroupedState(out, body, pipeline, nullable, false);
         }
         else if (projectionOnly) {
@@ -260,8 +264,14 @@ public final class PipelineCompiler
                 int column = stringDerivationColumn(derivation);
                 emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
             }
+            if (grouped && stringIdKey >= 0) {
+                emitStringIdGroupedGrowth(out, pipeline.aggregates(), stringIdKey);
+            }
             out.append("        for (int i = 0; i < selected; i++) {\n");
-            if (grouped) {
+            if (grouped && stringIdKey >= 0) {
+                emitStringIdGroupedAccumulate(out, body, "          ", pipeline, stringIdKey, resolver, nullResolver, stringMaskIds);
+            }
+            else if (grouped) {
                 emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
             }
             else if (projectionOnly) {
@@ -289,13 +299,23 @@ public final class PipelineCompiler
                 int column = stringDerivationColumn(derivation);
                 emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
             }
-            out.append("      for (int i = 0; i < rowCount; i++) {\n");
-            emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+            if (grouped && stringIdKey >= 0) {
+                emitStringIdGroupedGrowth(out, pipeline.aggregates(), stringIdKey);
+                out.append("      for (int i = 0; i < rowCount; i++) {\n");
+                emitStringIdGroupedAccumulate(out, body, "        ", pipeline, stringIdKey, resolver, nullResolver, stringMaskIds);
+            }
+            else {
+                out.append("      for (int i = 0; i < rowCount; i++) {\n");
+                emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+            }
             out.append("      }\n");
             out.append("    }\n");
         }
 
-        if (grouped) {
+        if (grouped && stringIdKey >= 0) {
+            emitStringIdGroupedResult(out, pipeline, resultTypes);
+        }
+        else if (grouped) {
             emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);
         }
         else if (projectionOnly) {
@@ -3374,6 +3394,92 @@ public final class PipelineCompiler
                 out.append("    nullByGid").append(kx).append(" = new boolean[16];\n");
             }
         }
+    }
+
+    /**
+     * The streamed single-key string grouping with dense ids: when the only group key is a globally-interned
+     * streamed string column, its ids are dense by construction, so the aggregation state can be plain arrays
+     * indexed by the id -- the intern is the only per-row hash, matching the operator harness's one-hash cost
+     * (the hash-table path paid a second find-or-create hash per row). Returns the key's column, or -1 when the
+     * shape does not apply (multiple/computed/nullable keys, grouping sets, joins, or a nullable aggregate --
+     * the array state carries no result null masks).
+     */
+    private static int streamedStringIdKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        if (pipeline.groupKeys().size() == 1 && pipeline.groupingSets().isEmpty() && pipeline.window() == null
+                && pipeline.joins().isEmpty()
+                && pipeline.groupKeys().getFirst() instanceof Plan.Col col
+                && encodingOf(encodings, 0, col.index()) == ColumnEncoding.STRING
+                && stringIdsCrossBatches(pipeline, col.index())
+                && !nullableOf(nullable, 0, col.index())
+                && !anyAggregateNullable(pipeline)) {
+            return col.index();
+        }
+        return -1;
+    }
+
+    /** State for the dense string-id grouping: per-cell arrays indexed by global id, grown to the dictionary size. */
+    private static void emitStringIdGroupedState(StringBuilder out, List<Plan.Aggregate> aggregates)
+    {
+        out.append("    int sgCap = 0; int sgCount = 0;\n");
+        out.append("    boolean[] sgUsed = new boolean[0];\n");
+        for (int c = 0; c < cellCount(aggregates); c++) {
+            out.append("    long[] sgA").append(c).append(" = new long[0];\n");
+        }
+    }
+
+    /** Per-batch growth of the dense string-id state to the (monotonically growing) dictionary size. */
+    private static void emitStringIdGroupedGrowth(StringBuilder out, List<Plan.Aggregate> aggregates, int keyColumn)
+    {
+        out.append("      if (cStrLen").append(keyColumn).append(" > sgCap) {\n");
+        out.append("        int sgNew = Math.max(cStrLen").append(keyColumn).append(", sgCap * 2);\n");
+        out.append("        sgUsed = java.util.Arrays.copyOf(sgUsed, sgNew);\n");
+        for (int c = 0; c < cellCount(aggregates); c++) {
+            out.append("        sgA").append(c).append(" = java.util.Arrays.copyOf(sgA").append(c).append(", sgNew);\n");
+        }
+        out.append("        sgCap = sgNew;\n");
+        out.append("      }\n");
+    }
+
+    /** One row's fold into the dense string-id state: first touch initializes the group's cells lazily. */
+    private static void emitStringIdGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, int keyColumn, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        out.append(indent).append("int sgid = cIds").append(keyColumn).append("[i];\n");
+        out.append(indent).append("if (!sgUsed[sgid]) { sgUsed[sgid] = true; sgCount++;\n");
+        emitStateIdentity(out, indent + "  ", aggregates, "sgA", "sgid");
+        out.append(indent).append("}\n");
+        for (int a = 0; a < aggregates.size(); a++) {
+            emitAggregateUpdate(out, indent, body, aggregates.get(a), a, cells(aggregates, a, "sgA", "sgid"), "(sgid + 1L)", resolver, nullResolver, stringMaskIds);
+        }
+    }
+
+    /** Compact the dense string-id state to the occupied ids: key column = the id, then finalized aggregates. */
+    private static void emitStringIdGroupedResult(StringBuilder out, Plan.Pipeline pipeline, List<Type> resultTypes)
+    {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
+        int aggregateCount = aggregates.size();
+        out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
+        out.append("    long[] outKey = new long[sgCount];\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("    long[] outAgg").append(a).append(" = new long[sgCount];\n");
+        }
+        out.append("    int w = 0;\n");
+        out.append("    for (int o = 0; o < sgCap; o++) {\n");
+        out.append("      if (sgUsed[o]) {\n");
+        out.append("        outKey[w] = o;\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("        outAgg").append(a).append("[w] = ").append(aggregator(aggregates.get(a)).result(cells(aggregates, a, "sgA", "o"))).append(";\n");
+        }
+        out.append("        w++;\n");
+        out.append("      }\n");
+        out.append("    }\n");
+        out.append("    result[0] = outKey;\n");
+        for (int a = 0; a < aggregateCount; a++) {
+            out.append("    result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
+        }
+        emitResultTypes(out, "    ", resultTypes);
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(sgCount, result, types))));\n");
     }
 
     private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
