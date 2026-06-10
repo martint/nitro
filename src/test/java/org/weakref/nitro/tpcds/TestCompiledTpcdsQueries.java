@@ -841,6 +841,12 @@ public class TestCompiledTpcdsQueries
     }
 
     @Test
+    void query14()
+    {
+        assertLabeledUnionMatchesHarness(CompiledTpcdsQueries.query14(), TpcdsParquetSupport::query14);
+    }
+
+    @Test
     void query23()
     {
         assertLabeledUnionMatchesHarness(CompiledTpcdsQueries.query23(), TpcdsParquetSupport::query23);

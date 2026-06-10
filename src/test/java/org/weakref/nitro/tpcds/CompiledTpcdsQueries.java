@@ -4427,6 +4427,207 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static LabeledUnion query14()
+    {
+        // Q14: November 2001 sales of cross-channel items (brand/class/category triples sold in all three channels
+        // of 1999-2001), ROLLUPed over (channel, brand, class, category), keeping cells above the all-channel
+        // average sale value. Each channel assembles its own cross-items chain and its own average, mirroring the
+        // harness; the value multiply is null-propagating (no null-as-zero here, unlike Q23).
+        record Channel(String name, String table, String soldDate, String item, String quantity, String price) {}
+
+        List<Channel> channels = List.of(
+                new Channel("store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_quantity", "ss_list_price"),
+                new Channel("catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_quantity", "cs_list_price"),
+                new Channel("web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_quantity", "ws_list_price"));
+
+        List<PreStage> stages = new ArrayList<>();
+        List<Stage> branches = new ArrayList<>();
+        for (Channel branch : channels) {
+            String suffix = branch.name();
+            for (Channel triple : channels) {
+                stages.add(new Stage(query14ChannelTriples(triple.table(), triple.soldDate(), triple.item()),
+                        "q14_triples_" + triple.name() + "_" + suffix));
+            }
+            stages.add(new Stage(query14SharedTriples(suffix), "q14_shared_" + suffix));
+            stages.add(new Stage(query14CrossItems("q14_shared_" + suffix), "q14_cross_items_" + suffix));
+            stages.add(new UnionStage(
+                    channels.stream()
+                            .map(values -> new Stage(query14ChannelSalesValues(values.table(), values.soldDate(),
+                                    values.quantity(), values.price()), "q14_values_" + values.name() + "_" + suffix))
+                            .toList(),
+                    "q14_all_values_" + suffix));
+            stages.add(new Stage(query14AverageSales("q14_all_values_" + suffix), "q14_average_" + suffix));
+            stages.add(new Stage(query14ChannelCells(branch.table(), branch.soldDate(), branch.item(),
+                    branch.quantity(), branch.price(), suffix), "q14_cells_" + suffix));
+            branches.add(new Stage(query14ChannelBranch(suffix), "q14_channel_" + suffix,
+                    List.of(DictRef.literal(0, suffix))));
+        }
+
+        // Combined main columns: the labeled union (channel, brand, class, category, sales, count); ROLLUP over the
+        // four keys re-summing sales and counts, ordered by the keys, top 100. The grouping id is appended last and
+        // dropped by the select, like the harness's group-id key.
+        QueryLowering main = QueryLowering.scan("q14_channels",
+                        new QueryLowering.Column("u_channel", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("u_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_category", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_sales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_count", ColumnEncoding.FLAT, false))
+                .groupBy("u_channel", "u_brand", "u_class", "u_category")
+                .groupingSets(List.of(new int[] {0, 1, 2, 3}, new int[] {0, 1, 2}, new int[] {0, 1}, new int[] {0}, new int[] {}))
+                .aggregate("sum", "u_sales")
+                .aggregate("sum", "u_count");
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4), new Plan.Col(5))
+                .orderBy(new Plan.Ordering(
+                        List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false), new Plan.SortKey(3, false)), 100));
+
+        return new LabeledUnion(stages, branches, "q14_channels", main, List.of(new DictRef(0, 0, 0)));
+    }
+
+    /** One channel's distinct (brand, class, category) triples sold in 1999-2001. */
+    private static QueryLowering query14ChannelTriples(String table, String soldDate, String item)
+    {
+        QueryLowering triples = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_class_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category_id", ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true));
+        triples.where(
+                        new Plan.Predicate(">", triples.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.Predicate("<", triples.column("d_year"), new Plan.Lit(2002)))
+                .groupBy("i_brand_id", "i_class_id", "i_category_id")
+                .count();
+        triples.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
+        return triples;
+    }
+
+    /** The triples sold in ALL three channels: the store triples joined to the catalog and web sets, deduplicated. */
+    private static QueryLowering query14SharedTriples(String suffix)
+    {
+        QueryLowering shared = QueryLowering.scan("q14_triples_store_" + suffix,
+                        new QueryLowering.Column("t_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("t_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("t_category", ColumnEncoding.FLAT, true))
+                .join("q14_triples_catalog_" + suffix,
+                        new String[] {"t_brand", "t_class", "t_category"},
+                        new String[] {"c_brand", "c_class", "c_category"},
+                        new QueryLowering.Column("c_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_category", ColumnEncoding.FLAT, true))
+                .join("q14_triples_web_" + suffix,
+                        new String[] {"t_brand", "t_class", "t_category"},
+                        new String[] {"w_brand", "w_class", "w_category"},
+                        new QueryLowering.Column("w_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("w_category", ColumnEncoding.FLAT, true));
+        shared.groupBy("t_brand", "t_class", "t_category")
+                .count();
+        shared.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2));
+        return shared;
+    }
+
+    /** The distinct items whose (brand, class, category) is a cross-channel triple. */
+    private static QueryLowering query14CrossItems(String sharedVirtual)
+    {
+        QueryLowering items = QueryLowering.scan("item",
+                        new QueryLowering.Column("i_item_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_class_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category_id", ColumnEncoding.FLAT, true))
+                .join(sharedVirtual,
+                        new String[] {"i_brand_id", "i_class_id", "i_category_id"},
+                        new String[] {"s_brand", "s_class", "s_category"},
+                        new QueryLowering.Column("s_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("s_category", ColumnEncoding.FLAT, true));
+        items.groupBy("i_item_sk")
+                .count();
+        items.select(new Plan.Col(0));
+        return items;
+    }
+
+    /** One channel's 1999-2001 raw sale values (null-propagating quantity times price), for the average union. */
+    private static QueryLowering query14ChannelSalesValues(String table, String soldDate, String quantity, String price)
+    {
+        QueryLowering values = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(price, ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true));
+        values.where(
+                        new Plan.Predicate(">", values.column("d_year"), new Plan.Lit(1998)),
+                        new Plan.Predicate("<", values.column("d_year"), new Plan.Lit(2002)))
+                .select(new Plan.Bin("*", values.column(price), values.column(quantity)));
+        return values;
+    }
+
+    /** The all-channel rounded average sale value: one scalar over the unioned raw values. */
+    private static QueryLowering query14AverageSales(String valuesVirtual)
+    {
+        QueryLowering average = QueryLowering.scan(valuesVirtual,
+                        new QueryLowering.Column("v_sales", ColumnEncoding.FLAT, true))
+                .aggregate("sum", "v_sales")
+                .aggregate("count", "v_sales");
+        average.select(new Plan.Call("divide_round_i64", new Plan.Col(0), new Plan.Col(1)));
+        return average;
+    }
+
+    /** One channel's November 2001 cross-items cells: (brand, class, category, sum of sales, count). */
+    private static QueryLowering query14ChannelCells(String table, String soldDate, String item,
+            String quantity, String price, String suffix)
+    {
+        QueryLowering cells = QueryLowering.scan(table,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(price, ColumnEncoding.FLAT, true))
+                .semiJoin("q14_cross_items_" + suffix, item, "ci_item",
+                        new QueryLowering.Column("ci_item", ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_brand_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_class_id", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_category_id", ColumnEncoding.FLAT, true))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true));
+        cells.where(
+                        new Plan.Predicate("=", cells.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Predicate("=", cells.column("d_moy"), new Plan.Lit(11)))
+                .groupBy("i_brand_id", "i_class_id", "i_category_id")
+                .aggregate("sum", new Plan.Bin("*", cells.column(price), cells.column(quantity)))
+                .count();
+        return cells;
+    }
+
+    /** One labeled channel branch: the cells above the broadcast average. */
+    private static QueryLowering query14ChannelBranch(String suffix)
+    {
+        QueryLowering branch = QueryLowering.scan("q14_cells_" + suffix,
+                        new QueryLowering.Column("g_brand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_class", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_category", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_sales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("g_count", ColumnEncoding.FLAT, false))
+                .crossJoin("q14_average_" + suffix,
+                        new QueryLowering.Column("avg_sales", ColumnEncoding.FLAT, true));
+        branch.where(
+                        new Plan.IsNull(branch.position("g_sales"), true),
+                        new Plan.IsNull(branch.position("avg_sales"), true),
+                        new Plan.Predicate("<", branch.column("avg_sales"), branch.column("g_sales")))
+                .select(new Plan.LitStr(suffix), new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4));
+        return branch;
+    }
+
     public static LabeledUnion query23()
     {
         // Q23: February 2000 catalog + web sales restricted to frequently-sold items (sold on more than four
