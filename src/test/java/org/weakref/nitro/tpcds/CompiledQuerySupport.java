@@ -401,13 +401,18 @@ public final class CompiledQuerySupport
                 return currentRows;
             }
 
+            // The exact-width all-columns list for columns(): the identity scratch must not be used here, since
+            // materialize(int[]) takes the array length as the column count and the scratch grows past width
+            // (the dense string path uses identity(count) over rows).
+            private final int[] allColumns = java.util.stream.IntStream.range(0, width).toArray();
+
             @Override
             public org.weakref.nitro.jit.Column[] columns()
             {
                 // Non-staged callers (a pipeline with no deferrable payload) get every column over the whole batch
                 // through the dense zero-copy path -- wrapping a non-null I64 column's array by reference -- not the
                 // per-row convert gather.
-                return materialize(identity(width));
+                return materialize(allColumns);
             }
 
             @Override
@@ -508,6 +513,9 @@ public final class CompiledQuerySupport
                     }
                     return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
                 }
+                if (values instanceof org.weakref.nitro.data.BinaryVector || values instanceof org.weakref.nitro.data.DictionaryVector) {
+                    return stringColumn(values, nulls, count, identity(count), null, nullable);
+                }
                 throw new IllegalArgumentException("Unsupported column vector type: " + values.getClass().getName());
             }
 
@@ -547,6 +555,9 @@ public final class CompiledQuerySupport
                         values[j] = isNull ? 0 : backing[position];
                     }
                 }
+                else if (vector instanceof org.weakref.nitro.data.BinaryVector || vector instanceof org.weakref.nitro.data.DictionaryVector) {
+                    return stringColumn(vector, nulls, count, selection, allSelected ? null : batchMask, nullable);
+                }
                 else {
                     for (int j = 0; j < count; j++) {
                         int position = allSelected ? selection[j] : batchMask.position(selection[j]);
@@ -558,6 +569,50 @@ public final class CompiledQuerySupport
                     }
                 }
                 return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+            }
+
+            /**
+             * A streamed probe's string column for one batch: per-batch dictionary plus per-row ids, the contract
+             * the generated string filters (predicate-over-dictionary masks rebuilt per batch) work against. A
+             * dictionary-encoded page keeps its dictionary (ids gathered per row); a plain-encoded page interns
+             * each selected row's bytes into a batch-local dictionary.
+             */
+            private org.weakref.nitro.jit.Column stringColumn(Vector vector, Vector nulls, int count, int[] selection, Mask batchMask, boolean nullable)
+            {
+                int[] ids = new int[count];
+                boolean[] nullMask = nullable ? new boolean[count] : null;
+                byte[][] dictionary;
+                if (vector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector
+                        && dictionaryVector.values() instanceof org.weakref.nitro.data.BinaryVector entries) {
+                    int dictionarySize = entries.length();
+                    dictionary = new byte[dictionarySize][];
+                    for (int entry = 0; entry < dictionarySize; entry++) {
+                        dictionary[entry] = stringBytes(entries, entry);
+                    }
+                    int[] vectorIds = dictionaryVector.ids();
+                    for (int j = 0; j < count; j++) {
+                        int position = batchMask == null ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nulls != null && CompiledQuerySupport.isNull(nulls, position);
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        ids[j] = isNull ? 0 : vectorIds[position];
+                    }
+                }
+                else {
+                    java.util.HashMap<String, Integer> index = new java.util.HashMap<>();
+                    List<byte[]> entries = new ArrayList<>();
+                    for (int j = 0; j < count; j++) {
+                        int position = batchMask == null ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nulls != null && CompiledQuerySupport.isNull(nulls, position);
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        ids[j] = isNull ? 0 : intern(index, entries, stringBytes(vector, position));
+                    }
+                    dictionary = entries.toArray(new byte[0][]);
+                }
+                return new org.weakref.nitro.jit.Column.StringColumn(ids, dictionary, nullMask);
             }
         };
     }
