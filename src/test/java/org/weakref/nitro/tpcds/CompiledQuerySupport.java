@@ -683,8 +683,11 @@ public final class CompiledQuerySupport
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
         org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
         boolean probeVirtual = virtuals.containsKey(probe.table());
+        // The streaming Parquet source converts numeric columns only; a probe that carries a dictionary string
+        // (e.g. a flag the WHERE filters on) is drained eagerly instead.
+        boolean probeString = probe.columns().stream().anyMatch(column -> column.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING);
 
-        if (probeVirtual) {
+        if (probeVirtual || probeString) {
             return runStageEager(allocator, tables, lowered, virtuals);
         }
 
