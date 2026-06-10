@@ -790,6 +790,9 @@ public final class CompiledQuerySupport
             if (spec.substringLength() >= 0) {
                 adapted = substringColumn(source, spec.substringStart(), spec.substringLength());
             }
+            else if (spec.upperCase()) {
+                adapted = upperColumn(source);
+            }
             else if (spec.loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.VERBATIM) {
                 continue;
             }
@@ -889,19 +892,32 @@ public final class CompiledQuerySupport
 
     private static org.weakref.nitro.jit.Column.StringColumn substringColumn(org.weakref.nitro.jit.Column.StringColumn source, int start, int length)
     {
+        return derivedStringColumn(source, value -> utf8Substring(value, start, length));
+    }
+
+    private static org.weakref.nitro.jit.Column.StringColumn upperColumn(org.weakref.nitro.jit.Column.StringColumn source)
+    {
+        return derivedStringColumn(source, value -> org.weakref.nitro.function.scalar.builtin.Utf8Support.upper(value, 0, value.length));
+    }
+
+    /**
+     * Apply a per-value transform to a string column's dictionary, then dedupe and re-sort the derived values into
+     * an ordered dictionary (id order = value order), remapping each source id to its derived value's new id.
+     */
+    private static org.weakref.nitro.jit.Column.StringColumn derivedStringColumn(org.weakref.nitro.jit.Column.StringColumn source,
+            java.util.function.UnaryOperator<byte[]> transform)
+    {
         byte[][] dictionary = source.dictionary();
         if (dictionary.length == 0) {
-            // An all-null column has nothing to truncate; its ids reference no entry.
+            // An all-null column has nothing to transform; its ids reference no entry.
             return source;
         }
-        byte[][] truncated = new byte[dictionary.length][];
+        byte[][] derivedValues = new byte[dictionary.length][];
         for (int i = 0; i < dictionary.length; i++) {
-            truncated[i] = utf8Substring(dictionary[i], start, length);
+            derivedValues[i] = transform.apply(dictionary[i]);
         }
-        // Dedupe and re-sort the truncated values into an ordered dictionary (id order = value order), remapping
-        // each source id to its truncated value's new id.
         java.util.TreeMap<byte[], Integer> ordered = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
-        for (byte[] value : truncated) {
+        for (byte[] value : derivedValues) {
             ordered.putIfAbsent(value, 0);
         }
         byte[][] derived = new byte[ordered.size()][];
@@ -913,7 +929,7 @@ public final class CompiledQuerySupport
         }
         int[] remap = new int[dictionary.length];
         for (int i = 0; i < dictionary.length; i++) {
-            remap[i] = ordered.get(truncated[i]);
+            remap[i] = ordered.get(derivedValues[i]);
         }
         int[] sourceIds = source.ids();
         int[] ids = new int[sourceIds.length];

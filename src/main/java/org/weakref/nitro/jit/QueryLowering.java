@@ -51,11 +51,11 @@ public final class QueryLowering
      * join one table more than once in a query (e.g. {@code date_dim} for both a sold and a returned date). The
      * {@code loadMode} is derived by {@link #lower()}, not declared.
      */
-    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength, LoadMode loadMode)
+    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength, boolean upperCase, LoadMode loadMode)
     {
         public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength)
         {
-            this(name, sourceName, encoding, nullable, substringStart, substringLength, LoadMode.ORDERED);
+            this(name, sourceName, encoding, nullable, substringStart, substringLength, false, LoadMode.ORDERED);
         }
 
         public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable)
@@ -65,7 +65,7 @@ public final class QueryLowering
 
         public Column withLoadMode(LoadMode mode)
         {
-            return new Column(name, sourceName, encoding, nullable, substringStart, substringLength, mode);
+            return new Column(name, sourceName, encoding, nullable, substringStart, substringLength, upperCase, mode);
         }
 
         public Column(String name, ColumnEncoding encoding, boolean nullable)
@@ -86,6 +86,16 @@ public final class QueryLowering
         public static Column substring(String name, boolean nullable, int start, int length)
         {
             return new Column(name, name, ColumnEncoding.STRING, nullable, start, length);
+        }
+
+        /**
+         * A string column loaded with every value uppercased ({@code upper_utf8} semantics, per code point): the
+         * loader uppercases the dictionary, dedupes and re-sorts it, and remaps the ids, so grouping, filtering,
+         * and joining all operate on the uppercased values.
+         */
+        public static Column upper(String name, boolean nullable)
+        {
+            return new Column(name, name, ColumnEncoding.STRING, nullable, 1, -1, true, LoadMode.ORDERED);
         }
     }
 
