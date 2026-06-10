@@ -1312,6 +1312,104 @@ public final class CompiledTpcdsQueries
         return aggregate;
     }
 
+    public static LabeledUnion query49()
+    {
+        // Q49: each channel's worst returners for December 2001 -- items ranked by their return-to-sold quantity
+        // ratio and by their refund-to-paid currency ratio, keeping items in either top ten. Each channel joins its
+        // sales (positive quantity, payment, profit) to its large-amount returns and the month, sums the four
+        // measures per item (returns coalesced to zero, matching the SQL), and derives the scaled ratios; two
+        // chained rank windows (no partition) append the ranks, the top-ten filter keeps either rank, and the
+        // channel label tags the rows. The labeled channels concatenate and order by channel, ranks, item, top 100.
+        List<Stage> stages = new ArrayList<>();
+        List<Stage> branches = new ArrayList<>();
+        record ChannelColumns(String name, String sales, String soldDate, String item, String order, String quantity,
+                String netPaid, String netProfit, String returns, String returnItem, String returnOrder,
+                String returnQuantity, String returnAmount) {}
+
+        for (ChannelColumns channel : List.of(
+                new ChannelColumns("store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number",
+                        "ss_quantity", "ss_net_paid", "ss_net_profit",
+                        "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt"),
+                new ChannelColumns("catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number",
+                        "cs_quantity", "cs_net_paid", "cs_net_profit",
+                        "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount"),
+                new ChannelColumns("web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number",
+                        "ws_quantity", "ws_net_paid", "ws_net_profit",
+                        "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt"))) {
+            String metricsVirtual = "q49_" + channel.name() + "_metrics";
+            String rankedVirtual = "q49_" + channel.name() + "_ranked";
+
+            QueryLowering metrics = QueryLowering.scan(channel.sales(),
+                            new QueryLowering.Column(channel.soldDate(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.item(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.order(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.quantity(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.netPaid(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.netProfit(), ColumnEncoding.FLAT, true))
+                    .join(channel.returns(),
+                            new String[] {channel.order(), channel.item()},
+                            new String[] {channel.returnOrder(), channel.returnItem()},
+                            new QueryLowering.Column(channel.returnItem(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.returnOrder(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.returnQuantity(), ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column(channel.returnAmount(), ColumnEncoding.FLAT, true))
+                    .join("date_dim", channel.soldDate(), "d_date_sk",
+                            new QueryLowering.Column("d_date_sk"),
+                            new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                            new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true));
+            metrics.where(
+                            new Plan.Predicate(">", metrics.column(channel.quantity()), new Plan.Lit(0)),
+                            new Plan.Predicate(">", metrics.column(channel.netPaid()), new Plan.Lit(0)),
+                            new Plan.Predicate(">", metrics.column(channel.netProfit()), new Plan.Lit(100)),
+                            new Plan.Predicate(">", metrics.column(channel.returnAmount()), new Plan.Lit(1_000_000)),
+                            new Plan.Predicate("=", metrics.column("d_year"), new Plan.Lit(2001)),
+                            new Plan.Predicate("=", metrics.column("d_moy"), new Plan.Lit(12)))
+                    .groupBy(channel.item())
+                    .aggregate("sum", new Plan.Coalesce(metrics.column(channel.returnQuantity()), new Plan.Lit(0)))
+                    .aggregate("sum", metrics.column(channel.quantity()))
+                    .aggregate("sum", new Plan.Coalesce(metrics.column(channel.returnAmount()), new Plan.Lit(0)))
+                    .aggregate("sum", metrics.column(channel.netPaid()));
+            // Metrics output: (item, return_ratio, currency_ratio) -- the scaled rounding divides over the sums.
+            metrics.select(new Plan.Col(0),
+                    new Plan.Call("divide_scale_round_i64", new Plan.Col(1), new Plan.Col(2), new Plan.Lit(1_000_000_000_000L)),
+                    new Plan.Call("divide_scale_round_i64", new Plan.Col(3), new Plan.Col(4), new Plan.Lit(1_000_000_000_000L)));
+            stages.add(new Stage(metrics, metricsVirtual));
+
+            QueryLowering ranked = QueryLowering.scan(metricsVirtual,
+                    new QueryLowering.Column("m_item", ColumnEncoding.FLAT, false),
+                    new QueryLowering.Column("m_return_ratio", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("m_currency_ratio", ColumnEncoding.FLAT, true));
+            ranked.window(new Plan.Window(new int[0], List.of(new Plan.SortKey(1, false)), Plan.RankFunction.RANK, -1));
+            stages.add(new Stage(ranked, rankedVirtual));
+
+            // Branch: the second rank window appends column 4; keep items in either top ten and label the channel.
+            QueryLowering branch = QueryLowering.scan(rankedVirtual,
+                    new QueryLowering.Column("r_item", ColumnEncoding.FLAT, false),
+                    new QueryLowering.Column("r_return_ratio", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("r_currency_ratio", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("r_return_rank", ColumnEncoding.FLAT, false));
+            branch.window(new Plan.Window(new int[0], List.of(new Plan.SortKey(2, false)), Plan.RankFunction.RANK, -1));
+            branch.having(new Plan.Or(List.of(
+                    new Plan.Predicate("<", new Plan.Col(3), new Plan.Lit(11)),
+                    new Plan.Predicate("<", new Plan.Col(4), new Plan.Lit(11)))));
+            branch.select(new Plan.LitStr(channel.name()), new Plan.Col(0), new Plan.Col(1), new Plan.Col(3), new Plan.Col(4));
+            branches.add(new Stage(branch, "q49_" + channel.name(), List.of(DictRef.literal(0, channel.name()))));
+        }
+
+        QueryLowering main = QueryLowering.scan("q49_channels",
+                new QueryLowering.Column("m_channel", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("m_item", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("m_return_ratio", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("m_return_rank", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("m_currency_rank", ColumnEncoding.FLAT, false));
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(3, false),
+                        new Plan.SortKey(4, false), new Plan.SortKey(1, false)), 100));
+
+        return new LabeledUnion(stages, branches, "q49_channels", main, List.of(new DictRef(0, 0, 0)));
+    }
+
     public static LabeledUnion query80()
     {
         // Q80: a month of net sales, returns, and profit per channel and dimension id with channel subtotals and a
