@@ -171,9 +171,13 @@ public final class PipelineCompiler
         }
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
-        // State lives across batches: initialize it once, before the batch loop.
+        // State lives across batches: initialize it once, before the batch loop. A join-less projection-only
+        // pipeline (a plain scan-and-project, e.g. a raw union branch) appends to projection output arrays.
         if (grouped) {
             emitGroupedState(out, pipeline, nullable, false);
+        }
+        else if (projectionOnly) {
+            emitProjectionState(out, pipeline, nullable);
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
@@ -245,6 +249,9 @@ public final class PipelineCompiler
             if (grouped) {
                 emitGroupedAccumulate(out, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
             }
+            else if (projectionOnly) {
+                emitProjectionAppend(out, "          ", pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
+            }
             else {
                 emitGlobalAccumulate(out, "          ", pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
             }
@@ -271,13 +278,17 @@ public final class PipelineCompiler
         if (grouped) {
             emitGroupedResult(out, pipeline, nullable, false, -1, resultTypes);
         }
+        else if (projectionOnly) {
+            emitProjectionResult(out, pipeline, nullable, resultTypes);
+        }
         else {
             emitGlobalResult(out, pipeline.aggregates(), resultTypes);
         }
         out.append("  }\n");
         emitApplyHaving(out, pipeline.having(), resultTypes);
         emitApplyOrdering(out, pipeline.ordering(), resultTypes, orderingSources);
-        emitApplyProjection(out, pipeline.projections(), resultTypes);
+        // A projection-only pipeline applied its projections inline (they define the output); no post step.
+        emitApplyProjection(out, projectionOnly ? List.of() : pipeline.projections(), resultTypes);
         out.append("}\n");
         return out.toString();
     }
