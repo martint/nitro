@@ -703,6 +703,40 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, List.of(), harness, tables);
     }
 
+    /**
+     * Run the Q05 channel-rollup shape: per channel a sales and a returns leaf concatenated (string dictionaries
+     * unified), grouped by the dimension id and labeled; the three labeled channels concatenated again, ordered by
+     * (channel, id) in the main.
+     */
+    private static void assertChannelUnionMatchesHarness(CompiledTpcdsQueries.ChannelUnion query, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        virtuals.put("q05_web_returns", CompiledQuerySupport.materializeStage(allocator, tables, query.webReturns().lower(), virtuals, List.of()));
+        List<CompiledQuerySupport.Materialized> channels = new ArrayList<>();
+        for (CompiledTpcdsQueries.Channel channel : query.channels()) {
+            CompiledQuerySupport.Materialized sales = CompiledQuerySupport.materializeStage(allocator, tables, channel.sales().lower(), virtuals, query.leafStrings());
+            CompiledQuerySupport.Materialized returns = CompiledQuerySupport.materializeStage(allocator, tables, channel.returns().lower(), virtuals, query.leafStrings());
+            virtuals.put(channel.unionVirtual(), CompiledQuerySupport.concatenate(sales, returns));
+            CompiledQuerySupport.Materialized grouped = CompiledQuerySupport.materializeStage(allocator, tables, channel.grouped().lower(), virtuals, channel.groupedStrings());
+            virtuals.put(channel.groupedVirtual(), grouped);
+            channels.add(grouped);
+        }
+        virtuals.put("q05_channels", CompiledQuerySupport.concatenate(
+                CompiledQuerySupport.concatenate(channels.get(0), channels.get(1)), channels.get(2)));
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, query.main().lower(), virtuals);
+        assertBridgedRowsMatch(run, List.of(new CompiledTpcdsQueries.DictRef(0, 0, 0), new CompiledTpcdsQueries.DictRef(1, 0, 1)), harness, tables);
+    }
+
+    @Test
+    void query05()
+    {
+        assertChannelUnionMatchesHarness(CompiledTpcdsQueries.query05(), TpcdsParquetSupport::query05);
+    }
+
     @Test
     void query79()
     {

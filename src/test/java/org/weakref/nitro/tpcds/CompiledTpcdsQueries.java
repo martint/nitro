@@ -1061,6 +1061,151 @@ public final class CompiledTpcdsQueries
                 List.of(new Stage(grouped, "q87_grouped")), main, List.of());
     }
 
+    /**
+     * The Q05 channel-rollup shape: per channel, a sales leaf and a returns leaf (one-hot value columns) concatenate
+     * into {@code unionVirtual}, the union groups by the dimension id under {@code groupedVirtual} (labeled with the
+     * channel name and the channel-prefixed id), and the labeled channel relations concatenate -- dictionaries
+     * unified -- into the relation {@code main} orders. {@code webReturns} is the date-filtered web-returns build the
+     * web returns leaf joins (the return attributes to its sale's site through the item/order join).
+     */
+    public record ChannelUnion(QueryLowering webReturns, List<Channel> channels, List<DictRef> leafStrings, QueryLowering main) {}
+
+    /** One Q05 channel: its two leaves, the union and grouped virtual names, and the grouped stage's labeled strings. */
+    public record Channel(QueryLowering sales, QueryLowering returns, String unionVirtual,
+            QueryLowering grouped, String groupedVirtual, List<DictRef> groupedStrings) {}
+
+    public static ChannelUnion query05()
+    {
+        // Q05: two weeks of sales, returns, and net profit per channel and dimension id. Each channel unions a sales
+        // leaf and a returns leaf (date-windowed stars emitting one-hot value columns; the web returns attribute to
+        // the site through a sales item/order join against the date-filtered returns), groups by the dimension id
+        // summing the three measures, and labels rows with the channel name and the channel-prefixed id. The labeled
+        // channels concatenate and order by (channel, id), top 100. The harness omits the SQL ROLLUP, and so does
+        // this port.
+        QueryLowering webReturns = QueryLowering.scan("web_returns",
+                        new QueryLowering.Column("wr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_return_amt", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("wr_net_loss", ColumnEncoding.FLAT, true))
+                .join("date_dim", "wr_returned_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        query05DateWindow(webReturns);
+        webReturns.select(new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4));
+
+        QueryLowering webReturnsLeaf = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_web_site_sk", ColumnEncoding.FLAT, true))
+                .join("q05_web_returns",
+                        new String[] {"ws_item_sk", "ws_order_number"},
+                        new String[] {"r_item", "r_order"},
+                        new QueryLowering.Column("r_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_order", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("r_amount", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r_loss", ColumnEncoding.FLAT, true))
+                .join("web_site", "ws_web_site_sk", "web_site_sk",
+                        new QueryLowering.Column("web_site_sk"),
+                        new QueryLowering.Column("web_site_id", ColumnEncoding.STRING, false));
+        // Combined: probe(0-2), returns(3-6), web_site(7-8); the return contributes (0, amount, -loss).
+        webReturnsLeaf.select(new Plan.Col(8), new Plan.Lit(0), new Plan.Col(5),
+                new Plan.Bin("-", new Plan.Lit(0), new Plan.Col(6)));
+
+        List<Channel> channels = List.of(
+                query05Channel("store channel", "store",
+                        query05SalesLeaf("store_sales", "ss_sold_date_sk", "ss_store_sk", "ss_ext_sales_price", "ss_net_profit", "store", "s_store_sk", "s_store_id"),
+                        query05ReturnsLeaf("store_returns", "sr_returned_date_sk", "sr_store_sk", "sr_return_amt", "sr_net_loss", "store", "s_store_sk", "s_store_id")),
+                query05Channel("catalog channel", "catalog_page",
+                        query05SalesLeaf("catalog_sales", "cs_sold_date_sk", "cs_catalog_page_sk", "cs_ext_sales_price", "cs_net_profit", "catalog_page", "cp_catalog_page_sk", "cp_catalog_page_id"),
+                        query05ReturnsLeaf("catalog_returns", "cr_returned_date_sk", "cr_catalog_page_sk", "cr_return_amount", "cr_net_loss", "catalog_page", "cp_catalog_page_sk", "cp_catalog_page_id")),
+                query05Channel("web channel", "web_site",
+                        query05SalesLeaf("web_sales", "ws_sold_date_sk", "ws_web_site_sk", "ws_ext_sales_price", "ws_net_profit", "web_site", "web_site_sk", "web_site_id"),
+                        webReturnsLeaf));
+
+        QueryLowering main = QueryLowering.scan("q05_channels",
+                new QueryLowering.Column("m_channel", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("m_id", ColumnEncoding.STRING, false),
+                new QueryLowering.Column("m_sales", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("m_returns", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("m_profit", ColumnEncoding.FLAT, true));
+        main.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new ChannelUnion(webReturns, channels, List.of(new DictRef(0, 2, 1)), main);
+    }
+
+    private static Channel query05Channel(String channelName, String idPrefix, QueryLowering sales, QueryLowering returns)
+    {
+        String shortName = channelName.substring(0, channelName.indexOf(' '));
+        return new Channel(sales, returns, "q05_" + shortName + "_union",
+                query05ChannelGrouped("q05_" + shortName + "_union", channelName),
+                "q05_" + shortName,
+                List.of(DictRef.literal(0, channelName), DictRef.prefixed(1, 0, 0, idPrefix)));
+    }
+
+    /** A channel's sales leaf: the date-windowed star over its dimension, contributing (id, amount, 0, profit). */
+    private static QueryLowering query05SalesLeaf(String salesTable, String soldDate, String dimensionKey,
+            String amount, String profit, String dimensionTable, String dimensionSk, String dimensionId)
+    {
+        QueryLowering leaf = query05LeafStar(salesTable, soldDate, dimensionKey, amount, profit, dimensionTable, dimensionSk, dimensionId);
+        // Combined: fact(0-3), date(4-5), dimension(6-7).
+        leaf.select(new Plan.Col(7), new Plan.Col(2), new Plan.Lit(0), new Plan.Col(3));
+        return leaf;
+    }
+
+    /** A channel's returns leaf: the same star over the returns fact, contributing (id, 0, amount, -loss). */
+    private static QueryLowering query05ReturnsLeaf(String returnsTable, String returnedDate, String dimensionKey,
+            String amount, String loss, String dimensionTable, String dimensionSk, String dimensionId)
+    {
+        QueryLowering leaf = query05LeafStar(returnsTable, returnedDate, dimensionKey, amount, loss, dimensionTable, dimensionSk, dimensionId);
+        leaf.select(new Plan.Col(7), new Plan.Lit(0), new Plan.Col(2),
+                new Plan.Bin("-", new Plan.Lit(0), new Plan.Col(3)));
+        return leaf;
+    }
+
+    private static QueryLowering query05LeafStar(String fact, String date, String dimensionKey, String amount,
+            String lastMeasure, String dimensionTable, String dimensionSk, String dimensionId)
+    {
+        QueryLowering leaf = QueryLowering.scan(fact,
+                        new QueryLowering.Column(date, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(dimensionKey, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(amount, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(lastMeasure, ColumnEncoding.FLAT, true))
+                .join("date_dim", date, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join(dimensionTable, dimensionKey, dimensionSk,
+                        new QueryLowering.Column(dimensionSk),
+                        new QueryLowering.Column(dimensionId, ColumnEncoding.STRING, false));
+        query05DateWindow(leaf);
+        return leaf;
+    }
+
+    /** The two-week window: 2000-08-23 through 2000-09-06 inclusive. */
+    private static void query05DateWindow(QueryLowering query)
+    {
+        query.where(
+                new Plan.Predicate(">=", query.column("d_date"), new Plan.Lit(LocalDate.of(2000, 8, 23).toEpochDay())),
+                new Plan.Predicate("<=", query.column("d_date"), new Plan.Lit(LocalDate.of(2000, 9, 6).toEpochDay())));
+    }
+
+    /** Group a channel's union by the dimension id, sum the three measures, label with the channel name. */
+    private static QueryLowering query05ChannelGrouped(String unionVirtual, String channelName)
+    {
+        QueryLowering grouped = QueryLowering.scan(unionVirtual,
+                        new QueryLowering.Column("u_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("u_sales", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_returns", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_profit", ColumnEncoding.FLAT, true))
+                .groupBy("u_id")
+                .aggregate("sum", "u_sales")
+                .aggregate("sum", "u_returns")
+                .aggregate("sum", "u_profit");
+        grouped.select(new Plan.LitStr(channelName), new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3));
+        return grouped;
+    }
+
     public static UnionComposite query97()
     {
         // Q97: count the (customer, item) pairs bought only from store, only from catalog, or from both, in a

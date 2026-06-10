@@ -55,7 +55,7 @@ import java.util.function.Supplier;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "78", "51", "38", "87", "97", "61", "83", "58", "57", "47", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
+    @Param({"01", "03", "06", "10", "35", "88", "90", "07", "13", "15", "22", "25", "26", "27", "29", "32", "33", "34", "39", "78", "51", "38", "87", "97", "61", "83", "58", "57", "47", "05", "37", "40", "42", "43", "48", "50", "52", "53", "55", "56",
             "60", "62", "66", "63", "65", "71", "73", "75", "76", "79", "82", "85", "89", "91", "04", "11", "12", "16", "19", "20", "21", "31", "36", "46", "59", "68", "69", "70", "74", "86", "92", "93", "94", "95", "96", "99"})
     public String query;
 
@@ -93,6 +93,7 @@ public class BenchmarkCompiledQueries
         composite("70", CompiledTpcdsQueries.query70());
         composite("78", CompiledTpcdsQueries.query78());
         runningCumulative("51", CompiledTpcdsQueries.query51());
+        channelUnion("05", CompiledTpcdsQueries.query05());
         composite("93", CompiledTpcdsQueries.query93());
         ported("99", CompiledTpcdsQueries.query99());
 
@@ -254,6 +255,38 @@ public class BenchmarkCompiledQueries
             virtuals.put("q51_store_window", CompiledQuerySupport.materializeStage(allocator, tables, storeWindow, virtuals, List.of()));
             virtuals.put("q51_union", CompiledQuerySupport.concatenate(virtuals.get("q51_web_window"), virtuals.get("q51_store_window")));
             virtuals.put("q51_merged", CompiledQuerySupport.materializeStage(allocator, tables, merged, virtuals, List.of()));
+            return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
+        });
+    }
+
+    /** The Q05 channel-rollup shape: per channel two leaves concatenated and grouped, the labeled channels concatenated, then the ordering main. */
+    private void channelUnion(String name, CompiledTpcdsQueries.ChannelUnion query)
+    {
+        record ChannelPlan(Lowered sales, Lowered returns, String unionVirtual, Lowered grouped, String groupedVirtual,
+                List<CompiledTpcdsQueries.DictRef> groupedStrings) {}
+
+        Lowered webReturns = query.webReturns().lower();
+        List<ChannelPlan> channels = new ArrayList<>();
+        for (CompiledTpcdsQueries.Channel channel : query.channels()) {
+            channels.add(new ChannelPlan(channel.sales().lower(), channel.returns().lower(), channel.unionVirtual(),
+                    channel.grouped().lower(), channel.groupedVirtual(), channel.groupedStrings()));
+        }
+        List<CompiledTpcdsQueries.DictRef> leafStrings = query.leafStrings();
+        Lowered main = query.main().lower();
+        runners.put(name, () -> {
+            Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+            virtuals.put("q05_web_returns", CompiledQuerySupport.materializeStage(allocator, tables, webReturns, virtuals, List.of()));
+            List<CompiledQuerySupport.Materialized> grouped = new ArrayList<>();
+            for (ChannelPlan channel : channels) {
+                CompiledQuerySupport.Materialized sales = CompiledQuerySupport.materializeStage(allocator, tables, channel.sales(), virtuals, leafStrings);
+                CompiledQuerySupport.Materialized returns = CompiledQuerySupport.materializeStage(allocator, tables, channel.returns(), virtuals, leafStrings);
+                virtuals.put(channel.unionVirtual(), CompiledQuerySupport.concatenate(sales, returns));
+                CompiledQuerySupport.Materialized channelGrouped = CompiledQuerySupport.materializeStage(allocator, tables, channel.grouped(), virtuals, channel.groupedStrings());
+                virtuals.put(channel.groupedVirtual(), channelGrouped);
+                grouped.add(channelGrouped);
+            }
+            virtuals.put("q05_channels", CompiledQuerySupport.concatenate(
+                    CompiledQuerySupport.concatenate(grouped.get(0), grouped.get(1)), grouped.get(2)));
             return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
         });
     }
