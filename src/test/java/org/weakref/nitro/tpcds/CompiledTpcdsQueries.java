@@ -4427,6 +4427,92 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static UnionSelfJoin query02()
+    {
+        // Q02: week-over-week ratio of combined web + catalog daily sales. Per year, the raw two-channel union joins
+        // the year's dates and groups per week into seven day-of-week sum buckets; the 2001 weeks (shifted 53 weeks
+        // forward) join the 2002 weeks and each day's ratio is emitted, ordered by week. The same union subquery
+        // assembles twice (no reuse), with the year filter inside each grouping stage like the harness's date build.
+        List<QueryLowering> branches = List.of(
+                query02ChannelSales("web_sales", "ws_sold_date_sk", "ws_ext_sales_price"),
+                query02ChannelSales("catalog_sales", "cs_sold_date_sk", "cs_ext_sales_price"));
+
+        // Combined main columns: current weeks 0-8 (adjusted week, week, seven day sums), next-year weeks 9-16.
+        QueryLowering main = QueryLowering.scan("q02_current",
+                        new QueryLowering.Column("c_adjusted_week", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_week", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_sunday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_monday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_tuesday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_wednesday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_thursday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_friday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_saturday", ColumnEncoding.FLAT, true))
+                .join("q02_next", "c_adjusted_week", "n_week",
+                        new QueryLowering.Column("n_week", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_sunday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_monday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_tuesday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_wednesday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_thursday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_friday", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("n_saturday", ColumnEncoding.FLAT, true));
+        Plan.Expr[] outputs = new Plan.Expr[8];
+        outputs[0] = new Plan.Col(1);
+        for (int day = 0; day < 7; day++) {
+            outputs[1 + day] = new Plan.Call("divide_scale_round_i64", new Plan.Col(2 + day), new Plan.Col(10 + day), new Plan.Lit(100));
+        }
+        main.select(outputs)
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 10_000));
+
+        return new UnionSelfJoin(branches, "q02_sales_current", "q02_sales_next",
+                query02WeeklyBuckets("q02_sales_current", 2001, true), "q02_current",
+                query02WeeklyBuckets("q02_sales_next", 2002, false), "q02_next",
+                main, List.of());
+    }
+
+    /** One Q02 channel's raw (sold date, sales) rows, for the cross-channel union. */
+    private static QueryLowering query02ChannelSales(String table, String soldDate, String salesPrice)
+    {
+        QueryLowering channel = QueryLowering.scan(table,
+                new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(salesPrice, ColumnEncoding.FLAT, true));
+        channel.select(new Plan.Col(0), new Plan.Col(1));
+        return channel;
+    }
+
+    /**
+     * One year's weekly day-of-week sums over the unioned channels: each day's bucket is the sale value when the
+     * date's day name matches, else zero. The current year's output leads with the week shifted 53 weeks forward,
+     * the join key against the next year.
+     */
+    private static QueryLowering query02WeeklyBuckets(String unionVirtual, long year, boolean adjustWeek)
+    {
+        QueryLowering weekly = QueryLowering.scan(unionVirtual,
+                        new QueryLowering.Column("u_sold_date", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("u_sales", ColumnEncoding.FLAT, true))
+                .join("date_dim", "u_sold_date", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_day_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true));
+        weekly.where(new Plan.Predicate("=", weekly.column("d_year"), new Plan.Lit(year)))
+                .groupBy("d_week_seq");
+        for (String day : List.of("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) {
+            weekly.aggregate("sum", new Plan.Case(
+                    List.of(new Plan.Case.Branch(
+                            new Plan.StringMatch(weekly.position("d_day_name"), List.of(day), false),
+                            weekly.column("u_sales"))),
+                    new Plan.Lit(0)));
+        }
+        if (adjustWeek) {
+            weekly.select(new Plan.Bin("+", new Plan.Col(0), new Plan.Lit(53)),
+                    new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4),
+                    new Plan.Col(5), new Plan.Col(6), new Plan.Col(7));
+        }
+        return weekly;
+    }
+
     public static Composite query64()
     {
         // Q64: customers who bought a banded-price colored item in both 1999 and 2000 from the same store, with
