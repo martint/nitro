@@ -464,6 +464,29 @@ public final class CompiledClickBenchQueries
         return new Ported(query, List.of());
     }
 
+    /**
+     * SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k,
+     * AVG(length(Referer)) AS l, COUNT(*) AS c, MIN(Referer) FROM hits WHERE Referer <> ''
+     * GROUP BY 1 HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25: the host extraction is a
+     * regexp-derived column applied per dictionary entry by the loader.
+     */
+    public static Ported query29()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                QueryLowering.Column.regexpReplace("RefererHost", "Referer", false, "^https?://(?:www\\.)?([^/]+)/.*$", "\\1"),
+                new QueryLowering.Column("Referer", ColumnEncoding.STRING, false));
+        query.where(new Plan.StringMatch(query.position("Referer"), List.of(""), true))
+                .groupBy("RefererHost")
+                .aggregate("avg", new Plan.Call("length_utf8", List.of(query.column("Referer"))))
+                .count()
+                .aggregate("min_utf8", "Referer");
+        query.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(100_000)));
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 25));
+        return new Ported(query, List.of(
+                new CompiledTpcdsQueries.DictRef(0, 0, 0),
+                new CompiledTpcdsQueries.DictRef(3, 0, 1)));
+    }
+
     /** SELECT SUM(ResolutionWidth), SUM(ResolutionWidth + 1), ..., SUM(ResolutionWidth + 89) FROM hits */
     public static Ported query30()
     {

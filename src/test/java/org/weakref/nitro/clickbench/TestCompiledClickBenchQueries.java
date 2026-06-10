@@ -244,6 +244,12 @@ public class TestCompiledClickBenchQueries
     }
 
     @Test
+    void query29()
+    {
+        assertTopKMatchesHarness(CompiledClickBenchQueries.query29(), ClickBenchHitsSupport::query29, 1);
+    }
+
+    @Test
     void query30()
     {
         assertMatchesHarness(CompiledClickBenchQueries.query30(), ClickBenchHitsSupport::query30);
