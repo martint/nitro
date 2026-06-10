@@ -56,7 +56,11 @@ public final class CompiledOperator
         this.columns = new Vector[values.length];
         this.nulls = new BooleanVector[values.length];
         for (int column = 0; column < values.length; column++) {
-            columns[column] = types[column].toVector(values[column], rowCount, dictionaries[column]);
+            // A caller-supplied dictionary marks the column as id-encoded regardless of its declared type:
+            // a string CASE folds to a LONG-typed id expression (value branch = dictionary id, else branch =
+            // the -1 empty-string sentinel), and the supplied dictionary is what gives those ids their values.
+            Type type = dictionaries[column] != null ? org.weakref.nitro.jit.Types.STRING : types[column];
+            columns[column] = type.toVector(values[column], rowCount, dictionaries[column]);
             if (columnNulls != null && columnNulls[column] != null) {
                 nulls[column] = new BooleanVector(columnNulls[column]);
             }

@@ -100,19 +100,20 @@ public final class Types
 
     private static BinaryVector reconstructString(long[] slots, int count, byte[][] dictionary)
     {
-        // A null entry canonicalizes to id 0; for an all-null column the dictionary is empty, so id 0 is out of range.
-        // Such entries are masked null by the caller, so any bytes work -- emit empty rather than indexing the dictionary.
+        // An out-of-range id emits empty bytes: a null entry canonicalizes to id 0 (out of range when the
+        // dictionary is empty, masked null by the caller), and a string CASE's else-'' branch emits the -1
+        // sentinel, whose value IS the empty string.
         int bytes = 0;
         for (int i = 0; i < count; i++) {
             int id = (int) slots[i];
-            if (id < dictionary.length) {
+            if (id >= 0 && id < dictionary.length) {
                 bytes += dictionary[id].length;
             }
         }
         BinaryVector vector = new BinaryVector(count, bytes);
         for (int i = 0; i < count; i++) {
             int id = (int) slots[i];
-            vector.setBytes(i, id < dictionary.length ? dictionary[id] : NO_BYTES);
+            vector.setBytes(i, id >= 0 && id < dictionary.length ? dictionary[id] : NO_BYTES);
         }
         vector.addTrait(Utf8Traits.UTF8_STRING);
         return vector;
