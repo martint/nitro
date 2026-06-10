@@ -3282,21 +3282,7 @@ public final class CompiledTpcdsQueries
                 .join("q83_web", "sr_item", "wr_item",
                         new QueryLowering.Column("wr_item", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("wr_qty", ColumnEncoding.FLAT, true));
-        // The three-channel total reads a NULL channel sum as 0 (the harness's add does not propagate nulls, and an
-        // all-null sum's value slot is zero), while each share's numerator DOES carry its own channel's null -- so a
-        // channel with a NULL sum reports a NULL share but still contributes 0 to the others' denominators.
-        Plan.Expr total = new Plan.Bin("+",
-                new Plan.Bin("+",
-                        new Plan.Coalesce(new Plan.Col(1), new Plan.Lit(0)),
-                        new Plan.Coalesce(new Plan.Col(3), new Plan.Lit(0))),
-                new Plan.Coalesce(new Plan.Col(5), new Plan.Lit(0)));
-        Plan.Expr denominator = new Plan.Bin("*", total, new Plan.Lit(3));
-        main.select(new Plan.Col(0),
-                        new Plan.Col(1), query83Share(new Plan.Col(1), denominator),
-                        new Plan.Col(3), query83Share(new Plan.Col(3), denominator),
-                        new Plan.Col(5), query83Share(new Plan.Col(5), denominator),
-                        new Plan.Call("divide_round_i64", new Plan.Bin("*", total, new Plan.Lit(10_000)), new Plan.Lit(3)))
-                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+        channelShareSelect(main);
 
         return new Composite(
                 List.of(new Stage(weeks, "q83_weeks"),
@@ -3328,10 +3314,122 @@ public final class CompiledTpcdsQueries
         return channel;
     }
 
-    /** The channel's integer-rounded share of the three-channel average: quantity * 10000 / (total * 3). */
-    private static Plan.Expr query83Share(Plan.Expr quantity, Plan.Expr denominator)
+    /**
+     * The shared Q58/Q83 output over a three-channel item join (combined columns: item 0, channel values 1/3/5):
+     * each channel's value with its integer-rounded share of the three-channel average, plus that average, top 100
+     * by item then the store value. The three-channel total reads a NULL channel sum as 0 (the harness's add does
+     * not propagate nulls, and an all-null sum's value slot is zero), while each share's numerator DOES carry its
+     * own channel's null -- so a channel with a NULL sum reports a NULL share but still contributes 0 to the others'
+     * denominators.
+     */
+    private static void channelShareSelect(QueryLowering main)
     {
-        return new Plan.Call("divide_round_i64", new Plan.Bin("*", quantity, new Plan.Lit(10_000)), denominator);
+        Plan.Expr total = new Plan.Bin("+",
+                new Plan.Bin("+",
+                        new Plan.Coalesce(new Plan.Col(1), new Plan.Lit(0)),
+                        new Plan.Coalesce(new Plan.Col(3), new Plan.Lit(0))),
+                new Plan.Coalesce(new Plan.Col(5), new Plan.Lit(0)));
+        Plan.Expr denominator = new Plan.Bin("*", total, new Plan.Lit(3));
+        main.select(new Plan.Col(0),
+                        new Plan.Col(1), channelShare(new Plan.Col(1), denominator),
+                        new Plan.Col(3), channelShare(new Plan.Col(3), denominator),
+                        new Plan.Col(5), channelShare(new Plan.Col(5), denominator),
+                        new Plan.Call("divide_round_i64", new Plan.Bin("*", total, new Plan.Lit(10_000)), new Plan.Lit(3)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+    }
+
+    /** The channel's integer-rounded share of the three-channel average: value * 10000 / (total * 3). */
+    private static Plan.Expr channelShare(Plan.Expr value, Plan.Expr denominator)
+    {
+        return new Plan.Call("divide_round_i64", new Plan.Bin("*", value, new Plan.Lit(10_000)), denominator);
+    }
+
+    public static Composite query58()
+    {
+        // Q58: items whose revenue in one target week is within ten percent of the three-channel average. The allowed
+        // dates derive from a scalar subquery -- the week sequence of one literal date, broadcast by a cross join and
+        // matched by column equality -- and each channel sums extended sales price per item id over those dates. The
+        // three per-item relations inner-join on the item id and survive only when every ordered channel pair is
+        // within ten percent (cross-multiplied integer bounds); Q83's share output reports each channel against the
+        // three-channel average.
+        QueryLowering week = QueryLowering.scan("date_dim",
+                new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true));
+        week.where(new Plan.Predicate("=", week.column("d_date"), new Plan.Lit(LocalDate.of(2000, 1, 3).toEpochDay())))
+                .groupBy("d_week_seq")
+                .count();
+        week.select(new Plan.Col(0));
+
+        QueryLowering dates = QueryLowering.scan("date_dim",
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true))
+                .crossJoin("q58_week", new QueryLowering.Column("qw_week_seq", ColumnEncoding.FLAT, false));
+        dates.where(new Plan.Predicate("=", dates.column("d_week_seq"), dates.column("qw_week_seq")))
+                .groupBy("d_date")
+                .count();
+        dates.select(new Plan.Col(0));
+
+        // Combined main columns: item(0), store_rev(1), c_item(2), catalog_rev(3), w_item(4), web_rev(5).
+        QueryLowering main = QueryLowering.scan("q58_store",
+                        new QueryLowering.Column("s_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("s_rev", ColumnEncoding.FLAT, true))
+                .join("q58_catalog", "s_item", "c_item",
+                        new QueryLowering.Column("c_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_rev", ColumnEncoding.FLAT, true))
+                .join("q58_web", "s_item", "w_item",
+                        new QueryLowering.Column("w_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("w_rev", ColumnEncoding.FLAT, true));
+        List<Plan.Condition> similarity = new ArrayList<>();
+        int[][] pairs = {{1, 3}, {1, 5}, {3, 1}, {3, 5}, {5, 1}, {5, 3}};
+        for (int[] pair : pairs) {
+            similarity.addAll(query58WithinTenPercent(pair[0], pair[1]));
+        }
+        main.where(similarity.toArray(Plan.Condition[]::new));
+        channelShareSelect(main);
+
+        return new Composite(
+                List.of(new Stage(week, "q58_week"),
+                        new Stage(dates, "q58_dates"),
+                        new Stage(query58Channel("store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ext_sales_price"),
+                                "q58_store", List.of(new DictRef(0, 1, 1))),
+                        new Stage(query58Channel("catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price"),
+                                "q58_catalog", List.of(new DictRef(0, 1, 1))),
+                        new Stage(query58Channel("web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_ext_sales_price"),
+                                "q58_web", List.of(new DictRef(0, 1, 1)))),
+                main,
+                List.of(new DictRef(0, 0, 0)));
+    }
+
+    /** A channel's revenue per item id in the target week: sales joined to item, date_dim, and q58_dates, grouped. */
+    private static QueryLowering query58Channel(String salesTable, String soldDate, String item, String price)
+    {
+        QueryLowering channel = QueryLowering.scan(salesTable,
+                        new QueryLowering.Column(soldDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(price, ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("date_dim", soldDate, "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join("q58_dates", "d_date", "qd_date",
+                        new QueryLowering.Column("qd_date", ColumnEncoding.FLAT, false));
+        channel.groupBy("i_item_id")
+                .aggregate("sum", price);
+        return channel;
+    }
+
+    /** {@code left} within ten percent of {@code right}, as cross-multiplied integer bounds: 9r <= 10l AND 10l <= 11r. */
+    private static List<Plan.Condition> query58WithinTenPercent(int left, int right)
+    {
+        return List.of(
+                new Plan.Predicate("<=",
+                        new Plan.Bin("*", new Plan.Col(right), new Plan.Lit(9)),
+                        new Plan.Bin("*", new Plan.Col(left), new Plan.Lit(10))),
+                new Plan.Predicate("<=",
+                        new Plan.Bin("*", new Plan.Col(left), new Plan.Lit(10)),
+                        new Plan.Bin("*", new Plan.Col(right), new Plan.Lit(11))));
     }
 
     public static Composite query61()
