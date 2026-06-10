@@ -2621,24 +2621,20 @@ public final class PipelineCompiler
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
         int total = cellCount(aggregates);
-        // Hash key is (setId, dataKey0, ..., dataKey{keyCount-1}); gsKey0 holds the setId, gsKey{kx+1} a data key.
-        // setId is never null; every data key is treated as nullable (an inactive key is null by construction).
+        // Interleaved slot records in one array, so a probe touches one or two cache lines instead of one per
+        // parallel key array, and an aggregate update lands in the lines the probe just loaded (the dominant cost
+        // at multi-million-group scale). Each slot is (keyCount + 2 + cellCount) longs: word 0 packs the mixed
+        // hash (high int, the probe fingerprint) with gid + 1 (low int; 0 = empty slot), word 1 packs the setId
+        // (high int) with the key null bits (low; an inactive key is null by construction), words 2.. hold the
+        // canonical key values (null canonicalized to 0, distinguished by its null bit), and the trailing words
+        // the aggregate state cells. The result emitters extract the cells into gid-ordered arrays at the end.
         out.append("    int cap = 1024;\n");
-        out.append("    long[] gsKey0 = new long[cap];\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append("    long[] gsKey").append(kx + 1).append(" = new long[cap];\n");
-            out.append("    boolean[] gsKeyN").append(kx).append(" = new boolean[cap];\n");
-        }
-        out.append("    int[] gsGid = new int[cap];\n");
-        out.append("    java.util.Arrays.fill(gsGid, -1);\n");
+        out.append("    long[] gsT = new long[cap * ").append(keyCount + 2 + total).append("];\n");
         out.append("    int gsMask = cap - 1; int gsFill = (int) (cap * 0.75f); int groupCount = 0;\n");
         out.append("    int[] setByGid = new int[16];\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
             out.append("    boolean[] nullByGid").append(kx).append(" = new boolean[16];\n");
-        }
-        for (int c = 0; c < total; c++) {
-            out.append("    long[] agg").append(c).append(" = new long[16];\n");
         }
     }
 
@@ -2681,16 +2677,27 @@ public final class PipelineCompiler
                 }
             }
             out.append(b).append("int setId = ").append(s).append(";\n");
-            out.append(b).append("int gslot = mix(").append(groupingSetsHashFold(keyCount)).append(") & gsMask;\n");
-            out.append(b).append("while (gsGid[gslot] != -1 && !(").append(groupingSetsKeyCompare("gslot", keyCount)).append(")) { gslot = (gslot + 1) & gsMask; }\n");
-            out.append(b).append("int gid = gsGid[gslot];\n");
+            StringBuilder nullBits = new StringBuilder("0L");
+            for (int kx = 0; kx < keyCount; kx++) {
+                nullBits.append(" | (ckN").append(kx).append(" ? ").append(1L << kx).append("L : 0L)");
+            }
+            out.append(b).append("long gMeta = ((long) setId << 32) | (").append(nullBits).append(");\n");
+            out.append(b).append("int gHash = mix(").append(groupingSetsHashFold(keyCount)).append(");\n");
+            out.append(b).append("int gslot = gHash & gsMask;\n");
+            int stride = keyCount + 2 + cellCount(aggregates);
+            out.append(b).append("int gbase = gslot * ").append(stride).append(";\n");
+            out.append(b).append("long gw0 = gsT[gbase];\n");
+            out.append(b).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && gsT[gbase + 1] == gMeta")
+                    .append(groupingSetsKeyCompare(keyCount))
+                    .append(")) { gslot = (gslot + 1) & gsMask; gbase = gslot * ").append(stride).append("; gw0 = gsT[gbase]; }\n");
+            out.append(b).append("int gid = ((int) gw0) - 1;\n");
             out.append(b).append("if (gid == -1) {\n");
             String c = b + "  ";
-            out.append(c).append("gid = groupCount++; gsGid[gslot] = gid;\n");
-            out.append(c).append("gsKey0[gslot] = setId;\n");
+            out.append(c).append("gid = groupCount++;\n");
+            out.append(c).append("gsT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
+            out.append(c).append("gsT[gbase + 1] = gMeta;\n");
             for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("gsKey").append(kx + 1).append("[gslot] = ck").append(kx).append(";\n");
-                out.append(c).append("gsKeyN").append(kx).append("[gslot] = ckN").append(kx).append(";\n");
+                out.append(c).append("gsT[gbase + ").append(kx + 2).append("] = ck").append(kx).append(";\n");
             }
             out.append(c).append("if (gid == setByGid.length) {\n");
             out.append(c).append("  int n = setByGid.length * 2;\n");
@@ -2699,43 +2706,34 @@ public final class PipelineCompiler
                 out.append(c).append("  keyByGid").append(kx).append(" = java.util.Arrays.copyOf(keyByGid").append(kx).append(", n);\n");
                 out.append(c).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
             }
-            for (int cell = 0; cell < cellCount(aggregates); cell++) {
-                out.append(c).append("  agg").append(cell).append(" = java.util.Arrays.copyOf(agg").append(cell).append(", n);\n");
-            }
             out.append(c).append("}\n");
             out.append(c).append("setByGid[gid] = setId;\n");
             for (int kx = 0; kx < keyCount; kx++) {
                 out.append(c).append("keyByGid").append(kx).append("[gid] = ck").append(kx).append(";\n");
                 out.append(c).append("nullByGid").append(kx).append("[gid] = ckN").append(kx).append(";\n");
             }
-            emitStateIdentity(out, c, aggregates, "agg", "gid");
+            for (int a = 0; a < aggregates.size(); a++) {
+                aggregator(aggregates.get(a)).emitIdentity(out, c, slotCells(aggregates, a, "gsT", "gbase", keyCount + 2));
+            }
             out.append(c).append("if (groupCount > gsFill) {\n");
             out.append(c).append("  int ncap = cap * 2;\n");
-            out.append(c).append("  long[] nKey0 = new long[ncap];\n");
-            for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("  long[] nKey").append(kx + 1).append(" = new long[ncap];\n");
-                out.append(c).append("  boolean[] nKeyN").append(kx).append(" = new boolean[ncap];\n");
-            }
-            out.append(c).append("  int[] nGid = new int[ncap];\n");
-            out.append(c).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
-            out.append(c).append("  for (int t = 0; t < cap; t++) { if (gsGid[t] != -1) {\n");
-            out.append(c).append("    int ns = mix(").append(groupingSetsRehashFold(keyCount)).append(") & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
-            out.append(c).append("    nKey0[ns] = gsKey0[t];\n");
-            for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("    nKey").append(kx + 1).append("[ns] = gsKey").append(kx + 1).append("[t];\n");
-                out.append(c).append("    nKeyN").append(kx).append("[ns] = gsKeyN").append(kx).append("[t];\n");
-            }
-            out.append(c).append("    nGid[ns] = gsGid[t]; } }\n");
-            out.append(c).append("  gsKey0 = nKey0;\n");
-            for (int kx = 0; kx < keyCount; kx++) {
-                out.append(c).append("  gsKey").append(kx + 1).append(" = nKey").append(kx + 1).append(";\n");
-                out.append(c).append("  gsKeyN").append(kx).append(" = nKeyN").append(kx).append(";\n");
-            }
-            out.append(c).append("  gsGid = nGid; gsMask = nMask; cap = ncap; gsFill = (int) (cap * 0.75f);\n");
+            out.append(c).append("  long[] nT = new long[ncap * ").append(stride).append("];\n");
+            out.append(c).append("  int nMask = ncap - 1;\n");
+            out.append(c).append("  int gPrev = gslot;\n");
+            out.append(c).append("  for (int t = 0; t < cap; t++) {\n");
+            out.append(c).append("    long w0 = gsT[t * ").append(stride).append("];\n");
+            out.append(c).append("    if ((int) w0 != 0) {\n");
+            out.append(c).append("      int ns = (int) (w0 >>> 32) & nMask; while ((int) nT[ns * ").append(stride).append("] != 0) { ns = (ns + 1) & nMask; }\n");
+            out.append(c).append("      System.arraycopy(gsT, t * ").append(stride).append(", nT, ns * ").append(stride).append(", ").append(stride).append(");\n");
+            // The aggregate update below addresses this row's record through gbase: track where the resize moved it.
+            out.append(c).append("      if (t == gPrev) { gslot = ns; gbase = ns * ").append(stride).append("; }\n");
+            out.append(c).append("    }\n");
+            out.append(c).append("  }\n");
+            out.append(c).append("  gsT = nT; gsMask = nMask; cap = ncap; gsFill = (int) (cap * 0.75f);\n");
             out.append(c).append("}\n");
             out.append(b).append("}\n");
             for (int a = 0; a < aggregates.size(); a++) {
-                emitAggregateUpdate(out, b, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver, stringMaskIds);
+                emitAggregateUpdate(out, b, aggregates.get(a), slotCells(aggregates, a, "gsT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
             }
             out.append(indent).append("}\n");
         }
@@ -2746,6 +2744,7 @@ public final class PipelineCompiler
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
         int aggregateCount = aggregates.size();
+        emitCellExtraction(out, "gsT", "gsMask", keyCount + 2 + cellCount(aggregates), keyCount + 2, aggregates);
         // Result columns: each group key, then each aggregate, then a trailing grouping_id (the GROUPING() bitmask).
         int columnCount = keyCount + aggregateCount + 1;
         out.append("    long[][] result = new long[").append(columnCount).append("][];\n");
@@ -2792,23 +2791,13 @@ public final class PipelineCompiler
         return folded;
     }
 
-    /** Hash input over a stored slot {@code t} for the grouping-sets rehash. */
-    private static String groupingSetsRehashFold(int keyCount)
-    {
-        String folded = "gsKey0[t]";
-        for (int kx = 0; kx < keyCount; kx++) {
-            folded = "(" + folded + ") * 0x9E3779B97F4A7C15L + gsKey" + (kx + 1) + "[t]";
-        }
-        return folded;
-    }
-
     /** Conjunction comparing a stored slot's (setId, keys, null flags) against the probe's. */
-    private static String groupingSetsKeyCompare(String slot, int keyCount)
+    private static String groupingSetsKeyCompare(int keyCount)
     {
-        StringBuilder compare = new StringBuilder("gsKey0[").append(slot).append("] == setId");
+        // The setId and null bits are covered by the gMeta word; only the key values remain to compare.
+        StringBuilder compare = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
-            compare.append(" && gsKey").append(kx + 1).append("[").append(slot).append("] == ck").append(kx);
-            compare.append(" && gsKeyN").append(kx).append("[").append(slot).append("] == ckN").append(kx);
+            compare.append(" && gsT[gbase + ").append(kx + 2).append("] == ck").append(kx);
         }
         return compare.toString();
     }
@@ -2851,24 +2840,20 @@ public final class PipelineCompiler
             return;
         }
         int keyCount = pipeline.groupKeys().size();
+        // Interleaved slot records in one array, so a probe touches one or two cache lines instead of one per
+        // parallel key array, and an aggregate update lands in the lines the probe just loaded (the dominant cost
+        // at multi-million-group scale). Each slot is (keyCount + 2 + cellCount) longs: word 0 packs the mixed
+        // hash (high int, the probe fingerprint) with gid + 1 (low int; 0 = empty slot), word 1 holds the key
+        // null bits, words 2.. the key values (null canonicalized to 0), and the trailing words the aggregate
+        // state cells. The result emitters extract the cells into gid-ordered arrays at the end.
         out.append("    int cap = 1024;\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append("    long[] htKey").append(kx).append(" = new long[cap];\n");
-            if (keyNullable(pipeline, nullable, kx)) {
-                out.append("    boolean[] htKeyN").append(kx).append(" = new boolean[cap];\n");
-            }
-        }
-        out.append("    int[] htGid = new int[cap];\n");
-        out.append("    java.util.Arrays.fill(htGid, -1);\n");
+        out.append("    long[] htT = new long[cap * ").append(keyCount + 2 + total).append("];\n");
         out.append("    int htMask = cap - 1; int htFill = (int) (cap * 0.75f); int groupCount = 0;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append("    long[] keyByGid").append(kx).append(" = new long[16];\n");
             if (keyNullable(pipeline, nullable, kx)) {
                 out.append("    boolean[] nullByGid").append(kx).append(" = new boolean[16];\n");
             }
-        }
-        for (int c = 0; c < total; c++) {
-            out.append("    long[] agg").append(c).append(" = new long[16];\n");
         }
     }
 
@@ -2933,17 +2918,29 @@ public final class PipelineCompiler
                 out.append(indent).append("long gk").append(kx).append(" = ").append(value).append(";\n");
             }
         }
-        out.append(indent).append("int gslot = mix(").append(hashFold("gk", "", keyCount)).append(") & htMask;\n");
-        out.append(indent).append("while (htGid[gslot] != -1 && !(").append(keyCompare("gslot", keyCount, pipeline, nullable)).append(")) { gslot = (gslot + 1) & htMask; }\n");
-        out.append(indent).append("int gid = htGid[gslot];\n");
+        StringBuilder nullBits = new StringBuilder("0L");
+        for (int kx = 0; kx < keyCount; kx++) {
+            if (keyNullable(pipeline, nullable, kx)) {
+                nullBits.append(" | (gkN").append(kx).append(" ? ").append(1L << kx).append("L : 0L)");
+            }
+        }
+        int stride = keyCount + 2 + cellCount(aggregates);
+        out.append(indent).append("long gMeta = ").append(nullBits).append(";\n");
+        out.append(indent).append("int gHash = mix(").append(hashFold("gk", "", keyCount)).append(");\n");
+        out.append(indent).append("int gslot = gHash & htMask;\n");
+        out.append(indent).append("int gbase = gslot * ").append(stride).append(";\n");
+        out.append(indent).append("long gw0 = htT[gbase];\n");
+        out.append(indent).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && htT[gbase + 1] == gMeta")
+                .append(keyCompare(keyCount))
+                .append(")) { gslot = (gslot + 1) & htMask; gbase = gslot * ").append(stride).append("; gw0 = htT[gbase]; }\n");
+        out.append(indent).append("int gid = ((int) gw0) - 1;\n");
         out.append(indent).append("if (gid == -1) {\n");
         String b = indent + "  ";
-        out.append(b).append("gid = groupCount++; htGid[gslot] = gid;\n");
+        out.append(b).append("gid = groupCount++;\n");
+        out.append(b).append("htT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
+        out.append(b).append("htT[gbase + 1] = gMeta;\n");
         for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("htKey").append(kx).append("[gslot] = gk").append(kx).append(";\n");
-            if (keyNullable(pipeline, nullable, kx)) {
-                out.append(b).append("htKeyN").append(kx).append("[gslot] = gkN").append(kx).append(";\n");
-            }
+            out.append(b).append("htT[gbase + ").append(kx + 2).append("] = gk").append(kx).append(";\n");
         }
         out.append(b).append("if (gid == keyByGid0.length) {\n");
         out.append(b).append("  int n = keyByGid0.length * 2;\n");
@@ -2953,9 +2950,6 @@ public final class PipelineCompiler
                 out.append(b).append("  nullByGid").append(kx).append(" = java.util.Arrays.copyOf(nullByGid").append(kx).append(", n);\n");
             }
         }
-        for (int c = 0; c < cellCount(aggregates); c++) {
-            out.append(b).append("  agg").append(c).append(" = java.util.Arrays.copyOf(agg").append(c).append(", n);\n");
-        }
         out.append(b).append("}\n");
         for (int kx = 0; kx < keyCount; kx++) {
             out.append(b).append("keyByGid").append(kx).append("[gid] = gk").append(kx).append(";\n");
@@ -2963,37 +2957,28 @@ public final class PipelineCompiler
                 out.append(b).append("nullByGid").append(kx).append("[gid] = gkN").append(kx).append(";\n");
             }
         }
-        emitStateIdentity(out, b, aggregates, "agg", "gid");
+        for (int a = 0; a < aggregates.size(); a++) {
+            aggregator(aggregates.get(a)).emitIdentity(out, b, slotCells(aggregates, a, "htT", "gbase", keyCount + 2));
+        }
         out.append(b).append("if (groupCount > htFill) {\n");
         out.append(b).append("  int ncap = cap * 2;\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("  long[] nKey").append(kx).append(" = new long[ncap];\n");
-            if (keyNullable(pipeline, nullable, kx)) {
-                out.append(b).append("  boolean[] nKeyN").append(kx).append(" = new boolean[ncap];\n");
-            }
-        }
-        out.append(b).append("  int[] nGid = new int[ncap];\n");
-        out.append(b).append("  java.util.Arrays.fill(nGid, -1); int nMask = ncap - 1;\n");
-        out.append(b).append("  for (int s = 0; s < cap; s++) { if (htGid[s] != -1) {\n");
-        out.append(b).append("    int ns = mix(").append(hashFold("htKey", "[s]", keyCount)).append(") & nMask; while (nGid[ns] != -1) { ns = (ns + 1) & nMask; }\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("    nKey").append(kx).append("[ns] = htKey").append(kx).append("[s];\n");
-            if (keyNullable(pipeline, nullable, kx)) {
-                out.append(b).append("    nKeyN").append(kx).append("[ns] = htKeyN").append(kx).append("[s];\n");
-            }
-        }
-        out.append(b).append("    nGid[ns] = htGid[s]; } }\n");
-        for (int kx = 0; kx < keyCount; kx++) {
-            out.append(b).append("  htKey").append(kx).append(" = nKey").append(kx).append(";\n");
-            if (keyNullable(pipeline, nullable, kx)) {
-                out.append(b).append("  htKeyN").append(kx).append(" = nKeyN").append(kx).append(";\n");
-            }
-        }
-        out.append(b).append("  htGid = nGid; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
+        out.append(b).append("  long[] nT = new long[ncap * ").append(stride).append("];\n");
+        out.append(b).append("  int nMask = ncap - 1;\n");
+        out.append(b).append("  int gPrev = gslot;\n");
+        out.append(b).append("  for (int s = 0; s < cap; s++) {\n");
+        out.append(b).append("    long w0 = htT[s * ").append(stride).append("];\n");
+        out.append(b).append("    if ((int) w0 != 0) {\n");
+        out.append(b).append("      int ns = (int) (w0 >>> 32) & nMask; while ((int) nT[ns * ").append(stride).append("] != 0) { ns = (ns + 1) & nMask; }\n");
+        out.append(b).append("      System.arraycopy(htT, s * ").append(stride).append(", nT, ns * ").append(stride).append(", ").append(stride).append(");\n");
+        // The aggregate update below addresses this row's record through gbase: track where the resize moved it.
+        out.append(b).append("      if (s == gPrev) { gslot = ns; gbase = ns * ").append(stride).append("; }\n");
+        out.append(b).append("    }\n");
+        out.append(b).append("  }\n");
+        out.append(b).append("  htT = nT; htMask = nMask; cap = ncap; htFill = (int) (cap * 0.75f);\n");
         out.append(b).append("}\n");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, aggregates.get(a), cells(aggregates, a, "agg", "gid"), resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, aggregates.get(a), slotCells(aggregates, a, "htT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
         }
     }
 
@@ -3039,6 +3024,7 @@ public final class PipelineCompiler
             return;
         }
         int keyCount = pipeline.groupKeys().size();
+        emitCellExtraction(out, "htT", "htMask", keyCount + 2 + cellCount(aggregates), keyCount + 2, aggregates);
         out.append("    long[][] result = new long[").append(keyCount + aggregateCount).append("][];\n");
         for (int kx = 0; kx < keyCount; kx++) {
             emitKeyResultColumn(out, "    ", kx, kx, kx == 0 ? reconstructDictColumn : -1, "groupCount");
@@ -3155,17 +3141,12 @@ public final class PipelineCompiler
     }
 
     /** Conjunction {@code htKey0[slot] == gk0 && ...} comparing every stored key component to the probe. */
-    private static String keyCompare(String slot, int keyCount, Plan.Pipeline pipeline, boolean[][] nullable)
+    private static String keyCompare(int keyCount)
     {
+        // The null bits are covered by the gMeta word; only the key values remain to compare.
         StringBuilder compare = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
-            if (kx > 0) {
-                compare.append(" && ");
-            }
-            compare.append("htKey").append(kx).append("[").append(slot).append("] == gk").append(kx);
-            if (keyNullable(pipeline, nullable, kx)) {
-                compare.append(" && htKeyN").append(kx).append("[").append(slot).append("] == gkN").append(kx);
-            }
+            compare.append(" && htT[gbase + ").append(kx + 2).append("] == gk").append(kx);
         }
         return compare.toString();
     }
@@ -3223,6 +3204,39 @@ public final class PipelineCompiler
             result.add(element == null ? name : name + "[" + element + "]");
         }
         return result;
+    }
+
+    /** Lvalue strings for aggregate {@code index}'s state cells stored inline in a slot record at {@code base}. */
+    private static List<String> slotCells(List<Plan.Aggregate> aggregates, int index, String table, String base, int firstCellWord)
+    {
+        int cellBase = cellBase(aggregates, index);
+        int n = aggregator(aggregates.get(index)).cells();
+        List<String> result = new ArrayList<>(n);
+        for (int c = 0; c < n; c++) {
+            result.add(table + "[" + base + " + " + (firstCellWord + cellBase + c) + "]");
+        }
+        return result;
+    }
+
+    /**
+     * Extract the in-record aggregate cells into gid-ordered {@code agg<cell>} arrays with one sequential walk of
+     * the slot table, so the result emitters (which finalize from {@code agg<cell>[g]}) stay layout-agnostic.
+     */
+    private static void emitCellExtraction(StringBuilder out, String table, String maskVar, int stride, int firstCellWord, List<Plan.Aggregate> aggregates)
+    {
+        int total = cellCount(aggregates);
+        for (int c = 0; c < total; c++) {
+            out.append("    long[] agg").append(c).append(" = new long[groupCount];\n");
+        }
+        out.append("    for (int xs = 0; xs <= ").append(maskVar).append("; xs++) {\n");
+        out.append("      long xw0 = ").append(table).append("[xs * ").append(stride).append("];\n");
+        out.append("      if ((int) xw0 != 0) {\n");
+        out.append("        int xg = ((int) xw0) - 1;\n");
+        for (int c = 0; c < total; c++) {
+            out.append("        agg").append(c).append("[xg] = ").append(table).append("[xs * ").append(stride).append(" + ").append(firstCellWord + c).append("];\n");
+        }
+        out.append("      }\n");
+        out.append("    }\n");
     }
 
     /** Emit the {@code Type[] types} literal for the result columns, each resolved by name from {@link Types}. */
