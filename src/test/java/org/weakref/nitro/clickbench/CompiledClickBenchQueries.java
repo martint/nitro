@@ -374,6 +374,24 @@ public final class CompiledClickBenchQueries
         return new Ported(query, 0, 0, 0);
     }
 
+    /**
+     * SELECT CounterID, AVG(length(URL)) AS l, COUNT(*) AS c FROM hits WHERE URL <> '' GROUP BY 1
+     * HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25
+     */
+    public static Ported query28()
+    {
+        QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,
+                new QueryLowering.Column("CounterID"),
+                new QueryLowering.Column("URL", ColumnEncoding.STRING, false));
+        query.where(new Plan.StringMatch(query.position("URL"), List.of(""), true))
+                .groupBy("CounterID")
+                .aggregate("avg", new Plan.Call("length_utf8", List.of(query.column("URL"))))
+                .count();
+        query.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(100_000)));
+        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(1, true)), 25));
+        return new Ported(query, List.of());
+    }
+
     /** SELECT SUM(ResolutionWidth), SUM(ResolutionWidth + 1), ..., SUM(ResolutionWidth + 89) FROM hits */
     public static Ported query30()
     {
