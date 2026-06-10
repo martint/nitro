@@ -4427,6 +4427,76 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static Composite query67()
+    {
+        // Q67: store-sale revenue (null quantity or price counting as zero) per eight-level item/date/store ROLLUP
+        // over a 12-month window, ranked DESCENDING within each category partition (rank capped at 100), ordered by
+        // every key. Q70's ranking-over-rollup shape widened to eight keys and a category partition; null rollup
+        // categories rank as their own singleton partition, like the harness's null partition key.
+        QueryLowering rollup = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sales_price", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_qoy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_moy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_id", ColumnEncoding.STRING, false))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_product_name", ColumnEncoding.STRING, true));
+        rollup.where(
+                        new Plan.Predicate(">", rollup.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", rollup.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("i_category", "i_class", "i_brand", "i_product_name", "d_year", "d_qoy", "d_moy", "s_store_id")
+                .groupingSets(List.of(
+                        new int[] {0, 1, 2, 3, 4, 5, 6, 7}, new int[] {0, 1, 2, 3, 4, 5, 6}, new int[] {0, 1, 2, 3, 4, 5},
+                        new int[] {0, 1, 2, 3, 4}, new int[] {0, 1, 2, 3}, new int[] {0, 1, 2}, new int[] {0, 1},
+                        new int[] {0}, new int[] {}))
+                .aggregate("sum", new Plan.Coalesce(
+                        new Plan.Bin("*", rollup.column("ss_sales_price"), rollup.column("ss_quantity")),
+                        new Plan.Lit(0)));
+        // rollup result: 8 keys (0-7), sum_sales(8), grouping_id(9).
+
+        QueryLowering ranked = QueryLowering.scan("q67_rollup",
+                        new QueryLowering.Column("r_category", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_class", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_brand", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_product_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r_qoy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r_moy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r_store_id", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("r_sum", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r_grouping_id", ColumnEncoding.FLAT, false));
+        ranked.window(new Plan.Window(new int[] {0}, List.of(new Plan.SortKey(8, true)), Plan.RankFunction.RANK, 100));
+        // after window: the 10 scanned columns plus rank(10).
+        ranked.orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false), new Plan.SortKey(5, false),
+                        new Plan.SortKey(6, false), new Plan.SortKey(7, false), new Plan.SortKey(8, false),
+                        new Plan.SortKey(10, false)), 100))
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2), new Plan.Col(3), new Plan.Col(4),
+                        new Plan.Col(5), new Plan.Col(6), new Plan.Col(7), new Plan.Col(8), new Plan.Col(10));
+
+        return new Composite(
+                List.of(new Stage(rollup, "q67_rollup", List.of(
+                        new DictRef(0, 3, 3), new DictRef(1, 3, 2), new DictRef(2, 3, 1),
+                        new DictRef(3, 3, 4), new DictRef(7, 2, 1)))),
+                ranked,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2),
+                        new DictRef(3, 0, 3), new DictRef(7, 0, 7)));
+    }
+
     public static UnionSelfJoin query02()
     {
         // Q02: week-over-week ratio of combined web + catalog daily sales. Per year, the raw two-channel union joins
