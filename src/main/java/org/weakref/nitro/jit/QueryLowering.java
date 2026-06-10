@@ -37,8 +37,13 @@ public final class QueryLowering
      * An explicit {@code sourceName} lets the same physical column be loaded under distinct logical names -- needed to
      * join one table more than once in a query (e.g. {@code date_dim} for both a sold and a returned date).
      */
-    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable)
+    public record Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable, int substringStart, int substringLength)
     {
+        public Column(String name, String sourceName, ColumnEncoding encoding, boolean nullable)
+        {
+            this(name, sourceName, encoding, nullable, 1, -1);
+        }
+
         public Column(String name, ColumnEncoding encoding, boolean nullable)
         {
             this(name, name, encoding, nullable);
@@ -47,6 +52,16 @@ public final class QueryLowering
         public Column(String name)
         {
             this(name, name, ColumnEncoding.FLAT, false);
+        }
+
+        /**
+         * A string column loaded as a substring of its source ({@code start} 1-based, {@code length} in code
+         * points): the loader truncates the dictionary, dedupes and re-sorts it, and remaps the ids, so grouping,
+         * filtering, and joining all operate on the derived values (two sources sharing the substring share an id).
+         */
+        public static Column substring(String name, boolean nullable, int start, int length)
+        {
+            return new Column(name, name, ColumnEncoding.STRING, nullable, start, length);
         }
     }
 

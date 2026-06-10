@@ -708,7 +708,7 @@ public final class CompiledQuerySupport
     {
         Materialized virtual = virtuals.get(source.table());
         if (virtual != null) {
-            columns[slot] = virtual.columns();
+            columns[slot] = withDerivedColumns(virtual.columns(), source.columns());
             rowCounts[slot] = virtual.rows();
         }
         else {
@@ -717,6 +717,65 @@ public final class CompiledQuerySupport
             columns[slot] = loaded.columns;
             rowCounts[slot] = loaded.rows;
         }
+    }
+
+    /**
+     * Replace each loaded string column whose spec declares a substring with its derived form: every dictionary
+     * entry truncated, the truncated values deduped and re-sorted into a new ordered dictionary, and the ids
+     * remapped -- two sources sharing the substring share an id, so grouping/filtering/joining all see the derived
+     * values. Identity when no spec declares a substring (the loaded columns are returned as-is, not copied).
+     */
+    private static org.weakref.nitro.jit.Column[] withDerivedColumns(org.weakref.nitro.jit.Column[] columns,
+            List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        org.weakref.nitro.jit.Column[] out = columns;
+        for (int c = 0; c < specs.size(); c++) {
+            org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
+            if (spec.substringLength() < 0 || !(columns[c] instanceof org.weakref.nitro.jit.Column.StringColumn source)) {
+                continue;
+            }
+            if (out == columns) {
+                out = columns.clone();
+            }
+            out[c] = substringColumn(source, spec.substringStart(), spec.substringLength());
+        }
+        return out;
+    }
+
+    private static org.weakref.nitro.jit.Column.StringColumn substringColumn(org.weakref.nitro.jit.Column.StringColumn source, int start, int length)
+    {
+        byte[][] dictionary = source.dictionary();
+        if (dictionary.length == 0) {
+            // An all-null column has nothing to truncate; its ids reference no entry.
+            return source;
+        }
+        byte[][] truncated = new byte[dictionary.length][];
+        for (int i = 0; i < dictionary.length; i++) {
+            truncated[i] = utf8Substring(dictionary[i], start, length);
+        }
+        // Dedupe and re-sort the truncated values into an ordered dictionary (id order = value order), remapping
+        // each source id to its truncated value's new id.
+        java.util.TreeMap<byte[], Integer> ordered = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        for (byte[] value : truncated) {
+            ordered.putIfAbsent(value, 0);
+        }
+        byte[][] derived = new byte[ordered.size()][];
+        int next = 0;
+        for (java.util.Map.Entry<byte[], Integer> entry : ordered.entrySet()) {
+            entry.setValue(next);
+            derived[next] = entry.getKey();
+            next++;
+        }
+        int[] remap = new int[dictionary.length];
+        for (int i = 0; i < dictionary.length; i++) {
+            remap[i] = ordered.get(truncated[i]);
+        }
+        int[] sourceIds = source.ids();
+        int[] ids = new int[sourceIds.length];
+        for (int r = 0; r < ids.length; r++) {
+            ids[r] = remap[sourceIds[r]];
+        }
+        return new org.weakref.nitro.jit.Column.StringColumn(ids, derived, source.nulls());
     }
 
     /** Run a pipeline stage (via {@link #runStage}) and materialize its result for use as a downstream stage's input. */
@@ -1245,7 +1304,7 @@ public final class CompiledQuerySupport
                 columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
             }
         }
-        return new DrainedInput(columns, size);
+        return new DrainedInput(withDerivedColumns(columns, specs), size);
     }
 
     /**
