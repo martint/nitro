@@ -4233,6 +4233,101 @@ public final class CompiledTpcdsQueries
                 List.of(new DictRef(0, 2, 1)));
     }
 
+    public static Composite query81()
+    {
+        // Q81: Q30's catalog sibling -- Georgia customers whose 2000 catalog-return total (including tax) exceeds
+        // 1.2x their state's average customer return, with the customer's name and full current address. Same
+        // totals/averages/threshold tree over catalog returns; the sixteen-column output carries the address book's
+        // street, city, county, zip, country, GMT offset, and location type, ordered across all of it, top 100.
+        QueryLowering averages = QueryLowering.scan("q81_returns_for_average",
+                        new QueryLowering.Column("a_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("a_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("a_total", ColumnEncoding.FLAT, true));
+        averages.where(new Plan.IsNull(2, true))
+                .groupBy("a_state")
+                .aggregate("sum", "a_total")
+                .aggregate("count", "a_total");
+        averages.select(new Plan.Col(0), new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)));
+
+        // Combined main columns: totals(0-2), averages(3-4), customer(5-10: sk, addr, id, salutation, first, last),
+        // address(11-22: sk, state, street number/name/type, suite, city, county, zip, country, gmt, location type).
+        QueryLowering main = QueryLowering.scan("q81_returns",
+                        new QueryLowering.Column("m_customer", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("m_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("m_total", ColumnEncoding.FLAT, true))
+                .join("q81_averages", "m_state", "v_state",
+                        new QueryLowering.Column("v_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("v_average", ColumnEncoding.FLAT, true))
+                .join("customer", "m_customer", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_customer_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("c_salutation", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_street_number", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_street_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_street_type", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_suite_number", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_county", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_gmt_offset", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ca_location_type", ColumnEncoding.STRING, true));
+        main.where(
+                        new Plan.StringMatch(main.position("ca_state"), List.of("GA"), false),
+                        new Plan.IsNull(2, true),
+                        new Plan.IsNull(4, true),
+                        new Plan.Predicate(">",
+                                new Plan.Bin("*", new Plan.Col(2), new Plan.Lit(10)),
+                                new Plan.Bin("*", new Plan.Col(4), new Plan.Lit(12))))
+                .select(new Plan.Col(7), new Plan.Col(8), new Plan.Col(9), new Plan.Col(10),
+                        new Plan.Col(13), new Plan.Col(14), new Plan.Col(15), new Plan.Col(16), new Plan.Col(17),
+                        new Plan.Col(18), new Plan.Col(12), new Plan.Col(19), new Plan.Col(20), new Plan.Col(21),
+                        new Plan.Col(22), new Plan.Col(2))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false),
+                        new Plan.SortKey(3, false), new Plan.SortKey(4, false), new Plan.SortKey(5, false),
+                        new Plan.SortKey(6, false), new Plan.SortKey(7, false), new Plan.SortKey(8, false),
+                        new Plan.SortKey(9, false), new Plan.SortKey(10, false), new Plan.SortKey(11, false),
+                        new Plan.SortKey(12, false), new Plan.SortKey(13, false), new Plan.SortKey(14, false),
+                        new Plan.SortKey(15, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(query81CustomerTotalReturn(), "q81_returns", List.of(new DictRef(1, 2, 1))),
+                        new Stage(query81CustomerTotalReturn(), "q81_returns_for_average", List.of(new DictRef(1, 2, 1))),
+                        new Stage(averages, "q81_averages", List.of(new DictRef(0, 0, 1)))),
+                main,
+                List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 3), new DictRef(2, 2, 4), new DictRef(3, 2, 5),
+                        new DictRef(4, 3, 2), new DictRef(5, 3, 3), new DictRef(6, 3, 4), new DictRef(7, 3, 5),
+                        new DictRef(8, 3, 6), new DictRef(9, 3, 7), new DictRef(10, 3, 1), new DictRef(11, 3, 8),
+                        new DictRef(12, 3, 9), new DictRef(14, 3, 11)));
+    }
+
+    /** 2000 catalog-return totals (including tax) per (returning customer, return-address state). */
+    private static QueryLowering query81CustomerTotalReturn()
+    {
+        QueryLowering totals = QueryLowering.scan("catalog_returns",
+                        new QueryLowering.Column("cr_returning_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_returning_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_return_amt_inc_tax", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cr_returned_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("customer_address", "cr_returning_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true));
+        totals.where(new Plan.Predicate("=", totals.column("d_year"), new Plan.Lit(2000)))
+                .groupBy("cr_returning_customer_sk", "ca_state")
+                .aggregate("sum", "cr_return_amt_inc_tax");
+        return totals;
+    }
+
     public static Composite query61()
     {
         // Q61: the share of November 1998 Jewelry revenue in one GMT zone sold through a promotion channel (direct
