@@ -140,14 +140,21 @@ public final class PipelineCompiler
         else {
             resultTypes = outputColumnTypes(pipeline, encodings);
         }
-        // A streamed probe carries no dictionaries, so only build-sourced string sort keys can value-compare.
+        // Build-sourced string sort keys capture their dictionary up front; a probe-sourced key value-compares
+        // only when the streamed column is globally interned (ids stable across batches) -- its dictionary is then
+        // re-captured per batch as the backing grows, and the final capture covers every appended row's id.
         Map<Integer, int[]> orderingSources = orderingStringSources(pipeline, resultTypes);
-        orderingSources.values().removeIf(source -> source[0] == 0);
+        orderingSources.values().removeIf(source -> source[0] == 0 && !stringIdsCrossBatches(pipeline, source[1]));
+        Map<Integer, int[]> probeOrderingSources = new java.util.TreeMap<>();
+        Map<Integer, int[]> buildOrderingSources = new java.util.TreeMap<>();
+        for (Map.Entry<Integer, int[]> entry : orderingSources.entrySet()) {
+            (entry.getValue()[0] == 0 ? probeOrderingSources : buildOrderingSources).put(entry.getKey(), entry.getValue());
+        }
         emitOrderingDictionaryFields(out, orderingSources);
         ClassBody body = new ClassBody();
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
                 + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
-        emitOrderingDictionaryCapture(out, orderingSources, input -> "builds[" + (input - 1) + "]");
+        emitOrderingDictionaryCapture(out, buildOrderingSources, input -> "builds[" + (input - 1) + "]");
 
         if (pipeline.window() != null) {
             // A window is a pipeline breaker: drain all probe batches into a buffer, then run the eager ranking logic.
@@ -245,6 +252,7 @@ public final class PipelineCompiler
             for (int column : payloadColumns) {
                 emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
             }
+            emitProbeOrderingDictionaryCapture(out, probeOrderingSources, payloadColumns);
             for (Plan.Condition match : aggregateMatches) {
                 emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
             }
@@ -269,6 +277,7 @@ public final class PipelineCompiler
             for (int column : referencedColumns(pipeline)) {
                 emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
             }
+            emitProbeOrderingDictionaryCapture(out, probeOrderingSources, referencedColumns(pipeline));
             for (Plan.Condition match : stringMatches) {
                 emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
             }
@@ -654,6 +663,17 @@ public final class PipelineCompiler
             int[] source = entry.getValue();
             out.append("    orderingDictionary").append(entry.getKey()).append(" = ((org.weakref.nitro.jit.Column.StringColumn) ")
                     .append(inputAccess.apply(source[0])).append("[").append(source[1]).append("]).dictionary();\n");
+        }
+    }
+
+    /** Per-batch re-capture of a globally-interned streamed probe column's dictionary for a string sort key. */
+    private static void emitProbeOrderingDictionaryCapture(StringBuilder out, Map<Integer, int[]> probeSources, java.util.Set<Integer> loadedColumns)
+    {
+        for (Map.Entry<Integer, int[]> entry : probeSources.entrySet()) {
+            int column = entry.getValue()[1];
+            if (loadedColumns.contains(column)) {
+                out.append("      orderingDictionary").append(entry.getKey()).append(" = cStr").append(column).append(";\n");
+            }
         }
     }
 
