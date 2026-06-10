@@ -4427,6 +4427,204 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static Composite query64()
+    {
+        // Q64: customers who bought a banded-price colored item in both 1999 and 2000 from the same store, with
+        // bought-vs-current address detail and per-year cost sums, kept when the second year's sale count does not
+        // exceed the first's. The cross-sales subquery assembles once per year (each with its own eligible-items
+        // stage, like the harness); the main self-joins the years on (item, store name, store zip) -- a mixed
+        // numeric + two-string key -- and emits the full detail in an unlimited sort.
+        QueryLowering main = QueryLowering.scan("q64_cross_1999", query64CrossSalesColumns("f_"))
+                .join("q64_cross_2000",
+                        new String[] {"f_item", "f_store_name", "f_store_zip"},
+                        new String[] {"s_item", "s_store_name", "s_store_zip"},
+                        query64CrossSalesColumns("s_"));
+        // Combined columns: first year 0-18, second year 19-37.
+        main.where(
+                        new Plan.Predicate("=", main.column("f_sold_year"), new Plan.Lit(1999)),
+                        new Plan.Predicate("=", main.column("s_sold_year"), new Plan.Lit(2000)),
+                        new Plan.Predicate("<", main.column("s_count"),
+                                new Plan.Bin("+", main.column("f_count"), new Plan.Lit(1))))
+                .orderBy(new Plan.Ordering(List.of(
+                        new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(20, false),
+                        new Plan.SortKey(13, false), new Plan.SortKey(14, false), new Plan.SortKey(15, false),
+                        new Plan.SortKey(16, false), new Plan.SortKey(17, false)), -1))
+                .select(new Plan.Col(0),
+                        new Plan.Col(2), new Plan.Col(3), new Plan.Col(4), new Plan.Col(5), new Plan.Col(6),
+                        new Plan.Col(7), new Plan.Col(8), new Plan.Col(9), new Plan.Col(10), new Plan.Col(11),
+                        new Plan.Col(12), new Plan.Col(15), new Plan.Col(16), new Plan.Col(17), new Plan.Col(18),
+                        new Plan.Col(35), new Plan.Col(36), new Plan.Col(37), new Plan.Col(31), new Plan.Col(34));
+
+        List<DictRef> crossStrings = List.of(
+                new DictRef(0, 17, 1), new DictRef(2, 3, 1), new DictRef(3, 3, 2),
+                new DictRef(4, 9, 1), new DictRef(5, 9, 2), new DictRef(6, 9, 3), new DictRef(7, 9, 4),
+                new DictRef(8, 10, 1), new DictRef(9, 10, 2), new DictRef(10, 10, 3), new DictRef(11, 10, 4));
+        return new Composite(
+                List.of(new Stage(query64EligibleItems(), "q64_eligible_1999"),
+                        new Stage(query64CrossSales(1999, "q64_eligible_1999"), "q64_cross_1999", crossStrings),
+                        new Stage(query64EligibleItems(), "q64_eligible_2000"),
+                        new Stage(query64CrossSales(2000, "q64_eligible_2000"), "q64_cross_2000", crossStrings)),
+                main,
+                List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 2), new DictRef(2, 0, 3),
+                        new DictRef(3, 0, 4), new DictRef(4, 0, 5), new DictRef(5, 0, 6), new DictRef(6, 0, 7),
+                        new DictRef(7, 0, 8), new DictRef(8, 0, 9), new DictRef(9, 0, 10), new DictRef(10, 0, 11)));
+    }
+
+    /** The 19 cross-sales output columns under {@code prefix}: 15 group keys (11 strings), count, three sums. */
+    private static QueryLowering.Column[] query64CrossSalesColumns(String prefix)
+    {
+        return new QueryLowering.Column[] {
+                new QueryLowering.Column(prefix + "product_name", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "item", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(prefix + "store_name", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "store_zip", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "bought_street_number", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "bought_street_name", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "bought_city", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "bought_zip", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "current_street_number", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "current_street_name", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "current_city", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "current_zip", ColumnEncoding.STRING, true),
+                new QueryLowering.Column(prefix + "sold_year", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(prefix + "first_sales_year", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(prefix + "first_ship_year", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(prefix + "count", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column(prefix + "wholesale", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(prefix + "list_price", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column(prefix + "coupon", ColumnEncoding.FLAT, true)};
+    }
+
+    /**
+     * Q64's eligible catalog items: catalog sales joined to their returns, kept when twice the total refund
+     * (null components reading zero, matching the non-null-propagating add) stays under the summed list price.
+     */
+    private static QueryLowering query64EligibleItems()
+    {
+        QueryLowering eligible = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_ext_list_price", ColumnEncoding.FLAT, true))
+                .join("catalog_returns",
+                        new String[] {"cs_item_sk", "cs_order_number"},
+                        new String[] {"cr_item_sk", "cr_order_number"},
+                        new QueryLowering.Column("cr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_order_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_refunded_cash", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_reversed_charge", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cr_store_credit", ColumnEncoding.FLAT, true));
+        eligible.groupBy("cs_item_sk")
+                .aggregate("sum", "cs_ext_list_price")
+                .aggregate("sum", new Plan.Bin("+",
+                        new Plan.Bin("+",
+                                new Plan.Coalesce(eligible.column("cr_refunded_cash"), new Plan.Lit(0)),
+                                new Plan.Coalesce(eligible.column("cr_reversed_charge"), new Plan.Lit(0))),
+                        new Plan.Coalesce(eligible.column("cr_store_credit"), new Plan.Lit(0))));
+        eligible.having(new Plan.Predicate("<", new Plan.Bin("*", new Plan.Col(2), new Plan.Lit(2)), new Plan.Col(1)));
+        eligible.select(new Plan.Col(0));
+        return eligible;
+    }
+
+    /**
+     * One year of Q64's cross sales: returned store sales of eligible items, joined to the store, the customer and
+     * both demographic/address snapshots, the three date roles, the promotion, the income bands, and the filtered
+     * item, grouped over the fifteen detail keys with the sale count and three cost sums.
+     */
+    private static QueryLowering query64CrossSales(long soldYear, String eligibleVirtual)
+    {
+        QueryLowering sales = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_promo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_wholesale_cost", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_list_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true))
+                .join("store_returns",
+                        new String[] {"ss_item_sk", "ss_ticket_number"},
+                        new String[] {"sr_item_sk", "sr_ticket_number"},
+                        new QueryLowering.Column("sr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_ticket_number", ColumnEncoding.FLAT, true))
+                .join(eligibleVirtual, "ss_item_sk", "e_item",
+                        new QueryLowering.Column("e_item", ColumnEncoding.FLAT, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("s_zip", ColumnEncoding.STRING, true))
+                .join("customer", "ss_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_first_sales_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("c_first_shipto_date_sk", ColumnEncoding.FLAT, true))
+                .join("customer_demographics", "ss_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true))
+                .join("customer_demographics", "c_current_cdemo_sk", "cd_demo_sk_current",
+                        new QueryLowering.Column("cd_demo_sk_current", "cd_demo_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("cd_marital_status_current", "cd_marital_status", ColumnEncoding.STRING, true))
+                .join("household_demographics", "ss_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_income_band_sk", ColumnEncoding.FLAT, true))
+                .join("household_demographics", "c_current_hdemo_sk", "hd_demo_sk_current",
+                        new QueryLowering.Column("hd_demo_sk_current", "hd_demo_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("hd_income_band_sk_current", "hd_income_band_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "ss_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_street_number", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_street_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk_current",
+                        new QueryLowering.Column("ca_address_sk_current", "ca_address_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("ca_street_number_current", "ca_street_number", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_street_name_current", "ca_street_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_city_current", "ca_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_zip_current", "ca_zip", ColumnEncoding.STRING, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("date_dim", "c_first_sales_date_sk", "d_date_sk_first_sales",
+                        new QueryLowering.Column("d_date_sk_first_sales", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_year_first_sales", "d_year", ColumnEncoding.FLAT, true))
+                .join("date_dim", "c_first_shipto_date_sk", "d_date_sk_first_ship",
+                        new QueryLowering.Column("d_date_sk_first_ship", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_year_first_ship", "d_year", ColumnEncoding.FLAT, true))
+                .join("promotion", "ss_promo_sk", "p_promo_sk",
+                        new QueryLowering.Column("p_promo_sk"))
+                .join("income_band", "hd_income_band_sk", "ib_income_band_sk",
+                        new QueryLowering.Column("ib_income_band_sk"))
+                .join("income_band", "hd_income_band_sk_current", "ib_income_band_sk_current",
+                        new QueryLowering.Column("ib_income_band_sk_current", "ib_income_band_sk", ColumnEncoding.FLAT, false))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_product_name", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("i_current_price", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("i_color", ColumnEncoding.STRING, true));
+        sales.where(
+                        new Plan.Predicate("=", sales.column("d_year"), new Plan.Lit(soldYear)),
+                        new Plan.Predicate(">=", sales.column("i_current_price"), new Plan.Lit(65_00L)),
+                        new Plan.Predicate("<=", sales.column("i_current_price"), new Plan.Lit(74_00L)),
+                        new Plan.StringMatch(sales.position("i_color"),
+                                List.of("purple", "burlywood", "indian", "spring", "floral", "medium"), false),
+                        new Plan.StringColumnCompare(sales.position("cd_marital_status"), sales.position("cd_marital_status_current"), true))
+                .groupBy("i_product_name", "ss_item_sk", "s_store_name", "s_zip",
+                        "ca_street_number", "ca_street_name", "ca_city", "ca_zip",
+                        "ca_street_number_current", "ca_street_name_current", "ca_city_current", "ca_zip_current",
+                        "d_year", "d_year_first_sales", "d_year_first_ship")
+                .count()
+                .aggregate("sum", "ss_wholesale_cost")
+                .aggregate("sum", "ss_list_price")
+                .aggregate("sum", "ss_coupon_amt");
+        return sales;
+    }
+
     public static LabeledUnion query14()
     {
         // Q14: November 2001 sales of cross-channel items (brand/class/category triples sold in all three channels
