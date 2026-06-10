@@ -223,7 +223,7 @@ public final class PipelineCompiler
                     emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
                 }
                 for (Plan.Condition match : matches) {
-                    emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
+                    emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
                 }
                 out.append("        int kept = 0;\n");
                 out.append("        for (int i = 0; i < selected; i++) {\n");
@@ -246,7 +246,7 @@ public final class PipelineCompiler
                 emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
             }
             for (Plan.Condition match : aggregateMatches) {
-                emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
+                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
             }
             out.append("        for (int i = 0; i < selected; i++) {\n");
             if (grouped) {
@@ -270,7 +270,7 @@ public final class PipelineCompiler
                 emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
             }
             for (Plan.Condition match : stringMatches) {
-                emitStringConditionPrelude(out, match, stringMaskIds.get(match), column -> "cStr" + column);
+                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
             }
             out.append("      for (int i = 0; i < rowCount; i++) {\n");
             emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
@@ -1593,6 +1593,7 @@ public final class PipelineCompiler
             case STRING -> {
                 out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).ids();\n");
                 out.append("    byte[][] cStr").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).dictionary();\n");
+                out.append("    int cStrLen").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).dictionarySize();\n");
                 if (nullable) {
                     out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).nulls();\n");
                 }
@@ -1699,11 +1700,37 @@ public final class PipelineCompiler
      */
     private static void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, int id, String dictionaryVar)
     {
+        out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
+        emitStringMaskFill(out, match, id, dictionaryVar, "0", dictionaryVar + ".length");
+    }
+
+    /**
+     * As {@link #emitStringMaskPrelude}, but for a streamed column whose dictionary is a per-query global intern
+     * (entries only ever appended, ids stable across batches): the mask lives in fields and each batch evaluates
+     * only the entries added since the last one, so the total per-query mask work is one pass over the final
+     * dictionary rather than one pass per batch.
+     */
+    private static void emitIncrementalStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, String dictionaryVar, String sizeVar)
+    {
+        body.field("boolean[]", "sMask" + id);
+        body.field("int", "sMaskLen" + id);
+        out.append("    if (sMask").append(id).append(" == null) { sMask").append(id).append(" = new boolean[0]; }\n");
+        out.append("    if (").append(sizeVar).append(" > sMaskLen").append(id).append(") {\n");
+        out.append("      if (sMask").append(id).append(".length < ").append(sizeVar).append(") { sMask").append(id)
+                .append(" = java.util.Arrays.copyOf(sMask").append(id).append(", Math.max(").append(sizeVar)
+                .append(", sMask").append(id).append(".length * 2)); }\n");
+        emitStringMaskFill(out, match, id, dictionaryVar, "sMaskLen" + id, sizeVar);
+        out.append("      sMaskLen").append(id).append(" = ").append(sizeVar).append(";\n");
+        out.append("    }\n");
+    }
+
+    /** Fill {@code sMask<id>[from, to)} by testing the dictionary entries, declaring the match's literals locally. */
+    private static void emitStringMaskFill(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String from, String to)
+    {
         if (match instanceof Plan.LikeMatch like) {
             out.append("    java.util.regex.Pattern sLikePat").append(id).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
                     .append(javaStringLiteral(like.pattern())).append(");\n");
-            out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
-            out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
+            out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
             String matches = "sLikePat" + id + ".matcher(new String(" + dictionaryVar + "[e], java.nio.charset.StandardCharsets.UTF_8)).matches()";
             out.append("      sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
             out.append("    }\n");
@@ -1728,8 +1755,7 @@ public final class PipelineCompiler
             out.append("    byte[] sLit").append(id).append("_").append(v).append(" = ")
                     .append(javaStringLiteral(values.get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
         }
-        out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
-        out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");
+        out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
         out.append("      byte[] sv = ").append(entry).append(";\n");
         StringBuilder member = new StringBuilder();
         for (int v = 0; v < values.size(); v++) {
@@ -3597,6 +3623,18 @@ public final class PipelineCompiler
         return columns;
     }
 
+    /**
+     * Does a streamed string column's id numbering have to be stable across batches? True when the column is
+     * consumed beyond filter predicates (group key, aggregate input, or projected output): those ids land in
+     * cross-batch state, so the source must intern the column into a per-query global dictionary, and its
+     * predicate masks extend incrementally rather than rebuilding per batch. A filter-only column's ids die with
+     * the batch, so a per-batch (page-local) dictionary suffices.
+     */
+    public static boolean stringIdsCrossBatches(Plan.Pipeline pipeline, int column)
+    {
+        return accumulateColumns(pipeline).contains(column);
+    }
+
     /** Order top-level (AND-ed) conjuncts most-selective-first by a static heuristic; AND is commutative so this is safe. */
     private static List<Plan.Condition> orderBySelectivity(List<Plan.Condition> conjuncts)
     {
@@ -4050,6 +4088,21 @@ public final class PipelineCompiler
     private static void emitStringConditionPrelude(StringBuilder out, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
     {
         emitStringConditionPrelude(out, null, match, id, dictionaryVar);
+    }
+
+    /**
+     * The streaming variant of {@link #emitStringConditionPrelude}: a match over a globally-interned column
+     * (ids stable across batches, see {@link #stringIdsCrossBatches}) gets an incremental field-held mask;
+     * everything else rebuilds per batch over the page-local dictionary, as in the materialized path.
+     */
+    private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id)
+    {
+        if (!(match instanceof Plan.StringColumnCompare) && stringIdsCrossBatches(pipeline, stringMatchColumn(match))) {
+            int column = stringMatchColumn(match);
+            emitIncrementalStringMaskPrelude(out, body, match, id, "cStr" + column, "cStrLen" + column);
+            return;
+        }
+        emitStringConditionPrelude(out, match, id, column -> "cStr" + column);
     }
 
     /** With a {@code body}, the remap / class arrays become instance fields (read from out-of-line stage methods). */

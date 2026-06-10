@@ -488,7 +488,7 @@ public class TestCompiledTpcdsQueries
                 CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, probe.table(), probe.columns()),
                 new org.weakref.nitro.jit.Column[0][], new int[0]);
         org.weakref.nitro.jit.CompiledPipeline.Result lazy = streaming.execute(
-                CompiledQuerySupport.parquetLazySource(new Allocator(), tables, probe.table(), probe.columns()),
+                CompiledQuerySupport.parquetLazySource(new Allocator(), tables, probe.table(), probe.columns(), lowered.pipeline()),
                 new org.weakref.nitro.jit.Column[0][], new int[0]);
 
         assertThat(lazy.rowCount()).isEqualTo(1).isEqualTo(eager.rowCount());

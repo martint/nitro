@@ -109,7 +109,7 @@ public class BenchmarkLazyScan
         // Staged: ss_quantity (the filter column) materializes; the four price measures materialize lazily, for the
         // surviving rows only.
         return streaming.execute(
-                CompiledQuerySupport.parquetLazySource(allocator, tables, TABLE, probeColumns()),
+                CompiledQuerySupport.parquetLazySource(allocator, tables, TABLE, probeColumns(), lowered.pipeline()),
                 NO_BUILDS, NO_BUILD_ROWS);
     }
 }

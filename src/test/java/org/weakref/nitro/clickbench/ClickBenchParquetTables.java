@@ -58,6 +58,13 @@ public final class ClickBenchParquetTables
     }
 
     @Override
+    public boolean streamOnly(String tableName)
+    {
+        // The 100M-row hits fact cannot be drained eagerly; stages stream it through the global intern.
+        return true;
+    }
+
+    @Override
     public List<Path> tableFiles(String tableName)
     {
         if (!HITS_TABLE.equals(tableName)) {

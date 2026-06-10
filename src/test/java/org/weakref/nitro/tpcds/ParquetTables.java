@@ -24,4 +24,15 @@ import java.util.List;
 public interface ParquetTables
 {
     List<Path> tableFiles(String tableName);
+
+    /**
+     * Is {@code tableName} too large to drain eagerly? A pipeline stage normally drains a string-carrying probe
+     * up front (the eager load builds ORDERED dictionaries, the contract id-comparing consumers rely on); a
+     * stream-only table is instead streamed through the per-query global intern (append-ordered ids), which
+     * suits id-equality consumers (grouping, filters) but not id-order ones.
+     */
+    default boolean streamOnly(String tableName)
+    {
+        return false;
+    }
 }

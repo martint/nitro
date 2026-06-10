@@ -62,7 +62,7 @@ public sealed interface Column
                         nulls[j] = string.nulls()[selection[j]];
                     }
                 }
-                yield new StringColumn(ids, string.dictionary(), nulls);
+                yield new StringColumn(ids, string.dictionary(), nulls, string.dictionarySize());
             }
         };
     }
@@ -104,10 +104,19 @@ public sealed interface Column
      * Dictionary-encoded string column: row {@code i} is the UTF-8 bytes {@code dictionary[ids[i]]} (null when
      * {@code nulls != null && nulls[i]}). The compiled loop works on the dense {@code ids}; string predicates are
      * evaluated once per dictionary entry into an id-indexed mask (predicate-over-dictionary).
+     *
+     * A streamed source that interns into a per-query global dictionary hands out its growing backing array
+     * directly (capacity-padded past the interned entries); {@code dictionarySize} is the number of valid leading
+     * entries. For an exact-sized dictionary it equals {@code dictionary.length}.
      */
-    record StringColumn(int[] ids, byte[][] dictionary, boolean[] nulls)
+    record StringColumn(int[] ids, byte[][] dictionary, boolean[] nulls, int dictionarySize)
             implements Column
     {
+        public StringColumn(int[] ids, byte[][] dictionary, boolean[] nulls)
+        {
+            this(ids, dictionary, nulls, dictionary.length);
+        }
+
         public StringColumn(int[] ids, byte[][] dictionary)
         {
             this(ids, dictionary, null);
