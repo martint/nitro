@@ -4308,6 +4308,95 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static Composite query28()
+    {
+        // Q28: six bucket statistics in one row -- for each store-sales quantity band (each with its own
+        // list-price/coupon/wholesale OR-band filter), the average, count, and distinct count of the list price.
+        // Each bucket lowers to the Q94 count-distinct pair: ROLLUP({list_price}, {}) carrying sum and count, then a
+        // stage summing CASEs on the grouping id (per-price rows count distinct values, the grand row carries the
+        // totals) and deriving the rounded average. The six bucket values broadcast through chained cross joins.
+        record Bucket(long minimumQuantity, long maximumQuantity, long minimumListPrice, long maximumListPrice,
+                long minimumCoupon, long maximumCoupon, long minimumWholesale, long maximumWholesale) {}
+
+        List<Bucket> buckets = List.of(
+                new Bucket(0, 5, 8_00L, 18_00L, 459_00L, 1459_00L, 57_00L, 77_00L),
+                new Bucket(6, 10, 90_00L, 100_00L, 2323_00L, 3323_00L, 31_00L, 51_00L),
+                new Bucket(11, 15, 142_00L, 152_00L, 12214_00L, 13214_00L, 79_00L, 99_00L),
+                new Bucket(16, 20, 135_00L, 145_00L, 6071_00L, 7071_00L, 38_00L, 58_00L),
+                new Bucket(21, 25, 122_00L, 132_00L, 836_00L, 1836_00L, 17_00L, 37_00L),
+                new Bucket(26, 30, 154_00L, 164_00L, 7326_00L, 8326_00L, 7_00L, 27_00L));
+
+        List<Stage> stages = new ArrayList<>();
+        QueryLowering main = null;
+        List<Plan.Expr> outputs = new ArrayList<>();
+        for (int b = 0; b < buckets.size(); b++) {
+            Bucket bucket = buckets.get(b);
+
+            QueryLowering prices = QueryLowering.scan("store_sales",
+                    new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_list_price", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_coupon_amt", ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("ss_wholesale_cost", ColumnEncoding.FLAT, true));
+            prices.where(
+                            new Plan.Predicate(">=", prices.column("ss_quantity"), new Plan.Lit(bucket.minimumQuantity())),
+                            new Plan.Predicate("<=", prices.column("ss_quantity"), new Plan.Lit(bucket.maximumQuantity())),
+                            new Plan.Or(List.of(
+                                    new Plan.And(List.of(
+                                            new Plan.Predicate(">=", prices.column("ss_list_price"), new Plan.Lit(bucket.minimumListPrice())),
+                                            new Plan.Predicate("<=", prices.column("ss_list_price"), new Plan.Lit(bucket.maximumListPrice())))),
+                                    new Plan.And(List.of(
+                                            new Plan.Predicate(">=", prices.column("ss_coupon_amt"), new Plan.Lit(bucket.minimumCoupon())),
+                                            new Plan.Predicate("<=", prices.column("ss_coupon_amt"), new Plan.Lit(bucket.maximumCoupon())))),
+                                    new Plan.And(List.of(
+                                            new Plan.Predicate(">=", prices.column("ss_wholesale_cost"), new Plan.Lit(bucket.minimumWholesale())),
+                                            new Plan.Predicate("<=", prices.column("ss_wholesale_cost"), new Plan.Lit(bucket.maximumWholesale())))))),
+                            new Plan.IsNull(prices.position("ss_list_price"), true))
+                    .groupBy("ss_list_price")
+                    .groupingSets(List.of(new int[] {0}, new int[0]))
+                    .aggregate("sum", "ss_list_price")
+                    .aggregate("count", "ss_list_price");
+            // Rollup output: list_price(0), sum(1), count(2), grouping_id(3): 0 per price, 1 for the grand total.
+            stages.add(new Stage(prices, "q28_rollup_" + b));
+
+            QueryLowering value = QueryLowering.scan("q28_rollup_" + b,
+                    new QueryLowering.Column("r_price_" + b, ColumnEncoding.FLAT, true),
+                    new QueryLowering.Column("r_sum_" + b, ColumnEncoding.FLAT, true),
+                    // count() materializes without a null mask -- declare it non-nullable (the Q22 trap).
+                    new QueryLowering.Column("r_count_" + b, ColumnEncoding.FLAT, false),
+                    new QueryLowering.Column("r_grouping_" + b, ColumnEncoding.FLAT, false));
+            Plan.Condition perPrice = new Plan.Predicate("=", value.column("r_grouping_" + b), new Plan.Lit(0));
+            Plan.Condition grandTotal = new Plan.Predicate("=", value.column("r_grouping_" + b), new Plan.Lit(1));
+            value.aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(perPrice, new Plan.Lit(1))), new Plan.Lit(0)))
+                    .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(grandTotal, value.column("r_sum_" + b))), new Plan.Lit(0)))
+                    .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(grandTotal, value.column("r_count_" + b))), new Plan.Lit(0)));
+            // Bucket value: (average, count, distinct count) -- the harness's per-bucket projection order.
+            value.select(
+                    new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)),
+                    new Plan.Col(2),
+                    new Plan.Col(0));
+            stages.add(new Stage(value, "q28_bucket_" + b));
+
+            if (main == null) {
+                main = QueryLowering.scan("q28_bucket_" + b,
+                        new QueryLowering.Column("avg_" + b, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("count_" + b, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("distinct_" + b, ColumnEncoding.FLAT, true));
+            }
+            else {
+                main = main.crossJoin("q28_bucket_" + b,
+                        new QueryLowering.Column("avg_" + b, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("count_" + b, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("distinct_" + b, ColumnEncoding.FLAT, true));
+            }
+            outputs.add(new Plan.Col(3 * b));
+            outputs.add(new Plan.Col(3 * b + 1));
+            outputs.add(new Plan.Col(3 * b + 2));
+        }
+        main.select(outputs.toArray(Plan.Expr[]::new));
+
+        return new Composite(stages, main, List.of());
+    }
+
     public static Composite query30()
     {
         // Q30: Georgia customers whose 2002 web-return total exceeds 1.2x their state's average customer return, with
