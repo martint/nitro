@@ -95,6 +95,11 @@ public final class TrinoParquetScanOperator
     private static final Field PARQUET_SOURCE_PAGE_BLOCKS = declaredField("io.trino.parquet.reader.ParquetReader$ParquetSourcePage", "blocks");
 
     private final Allocator allocator;
+    // Converted dictionary vectors, cached by the source dictionary Block's identity: the reader hands the same
+    // dictionary Block to every batch of a column chunk, so converting it once keeps the vector's identity stable
+    // across those batches (identity-keyed consumers -- per-batch mask caches, global intern page remaps -- rely
+    // on it) and skips the per-batch conversion.
+    private final java.util.IdentityHashMap<Block, Vector> convertedDictionaries = new java.util.IdentityHashMap<>();
     private final List<Path> files;
     private final List<String> columnNames;
 
@@ -452,7 +457,8 @@ public final class TrinoParquetScanOperator
         if (preserveEncodings) {
             if (block instanceof DictionaryBlock dictionaryBlock) {
                 int[] ids = dictionaryIds(dictionaryBlock);
-                Vector dictionaryValues = convertValues(column, dictionaryBlock.getDictionary(), true);
+                Vector dictionaryValues = convertedDictionaries.computeIfAbsent(dictionaryBlock.getDictionary(),
+                        dictionary -> convertValues(column, dictionary, true));
                 return allocator.adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(ids, dictionaryValues));
             }
             if (block instanceof RunLengthEncodedBlock runLengthEncodedBlock) {
