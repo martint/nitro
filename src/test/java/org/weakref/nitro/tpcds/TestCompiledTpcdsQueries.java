@@ -911,6 +911,18 @@ public class TestCompiledTpcdsQueries
         assertUnionCompositeMatchesHarness(CompiledTpcdsQueries.query54(), TpcdsParquetSupport::query54);
     }
 
+    /** Q17's three-fact join combination is empty at sf10: both engines must agree at zero rows (the empty oracle is permitted). */
+    @Test
+    void query17()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledTpcdsQueries.Ported ported = CompiledTpcdsQueries.query17();
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        assertBridgedRowsMatch(run, ported.stringColumns(), TpcdsParquetSupport::query17, tables, true);
+    }
+
     /** Q18's cohort filter is empty at sf10: both engines must agree at zero rows (the empty oracle is permitted). */
     @Test
     void query18()

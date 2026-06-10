@@ -4477,6 +4477,82 @@ public final class CompiledTpcdsQueries
         return boundary;
     }
 
+    public static Ported query17()
+    {
+        // Q17: quantity statistics (count, average, sample stddev, and the stddev/mean ratio) for store sales
+        // returned in 2001 Q1 and re-bought through the catalog within three quarters, per (item, state). The
+        // three-fact multi-key chain of Q25/Q29 with quarter-name date roles and nine statistical aggregates.
+        // The join combination is EMPTY at sf10 -- the test permits the empty oracle.
+        QueryLowering query = QueryLowering.scan("store_sales",
+                        new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_store_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ss_quantity", ColumnEncoding.FLAT, true))
+                .join("date_dim", "ss_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_quarter_name", ColumnEncoding.STRING, true))
+                .join("item", "ss_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, true))
+                .join("store", "ss_store_sk", "s_store_sk",
+                        new QueryLowering.Column("s_store_sk"),
+                        new QueryLowering.Column("s_state", ColumnEncoding.STRING, true))
+                .join("store_returns",
+                        new String[] {"ss_customer_sk", "ss_item_sk", "ss_ticket_number"},
+                        new String[] {"sr_customer_sk", "sr_item_sk", "sr_ticket_number"},
+                        new QueryLowering.Column("sr_returned_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_ticket_number", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("sr_return_quantity", ColumnEncoding.FLAT, true))
+                .join("date_dim", "sr_returned_date_sk", "d_date_sk_returned",
+                        new QueryLowering.Column("d_date_sk_returned", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_quarter_name_returned", "d_quarter_name", ColumnEncoding.STRING, true))
+                .join("catalog_sales",
+                        new String[] {"sr_customer_sk", "sr_item_sk"},
+                        new String[] {"cs_bill_customer_sk", "cs_item_sk"},
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_quantity", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk_catalog",
+                        new QueryLowering.Column("d_date_sk_catalog", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_quarter_name_catalog", "d_quarter_name", ColumnEncoding.STRING, true));
+        query.where(
+                        new Plan.StringMatch(query.position("d_quarter_name"), List.of("2001Q1"), false),
+                        new Plan.StringMatch(query.position("d_quarter_name_returned"), List.of("2001Q1", "2001Q2", "2001Q3"), false),
+                        new Plan.StringMatch(query.position("d_quarter_name_catalog"), List.of("2001Q1", "2001Q2", "2001Q3"), false))
+                .groupBy("i_item_id", "i_item_desc", "s_state")
+                .aggregate("count", "ss_quantity")
+                .aggregate("avg", "ss_quantity")
+                .aggregate("stddev", "ss_quantity")
+                .aggregate("count", "sr_return_quantity")
+                .aggregate("avg", "sr_return_quantity")
+                .aggregate("stddev", "sr_return_quantity")
+                .aggregate("count", "cs_quantity")
+                .aggregate("avg", "cs_quantity")
+                .aggregate("stddev", "cs_quantity");
+        // Grouped columns: keys 0-2, then (count, avg, stddev) per measure at 3 + 3m.
+        query.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+        Plan.Expr[] outputs = new Plan.Expr[15];
+        outputs[0] = new Plan.Col(0);
+        outputs[1] = new Plan.Col(1);
+        outputs[2] = new Plan.Col(2);
+        for (int measure = 0; measure < 3; measure++) {
+            outputs[3 + 4 * measure] = new Plan.Col(3 + 3 * measure);
+            outputs[4 + 4 * measure] = new Plan.Col(4 + 3 * measure);
+            outputs[5 + 4 * measure] = new Plan.Col(5 + 3 * measure);
+            outputs[6 + 4 * measure] = new Plan.Call("divide_f64", new Plan.Col(5 + 3 * measure), new Plan.Col(4 + 3 * measure));
+        }
+        query.select(outputs);
+
+        return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 3, 1)));
+    }
+
     public static Ported query18()
     {
         // Q18: seven integer-rounded catalog-sale averages per (item id, country, state, county) ROLLUP for one
