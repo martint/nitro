@@ -1102,14 +1102,26 @@ public final class CompiledQuerySupport
             return new byte[][] {ref.literal().getBytes(java.nio.charset.StandardCharsets.UTF_8)};
         }
         byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
-        if (ref.substringLength() < 0) {
-            return dictionary;
+        if (ref.substringLength() >= 0) {
+            byte[][] truncated = new byte[dictionary.length][];
+            for (int i = 0; i < dictionary.length; i++) {
+                truncated[i] = utf8Substring(dictionary[i], ref.substringStart(), ref.substringLength());
+            }
+            dictionary = truncated;
         }
-        byte[][] truncated = new byte[dictionary.length][];
-        for (int i = 0; i < dictionary.length; i++) {
-            truncated[i] = utf8Substring(dictionary[i], ref.substringStart(), ref.substringLength());
+        if (ref.prefix() != null) {
+            // 'prefix' || value, applied per dictionary entry: a constant prefix keeps the entries' byte order, so
+            // id-based ordering and grouping on the prefixed column are unaffected.
+            byte[] prefix = ref.prefix().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[][] prefixed = new byte[dictionary.length][];
+            for (int i = 0; i < dictionary.length; i++) {
+                prefixed[i] = new byte[prefix.length + dictionary[i].length];
+                System.arraycopy(prefix, 0, prefixed[i], 0, prefix.length);
+                System.arraycopy(dictionary[i], 0, prefixed[i], prefix.length, dictionary[i].length);
+            }
+            dictionary = prefixed;
         }
-        return truncated;
+        return dictionary;
     }
 
     /** UTF-8 substring by code point: {@code start} is 1-based, {@code length} a code-point count. */
