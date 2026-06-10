@@ -3245,6 +3245,95 @@ public final class CompiledTpcdsQueries
         return count;
     }
 
+    public static Composite query83()
+    {
+        // Q83: items returned in all three channels during three target weeks, with each channel's share of the
+        // three-channel total. The date set derives in two steps -- the distinct week sequences of three literal
+        // dates, then the distinct date keys of those weeks -- and each channel's returns join item and that date set,
+        // summing returned quantity per item id. The per-item channel relations inner-join on the item id (a string
+        // key against materialized virtual relations) and the shares are integer-rounded percentages of the
+        // three-channel average, top 100 by item and store quantity.
+        QueryLowering weeks = QueryLowering.scan("date_dim",
+                new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true));
+        weeks.where(new Plan.Or(List.of(
+                        new Plan.Predicate("=", weeks.column("d_date"), new Plan.Lit(LocalDate.of(2000, 6, 30).toEpochDay())),
+                        new Plan.Predicate("=", weeks.column("d_date"), new Plan.Lit(LocalDate.of(2000, 9, 27).toEpochDay())),
+                        new Plan.Predicate("=", weeks.column("d_date"), new Plan.Lit(LocalDate.of(2000, 11, 17).toEpochDay())))))
+                .groupBy("d_week_seq")
+                .count();
+        weeks.select(new Plan.Col(0));
+
+        QueryLowering dates = QueryLowering.scan("date_dim",
+                        new QueryLowering.Column("d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true))
+                .join("q83_weeks", "d_week_seq", "qw_week_seq",
+                        new QueryLowering.Column("qw_week_seq", ColumnEncoding.FLAT, false));
+        dates.groupBy("d_date_sk").count();
+        dates.select(new Plan.Col(0));
+
+        // Combined main columns: item(0), sr_qty(1), cr_item(2), cr_qty(3), wr_item(4), wr_qty(5).
+        QueryLowering main = QueryLowering.scan("q83_store",
+                        new QueryLowering.Column("sr_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("sr_qty", ColumnEncoding.FLAT, true))
+                .join("q83_catalog", "sr_item", "cr_item",
+                        new QueryLowering.Column("cr_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("cr_qty", ColumnEncoding.FLAT, true))
+                .join("q83_web", "sr_item", "wr_item",
+                        new QueryLowering.Column("wr_item", ColumnEncoding.STRING, false),
+                        new QueryLowering.Column("wr_qty", ColumnEncoding.FLAT, true));
+        // The three-channel total reads a NULL channel sum as 0 (the harness's add does not propagate nulls, and an
+        // all-null sum's value slot is zero), while each share's numerator DOES carry its own channel's null -- so a
+        // channel with a NULL sum reports a NULL share but still contributes 0 to the others' denominators.
+        Plan.Expr total = new Plan.Bin("+",
+                new Plan.Bin("+",
+                        new Plan.Coalesce(new Plan.Col(1), new Plan.Lit(0)),
+                        new Plan.Coalesce(new Plan.Col(3), new Plan.Lit(0))),
+                new Plan.Coalesce(new Plan.Col(5), new Plan.Lit(0)));
+        Plan.Expr denominator = new Plan.Bin("*", total, new Plan.Lit(3));
+        main.select(new Plan.Col(0),
+                        new Plan.Col(1), query83Share(new Plan.Col(1), denominator),
+                        new Plan.Col(3), query83Share(new Plan.Col(3), denominator),
+                        new Plan.Col(5), query83Share(new Plan.Col(5), denominator),
+                        new Plan.Call("divide_round_i64", new Plan.Bin("*", total, new Plan.Lit(10_000)), new Plan.Lit(3)))
+                .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(weeks, "q83_weeks"),
+                        new Stage(dates, "q83_dates"),
+                        new Stage(query83ChannelReturns("store_returns", "sr_item_sk", "sr_returned_date_sk", "sr_return_quantity"),
+                                "q83_store", List.of(new DictRef(0, 1, 1))),
+                        new Stage(query83ChannelReturns("catalog_returns", "cr_item_sk", "cr_returned_date_sk", "cr_return_quantity"),
+                                "q83_catalog", List.of(new DictRef(0, 1, 1))),
+                        new Stage(query83ChannelReturns("web_returns", "wr_item_sk", "wr_returned_date_sk", "wr_return_quantity"),
+                                "q83_web", List.of(new DictRef(0, 1, 1)))),
+                main,
+                List.of(new DictRef(0, 0, 0)));
+    }
+
+    /** A channel's returned quantity per item id within the allowed dates: returns joined to item and q83_dates, grouped. */
+    private static QueryLowering query83ChannelReturns(String returnsTable, String item, String returnedDate, String quantity)
+    {
+        QueryLowering channel = QueryLowering.scan(returnsTable,
+                        new QueryLowering.Column(item, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(returnedDate, ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column(quantity, ColumnEncoding.FLAT, true))
+                .join("item", item, "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .join("q83_dates", returnedDate, "qd_date_sk",
+                        new QueryLowering.Column("qd_date_sk", ColumnEncoding.FLAT, false));
+        channel.groupBy("i_item_id")
+                .aggregate("sum", quantity);
+        return channel;
+    }
+
+    /** The channel's integer-rounded share of the three-channel average: quantity * 10000 / (total * 3). */
+    private static Plan.Expr query83Share(Plan.Expr quantity, Plan.Expr denominator)
+    {
+        return new Plan.Call("divide_round_i64", new Plan.Bin("*", quantity, new Plan.Lit(10_000)), denominator);
+    }
+
     public static Composite query61()
     {
         // Q61: the share of November 1998 Jewelry revenue in one GMT zone sold through a promotion channel (direct
