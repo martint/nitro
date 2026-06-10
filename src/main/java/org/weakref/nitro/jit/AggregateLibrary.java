@@ -124,6 +124,32 @@ public final class AggregateLibrary
         register("count", additive("1L"));
         register("min", extreme("Math.min", "Long.MAX_VALUE"));
         register("max", extreme("Math.max", "Long.MIN_VALUE"));
+        // COUNT(DISTINCT x) per group, fused into the grouping pass: the count cell only increments when the
+        // (group, value) pair is new in the generated per-aggregate distinct set. The set machinery is emitted by
+        // the compiler at the grouped call site (it needs the class body and a stable group identity), so the
+        // registry entry only declares the cell shape and finalization.
+        register("count_distinct", new AggregateCompiler()
+        {
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
+            {
+                out.append(indent).append(cells.get(0)).append(" = 0L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                throw new IllegalStateException("count_distinct is fused at the grouped call site");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                throw new IllegalStateException("count_distinct partial states cannot merge (the distinct sets are not mergeable cells)");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return cells.get(0);
+            }
+        });
         // Lexicographic minimum of a dictionary-string column: state is the min entry's id (-1 = none yet);
         // candidates compare through the column's dictionary (UTF-8 lexicographic = unsigned byte order).
         // The input must be a string column id, so the dictionary-less emit forms reject generation.

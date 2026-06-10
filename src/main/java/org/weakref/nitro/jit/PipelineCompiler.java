@@ -1034,7 +1034,10 @@ public final class PipelineCompiler
         // a nullable aggregate routes through the null-aware hash path instead (array mode emits no result null mask).
         boolean speculate = grouped && pipeline.groupKeys().size() == 1
                 && pipeline.groupingSets().isEmpty()
-                && !anyGroupKeyNullable(pipeline, nullable) && !anyAggregateNullable(pipeline);
+                && !anyGroupKeyNullable(pipeline, nullable) && !anyAggregateNullable(pipeline)
+                // count_distinct's per-group set is keyed by a stable group identity, which array mode lacks
+                // across its deopt migration (offsets become hash gids) -- route through the hash path.
+                && pipeline.aggregates().stream().noneMatch(aggregate -> aggregate.fn().equals("count_distinct"));
 
         // Group-on-id: when the single group key is a dictionary column, group on its dense id (so array mode
         // applies even when the dictionary's values are sparse) and reconstruct the value at finalize.
@@ -2946,13 +2949,38 @@ public final class PipelineCompiler
         }
     }
 
-    /** Fold one row into an aggregate's cells, skipping the row when the aggregate's input is null (so nulls are ignored). */
     private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        emitAggregateUpdate(out, indent, null, aggregate, -1, cells, null, resolver, nullResolver, stringMaskIds);
+    }
+
+    /**
+     * Fold one row into an aggregate's cells, skipping the row when the aggregate's input is null (so nulls are
+     * ignored). A grouped call site passes the class {@code body}, the aggregate's {@code index}, and a stable
+     * nonzero {@code groupId} expression, which the fused {@code count_distinct} needs: its count cell increments
+     * only when {@code distinctAdd<index>(groupId, input)} inserts a new (group, value) pair into the emitted
+     * open-addressing set.
+     */
+    private static void emitAggregateUpdate(StringBuilder out, String indent, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         AggregateLibrary.AggregateCompiler aggregator = aggregator(aggregate);
         String inputExpr = input(aggregate, resolver, nullResolver, stringMaskIds);
         String dictionary = aggregateInputDictionary(aggregate);
         String guard = aggregate.input() == null ? "false" : nullExpr(aggregate.input(), resolver, nullResolver, stringMaskIds);
+        if (aggregate.fn().equals("count_distinct")) {
+            if (body == null || groupId == null) {
+                throw new IllegalStateException("count_distinct requires a grouped context with a stable group identity");
+            }
+            emitDistinctSet(body, index);
+            String update = "if (distinctAdd" + index + "(" + groupId + ", " + inputExpr + ")) { " + cells.get(0) + " += 1L; }";
+            if (guard.equals("false")) {
+                out.append(indent).append(update).append("\n");
+            }
+            else {
+                out.append(indent).append("if (!(").append(guard).append(")) { ").append(update).append(" }\n");
+            }
+            return;
+        }
         if (guard.equals("false")) {
             aggregator.emitUpdate(out, indent, cells, inputExpr, dictionary);
             return;
@@ -2960,6 +2988,44 @@ public final class PipelineCompiler
         out.append(indent).append("if (!(").append(guard).append(")) {\n");
         aggregator.emitUpdate(out, indent + "  ", cells, inputExpr, dictionary);
         out.append(indent).append("}\n");
+    }
+
+    /** Emit (once) aggregate {@code index}'s distinct set: interleaved [groupId, value] open addressing, groupId nonzero. */
+    private static void emitDistinctSet(ClassBody body, int index)
+    {
+        String set = "dSet" + index;
+        if (body.methods().indexOf("boolean distinctAdd" + index + "(") >= 0) {
+            return;
+        }
+        body.field("long[]", set);
+        body.field("int", set + "Count");
+        StringBuilder method = body.methods();
+        method.append("  private boolean distinctAdd").append(index).append("(long gid, long value) {\n");
+        method.append("    if (").append(set).append(" == null) { ").append(set).append(" = new long[2048]; }\n");
+        // Grow at half-full (count pairs vs len/2 slots); rehash every occupied pair into the doubled table.
+        method.append("    if ((long) (").append(set).append("Count + 1) * 4 >= ").append(set).append(".length) {\n");
+        method.append("      long[] old = ").append(set).append("; ").append(set).append(" = new long[old.length * 2];\n");
+        method.append("      int rmask = (").append(set).append(".length >> 1) - 1;\n");
+        method.append("      for (int s = 0; s < old.length; s += 2) {\n");
+        method.append("        if (old[s] != 0L) {\n");
+        method.append("          long rh = (old[s] * 0x9E3779B97F4A7C15L) ^ (old[s + 1] * 0xC2B2AE3D27D4EB4FL);\n");
+        method.append("          int rslot = (int) ((rh ^ (rh >>> 32)) & rmask);\n");
+        method.append("          while (").append(set).append("[rslot << 1] != 0L) { rslot = (rslot + 1) & rmask; }\n");
+        method.append("          ").append(set).append("[rslot << 1] = old[s]; ").append(set).append("[(rslot << 1) + 1] = old[s + 1];\n");
+        method.append("        }\n");
+        method.append("      }\n");
+        method.append("    }\n");
+        method.append("    int mask = (").append(set).append(".length >> 1) - 1;\n");
+        method.append("    long h = (gid * 0x9E3779B97F4A7C15L) ^ (value * 0xC2B2AE3D27D4EB4FL);\n");
+        method.append("    int slot = (int) ((h ^ (h >>> 32)) & mask);\n");
+        method.append("    while (true) {\n");
+        method.append("      int p = slot << 1;\n");
+        method.append("      long g = ").append(set).append("[p];\n");
+        method.append("      if (g == 0L) { ").append(set).append("[p] = gid; ").append(set).append("[p + 1] = value; ").append(set).append("Count++; return true; }\n");
+        method.append("      if (g == gid && ").append(set).append("[p + 1] == value) { return false; }\n");
+        method.append("      slot = (slot + 1) & mask;\n");
+        method.append("    }\n");
+        method.append("  }\n");
     }
 
     /** The dictionary variable for a string aggregate's input: set when the input is a plain scan column (whose string id the row loop works on), else null. */
@@ -3068,7 +3134,7 @@ public final class PipelineCompiler
             String b = indent + "  ";
             out.append(b).append("int gbase = findGroupSet").append(s).append("(").append(arguments).append(");\n");
             for (int a = 0; a < aggregates.size(); a++) {
-                emitAggregateUpdate(out, b, aggregates.get(a), slotCells(aggregates, a, "gsT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
+                emitAggregateUpdate(out, b, body, aggregates.get(a), a, slotCells(aggregates, a, "gsT", "gbase", keyCount + 2), "(gsT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
             }
             out.append(indent).append("}\n");
             if (body.methods().indexOf("int findGroupSet" + s + "(") >= 0) {
@@ -3361,7 +3427,7 @@ public final class PipelineCompiler
         }
         out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, aggregates.get(a), slotCells(aggregates, a, "htT", "gbase", keyCount + 2), resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
         }
         if (body.methods().indexOf("int findGroup(") >= 0) {
             return;
