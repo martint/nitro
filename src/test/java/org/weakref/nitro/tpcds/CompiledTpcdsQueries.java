@@ -4308,6 +4308,62 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static Composite query45()
+    {
+        // Q45: Q2/2001 web sales by the customer's city and zip, keeping sales whose customer lives in one of nine
+        // zips OR whose item is in a ten-item list. The item membership (the SQL's IN-subquery, the harness's mark
+        // semi-join) is a LEFT join against the prime-keyed items on the item id string, with IS NOT NULL as the
+        // membership test inside the OR.
+        QueryLowering primes = QueryLowering.scan("item",
+                new QueryLowering.Column("i_item_sk", ColumnEncoding.FLAT, false),
+                new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false));
+        List<Plan.Condition> primeKeys = new ArrayList<>();
+        for (long prime : new long[] {2, 3, 5, 7, 11, 13, 17, 19, 23, 29}) {
+            primeKeys.add(new Plan.Predicate("=", primes.column("i_item_sk"), new Plan.Lit(prime)));
+        }
+        primes.where(new Plan.Or(primeKeys))
+                .select(primes.column("i_item_id"));
+
+        // Combined main columns: web_sales(0-3), customer(4-5), address(6-8: sk, city, zip), date(9-11),
+        // item(12-13), prime items(14, null when the item is not in the list).
+        QueryLowering main = QueryLowering.scan("web_sales",
+                        new QueryLowering.Column("ws_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_bill_customer_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_sales_price", ColumnEncoding.FLAT, true))
+                .join("customer", "ws_bill_customer_sk", "c_customer_sk",
+                        new QueryLowering.Column("c_customer_sk"),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true))
+                .join("customer_address", "c_current_addr_sk", "ca_address_sk",
+                        new QueryLowering.Column("ca_address_sk"),
+                        new QueryLowering.Column("ca_city", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true))
+                .join("date_dim", "ws_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_qoy", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true))
+                .join("item", "ws_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false))
+                .leftJoin("q45_primes", "i_item_id", "p_item_id",
+                        new QueryLowering.Column("p_item_id", ColumnEncoding.STRING, true));
+        main.where(
+                        new Plan.Predicate("=", main.column("d_qoy"), new Plan.Lit(2)),
+                        new Plan.Predicate("=", main.column("d_year"), new Plan.Lit(2001)),
+                        new Plan.Or(List.of(
+                                new Plan.StringMatch(main.position("ca_zip"),
+                                        List.of("85669", "86197", "88274", "83405", "86475", "85392", "85460", "80348", "81792"), false),
+                                new Plan.IsNull(main.position("p_item_id"), true))))
+                .groupBy("ca_zip", "ca_city")
+                .aggregate("sum", "ws_sales_price");
+        main.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(primes, "q45_primes", List.of(new DictRef(0, 0, 1)))),
+                main,
+                List.of(new DictRef(0, 2, 2), new DictRef(1, 2, 1)));
+    }
+
     public static Composite query72()
     {
         // Q72: catalog orders per (item, warehouse, week) where the warehouse was short -- on-hand inventory below
