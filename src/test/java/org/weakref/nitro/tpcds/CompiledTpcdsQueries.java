@@ -4308,6 +4308,90 @@ public final class CompiledTpcdsQueries
                 new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(maximumQuantity + 1L)));
     }
 
+    public static Composite query72()
+    {
+        // Q72: catalog orders per (item, warehouse, week) where the warehouse was short -- on-hand inventory below
+        // the ordered quantity in the order's week -- and the order shipped more than five days after the sale,
+        // split into promoted and unpromoted counts. The 1999 inventory joined to its week is the one virtual
+        // relation; the main streams catalog sales through the sold-date week, the (item, week) inventory match,
+        // warehouse, item, the demographic filters, the ship date, and a LEFT join to promotion whose null-ness
+        // one-hot splits the counts (the harness's mark semi-join, the SQL's left join).
+        QueryLowering inventory = QueryLowering.scan("inventory",
+                        new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_warehouse_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
+                .join("date_dim", "inv_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true));
+        inventory.where(new Plan.Predicate("=", inventory.column("d_year"), new Plan.Lit(1999)))
+                .select(inventory.column("inv_item_sk"), inventory.column("inv_warehouse_sk"),
+                        inventory.column("inv_quantity_on_hand"), inventory.column("d_week_seq"));
+
+        // Combined main columns: catalog_sales(0-7), sold date(8-11: sk, week, year, date), inventory(12-15),
+        // warehouse(16-17), item(18-19), demographics(20-21, 22-23), ship date(24-25), promotion(26, null for
+        // unpromoted orders). All references are by name.
+        QueryLowering main = QueryLowering.scan("catalog_sales",
+                        new QueryLowering.Column("cs_item_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_quantity", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_cdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_bill_hdemo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_sold_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_ship_date_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_promo_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_order_number", ColumnEncoding.FLAT, true))
+                .join("date_dim", "cs_sold_date_sk", "d_date_sk",
+                        new QueryLowering.Column("d_date_sk"),
+                        new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("d_date", ColumnEncoding.FLAT, true))
+                .join("q72_inventory",
+                        new String[] {"cs_item_sk", "d_week_seq"},
+                        new String[] {"inv_item", "inv_week"},
+                        new QueryLowering.Column("inv_item", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("inv_warehouse", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("inv_on_hand", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("inv_week", ColumnEncoding.FLAT, false))
+                .join("warehouse", "inv_warehouse", "w_warehouse_sk",
+                        new QueryLowering.Column("w_warehouse_sk"),
+                        new QueryLowering.Column("w_warehouse_name", ColumnEncoding.STRING, true))
+                .join("item", "cs_item_sk", "i_item_sk",
+                        new QueryLowering.Column("i_item_sk"),
+                        new QueryLowering.Column("i_item_desc", ColumnEncoding.STRING, true))
+                .join("customer_demographics", "cs_bill_cdemo_sk", "cd_demo_sk",
+                        new QueryLowering.Column("cd_demo_sk"),
+                        new QueryLowering.Column("cd_marital_status", ColumnEncoding.STRING, true))
+                .join("household_demographics", "cs_bill_hdemo_sk", "hd_demo_sk",
+                        new QueryLowering.Column("hd_demo_sk"),
+                        new QueryLowering.Column("hd_buy_potential", ColumnEncoding.STRING, true))
+                .join("date_dim", "cs_ship_date_sk", "d_date_sk_2",
+                        new QueryLowering.Column("d_date_sk_2", "d_date_sk", ColumnEncoding.FLAT, false),
+                        new QueryLowering.Column("d_ship_date", "d_date", ColumnEncoding.FLAT, true))
+                .leftJoin("promotion", "cs_promo_sk", "p_promo_sk",
+                        new QueryLowering.Column("p_promo_sk", ColumnEncoding.FLAT, true));
+        Plan.Condition unpromoted = new Plan.IsNull(main.position("p_promo_sk"), false);
+        main.where(
+                        new Plan.Predicate("=", main.column("d_year"), new Plan.Lit(1999)),
+                        new Plan.StringMatch(main.position("cd_marital_status"), List.of("D"), false),
+                        new Plan.StringMatch(main.position("hd_buy_potential"), List.of(">10000"), false),
+                        new Plan.Predicate("<", main.column("inv_on_hand"), main.column("cs_quantity")),
+                        new Plan.Predicate(">", main.column("d_ship_date"),
+                                new Plan.Bin("+", main.column("d_date"), new Plan.Lit(5))))
+                .groupBy("i_item_desc", "w_warehouse_name", "d_week_seq")
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(unpromoted, new Plan.Lit(1))), new Plan.Lit(0)))
+                .aggregate("sum", new Plan.Case(List.of(new Plan.Case.Branch(unpromoted, new Plan.Lit(0))), new Plan.Lit(1)))
+                .count();
+        main.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(5, true), new Plan.SortKey(0, false),
+                new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
+
+        return new Composite(
+                List.of(new Stage(inventory, "q72_inventory")),
+                main,
+                List.of(new DictRef(0, 4, 1), new DictRef(1, 3, 1)));
+    }
+
     public static Composite query44()
     {
         // Q44: one store's best and worst performing items by rank. Items at store four whose average net profit
