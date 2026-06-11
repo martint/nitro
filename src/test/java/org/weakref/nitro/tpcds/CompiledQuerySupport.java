@@ -384,6 +384,15 @@ public final class CompiledQuerySupport
                     && (PipelineCompiler.stringMaybeView(pipeline, c)
                             || PipelineCompiler.stringBoundedFilterViewable(pipeline, probeEncodings, probeNullable, c));
         }
+        // A derivation-only column (consumed only through per-entry numeric derivations + leaf filters) never
+        // interns: its plain pages pass through as views for ANY selection -- the generated derivation prelude
+        // computes per surviving row in place -- and its dictionary pages stay page-local.
+        boolean[] derivedView = new boolean[width];
+        for (int c = 0; c < width; c++) {
+            derivedView[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+                    && !specs.get(c).nullable()
+                    && PipelineCompiler.stringDerivedOnly(pipeline, c);
+        }
         // Winners dictionaries for winners-mode min inputs: appended to only on a new minimum, snapshotted for
         // the result reconstruction.
         boolean[] minWinners = new boolean[width];
@@ -642,8 +651,8 @@ public final class CompiledQuerySupport
                 // A viewable full-batch plain page passes through in place even for a globally-interned column:
                 // in a bounded top-N pipeline only the filter stage sees full batches, and it evaluates on the
                 // view; the payload stage's partial candidate selections fall through to the interned path.
-                if ((viewable[column] || (filterStage && !nullable)) && vector instanceof org.weakref.nitro.data.BinaryVector viewBinary
-                        && batchMask == null && (count == currentRows || minWinners[column] || filterStage)) {
+                if ((viewable[column] || derivedView[column] || (filterStage && !nullable)) && vector instanceof org.weakref.nitro.data.BinaryVector viewBinary
+                        && batchMask == null && (count == currentRows || minWinners[column] || filterStage || derivedView[column])) {
                     // A winners-min consumer indexes the view through the stage's selection, so a partial
                     // payload selection can still take it (the view is selection-independent page positions).
                     return new org.weakref.nitro.jit.Column.BytesViewColumn(viewBinary.data(), viewBinary.offsets());

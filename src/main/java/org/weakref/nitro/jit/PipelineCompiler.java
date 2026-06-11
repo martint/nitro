@@ -375,7 +375,12 @@ public final class PipelineCompiler
             }
             for (Plan.Call derivation : collectStringDerivations(pipeline)) {
                 int column = stringDerivationColumn(derivation);
-                emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
+                if (stringDerivedOnly(pipeline, column)) {
+                    emitPageLocalStringDerivationPrelude(out, body, pipeline, nullable, derivation, column, "selected");
+                }
+                else {
+                    emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
+                }
             }
             if (grouped && stringIdKey >= 0) {
                 emitStringIdGroupedGrowth(out, pipeline.aggregates(), stringIdKey);
@@ -410,7 +415,12 @@ public final class PipelineCompiler
             }
             for (Plan.Call derivation : collectStringDerivations(pipeline)) {
                 int column = stringDerivationColumn(derivation);
-                emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
+                if (stringDerivedOnly(pipeline, column)) {
+                    emitPageLocalStringDerivationPrelude(out, body, pipeline, nullable, derivation, column, "rowCount");
+                }
+                else {
+                    emitIncrementalStringDerivationPrelude(out, body, derivation, "cStr" + column, "cStrLen" + column);
+                }
             }
             if (grouped && stringIdKey >= 0) {
                 emitStringIdGroupedGrowth(out, pipeline.aggregates(), stringIdKey);
@@ -2082,7 +2092,8 @@ public final class PipelineCompiler
     private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar, boolean filterDual)
     {
         if (encoding != ColumnEncoding.STRING
-                || !(filterDual || stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullableAll, column))) {
+                || !(filterDual || stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullableAll, column)
+                        || (stringDerivedOnly(pipeline, column) && !nullable))) {
             emitScanColumnLoad(out, column, encoding, nullable);
             return;
         }
@@ -2345,6 +2356,45 @@ public final class PipelineCompiler
         out.append("        ").append(array).append("[e] = ").append(STRING_DERIVATIONS.get(call.name()).apply(dictionaryVar + "[e]")).append(";\n");
         out.append("      }\n");
         out.append("      ").append(array).append("Len = ").append(sizeVar).append(";\n");
+        out.append("    }\n");
+    }
+
+    /**
+     * The derivation prelude for a column with page-local ids (see {@link #stringDerivedOnly}): a view batch
+     * fills the array compacted -- entry {@code e} is row {@code selection[e]}'s in-place value, matching the
+     * identity-aliased ids -- and a dictionary batch derives per page-dictionary entry, cached by dictionary
+     * identity across the batches that share it.
+     */
+    private static void emitPageLocalStringDerivationPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, boolean[][] nullable, Plan.Call call, int column, String rowsVar)
+    {
+        String array = derivationArray(call);
+        body.field("int[]", array);
+        body.field("byte[][]", array + "Dict");
+        String row = rowsVar.equals("rowCount") ? "e" : "selection[e]";
+        boolean views = !nullableOf(nullable, 0, column);
+        out.append("    if (").append(array).append(" == null) { ").append(array).append(" = new int[0]; }\n");
+        if (views) {
+            out.append("    if (cView").append(column).append(" != null) {\n");
+            out.append("      if (").append(array).append(".length < ").append(rowsVar).append(") { ").append(array)
+                    .append(" = new int[Math.max(").append(rowsVar).append(", ").append(array).append(".length * 2)]; }\n");
+            out.append("      for (int e = 0; e < ").append(rowsVar).append("; e++) {\n");
+            out.append("        int sDrvRow = ").append(row).append(";\n");
+            out.append("        ").append(array).append("[e] = ").append(STRING_DERIVATIONS.get(call.name())
+                    .apply("cView" + column + ", cViewOff" + column + "[sDrvRow], cViewOff" + column + "[sDrvRow + 1]")).append(";\n");
+            out.append("      }\n");
+            out.append("      ").append(array).append("Dict = null;\n");
+            out.append("    }\n");
+            out.append("    else if (").append(array).append("Dict != cStr").append(column).append(") {\n");
+        }
+        else {
+            out.append("    if (").append(array).append("Dict != cStr").append(column).append(") {\n");
+        }
+        out.append("      if (").append(array).append(".length < cStrLen").append(column).append(") { ").append(array)
+                .append(" = new int[Math.max(cStrLen").append(column).append(", ").append(array).append(".length * 2)]; }\n");
+        out.append("      for (int e = 0; e < cStrLen").append(column).append("; e++) {\n");
+        out.append("        ").append(array).append("[e] = ").append(STRING_DERIVATIONS.get(call.name()).apply("cStr" + column + "[e]")).append(";\n");
+        out.append("      }\n");
+        out.append("      ").append(array).append("Dict = cStr").append(column).append(";\n");
         out.append("    }\n");
     }
 
@@ -4740,7 +4790,70 @@ public final class PipelineCompiler
      */
     public static boolean stringIdsCrossBatches(Plan.Pipeline pipeline, int column)
     {
-        return accumulateColumns(pipeline).contains(column) && !stringMinWinners(pipeline, column);
+        return accumulateColumns(pipeline).contains(column) && !stringMinWinners(pipeline, column)
+                && !stringDerivedOnly(pipeline, column);
+    }
+
+    /**
+     * Is {@code column} consumed only through per-entry numeric derivations (plus leaf filter predicates)?
+     * Such a column never needs cross-batch ids: a view batch computes the derivation per row in place, a
+     * dictionary batch caches it per page-dictionary entry -- no global intern (ClickBench q28's
+     * avg(length(URL)) otherwise interned ~20M URLs just to read their lengths).
+     */
+    public static boolean stringDerivedOnly(Plan.Pipeline pipeline, int column)
+    {
+        if (!pipeline.joins().isEmpty() || pipeline.window() != null) {
+            return false;
+        }
+        if (pipeline.groupKeys().stream().anyMatch(key -> referencesColumn(key, column))
+                || (projectionOnly(pipeline) && pipeline.projections().stream().anyMatch(projection -> referencesColumn(projection, column)))) {
+            return false;
+        }
+        boolean derived = false;
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() == null || !referencesColumn(aggregate.input(), column)) {
+                continue;
+            }
+            if (!referencesOnlyThroughDerivations(aggregate.input(), column)) {
+                return false;
+            }
+            derived = true;
+        }
+        if (!derived) {
+            return false;
+        }
+        for (Plan.Condition match : collectPipelineStringMatches(pipeline)) {
+            if (match instanceof Plan.StringColumnCompare compare) {
+                if (compare.left() == column || compare.right() == column) {
+                    return false;
+                }
+                continue;
+            }
+            if (stringMatchColumn(match) != column) {
+                continue;
+            }
+            boolean supported = match instanceof Plan.StringMatch
+                    || (match instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
+            if (!supported) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Does {@code expr} reach {@code column} only through registered per-entry derivation calls? */
+    private static boolean referencesOnlyThroughDerivations(Plan.Expr expr, int column)
+    {
+        return switch (expr) {
+            case Plan.Col col -> col.index() != column;
+            case Plan.Call call -> stringDerivationColumn(call) == column
+                    || call.arguments().stream().allMatch(argument -> referencesOnlyThroughDerivations(argument, column));
+            case Plan.Bin bin -> referencesOnlyThroughDerivations(bin.left(), column) && referencesOnlyThroughDerivations(bin.right(), column);
+            case Plan.Case kase -> kase.branches().stream().allMatch(branch -> referencesOnlyThroughDerivations(branch.value(), column))
+                    && referencesOnlyThroughDerivations(kase.defaultValue(), column);
+            case Plan.Coalesce coalesce -> coalesce.arguments().stream().allMatch(argument -> referencesOnlyThroughDerivations(argument, column));
+            default -> true;
+        };
     }
 
     /** Order top-level (AND-ed) conjuncts most-selective-first by a static heuristic; AND is commutative so this is safe. */
@@ -5235,7 +5348,7 @@ public final class PipelineCompiler
             emitIncrementalStringMaskPrelude(out, body, match, id, "cStr" + column, "cStrLen" + column);
             return;
         }
-        if (stringMaybeView(pipeline, column)) {
+        if (stringMaybeView(pipeline, column) || stringDerivedOnly(pipeline, column)) {
             emitViewOrCachedStringMaskPrelude(out, body, pipeline, match, id, column, rowsVar);
             return;
         }

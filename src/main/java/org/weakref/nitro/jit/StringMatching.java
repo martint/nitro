@@ -49,9 +49,15 @@ public final class StringMatching
     /** The number of code points in UTF-8 bytes (continuation bytes don't start a code point). */
     public static int codePointCount(byte[] utf8)
     {
+        return codePointCount(utf8, 0, utf8.length);
+    }
+
+    /** Code points of the UTF-8 slice {@code [from, to)} -- the in-place form for zero-copy view rows. */
+    public static int codePointCount(byte[] utf8, int from, int to)
+    {
         int count = 0;
-        for (byte b : utf8) {
-            if ((b & 0xC0) != 0x80) {
+        for (int i = from; i < to; i++) {
+            if ((utf8[i] & 0xC0) != 0x80) {
                 count++;
             }
         }
