@@ -196,6 +196,7 @@ public final class PipelineCompiler
 
         boolean grouped = !pipeline.groupKeys().isEmpty();
         int stringIdKey = streamedStringIdKey(pipeline, encodings, nullable);
+        int boundedTopKey = boundedTopKeyColumn(pipeline, encodings, nullable);
         // State lives across batches: initialize it once, before the batch loop. A join-less projection-only
         // pipeline (a plain scan-and-project, e.g. a raw union branch) appends to projection output arrays.
         if (grouped && stringIdKey >= 0) {
@@ -206,6 +207,10 @@ public final class PipelineCompiler
         }
         else if (projectionOnly) {
             emitProjectionState(out, pipeline, nullable);
+            if (boundedTopKey >= 0) {
+                out.append("    long[] btKeys = new long[").append(pipeline.ordering().limit()).append("];\n");
+                out.append("    int btCount = 0; long btWorst = 0;\n");
+            }
         }
         else {
             emitGlobalState(out, pipeline.aggregates());
@@ -245,10 +250,10 @@ public final class PipelineCompiler
                 out.append("      {\n");
                 out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
                 for (int column : columns) {
-                    emitStreamingScanColumnLoad(out, body, pipeline, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
+                    emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
                 }
                 for (Plan.Condition match : matches) {
-                    emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match), "selected");
+                    emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, match, stringMaskIds.get(match), "selected");
                 }
                 out.append("        int kept = 0;\n");
                 out.append("        for (int i = 0; i < selected; i++) {\n");
@@ -257,7 +262,13 @@ public final class PipelineCompiler
                 out.append("        selected = kept;\n");
                 out.append("      }\n");
             }
-            // Payload stage: materialize the columns the aggregation reads (group keys, measures) for the survivors.
+            // For a bounded top-N, a key-only stage shrinks the survivors to threshold-beating rows first.
+            if (boundedTopKey >= 0) {
+                emitBoundedTopKeyStage(out, pipeline, boundedTopKey);
+            }
+            // Payload stage: materialize the columns the aggregation reads (group keys, measures) for the
+            // survivors -- but only when there ARE survivors: materializing a column borrows (hence decodes)
+            // it even for zero rows, and a selective filter or top-N threshold prunes most batches entirely.
             TreeSet<Integer> payloadColumns = accumulateColumns(pipeline);
             List<Plan.Condition> aggregateMatches = new ArrayList<>();
             for (Plan.Aggregate aggregate : pipeline.aggregates()) {
@@ -265,14 +276,14 @@ public final class PipelineCompiler
                     collectStringMatchesInExpr(aggregate.input(), aggregateMatches);
                 }
             }
-            out.append("      {\n");
+            out.append("      if (selected > 0) {\n");
             out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(payloadColumns)).append(", selection, selected);\n");
             for (int column : payloadColumns) {
-                emitStreamingScanColumnLoad(out, body, pipeline, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
+                emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
             }
             emitProbeOrderingDictionaryCapture(out, probeOrderingSources, payloadColumns);
             for (Plan.Condition match : aggregateMatches) {
-                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match), "selected");
+                emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, match, stringMaskIds.get(match), "selected");
             }
             for (Plan.Call derivation : collectStringDerivations(pipeline)) {
                 int column = stringDerivationColumn(derivation);
@@ -303,11 +314,11 @@ public final class PipelineCompiler
             out.append("      int rowCount = source.rows();\n");
             out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
             for (int column : referencedColumns(pipeline)) {
-                emitStreamingScanColumnLoad(out, body, pipeline, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "rowCount");
+                emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "rowCount");
             }
             emitProbeOrderingDictionaryCapture(out, probeOrderingSources, referencedColumns(pipeline));
             for (Plan.Condition match : stringMatches) {
-                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match), "rowCount");
+                emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, match, stringMaskIds.get(match), "rowCount");
             }
             for (Plan.Call derivation : collectStringDerivations(pipeline)) {
                 int column = stringDerivationColumn(derivation);
@@ -973,6 +984,64 @@ public final class PipelineCompiler
                     || kase.branches().stream().anyMatch(branch -> exprCarriesNull(pipeline, nullable, branch.value()));
             case Plan.Coalesce coalesce -> coalesce.arguments().stream().allMatch(argument -> exprCarriesNull(pipeline, nullable, argument));
         };
+    }
+
+    /**
+     * The input column of a bounded top-N's sort key for a streamed projection-only pipeline, or -1. With a
+     * single plain-column LONG sort key and a small LIMIT, the payload (all projected columns -- including any
+     * string interning) materializes only for rows that beat the current k-th key: the threshold prunes nearly
+     * every row after warmup, the compiled twin of the operator harness's bounded TopN state. The appended rows
+     * slightly over-collect (no eviction); the ordinary ordering pass sorts and limits them at the end.
+     */
+    private static int boundedTopKeyColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        if (!projectionOnly(pipeline) || !pipeline.joins().isEmpty() || pipeline.filters().isEmpty()
+                || pipeline.ordering() == null || pipeline.ordering().offset() != 0
+                || pipeline.ordering().limit() <= 0 || pipeline.ordering().limit() > 1024
+                || pipeline.ordering().keys().size() != 1) {
+            return -1;
+        }
+        Plan.SortKey key = pipeline.ordering().keys().getFirst();
+        if (key.expr() != null || key.column() >= pipeline.projections().size()
+                || !(pipeline.projections().get(key.column()) instanceof Plan.Col col)
+                || encodingOf(encodings, 0, col.index()) != ColumnEncoding.FLAT
+                || nullableOf(nullable, 0, col.index())) {
+            return -1;
+        }
+        return col.index();
+    }
+
+    /**
+     * The bounded top-N's key stage: load the sort-key column for the filter survivors, keep only the rows that
+     * beat the current k-th best key (tracked exactly in a small array), and shrink the selection to them --
+     * the payload stage then materializes just those rows.
+     */
+    private static void emitBoundedTopKeyStage(StringBuilder out, Plan.Pipeline pipeline, int keyColumn)
+    {
+        boolean descending = pipeline.ordering().keys().getFirst().descending();
+        int limit = pipeline.ordering().limit();
+        String better = descending ? ">" : "<";
+        out.append("      {\n");
+        out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(new int[] {").append(keyColumn).append("}, selection, selected);\n");
+        out.append("        long[] c").append(keyColumn).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(keyColumn).append("]).values();\n");
+        out.append("        int kept = 0;\n");
+        out.append("        for (int i = 0; i < selected; i++) {\n");
+        out.append("          long btKey = c").append(keyColumn).append("[i];\n");
+        out.append("          if (btCount < ").append(limit).append(") {\n");
+        out.append("            btKeys[btCount++] = btKey;\n");
+        out.append("            if (btCount == ").append(limit).append(") { btWorst = btKeys[0]; for (int b = 1; b < btCount; b++) { if (btKeys[b] ").append(descending ? "<" : ">").append(" btWorst) { btWorst = btKeys[b]; } } }\n");
+        out.append("            selection[kept++] = selection[i];\n");
+        out.append("          }\n");
+        out.append("          else if (btKey ").append(better).append(" btWorst) {\n");
+        out.append("            int btWorstSlot = 0;\n");
+        out.append("            for (int b = 1; b < btCount; b++) { if (btKeys[b] ").append(descending ? "<" : ">").append(" btKeys[btWorstSlot]) { btWorstSlot = b; } }\n");
+        out.append("            btKeys[btWorstSlot] = btKey;\n");
+        out.append("            btWorst = btKeys[0]; for (int b = 1; b < btCount; b++) { if (btKeys[b] ").append(descending ? "<" : ">").append(" btWorst) { btWorst = btKeys[b]; } }\n");
+        out.append("            selection[kept++] = selection[i];\n");
+        out.append("          }\n");
+        out.append("        }\n");
+        out.append("        selected = kept;\n");
+        out.append("      }\n");
     }
 
     /** Declare the growable output arrays (one per projection, plus a null mask per nullable column reference) before the row loop. */
@@ -1641,9 +1710,10 @@ public final class PipelineCompiler
      * source -- load both shapes behind a runtime dispatch, aliasing the view's ids to identity so the row loop
      * reads the row-indexed mask unchanged.
      */
-    private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, int column, ColumnEncoding encoding, boolean nullable, String rowsVar)
+    private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar)
     {
-        if (encoding != ColumnEncoding.STRING || !stringMaybeView(pipeline, column)) {
+        if (encoding != ColumnEncoding.STRING
+                || !(stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullableAll, column))) {
             emitScanColumnLoad(out, column, encoding, nullable);
             return;
         }
@@ -1925,6 +1995,11 @@ public final class PipelineCompiler
     {
         body.field("boolean[]", "sMask" + id);
         body.field("int", "sMaskLen" + id);
+        emitIncrementalStringMaskPreludeBody(out, match, id, dictionaryVar, sizeVar);
+    }
+
+    private static void emitIncrementalStringMaskPreludeBody(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String sizeVar)
+    {
         out.append("    if (sMask").append(id).append(" == null) { sMask").append(id).append(" = new boolean[0]; }\n");
         out.append("    if (").append(sizeVar).append(" > sMaskLen").append(id).append(") {\n");
         out.append("      if (sMask").append(id).append(".length < ").append(sizeVar).append(") { sMask").append(id)
@@ -4085,6 +4160,51 @@ public final class PipelineCompiler
         return any || stringMinWinners(pipeline, column);
     }
 
+    /**
+     * Can a globally-interned string column's FILTER stage still take the zero-copy view? Only in a bounded
+     * top-N pipeline: there the payload stage materializes threshold-beating candidates (a strict subset of the
+     * batch), so the view's full-batch shape can never leak into id-consuming code -- the filter evaluates in
+     * place, and the few payload rows intern as usual.
+     */
+    public static boolean stringBoundedFilterViewable(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int column)
+    {
+        if (boundedTopKeyColumn(pipeline, encodings, nullable) < 0) {
+            return false;
+        }
+        if (pipeline.groupKeys().stream().anyMatch(key -> referencesColumn(key, column))) {
+            return false;
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null && referencesColumn(aggregate.input(), column)) {
+                return false;
+            }
+        }
+        for (Plan.Call derivation : collectStringDerivations(pipeline)) {
+            if (stringDerivationColumn(derivation) == column) {
+                return false;
+            }
+        }
+        boolean any = false;
+        for (Plan.Condition match : collectPipelineStringMatches(pipeline)) {
+            if (match instanceof Plan.StringColumnCompare compare) {
+                if (compare.left() == column || compare.right() == column) {
+                    return false;
+                }
+                continue;
+            }
+            if (stringMatchColumn(match) != column) {
+                continue;
+            }
+            any = true;
+            boolean supported = match instanceof Plan.StringMatch
+                    || (match instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
+            if (!supported) {
+                return false;
+            }
+        }
+        return any;
+    }
+
     /** Is {@code column} a winners-mode min input: a maybe-view column some {@code min_utf8} reads directly? */
     public static boolean stringMinWinners(Plan.Pipeline pipeline, int column)
     {
@@ -4608,7 +4728,7 @@ public final class PipelineCompiler
      * (ids stable across batches, see {@link #stringIdsCrossBatches}) gets an incremental field-held mask;
      * everything else rebuilds per batch over the page-local dictionary, as in the materialized path.
      */
-    private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id, String rowsVar)
+    private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, Plan.Condition match, int id, String rowsVar)
     {
         if (match instanceof Plan.StringColumnCompare) {
             emitStringConditionPrelude(out, match, id, column -> "cStr" + column);
@@ -4616,6 +4736,23 @@ public final class PipelineCompiler
         }
         int column = stringMatchColumn(match);
         if (stringIdsCrossBatches(pipeline, column)) {
+            if (stringBoundedFilterViewable(pipeline, encodings, nullable, column)) {
+                // The filter stage may see a view batch (evaluated per row in place); a dictionary-page batch
+                // extends the incremental global mask as usual (its ids are global there). An encoding switch
+                // resets the incremental watermark so the entry mask refills fully.
+                body.field("boolean[]", "sMask" + id);
+                body.field("int", "sMaskLen" + id);
+                out.append("    if (cView").append(column).append(" != null) {\n");
+                out.append("      if (sMask").append(id).append(" == null || sMask").append(id).append(".length < ").append(rowsVar).append(") { sMask").append(id)
+                        .append(" = new boolean[Math.max(").append(rowsVar).append(", sMask").append(id).append(" == null ? 0 : sMask").append(id).append(".length * 2)]; }\n");
+                emitViewMaskFill(out, body, match, id, column, rowsVar);
+                out.append("      sMaskLen").append(id).append(" = 0;\n");
+                out.append("    }\n");
+                out.append("    else {\n");
+                emitIncrementalStringMaskPreludeBody(out, match, id, "cStr" + column, "cStrLen" + column);
+                out.append("    }\n");
+                return;
+            }
             emitIncrementalStringMaskPrelude(out, body, match, id, "cStr" + column, "cStrLen" + column);
             return;
         }

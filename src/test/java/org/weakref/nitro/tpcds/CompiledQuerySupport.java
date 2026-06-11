@@ -359,6 +359,14 @@ public final class CompiledQuerySupport
         // are interned into a per-query global dictionary; filter-only strings keep cheap page-local dictionaries.
         GlobalStringDictionary[] globalDictionaries = new GlobalStringDictionary[width];
         boolean[] viewable = new boolean[width];
+        // The probe's encoding/nullability arrays for the compiler-shared mode predicates (bounded pipelines
+        // have no joins, so the probe is the whole combined space).
+        org.weakref.nitro.jit.ColumnEncoding[][] probeEncodings = new org.weakref.nitro.jit.ColumnEncoding[][] {
+                specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::encoding).toArray(org.weakref.nitro.jit.ColumnEncoding[]::new)};
+        boolean[][] probeNullable = new boolean[1][width];
+        for (int c = 0; c < width; c++) {
+            probeNullable[0][c] = specs.get(c).nullable();
+        }
         for (int c = 0; c < width; c++) {
             org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
             if (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
@@ -373,7 +381,8 @@ public final class CompiledQuerySupport
             // no nulls.
             viewable[c] = spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
                     && !spec.nullable()
-                    && PipelineCompiler.stringMaybeView(pipeline, c);
+                    && (PipelineCompiler.stringMaybeView(pipeline, c)
+                            || PipelineCompiler.stringBoundedFilterViewable(pipeline, probeEncodings, probeNullable, c));
         }
         // Winners dictionaries for winners-mode min inputs: appended to only on a new minimum, snapshotted for
         // the result reconstruction.
@@ -613,6 +622,13 @@ public final class CompiledQuerySupport
             {
                 int[] ids = new int[count];
                 boolean[] nullMask = nullable ? new boolean[count] : null;
+                // A viewable full-batch plain page passes through in place even for a globally-interned column:
+                // in a bounded top-N pipeline only the filter stage sees full batches, and it evaluates on the
+                // view; the payload stage's partial candidate selections fall through to the interned path.
+                if (viewable[column] && vector instanceof org.weakref.nitro.data.BinaryVector viewBinary
+                        && batchMask == null && count == currentRows) {
+                    return new org.weakref.nitro.jit.Column.BytesViewColumn(viewBinary.data(), viewBinary.offsets());
+                }
                 GlobalStringDictionary global = globalDictionaries[column];
                 if (global != null) {
                     if (vector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector
