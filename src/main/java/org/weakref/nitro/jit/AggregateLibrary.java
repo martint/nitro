@@ -122,6 +122,52 @@ public final class AggregateLibrary
             }
         });
         register("count", additive("1L"));
+        // F64 aggregates over raw-bits long lanes: the cells hold the running double's bits.
+        register("sum_f64", f64Fold("+", "0.0", true));
+        register("min_f64", f64Fold("Math.min", "Double.POSITIVE_INFINITY", false));
+        register("max_f64", f64Fold("Math.max", "Double.NEGATIVE_INFINITY", false));
+        register("avg_f64", new AggregateCompiler()
+        {
+            @Override public int cells()
+            {
+                return 2;   // [0] = bits of the running sum, [1] = count of non-null inputs
+            }
+
+            @Override public Type outputType()
+            {
+                return Types.DOUBLE;
+            }
+
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
+            {
+                out.append(indent).append(cells.get(0)).append(" = 0L;\n");   // bits(0.0) == 0L
+                out.append(indent).append(cells.get(1)).append(" = 0L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                out.append(indent).append(cells.get(0)).append(" = Double.doubleToRawLongBits(Double.longBitsToDouble(")
+                        .append(cells.get(0)).append(") + Double.longBitsToDouble(").append(input).append("));\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + 1L;\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                out.append(indent).append(cells.get(0)).append(" = Double.doubleToRawLongBits(Double.longBitsToDouble(")
+                        .append(cells.get(0)).append(") + Double.longBitsToDouble(").append(other.get(0)).append("));\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(other.get(1)).append(";\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return "Double.doubleToRawLongBits(" + cells.get(1) + " == 0L ? 0.0 : Double.longBitsToDouble(" + cells.get(0) + ") / (double) " + cells.get(1) + ")";
+            }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                return cells.get(1) + " == 0L";
+            }
+        });
         register("min", extreme("Math.min", "Long.MAX_VALUE"));
         register("max", extreme("Math.max", "Long.MIN_VALUE"));
         // COUNT(DISTINCT x) per group, fused into the grouping pass: the count cell only increments when the
@@ -317,6 +363,60 @@ public final class AggregateLibrary
     }
 
     private AggregateLibrary() {}
+
+    /**
+     * A two-cell F64 fold: [0] = bits of the running value (sum / min / max as doubles), [1] = non-null count
+     * (zero means SQL NULL). {@code infix} selects {@code a + b}; otherwise {@code fold(a, b)}.
+     */
+    private static AggregateCompiler f64Fold(String fold, String identity, boolean infix)
+    {
+        return new AggregateCompiler()
+        {
+            @Override public int cells()
+            {
+                return 2;
+            }
+
+            @Override public Type outputType()
+            {
+                return Types.DOUBLE;
+            }
+
+            @Override public void emitIdentity(StringBuilder out, String indent, List<String> cells)
+            {
+                out.append(indent).append(cells.get(0)).append(" = Double.doubleToRawLongBits(").append(identity).append(");\n");
+                out.append(indent).append(cells.get(1)).append(" = 0L;\n");
+            }
+
+            @Override public void emitUpdate(StringBuilder out, String indent, List<String> cells, String input)
+            {
+                String combined = infix
+                        ? "Double.longBitsToDouble(" + cells.get(0) + ") " + fold + " Double.longBitsToDouble(" + input + ")"
+                        : fold + "(Double.longBitsToDouble(" + cells.get(0) + "), Double.longBitsToDouble(" + input + "))";
+                out.append(indent).append(cells.get(0)).append(" = Double.doubleToRawLongBits(").append(combined).append(");\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + 1L;\n");
+            }
+
+            @Override public void emitMerge(StringBuilder out, String indent, List<String> cells, List<String> other)
+            {
+                String combined = infix
+                        ? "Double.longBitsToDouble(" + cells.get(0) + ") " + fold + " Double.longBitsToDouble(" + other.get(0) + ")"
+                        : fold + "(Double.longBitsToDouble(" + cells.get(0) + "), Double.longBitsToDouble(" + other.get(0) + "))";
+                out.append(indent).append(cells.get(0)).append(" = Double.doubleToRawLongBits(").append(combined).append(");\n");
+                out.append(indent).append(cells.get(1)).append(" = ").append(cells.get(1)).append(" + ").append(other.get(1)).append(";\n");
+            }
+
+            @Override public String result(List<String> cells)
+            {
+                return cells.get(0);
+            }
+
+            @Override public String resultNull(List<String> cells)
+            {
+                return cells.get(1) + " == 0L";
+            }
+        };
+    }
 
     public static void register(String name, AggregateCompiler compiler)
     {

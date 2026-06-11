@@ -540,6 +540,20 @@ public final class CompiledQuerySupport
              */
             private org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count, boolean nullable, int column)
             {
+                if (values instanceof org.weakref.nitro.data.F64Vector f64) {
+                    // F64 lanes carry raw double bits in the long buffer.
+                    double[] backing = f64.values();
+                    long[] copy = valueBuffer(column, count);
+                    boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
+                    for (int i = 0; i < count; i++) {
+                        boolean isNull = isNull(nulls, i);
+                        if (nullMask != null) {
+                            nullMask[i] = isNull;
+                        }
+                        copy[i] = isNull ? 0 : Double.doubleToRawLongBits(backing[i]);
+                    }
+                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                }
                 if (values instanceof I64Vector i64) {
                     if (nulls == null) {
                         return new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
@@ -569,6 +583,24 @@ public final class CompiledQuerySupport
                             nullMask[i] = isNull;
                         }
                         copy[i] = isNull ? 0 : backing[i];
+                    }
+                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                }
+                if (values instanceof org.weakref.nitro.data.DictionaryVector dictionary
+                        && !(dictionary.values() instanceof org.weakref.nitro.data.BinaryVector)) {
+                    int[] ids = dictionary.ids();
+                    org.weakref.nitro.data.Vector entries = dictionary.values();
+                    double[] doubleEntries = entries instanceof org.weakref.nitro.data.F64Vector f64Entries ? f64Entries.values() : null;
+                    long[] copy = valueBuffer(column, count);
+                    boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
+                    for (int i = 0; i < count; i++) {
+                        boolean isNull = isNull(nulls, i);
+                        if (nullMask != null) {
+                            nullMask[i] = isNull;
+                        }
+                        copy[i] = isNull ? 0
+                                : doubleEntries != null ? Double.doubleToRawLongBits(doubleEntries[ids[i]])
+                                : longValue(entries, ids[i]);
                     }
                     return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
                 }
@@ -617,6 +649,35 @@ public final class CompiledQuerySupport
                             nullMask[j] = isNull;
                         }
                         values[j] = isNull ? 0 : backing[position];
+                    }
+                }
+                else if (vector instanceof org.weakref.nitro.data.F64Vector f64) {
+                    double[] backing = f64.values();
+                    for (int j = 0; j < count; j++) {
+                        int position = allSelected ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nullBacking != null && nullBacking[position];
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        values[j] = isNull ? 0 : Double.doubleToRawLongBits(backing[position]);
+                    }
+                }
+                else if (vector instanceof org.weakref.nitro.data.DictionaryVector dictionary
+                        && !(dictionary.values() instanceof org.weakref.nitro.data.BinaryVector)) {
+                    // A dictionary-encoded NUMERIC page (parquet dict-encodes low-cardinality doubles/ints):
+                    // decode through the ids; F64 entries land as raw bits like any F64 lane.
+                    int[] ids = dictionary.ids();
+                    org.weakref.nitro.data.Vector entries = dictionary.values();
+                    double[] doubleEntries = entries instanceof org.weakref.nitro.data.F64Vector f64Entries ? f64Entries.values() : null;
+                    for (int j = 0; j < count; j++) {
+                        int position = allSelected ? selection[j] : batchMask.position(selection[j]);
+                        boolean isNull = nullBacking != null && nullBacking[position];
+                        if (nullMask != null) {
+                            nullMask[j] = isNull;
+                        }
+                        values[j] = isNull ? 0
+                                : doubleEntries != null ? Double.doubleToRawLongBits(doubleEntries[ids[position]])
+                                : longValue(entries, ids[position]);
                     }
                 }
                 else if (vector instanceof org.weakref.nitro.data.BinaryVector || vector instanceof org.weakref.nitro.data.DictionaryVector) {

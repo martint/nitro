@@ -20,6 +20,8 @@ package org.weakref.nitro.jit;
 public enum ColumnEncoding
 {
     FLAT,
+    /** Flat long lanes holding raw double bits; loop shapes match {@link #FLAT}, the logical type is DOUBLE. */
+    F64,
     DICTIONARY,
     CONSTANT,
     /** Dictionary-encoded string (a {@link Column.StringColumn}); the loop works on ids, predicates over the dictionary. */

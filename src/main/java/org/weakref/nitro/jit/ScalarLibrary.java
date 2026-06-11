@@ -59,6 +59,14 @@ public final class ScalarLibrary
         // so a compiled stage and the operator tree agree to the cent: multiply_i64 is a long product; the
         // rescaling round-half-up divide is computed in BigInteger via a runtime helper.
         register("multiply_i64", infix("*"));
+        // F64 arithmetic over raw-bits long lanes: unwrap, operate, rewrap.
+        register("add_f64", f64Infix("+"));
+        register("subtract_f64", f64Infix("-"));
+        register("multiply_f64", f64Infix("*"));
+        register("divide_f64", f64Infix("/"));
+        // The civil-calendar year of an epoch-day lane (TPC-H date columns).
+        register("year_of_date", arguments ->
+                "org.weakref.nitro.function.scalar.builtin.YearOfDate.yearOfEpochDay(" + arguments.get(0) + ")");
         register("divide_scale_round_i64", arguments ->
                 "org.weakref.nitro.jit.DecimalMath.roundScaledDivide(" + arguments.get(0) + ", " + arguments.get(1) + ", " + arguments.get(2) + ")");
         register("divide_round_i64", arguments ->
@@ -104,6 +112,17 @@ public final class ScalarLibrary
     public static boolean isDoubleResult(String name)
     {
         return DOUBLE_RESULTS.contains(name);
+    }
+
+    private static ScalarCompiler f64Infix(String operator)
+    {
+        return arguments -> "Double.doubleToRawLongBits(Double.longBitsToDouble(" + arguments.get(0) + ") "
+                + operatorToken(operator) + " Double.longBitsToDouble(" + arguments.get(1) + "))";
+    }
+
+    private static String operatorToken(String operator)
+    {
+        return operator;
     }
 
     private static ScalarCompiler infix(String operator)

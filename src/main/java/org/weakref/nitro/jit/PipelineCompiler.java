@@ -518,6 +518,16 @@ public final class PipelineCompiler
         return encodings[input][column];
     }
 
+    /** The logical result type a scan column's encoding implies (F64 lanes are DOUBLE, STRING ids reconstruct, else LONG). */
+    private static Type typeOf(ColumnEncoding encoding)
+    {
+        return switch (encoding) {
+            case STRING -> Types.STRING;
+            case F64 -> Types.DOUBLE;
+            default -> Types.LONG;
+        };
+    }
+
     private static boolean nullableOf(boolean[][] nullable, int input, int column)
     {
         return nullable != null && input < nullable.length && nullable[input] != null
@@ -636,7 +646,7 @@ public final class PipelineCompiler
     private static String joinAccess(ColumnEncoding encoding, ColumnVars vars, String row)
     {
         return switch (encoding) {
-            case FLAT -> vars.flat() + "[" + row + "]";
+            case FLAT, F64 -> vars.flat() + "[" + row + "]";
             case STRING -> vars.ids() + "[" + row + "]";   // the dense id is the value the loop works on
             case DICTIONARY -> vars.dict() + "[" + vars.ids() + "[" + row + "]]";
             case CONSTANT -> vars.constant();
@@ -648,13 +658,13 @@ public final class PipelineCompiler
     {
         String type = "org.weakref.nitro.jit.Column.";
         String columnType = switch (encoding) {
-            case FLAT -> "FlatColumn";
+            case FLAT, F64 -> "FlatColumn";
             case STRING -> "StringColumn";
             case DICTIONARY -> "DictionaryColumn";
             case CONSTANT -> "ConstantColumn";
         };
         switch (encoding) {
-            case FLAT -> out.append("    long[] ").append(vars.flat()).append(" = ((").append(type).append("FlatColumn) ").append(source).append(").values();\n");
+            case FLAT, F64 -> out.append("    long[] ").append(vars.flat()).append(" = ((").append(type).append("FlatColumn) ").append(source).append(").values();\n");
             case STRING -> {
                 out.append("    int[] ").append(vars.ids()).append(" = ((").append(type).append("StringColumn) ").append(source).append(").ids();\n");
                 // The dictionary is needed for string filters (predicate-over-dictionary); a cheap array reference.
@@ -742,8 +752,7 @@ public final class PipelineCompiler
     {
         List<Type> types = new ArrayList<>();
         for (Plan.Expr groupKey : pipeline.groupKeys()) {
-            boolean string = groupKey instanceof Plan.Col col && combinedEncoding(pipeline, encodings, col.index()) == ColumnEncoding.STRING;
-            types.add(string ? Types.STRING : Types.LONG);
+            types.add(groupKey instanceof Plan.Col col ? typeOf(combinedEncoding(pipeline, encodings, col.index())) : Types.LONG);
         }
         for (Plan.Aggregate aggregate : pipeline.aggregates()) {
             types.add(aggregator(aggregate).outputType());
@@ -1088,6 +1097,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> inputTypes.get(col.index());
             case Plan.Lit ignored -> Types.LONG;
+            case Plan.LitF64 ignored -> Types.DOUBLE;
             case Plan.LitStr ignored -> Types.STRING;
             case Plan.NullLit ignored -> Types.LONG;
             case Plan.Bin bin -> projectionType(bin.left(), inputTypes) == Types.DOUBLE || projectionType(bin.right(), inputTypes) == Types.DOUBLE ? Types.DOUBLE : Types.LONG;
@@ -1158,6 +1168,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> combinedNullable(pipeline, nullable, col.index());
             case Plan.Lit ignored -> false;
+            case Plan.LitF64 ignored -> false;
             case Plan.LitStr ignored -> false;
             case Plan.NullLit ignored -> true;
             case Plan.Bin bin -> exprCarriesNull(pipeline, nullable, bin.left()) || exprCarriesNull(pipeline, nullable, bin.right());
@@ -2152,7 +2163,7 @@ public final class PipelineCompiler
     private static void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding, boolean nullable)
     {
         switch (encoding) {
-            case FLAT -> {
+            case FLAT, F64 -> {
                 out.append("    long[] c").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).values();\n");
                 if (nullable) {
                     out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).nulls();\n");
@@ -2186,7 +2197,7 @@ public final class PipelineCompiler
     private static String scanAccess(int column, ColumnEncoding encoding, String row)
     {
         return switch (encoding) {
-            case FLAT -> "c" + column + "[" + row + "]";
+            case FLAT, F64 -> "c" + column + "[" + row + "]";
             case DICTIONARY -> "cDict" + column + "[cIds" + column + "[" + row + "]]";
             case CONSTANT -> "cConst" + column;
             case STRING -> "cIds" + column + "[" + row + "]";   // the dense id is the value the loop works on
@@ -2200,7 +2211,7 @@ public final class PipelineCompiler
             return "false";
         }
         return switch (encoding) {
-            case FLAT, DICTIONARY, STRING -> "cN" + column + "[" + row + "]";
+            case FLAT, F64, DICTIONARY, STRING -> "cN" + column + "[" + row + "]";
             case CONSTANT -> "cNconst" + column;
         };
     }
@@ -2243,6 +2254,7 @@ public final class PipelineCompiler
             case Plan.Coalesce coalesce -> coalesce.arguments().forEach(argument -> collectStringMatchesInExpr(argument, into));
             case Plan.Col ignored -> {}
             case Plan.Lit ignored -> {}
+            case Plan.LitF64 ignored -> {}
             case Plan.LitStr ignored -> {}
             case Plan.NullLit ignored -> {}
         }
@@ -2339,6 +2351,7 @@ public final class PipelineCompiler
             case Plan.Coalesce coalesce -> coalesce.arguments().forEach(argument -> collectStringDerivationsInExpr(argument, into));
             case Plan.Col ignored -> {}
             case Plan.Lit ignored -> {}
+            case Plan.LitF64 ignored -> {}
             case Plan.LitStr ignored -> {}
             case Plan.NullLit ignored -> {}
         }
@@ -2960,7 +2973,7 @@ public final class PipelineCompiler
                 emitJoinColumnLoad(buildCode, encoding, columnNullable, "build" + k + "[" + column + "]", buildVars(k, column));
                 ColumnVars vars = buildVars(k, column);
                 switch (encoding) {
-                    case FLAT -> exports.add(new String[] {"long[]", vars.flat()});
+                    case FLAT, F64 -> exports.add(new String[] {"long[]", vars.flat()});
                     case STRING -> {
                         exports.add(new String[] {"int[]", vars.ids()});
                         exports.add(new String[] {"byte[][]", vars.stringDict()});
@@ -4913,9 +4926,9 @@ public final class PipelineCompiler
     {
         return switch (condition) {
             case Plan.Predicate predicate -> switch (predicate.op()) {
-                case "=", "==" -> 0;
-                case "<>", "!=" -> 4;
-                default -> 2;   // <, <=, >, >=
+                case "=", "==", "eq_f64" -> 0;
+                case "<>", "!=", "neq_f64" -> 4;
+                default -> 2;   // <, <=, >, >= and their _f64 forms
             };
             case Plan.StringMatch match -> match.negated() ? 4 : (match.values().size() == 1 ? 0 : 1);
             case Plan.SubstringMatch match -> match.negated() ? 4 : 2;
@@ -5022,6 +5035,27 @@ public final class PipelineCompiler
         };
     }
 
+    /**
+     * The value comparison of a predicate: an {@code _f64}-suffixed operator compares the operands' long
+     * lanes as the doubles whose raw bits they hold; anything else compares the longs directly.
+     */
+    private static String predicateComparison(String sqlOperator, String left, String right)
+    {
+        if (sqlOperator.endsWith("_f64")) {
+            String op = switch (sqlOperator) {
+                case "lt_f64" -> "<";
+                case "lte_f64" -> "<=";
+                case "gt_f64" -> ">";
+                case "gte_f64" -> ">=";
+                case "eq_f64" -> "==";
+                case "neq_f64" -> "!=";
+                default -> throw new IllegalArgumentException("Unknown f64 predicate operator: " + sqlOperator);
+            };
+            return "(Double.longBitsToDouble(" + left + ") " + op + " Double.longBitsToDouble(" + right + "))";
+        }
+        return "(" + left + " " + comparison(sqlOperator) + " " + right + ")";
+    }
+
     private static String condition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return switch (condition) {
@@ -5029,7 +5063,7 @@ public final class PipelineCompiler
                 // SQL three-valued logic: a comparison with a null operand is NULL, which a filter treats as false.
                 // Guard the value comparison with the operands' not-null tests. Under NEVER_NULL the guard collapses
                 // away (nullExpr -> "false"), so callers without null information emit the bare comparison unchanged.
-                String comparison = "(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+                String comparison = predicateComparison(predicate.op(), expr(predicate.left(), resolver, nullResolver), expr(predicate.right(), resolver, nullResolver));
                 String guard = notNullGuard(orNull(nullExpr(predicate.left(), resolver, nullResolver), nullExpr(predicate.right(), resolver, nullResolver)));
                 yield guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
             }
@@ -5063,6 +5097,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> resolver.apply(col.index());
             case Plan.Lit lit -> lit.value() + "L";
+            case Plan.LitF64 lit -> Double.doubleToRawLongBits(lit.value()) + "L /* " + lit.value() + " */";
             case Plan.LitStr ignored -> "0L";   // constant string: emit dictionary id 0 (the value comes from the consumer's single-entry dictionary)
             case Plan.NullLit ignored -> "0L";   // null long: a placeholder value; the null mask (below) is what matters
             case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
@@ -5127,6 +5162,7 @@ public final class PipelineCompiler
         return switch (expr) {
             case Plan.Col col -> nullResolver.apply(col.index());
             case Plan.Lit ignored -> "false";
+            case Plan.LitF64 ignored -> "false";
             case Plan.LitStr ignored -> "false";
             case Plan.NullLit ignored -> "true";
             case Plan.Bin bin -> orNull(nullExpr(bin.left(), resolver, nullResolver, stringMaskIds), nullExpr(bin.right(), resolver, nullResolver, stringMaskIds));
@@ -5224,7 +5260,7 @@ public final class PipelineCompiler
                 String guard = andGuards(
                         notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
                         notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
-                String comparison = "(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+                String comparison = predicateComparison(predicate.op(), expr(predicate.left(), resolver, nullResolver), expr(predicate.right(), resolver, nullResolver));
                 return guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
             }
             case Plan.And and -> {
@@ -5278,7 +5314,7 @@ public final class PipelineCompiler
                 String guard = andGuards(
                         notNullGuard(nullExpr(predicate.left(), resolver, nullResolver)),
                         notNullGuard(nullExpr(predicate.right(), resolver, nullResolver)));
-                String negated = "!(" + expr(predicate.left(), resolver, nullResolver) + " " + comparison(predicate.op()) + " " + expr(predicate.right(), resolver, nullResolver) + ")";
+                String negated = "!" + predicateComparison(predicate.op(), expr(predicate.left(), resolver, nullResolver), expr(predicate.right(), resolver, nullResolver));
                 return guard.isEmpty() ? negated : "(" + guard + " && " + negated + ")";
             }
             case Plan.And and -> {

@@ -535,6 +535,7 @@ public final class QueryLowering
         switch (expr) {
             case Plan.Col col -> marks[col.index()] = true;
             case Plan.Lit ignored -> {}
+            case Plan.LitF64 ignored -> {}
             case Plan.LitStr ignored -> {}
             case Plan.NullLit ignored -> {}
             case Plan.Bin bin -> {

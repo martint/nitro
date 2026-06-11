@@ -27,7 +27,7 @@ public final class Plan
 
     /** Scalar expression over input columns. */
     public sealed interface Expr
-            permits Col, Lit, LitStr, NullLit, Bin, Call, Case, Coalesce
+            permits Col, Lit, LitF64, LitStr, NullLit, Bin, Call, Case, Coalesce
     {}
 
     /** Reference to input column {@code index}. */
@@ -37,6 +37,11 @@ public final class Plan
 
     /** Literal long. */
     public record Lit(long value)
+            implements Expr
+    {}
+
+    /** A double literal; the generated code carries it as raw bits in the long lanes. */
+    public record LitF64(double value)
             implements Expr
     {}
 

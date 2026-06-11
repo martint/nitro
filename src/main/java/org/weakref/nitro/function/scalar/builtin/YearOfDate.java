@@ -89,7 +89,7 @@ public final class YearOfDate
     }
 
     /** Days-to-civil year (Howard Hinnant's algorithm), exact over the proleptic Gregorian calendar. */
-    static long yearOfEpochDay(long epochDay)
+    public static long yearOfEpochDay(long epochDay)
     {
         long z = epochDay + 719468;
         long era = Math.floorDiv(z, 146097);

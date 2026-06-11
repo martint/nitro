@@ -131,6 +131,7 @@ public final class BatchFunctionCompiler
         return switch (expression) {
             case Plan.Col col -> "in" + col.index() + "[i]";
             case Plan.Lit lit -> lit.value() + "L";
+            case Plan.LitF64 lit -> Double.doubleToRawLongBits(lit.value()) + "L /* " + lit.value() + " */";
             case Plan.LitStr ignored -> throw new UnsupportedOperationException("string literal projection is JIT-only");
             case Plan.NullLit ignored -> throw new UnsupportedOperationException("null literal projection is JIT-only");
             case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(java.util.List.of(expr(bin.left()), expr(bin.right())));
@@ -176,6 +177,7 @@ public final class BatchFunctionCompiler
         switch (expression) {
             case Plan.Col col -> into.add(col.index());
             case Plan.Lit ignored -> {}
+            case Plan.LitF64 ignored -> {}
             case Plan.LitStr ignored -> {}
             case Plan.NullLit ignored -> {}
             case Plan.Bin bin -> {
