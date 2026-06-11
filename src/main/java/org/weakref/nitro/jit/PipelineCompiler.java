@@ -297,7 +297,7 @@ public final class PipelineCompiler
                 emitStringIdGroupedAccumulate(out, body, "          ", pipeline, stringIdKey, resolver, nullResolver, stringMaskIds);
             }
             else if (grouped) {
-                emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false);
+                emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false, "selection[i]");
             }
             else if (projectionOnly) {
                 emitProjectionAppend(out, "          ", pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
@@ -3136,12 +3136,12 @@ public final class PipelineCompiler
 
     private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
-        emitAggregateUpdate(out, indent, null, null, aggregate, -1, cells, null, resolver, nullResolver, stringMaskIds);
+        emitAggregateUpdate(out, indent, null, null, aggregate, -1, cells, null, "i", resolver, nullResolver, stringMaskIds);
     }
 
     private static void emitAggregateUpdate(StringBuilder out, String indent, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
-        emitAggregateUpdate(out, indent, null, body, aggregate, index, cells, groupId, resolver, nullResolver, stringMaskIds);
+        emitAggregateUpdate(out, indent, null, body, aggregate, index, cells, groupId, "i", resolver, nullResolver, stringMaskIds);
     }
 
     /**
@@ -3153,22 +3153,31 @@ public final class PipelineCompiler
      */
     private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
+        emitAggregateUpdate(out, indent, pipeline, body, aggregate, index, cells, groupId, "i", resolver, nullResolver, stringMaskIds);
+    }
+
+    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, String viewRowExpression, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
         if (pipeline != null && aggregate.fn().equals("min_utf8") && aggregate.input() instanceof Plan.Col col
                 && stringMinWinners(pipeline, col.index())) {
             // Winners-mode: compare the candidate's bytes in place (view slice, or a dictionary page's entry)
             // against the current minimum, appending to the source's winners dictionary only on a win -- the
-            // column never pays a per-row intern. The cell holds the winner id (-1 = none yet).
+            // column never pays a per-row intern or copy. A view is selection-independent (page positions), so
+            // in a staged payload it is indexed through the stage's selection.
             int column = col.index();
             String cell = cells.get(0);
+            String position = "sViewRow" + column;
             out.append(indent).append("{ byte[] mwD; int mwF; int mwT;\n");
-            out.append(indent).append("  if (cView").append(column).append(" != null) { mwD = cView").append(column)
-                    .append("; mwF = cViewOff").append(column).append("[i]; mwT = cViewOff").append(column).append("[i + 1]; }\n");
+            out.append(indent).append("  if (cView").append(column).append(" != null) { int ").append(position)
+                    .append(" = ").append(viewRowExpression).append("; mwD = cView").append(column)
+                    .append("; mwF = cViewOff").append(column).append("[").append(position).append("]; mwT = cViewOff").append(column)
+                    .append("[").append(position).append(" + 1]; }\n");
             out.append(indent).append("  else { mwD = cStr").append(column).append("[cIds").append(column)
                     .append("[i]]; mwF = 0; mwT = mwD.length; }\n");
             out.append(indent).append("  long mwCur = ").append(cell).append(";\n");
             out.append(indent).append("  if (mwCur == -1L || java.util.Arrays.compareUnsigned(mwD, mwF, mwT, sWinners").append(column)
                     .append("[(int) mwCur], 0, sWinners").append(column).append("[(int) mwCur].length) < 0) {\n");
-            out.append(indent).append("    ").append(cell).append(" = sWinnersSource.addWinner(").append(column).append(", mwD, mwF, mwT);\n");
+            out.append(indent).append("    ").append(cell).append(" = sWinnersSource.addWinner(").append(column).append(", mwD, mwF, mwT - mwF);\n");
             out.append(indent).append("    sWinners").append(column).append(" = sWinnersSource.winners(").append(column).append(");\n");
             out.append(indent).append("  } }\n");
             return;
@@ -3649,6 +3658,11 @@ public final class PipelineCompiler
 
     private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
     {
+        emitGroupedAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, "i");
+    }
+
+    private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression)
+    {
         if (!pipeline.groupingSets().isEmpty()) {
             emitGroupingSetsAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds);
             return;
@@ -3723,7 +3737,7 @@ public final class PipelineCompiler
         }
         out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", viewRowExpression, resolver, nullResolver, stringMaskIds);
         }
         if (body.methods().indexOf("int findGroup(") >= 0) {
             return;
@@ -4788,6 +4802,9 @@ public final class PipelineCompiler
     /** Per-row in-place fill of a view batch's mask: vectorized containment for LIKE, byte equality for IN. */
     private static void emitViewMaskFill(StringBuilder out, ClassBody body, Plan.Condition match, int id, int column, String rowsVar)
     {
+        // The view holds page positions; in a staged context the mask's slot e maps to the stage's
+        // selection[e] (identity in the first conjunct), in the dense no-filter loop to e itself.
+        String row = rowsVar.equals("rowCount") ? "e" : "selection[e]";
         if (match instanceof Plan.LikeMatch like) {
             String literal = likeContainsLiteral(like.pattern());
             body.field("org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.ContainsNeedle", "sNeedle" + id);
@@ -4795,8 +4812,9 @@ public final class PipelineCompiler
                     .append(" = org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.containsNeedle(")
                     .append(javaStringLiteral(literal)).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8)); }\n");
             out.append("      for (int e = 0; e < ").append(rowsVar).append("; e++) {\n");
+            out.append("        int sRow = ").append(row).append(";\n");
             String matches = "org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.contains(cView" + column
-                    + ", cViewOff" + column + "[e], cViewOff" + column + "[e + 1] - cViewOff" + column + "[e], sNeedle" + id + ")";
+                    + ", cViewOff" + column + "[sRow], cViewOff" + column + "[sRow + 1] - cViewOff" + column + "[sRow], sNeedle" + id + ")";
             out.append("        sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
             out.append("      }\n");
             return;
@@ -4807,7 +4825,8 @@ public final class PipelineCompiler
                     .append(javaStringLiteral(exact.values().get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
         }
         out.append("      for (int e = 0; e < ").append(rowsVar).append("; e++) {\n");
-        out.append("        int sFrom = cViewOff").append(column).append("[e]; int sTo = cViewOff").append(column).append("[e + 1];\n");
+        out.append("        int sRow = ").append(row).append(";\n");
+        out.append("        int sFrom = cViewOff").append(column).append("[sRow]; int sTo = cViewOff").append(column).append("[sRow + 1];\n");
         StringBuilder member = new StringBuilder();
         for (int v = 0; v < exact.values().size(); v++) {
             member.append(member.length() == 0 ? "" : " || ")

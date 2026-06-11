@@ -626,7 +626,9 @@ public final class CompiledQuerySupport
                 // in a bounded top-N pipeline only the filter stage sees full batches, and it evaluates on the
                 // view; the payload stage's partial candidate selections fall through to the interned path.
                 if (viewable[column] && vector instanceof org.weakref.nitro.data.BinaryVector viewBinary
-                        && batchMask == null && count == currentRows) {
+                        && batchMask == null && (count == currentRows || minWinners[column])) {
+                    // A winners-min consumer indexes the view through the stage's selection, so a partial
+                    // payload selection can still take it (the view is selection-independent page positions).
                     return new org.weakref.nitro.jit.Column.BytesViewColumn(viewBinary.data(), viewBinary.offsets());
                 }
                 GlobalStringDictionary global = globalDictionaries[column];
