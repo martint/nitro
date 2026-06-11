@@ -543,6 +543,239 @@ final class TpchParquetSupport
         return result;
     }
 
+    /**
+     * Q7: lineitem(1995-1996) probes supplier, orders, customer, then the two nation builds; the
+     * FRANCE/GERMANY pairing runs post-join; volume grouped by (supp_nation, cust_nation, year(shipdate)).
+     */
+    public static Operator query07(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator lineitem = filter(allocator, primitiveRegistry,
+                scannedTable(allocator, tables, "lineitem",
+                        "l_orderkey", "l_suppkey", "l_extendedprice", "l_discount", "l_shipdate"),
+                and(
+                        greaterThan(4, LocalDate.of(1995, 1, 1).toEpochDay() - 1),
+                        lessThan(4, LocalDate.of(1996, 12, 31).toEpochDay() + 1)));
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey");
+        Operator joined = new HashJoinOperator(allocator, lineitem, 1, supplier, 0);
+        Operator orders = scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey");
+        joined = new HashJoinOperator(allocator, joined, 0, orders, 0);
+        Operator customer = scannedTable(allocator, tables, "customer", "c_custkey", "c_nationkey");
+        joined = new HashJoinOperator(allocator, joined, 8, customer, 0);
+        Operator supplierNation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_name");
+        joined = new HashJoinOperator(allocator, joined, 6, supplierNation, 0);
+        Operator customerNation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_name");
+        // [l x5, s x2, o x2, c x2, supp nation x2 -> 11,12, cust nation x2 -> 13,14]
+        joined = new HashJoinOperator(allocator, joined, 10, customerNation, 0);
+
+        Operator filtered = filter(allocator, primitiveRegistry, joined,
+                or(
+                        and(equalUtf8(12, "FRANCE"), equalUtf8(14, "GERMANY")),
+                        and(equalUtf8(12, "GERMANY"), equalUtf8(14, "FRANCE"))));
+
+        // [supp_nation, cust_nation, l_year, volume]
+        Variable one = new Variable(0);
+        Variable oneMinusDiscount = new Variable(1);
+        Variable volume = new Variable(2);
+        Variable year = new Variable(3);
+        Operator projected = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(one, new Literal(1.0), AllMask.ALL),
+                                new Assignment(oneMinusDiscount, new Call("subtract_f64", List.of(
+                                        new Reference(one, Stream.VALUES),
+                                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(volume, new Call("multiply_f64", List.of(
+                                        new Reference(new Input(2), Stream.VALUES),
+                                        new Reference(oneMinusDiscount, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(year, new Call("year_of_date", List.of(
+                                        new Reference(new Input(4), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(12), Stream.VALUES),
+                                new Reference(new Input(14), Stream.VALUES),
+                                new Reference(year, Stream.VALUES),
+                                new Reference(volume, Stream.VALUES))),
+                primitiveRegistry,
+                filtered);
+        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0, 1, 2), List.of(new SumF64(3)), projected);
+        return new SortOperator(allocator, new int[] {0, 1, 2}, new boolean[] {false, false, false}, aggregated);
+    }
+
+    /**
+     * Q8: part(ECONOMY ANODIZED STEEL) restricts lineitem; orders(1995-1996), customer, the AMERICA region
+     * chain on the customer nation, and the supplier nation provide the CASE source; one output row per year
+     * carries sum(brazil volume) / sum(volume).
+     */
+    public static Operator query08(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator part = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "part", "p_partkey", "p_type"),
+                        equalUtf8(1, "ECONOMY ANODIZED STEEL")),
+                0);
+        Operator lineitem = scannedTable(allocator, tables, "lineitem",
+                "l_partkey", "l_orderkey", "l_suppkey", "l_extendedprice", "l_discount");
+        Operator joined = new HashJoinOperator(allocator, lineitem, 0, part, 0);
+        Operator orders = filter(allocator, primitiveRegistry,
+                scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_orderdate"),
+                and(
+                        greaterThan(2, LocalDate.of(1995, 1, 1).toEpochDay() - 1),
+                        lessThan(2, LocalDate.of(1996, 12, 31).toEpochDay() + 1)));
+        // [l x5, p_partkey, o_orderkey, o_custkey, o_orderdate -> 6,7,8]
+        joined = new HashJoinOperator(allocator, joined, 1, orders, 0);
+        Operator customer = scannedTable(allocator, tables, "customer", "c_custkey", "c_nationkey");
+        // + [c_custkey, c_nationkey -> 9,10]
+        joined = new HashJoinOperator(allocator, joined, 7, customer, 0);
+
+        Operator region = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "region", "r_regionkey", "r_name"),
+                        equalUtf8(1, "AMERICA")),
+                0);
+        Operator nation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_regionkey");
+        Operator nationInAmerica = projectInputs(allocator, primitiveRegistry,
+                new HashJoinOperator(allocator, nation, 1, region, 0),
+                0);
+        // + [n_nationkey -> 11] (customer nation, AMERICA restriction)
+        joined = new HashJoinOperator(allocator, joined, 10, nationInAmerica, 0);
+        Operator supplierNation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_name");
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey");
+        Operator supplierWithNation = projectInputs(allocator, primitiveRegistry,
+                new HashJoinOperator(allocator, supplier, 1, supplierNation, 0),
+                0, 3);
+        // + [s_suppkey, n_name -> 12,13]
+        joined = new HashJoinOperator(allocator, joined, 2, supplierWithNation, 0);
+
+        // [o_year, brazilVolume, volume]
+        Variable one = new Variable(0);
+        Variable oneMinusDiscount = new Variable(1);
+        Variable volume = new Variable(2);
+        Variable year = new Variable(3);
+        Variable brazil = new Variable(4);
+        Variable isBrazil = new Variable(5);
+        Variable zero = new Variable(6);
+        Variable brazilVolume = new Variable(7);
+        Operator projected = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(one, new Literal(1.0), AllMask.ALL),
+                                new Assignment(oneMinusDiscount, new Call("subtract_f64", List.of(
+                                        new Reference(one, Stream.VALUES),
+                                        new Reference(new Input(4), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(volume, new Call("multiply_f64", List.of(
+                                        new Reference(new Input(3), Stream.VALUES),
+                                        new Reference(oneMinusDiscount, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(year, new Call("year_of_date", List.of(
+                                        new Reference(new Input(8), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(brazil, new Literal("BRAZIL"), AllMask.ALL),
+                                new Assignment(isBrazil, new Call("eq_utf8", List.of(
+                                        new Reference(new Input(13), Stream.VALUES),
+                                        new Reference(brazil, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(zero, new Literal(0.0), AllMask.ALL),
+                                new Assignment(brazilVolume, new Call("if_f64", List.of(
+                                        new Reference(isBrazil, Stream.VALUES),
+                                        new Reference(volume, Stream.VALUES),
+                                        new Reference(zero, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(year, Stream.VALUES),
+                                new Reference(brazilVolume, Stream.VALUES),
+                                new Reference(volume, Stream.VALUES))),
+                primitiveRegistry,
+                joined);
+        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(new SumF64(1), new SumF64(2)), projected);
+        Operator sorted = new SortOperator(allocator, new int[] {0}, new boolean[] {false}, aggregated);
+
+        Variable share = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(new Assignment(share, new Call("divide_f64", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(share, Stream.VALUES))),
+                primitiveRegistry,
+                sorted);
+    }
+
+    /**
+     * Q9: part('%green%') restricts lineitem; supplier, the (suppkey, partkey) partsupp join, orders, and
+     * nation provide profit = volume - supplycost * quantity, grouped by (nation, year(orderdate)) and
+     * sorted (nation, year DESC).
+     */
+    public static Operator query09(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator part = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "part", "p_partkey", "p_name"),
+                        containsUtf8(1, "green")),
+                0);
+        Operator lineitem = scannedTable(allocator, tables, "lineitem",
+                "l_partkey", "l_orderkey", "l_suppkey", "l_quantity", "l_extendedprice", "l_discount");
+        Operator joined = new HashJoinOperator(allocator, lineitem, 0, part, 0);
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey");
+        // + [s_suppkey, s_nationkey -> 7,8]
+        joined = new HashJoinOperator(allocator, joined, 2, supplier, 0);
+        Operator partsupp = scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_supplycost");
+        // + [ps_partkey, ps_suppkey, ps_supplycost -> 9,10,11]
+        joined = new HashJoinOperator(allocator, joined, new int[] {2, 0}, partsupp, new int[] {1, 0});
+        Operator orders = scannedTable(allocator, tables, "orders", "o_orderkey", "o_orderdate");
+        // + [o_orderkey, o_orderdate -> 12,13]
+        joined = new HashJoinOperator(allocator, joined, 1, orders, 0);
+        Operator nation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_name");
+        // + [n_nationkey, n_name -> 14,15]
+        joined = new HashJoinOperator(allocator, joined, 8, nation, 0);
+
+        // [nation, o_year, amount]
+        Variable one = new Variable(0);
+        Variable oneMinusDiscount = new Variable(1);
+        Variable volume = new Variable(2);
+        Variable cost = new Variable(3);
+        Variable amount = new Variable(4);
+        Variable year = new Variable(5);
+        Operator projected = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(one, new Literal(1.0), AllMask.ALL),
+                                new Assignment(oneMinusDiscount, new Call("subtract_f64", List.of(
+                                        new Reference(one, Stream.VALUES),
+                                        new Reference(new Input(5), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(volume, new Call("multiply_f64", List.of(
+                                        new Reference(new Input(4), Stream.VALUES),
+                                        new Reference(oneMinusDiscount, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(cost, new Call("multiply_f64", List.of(
+                                        new Reference(new Input(11), Stream.VALUES),
+                                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(amount, new Call("subtract_f64", List.of(
+                                        new Reference(volume, Stream.VALUES),
+                                        new Reference(cost, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(year, new Call("year_of_date", List.of(
+                                        new Reference(new Input(13), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(15), Stream.VALUES),
+                                new Reference(year, Stream.VALUES),
+                                new Reference(amount, Stream.VALUES))),
+                primitiveRegistry,
+                joined);
+        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0, 1), List.of(new SumF64(2)), projected);
+        return new SortOperator(allocator, new int[] {0, 1}, new boolean[] {false, true}, aggregated);
+    }
+
+    private static FilterSpec containsUtf8(int inputIndex, String needle)
+    {
+        Variable literal = new Variable(0);
+        Variable result = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(needle), AllMask.ALL),
+                new Assignment(result, new Call("contains_utf8", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
     // ---- scan / filter plumbing ----
 
     private static Operator scannedTable(Allocator allocator, TpchParquetTables tables, String tableName, String... columns)
