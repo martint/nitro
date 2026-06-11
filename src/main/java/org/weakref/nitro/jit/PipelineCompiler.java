@@ -294,7 +294,10 @@ public final class PipelineCompiler
                 List<Plan.Condition> matches = new ArrayList<>();
                 collectStringMatches(conjunct, matches);
                 int fusedColumn = fusedViewConjunctColumn(pipeline, encodings, nullable, conjunct);
-                out.append("      {\n");
+                // A later stage only runs when rows survived: materializing a column borrows (hence decodes) it
+                // even for zero rows, so a selective earlier conjunct must short-circuit the rest of the batch
+                // (q37: CounterID = 62 empties ~99.9% of batches; the URL stage was still decoding every chunk).
+                out.append(identity ? "      {\n" : "      if (selected > 0) {\n");
                 // A fused single-leaf stage asks the source for the filtering shape: plain pages of the leaf's
                 // column arrive as a zero-copy view even when the column is globally interned elsewhere -- the
                 // payload stage then interns only the survivors.
@@ -1295,7 +1298,7 @@ public final class PipelineCompiler
         boolean primaryDescending = pipeline.ordering().keys().get(0).descending();
         boolean secondaryDescending = pipeline.ordering().keys().get(1).descending();
         int limit = pipeline.ordering().limit();
-        out.append("      {\n");
+        out.append("      if (selected > 0) {\n");
         out.append("        org.weakref.nitro.jit.Column[] in = source.materializeFiltering(").append(intArrayLiteral(new TreeSet<>(List.of(primary, secondary)))).append(", selection, selected);\n");
         out.append("        long[] c").append(primary).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(primary).append("]).values();\n");
         emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, secondary, ColumnEncoding.STRING, false, "selected", true);
@@ -1370,7 +1373,7 @@ public final class PipelineCompiler
         int limit = pipeline.ordering().limit();
         String better = descending ? "> 0" : "< 0";
         String worse = descending ? "< 0" : "> 0";
-        out.append("      {\n");
+        out.append("      if (selected > 0) {\n");
         out.append("        org.weakref.nitro.jit.Column[] in = source.materializeFiltering(new int[] {").append(keyColumn).append("}, selection, selected);\n");
         emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, keyColumn, ColumnEncoding.STRING, false, "selected", true);
         out.append("        int kept = 0;\n");
@@ -1405,7 +1408,7 @@ public final class PipelineCompiler
         boolean descending = pipeline.ordering().keys().getFirst().descending();
         int limit = pipeline.ordering().limit();
         String better = descending ? ">" : "<";
-        out.append("      {\n");
+        out.append("      if (selected > 0) {\n");
         out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(new int[] {").append(keyColumn).append("}, selection, selected);\n");
         out.append("        long[] c").append(keyColumn).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(keyColumn).append("]).values();\n");
         out.append("        int kept = 0;\n");
