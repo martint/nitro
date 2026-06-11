@@ -658,17 +658,19 @@ public final class CompiledQuerySupport
                     }
                 }
                 else {
-                    java.util.HashMap<String, Integer> index = new java.util.HashMap<>();
-                    List<byte[]> entries = new ArrayList<>();
+                    // A filter-only plain page: no cross-batch ids are needed, so skip interning entirely --
+                    // identity ids over the rows' bytes, and the per-batch mask evaluates each row directly
+                    // (the same per-row predicate cost the operator harness pays, without the hash table).
+                    dictionary = new byte[count][];
                     for (int j = 0; j < count; j++) {
                         int position = batchMask == null ? selection[j] : batchMask.position(selection[j]);
                         boolean isNull = nulls != null && CompiledQuerySupport.isNull(nulls, position);
                         if (nullMask != null) {
                             nullMask[j] = isNull;
                         }
-                        ids[j] = isNull ? 0 : intern(index, entries, stringBytes(vector, position));
+                        dictionary[j] = isNull ? NO_STRING_BYTES : stringBytes(vector, position);
+                        ids[j] = j;
                     }
-                    dictionary = entries.toArray(new byte[0][]);
                 }
                 return new org.weakref.nitro.jit.Column.StringColumn(ids, dictionary, nullMask);
             }
@@ -1964,6 +1966,8 @@ public final class CompiledQuerySupport
                 io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
         return value -> pattern.matcher(io.airlift.slice.Slices.wrappedBuffer(value)).replaceAll(replacement).getBytes();
     }
+
+    private static final byte[] NO_STRING_BYTES = new byte[0];
 
     private static int intern(java.util.Map<String, Integer> index, List<byte[]> dictionary, byte[] bytes)
     {
