@@ -888,12 +888,14 @@ public final class PipelineCompiler
         out.append("    int n = result.rowCount(); long[][] cols = result.columns(); boolean[][] on = result.nulls();\n");
         out.append("    int[] order = new int[n];\n");
         out.append("    for (int i = 0; i < n; i++) { order[i] = i; }\n");
-        out.append("    sortOrder(order, 0, n, cols, on);\n");
         // OFFSET skips the first rows of the sorted order; LIMIT then bounds what remains (SQL OFFSET/LIMIT).
+        // Only the first skip + limit positions are ever read, so the sort is partial up to that bound -- a
+        // grouped LIMIT 10 over millions of groups (ClickBench q16: 17.6M) is one selection pass, not a sort.
         int offset = ordering.offset();
         out.append("    int skip = Math.min(").append(offset).append(", n);\n");
         String limit = ordering.limit() < 0 ? "(n - skip)" : "Math.min(" + ordering.limit() + ", n - skip)";
         out.append("    int outN = ").append(limit).append(";\n");
+        out.append("    sortOrder(order, 0, n, skip + outN, cols, on);\n");
         out.append("    long[][] sorted = new long[cols.length][outN];\n");
         out.append("    for (int w = 0; w < outN; w++) { int s = order[skip + w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
         emitGatherNulls(out, "order[skip + g]");
@@ -945,15 +947,17 @@ public final class PipelineCompiler
     }
 
     /**
-     * A primitive in-place quicksort over the row-index permutation (median-of-three pivot, insertion sort for
-     * small ranges, recursing into the smaller partition). The boxed {@code Arrays.sort(Integer[], comparator)}
-     * this replaces paid one boxed allocation per result row plus TimSort's comparator dispatch; the index
-     * tie-break in compareOrder makes the comparison total, so the output is identical to the stable sort's.
+     * A primitive in-place partial quicksort over the row-index permutation (median-of-three pivot, insertion
+     * sort for small ranges, recursing into the smaller partition): positions at and beyond {@code bound} are
+     * never ordered, so an ORDER BY ... LIMIT reads its prefix in O(n) average. The boxed
+     * {@code Arrays.sort(Integer[], comparator)} this replaces paid one boxed allocation per result row plus
+     * TimSort's comparator dispatch; the index tie-break in compareOrder makes the comparison total, so the
+     * emitted prefix is identical to the stable sort's.
      */
     private static void emitOrderSort(StringBuilder out)
     {
-        out.append("  private static void sortOrder(int[] order, int lo, int hi, long[][] cols, boolean[][] on) {\n");
-        out.append("    while (true) {\n");
+        out.append("  private static void sortOrder(int[] order, int lo, int hi, int bound, long[][] cols, boolean[][] on) {\n");
+        out.append("    while (lo < bound) {\n");
         out.append("      int len = hi - lo;\n");
         out.append("      if (len <= 24) {\n");
         out.append("        for (int i = lo + 1; i < hi; i++) {\n");
@@ -976,8 +980,8 @@ public final class PipelineCompiler
         out.append("        while (compareOrder(order[j], pivot, cols, on) > 0) { j--; }\n");
         out.append("        if (i <= j) { int t = order[i]; order[i] = order[j]; order[j] = t; i++; j--; }\n");
         out.append("      }\n");
-        out.append("      if (j + 1 - lo < hi - i) { sortOrder(order, lo, j + 1, cols, on); lo = i; }\n");
-        out.append("      else { sortOrder(order, i, hi, cols, on); hi = j + 1; }\n");
+        out.append("      if (j + 1 - lo < hi - i) { sortOrder(order, lo, j + 1, bound, cols, on); lo = i; }\n");
+        out.append("      else { sortOrder(order, i, hi, bound, cols, on); hi = j + 1; }\n");
         out.append("    }\n");
         out.append("  }\n");
     }
