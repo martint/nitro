@@ -385,12 +385,15 @@ public final class PipelineCompiler
             if (grouped && stringIdKey >= 0) {
                 emitStringIdGroupedGrowth(out, pipeline.aggregates(), stringIdKey);
             }
+            if (grouped && stringIdKey < 0) {
+                emitGroupMemoLocals(out, "        ");
+            }
             out.append("        for (int i = 0; i < selected; i++) {\n");
             if (grouped && stringIdKey >= 0) {
                 emitStringIdGroupedAccumulate(out, body, "          ", pipeline, stringIdKey, resolver, nullResolver, stringMaskIds);
             }
             else if (grouped) {
-                emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false, "selection[i]");
+                emitGroupedAccumulate(out, body, "          ", pipeline, nullable, resolver, resolver, nullResolver, stringMaskIds, false, "selection[i]", true);
             }
             else if (projectionOnly) {
                 emitProjectionAppend(out, "          ", pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
@@ -454,8 +457,11 @@ public final class PipelineCompiler
                 out.append("    }\n");
             }
             else {
+                if (grouped && stringIdKey < 0) {
+                    emitGroupMemoLocals(out, "      ");
+                }
                 out.append("      for (int i = 0; i < rowCount; i++) {\n");
-                emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+                emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false, false, true);
                 out.append("      }\n");
                 out.append("    }\n");
             }
@@ -3501,7 +3507,13 @@ public final class PipelineCompiler
 
     private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
     {
-        emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, false);
+        emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, false, false);
+    }
+
+    /** The per-batch group-memo locals (see the memoized findGroup in the grouped accumulate). */
+    private static void emitGroupMemoLocals(StringBuilder out, String indent)
+    {
+        out.append(indent).append("long gMemoKey = 0L; int gMemoBase = -1; long[] gMemoTable = null;\n");
     }
 
     /**
@@ -3509,6 +3521,11 @@ public final class PipelineCompiler
      * the WHERE was already applied upstream (interleaved with the join probes for early-out), so it is not re-checked.
      */
     private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied)
+    {
+        emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, filtersApplied, false);
+    }
+
+    private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied, boolean memo)
     {
         String bodyIndent = indent;
         boolean emitFilter = !filtersApplied && !pipeline.filters().isEmpty();
@@ -3521,7 +3538,7 @@ public final class PipelineCompiler
             emitProjectionAppend(out, bodyIndent, pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
         }
         else if (grouped) {
-            emitGroupedAccumulate(out, body, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
+            emitGroupedAccumulate(out, body, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, "i", memo);
         }
         else {
             emitGlobalAccumulate(out, body, bodyIndent, pipeline, resolver, nullResolver, stringMaskIds);
@@ -4141,10 +4158,15 @@ public final class PipelineCompiler
 
     private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
     {
-        emitGroupedAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, "i");
+        emitGroupedAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, "i", false);
     }
 
     private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression)
+    {
+        emitGroupedAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, viewRowExpression, false);
+    }
+
+    private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression, boolean memo)
     {
         if (!pipeline.groupingSets().isEmpty()) {
             emitGroupingSetsAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds);
@@ -4218,7 +4240,18 @@ public final class PipelineCompiler
                 parameters.append(", boolean gkN").append(kx);
             }
         }
-        out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
+        // Adjacent rows often repeat the group key (ClickBench RegionID: ~80% adjacent-equal), so a one-entry
+        // memo of the last key's record base skips the hash+probe on repeats. The memo lives in per-batch
+        // LOCALS (registers; an earlier field-held form cost scattered-key queries ~20%), declared by the
+        // streaming row loops; table growth invalidates via the htT identity compare.
+        if (memo && keyCount == 1 && !keyNullable(pipeline, nullable, 0)) {
+            out.append(indent).append("int gbase;\n");
+            out.append(indent).append("if (gMemoBase >= 0 && gMemoTable == htT && gMemoKey == gk0) { gbase = gMemoBase; }\n");
+            out.append(indent).append("else { gbase = findGroup(gk0); gMemoKey = gk0; gMemoBase = gbase; gMemoTable = htT; }\n");
+        }
+        else {
+            out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
+        }
         for (int a = 0; a < aggregates.size(); a++) {
             emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", viewRowExpression, resolver, nullResolver, stringMaskIds);
         }
