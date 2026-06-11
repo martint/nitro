@@ -83,6 +83,15 @@ public final class TpchParquetTables
     }
 
     @Override
+    public boolean streamOnly(String tableName)
+    {
+        // The compiled engine streams every TPC-H probe: lineitem and orders are too large for the eager
+        // ordered-dictionary drain, and every string consumer here needs id equality only (group keys and
+        // predicates; value ORDER BY uses the streamed ordering-dictionary capture).
+        return true;
+    }
+
+    @Override
     public List<Path> tableFiles(String tableName)
     {
         Path tableDirectory = schemaDirectory().resolve(tableName);

@@ -52,6 +52,42 @@ public class TestCompiledTpchQueries
         assertMatchesReference("06", CompiledTpchQueries.query06());
     }
 
+    @Test
+    void query03()
+    {
+        assertMatchesReference("03", CompiledTpchQueries.query03());
+    }
+
+    @Test
+    void query05()
+    {
+        assertMatchesReference("05", CompiledTpchQueries.query05());
+    }
+
+    @Test
+    void query10()
+    {
+        assertMatchesReference("10", CompiledTpchQueries.query10());
+    }
+
+    @Test
+    void query12()
+    {
+        assertMatchesReference("12", CompiledTpchQueries.query12());
+    }
+
+    @Test
+    void query14()
+    {
+        assertMatchesReference("14", CompiledTpchQueries.query14());
+    }
+
+    @Test
+    void query19()
+    {
+        assertMatchesReference("19", CompiledTpchQueries.query19());
+    }
+
     private static void assertMatchesReference(String queryId, CompiledTpcdsQueries.Ported ported)
     {
         var tables = TpchParquetTables.actualIfPresent();
