@@ -3,6 +3,7 @@ package org.weakref.nitro.tools;
 import io.trino.Session;
 import io.trino.plugin.hive.HivePlugin;
 import io.trino.plugin.tpcds.TpcdsPlugin;
+import io.trino.plugin.tpch.TpchPlugin;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.StandaloneQueryRunner;
@@ -36,8 +37,19 @@ public final class TpcdsParquetDumper
                 .build();
 
         try (QueryRunner queryRunner = new StandaloneQueryRunner(session)) {
-            queryRunner.installPlugin(new TpcdsPlugin());
-            queryRunner.createCatalog("tpcds", "tpcds");
+            String catalog = arguments.sourceCatalog();
+            switch (catalog) {
+                case "tpcds" -> {
+                    queryRunner.installPlugin(new TpcdsPlugin());
+                    queryRunner.createCatalog(catalog, catalog);
+                }
+                case "tpch" -> {
+                    queryRunner.installPlugin(new TpchPlugin());
+                    // STANDARD naming gives the spec's prefixed column names (l_shipdate, not shipdate).
+                    queryRunner.createCatalog(catalog, catalog, Map.of("tpch.column-naming", "STANDARD"));
+                }
+                default -> throw new IllegalArgumentException("Unsupported source catalog: " + catalog);
+            }
 
             queryRunner.installPlugin(new HivePlugin());
             queryRunner.createCatalog("hive", "hive", Map.of(
@@ -48,9 +60,10 @@ public final class TpcdsParquetDumper
             String targetSchema = arguments.targetSchema();
             execute(queryRunner, "CREATE SCHEMA IF NOT EXISTS hive." + quotedIdentifier(targetSchema));
 
-            List<String> tables = arguments.tables().isEmpty() ? allSourceTables(queryRunner, arguments.sourceSchema()) : arguments.tables();
-            System.out.printf("Dumping %d TPC-DS tables from tpcds.%s to hive.%s under %s%n",
+            List<String> tables = arguments.tables().isEmpty() ? allSourceTables(queryRunner, catalog, arguments.sourceSchema()) : arguments.tables();
+            System.out.printf("Dumping %d tables from %s.%s to hive.%s under %s%n",
                     tables.size(),
+                    catalog,
                     arguments.sourceSchema(),
                     targetSchema,
                     arguments.outputRoot().toAbsolutePath());
@@ -74,9 +87,9 @@ public final class TpcdsParquetDumper
             return;
         }
 
-        String sourceName = "tpcds." + quotedIdentifier(arguments.sourceSchema()) + "." + quotedTable;
+        String sourceName = arguments.sourceCatalog() + "." + quotedIdentifier(arguments.sourceSchema()) + "." + quotedTable;
         String sql = "CREATE TABLE " + targetName + " WITH (format = 'PARQUET') AS SELECT " +
-                selectList(queryRunner, arguments.sourceSchema(), table) +
+                selectList(queryRunner, arguments.sourceCatalog(), arguments.sourceSchema(), table) +
                 " FROM " + sourceName;
 
         Instant start = Instant.now();
@@ -90,17 +103,17 @@ public final class TpcdsParquetDumper
         System.out.printf("Created %s with %,d rows in %s%n", targetName, rows, formatDuration(duration));
     }
 
-    private static List<String> allSourceTables(QueryRunner queryRunner, String sourceSchema)
+    private static List<String> allSourceTables(QueryRunner queryRunner, String sourceCatalog, String sourceSchema)
     {
-        MaterializedResult result = execute(queryRunner, "SHOW TABLES FROM tpcds." + quotedIdentifier(sourceSchema));
+        MaterializedResult result = execute(queryRunner, "SHOW TABLES FROM " + sourceCatalog + "." + quotedIdentifier(sourceSchema));
         List<String> tables = new ArrayList<>();
         result.getMaterializedRows().forEach(row -> tables.add((String) row.getField(0)));
         return tables;
     }
 
-    private static String selectList(QueryRunner queryRunner, String sourceSchema, String table)
+    private static String selectList(QueryRunner queryRunner, String sourceCatalog, String sourceSchema, String table)
     {
-        MaterializedResult result = execute(queryRunner, "SHOW COLUMNS FROM tpcds." + quotedIdentifier(sourceSchema) + "." + quotedIdentifier(table));
+        MaterializedResult result = execute(queryRunner, "SHOW COLUMNS FROM " + sourceCatalog + "." + quotedIdentifier(sourceSchema) + "." + quotedIdentifier(table));
         List<String> expressions = new ArrayList<>();
         for (var row : result.getMaterializedRows()) {
             String column = (String) row.getField(0);
@@ -168,11 +181,12 @@ public final class TpcdsParquetDumper
         return "%d.%03ds".formatted(remainingSeconds, millis);
     }
 
-    private record Arguments(Path outputRoot, String sourceSchema, String targetSchema, List<String> tables, boolean overwrite, String parquetCompression)
+    private record Arguments(Path outputRoot, String sourceCatalog, String sourceSchema, String targetSchema, List<String> tables, boolean overwrite, String parquetCompression)
     {
         private static Arguments parse(String[] args)
         {
             Path outputRoot = null;
+            String sourceCatalog = "tpcds";
             String sourceSchema = "sf1";
             String targetSchema = null;
             List<String> tables = List.of();
@@ -183,6 +197,7 @@ public final class TpcdsParquetDumper
                 String argument = args[index];
                 switch (argument) {
                     case "--output-root" -> outputRoot = Path.of(requireValue(args, ++index, argument));
+                    case "--source-catalog" -> sourceCatalog = requireValue(args, ++index, argument).toLowerCase(Locale.ENGLISH);
                     case "--source-schema" -> sourceSchema = requireValue(args, ++index, argument);
                     case "--target-schema" -> targetSchema = requireValue(args, ++index, argument);
                     case "--tables" -> tables = parseTables(requireValue(args, ++index, argument));
@@ -204,7 +219,7 @@ public final class TpcdsParquetDumper
                 targetSchema = defaultTargetSchema(sourceSchema);
             }
 
-            return new Arguments(outputRoot, sourceSchema, targetSchema, tables, overwrite, parquetCompression);
+            return new Arguments(outputRoot, sourceCatalog, sourceSchema, targetSchema, tables, overwrite, parquetCompression);
         }
 
         private static String requireValue(String[] args, int index, String option)
@@ -238,7 +253,8 @@ public final class TpcdsParquetDumper
                     Usage: mvn -f tools/tpcds-parquet-dumper/pom.xml exec:java -Dexec.args="..."
 
                       --output-root <path>     Required root directory for the Hive file metastore and parquet data
-                      --source-schema <schema>  TPC-DS source schema, default: sf1
+                      --source-catalog <name>   Source connector, tpcds or tpch, default: tpcds
+                      --source-schema <schema>  Source schema, default: sf1
                       --target-schema <schema>  Hive target schema, default: source schema with '.' replaced by '_'
                       --tables <a,b,c>         Comma-separated subset of tables, default: all tables in the source schema
                       --parquet-compression    Parquet compression codec, default: GZIP
