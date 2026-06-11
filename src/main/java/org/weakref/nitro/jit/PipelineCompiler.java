@@ -269,9 +269,13 @@ public final class PipelineCompiler
                 collectStringMatches(conjunct, matches);
                 int fusedColumn = fusedViewConjunctColumn(pipeline, encodings, nullable, conjunct);
                 out.append("      {\n");
-                out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
+                // A fused single-leaf stage asks the source for the filtering shape: plain pages of the leaf's
+                // column arrive as a zero-copy view even when the column is globally interned elsewhere -- the
+                // payload stage then interns only the survivors.
+                String materializeCall = fusedColumn >= 0 ? "materializeFiltering" : "materialize";
+                out.append("        org.weakref.nitro.jit.Column[] in = source.").append(materializeCall).append("(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
                 for (int column : columns) {
-                    emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), rows);
+                    emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), rows, column == fusedColumn);
                 }
                 if (fusedColumn >= 0) {
                     // View batch: evaluate the leaf in place per surviving row -- one pass, no mask array.
@@ -1080,7 +1084,8 @@ public final class PipelineCompiler
         if (encodingOf(encodings, 0, column) != ColumnEncoding.STRING) {
             return -1;
         }
-        if (stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullable, column)) {
+        if (stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullable, column)
+                || stringFilterViewable(pipeline, nullable, column)) {
             return column;
         }
         return -1;
@@ -1824,8 +1829,13 @@ public final class PipelineCompiler
      */
     private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar)
     {
+        emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullableAll, column, encoding, nullable, rowsVar, false);
+    }
+
+    private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar, boolean filterDual)
+    {
         if (encoding != ColumnEncoding.STRING
-                || !(stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullableAll, column))) {
+                || !(filterDual || stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullableAll, column))) {
             emitScanColumnLoad(out, column, encoding, nullable);
             return;
         }
@@ -4309,6 +4319,38 @@ public final class PipelineCompiler
             if (stringDerivationColumn(derivation) == column) {
                 return false;
             }
+        }
+        boolean any = false;
+        for (Plan.Condition match : collectPipelineStringMatches(pipeline)) {
+            if (match instanceof Plan.StringColumnCompare compare) {
+                if (compare.left() == column || compare.right() == column) {
+                    return false;
+                }
+                continue;
+            }
+            if (stringMatchColumn(match) != column) {
+                continue;
+            }
+            any = true;
+            boolean supported = match instanceof Plan.StringMatch
+                    || (match instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
+            if (!supported) {
+                return false;
+            }
+        }
+        return any;
+    }
+
+    /**
+     * Can {@code column}'s FILTER stages take the zero-copy view even though the column is globally interned
+     * (a group key or aggregate input)? True when the column is non-null and every predicate over it has a
+     * per-row view evaluation. The view is confined to the filter-stage materialize (a dedicated source call);
+     * payload stages still intern, but only the filter's survivors.
+     */
+    public static boolean stringFilterViewable(Plan.Pipeline pipeline, boolean[][] nullable, int column)
+    {
+        if (nullableOf(nullable, 0, column)) {
+            return false;
         }
         boolean any = false;
         for (Plan.Condition match : collectPipelineStringMatches(pipeline)) {

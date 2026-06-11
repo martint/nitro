@@ -80,6 +80,17 @@ public interface StreamingPipeline
         }
 
         /**
+         * The filter-stage variant of {@link #materialize(int[], int[], int)}: the caller evaluates string
+         * predicates per row against the raw page bytes, so a source may hand plain string pages through as
+         * zero-copy {@link Column.BytesViewColumn} views (page-position indexed) even for columns whose payload
+         * shape is interned ids. The default does not distinguish.
+         */
+        default Column[] materializeFiltering(int[] columns, int[] selection, int count)
+        {
+            return materialize(columns, selection, count);
+        }
+
+        /**
          * Materialize the requested {@code columns} over the whole current batch (no selection). Used by
          * join-driven late materialization for the eager columns -- the probe's join keys and filter columns --
          * that must be decoded for every row to run the joins and filters; the payload columns are then

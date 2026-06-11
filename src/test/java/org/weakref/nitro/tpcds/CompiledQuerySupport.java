@@ -460,7 +460,16 @@ public final class CompiledQuerySupport
             public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
             {
                 for (int column : columns) {
-                    out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable(), column);
+                    out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable(), column, false);
+                }
+                return out;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materializeFiltering(int[] columns, int[] selection, int count)
+            {
+                for (int column : columns) {
+                    out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable(), column, true);
                 }
                 return out;
             }
@@ -555,7 +564,7 @@ public final class CompiledQuerySupport
                     return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
                 }
                 if (values instanceof org.weakref.nitro.data.BinaryVector || values instanceof org.weakref.nitro.data.DictionaryVector) {
-                    return stringColumn(values, nulls, count, identity(count), null, nullable, column);
+                    return stringColumn(values, nulls, count, identity(count), null, nullable, column, false);
                 }
                 throw new IllegalArgumentException("Unsupported column vector type: " + values.getClass().getName());
             }
@@ -566,7 +575,7 @@ public final class CompiledQuerySupport
              * null vector's backing array, so the per-row work is tight typed array access -- per-row virtual
              * accessor calls dominated filtered global aggregates over wide facts.
              */
-            private org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask batchMask, int c, int count, int[] selection, boolean nullable, int column)
+            private org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask batchMask, int c, int count, int[] selection, boolean nullable, int column, boolean filterStage)
             {
                 Vector vector = batch.output(c).borrow(Stream.VALUES);
                 Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
@@ -602,7 +611,7 @@ public final class CompiledQuerySupport
                     }
                 }
                 else if (vector instanceof org.weakref.nitro.data.BinaryVector || vector instanceof org.weakref.nitro.data.DictionaryVector) {
-                    return stringColumn(vector, nulls, count, selection, allSelected ? null : batchMask, nullable, column);
+                    return stringColumn(vector, nulls, count, selection, allSelected ? null : batchMask, nullable, column, filterStage);
                 }
                 else {
                     for (int j = 0; j < count; j++) {
@@ -623,7 +632,7 @@ public final class CompiledQuerySupport
              * dictionary-encoded page keeps its dictionary (ids gathered per row); a plain-encoded page interns
              * each selected row's bytes into a batch-local dictionary.
              */
-            private org.weakref.nitro.jit.Column stringColumn(Vector vector, Vector nulls, int count, int[] selection, Mask batchMask, boolean nullable, int column)
+            private org.weakref.nitro.jit.Column stringColumn(Vector vector, Vector nulls, int count, int[] selection, Mask batchMask, boolean nullable, int column, boolean filterStage)
             {
                 int[] ids = new int[count];
                 boolean[] nullMask = nullable ? new boolean[count] : null;
@@ -633,8 +642,8 @@ public final class CompiledQuerySupport
                 // A viewable full-batch plain page passes through in place even for a globally-interned column:
                 // in a bounded top-N pipeline only the filter stage sees full batches, and it evaluates on the
                 // view; the payload stage's partial candidate selections fall through to the interned path.
-                if (viewable[column] && vector instanceof org.weakref.nitro.data.BinaryVector viewBinary
-                        && batchMask == null && (count == currentRows || minWinners[column])) {
+                if ((viewable[column] || (filterStage && !nullable)) && vector instanceof org.weakref.nitro.data.BinaryVector viewBinary
+                        && batchMask == null && (count == currentRows || minWinners[column] || filterStage)) {
                     // A winners-min consumer indexes the view through the stage's selection, so a partial
                     // payload selection can still take it (the view is selection-independent page positions).
                     return new org.weakref.nitro.jit.Column.BytesViewColumn(viewBinary.data(), viewBinary.offsets());
