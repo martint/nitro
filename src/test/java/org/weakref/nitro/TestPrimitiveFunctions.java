@@ -54,12 +54,14 @@ import org.weakref.nitro.function.scalar.builtin.LessThanF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
+import org.weakref.nitro.function.scalar.builtin.LikeUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapContainsKeyUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapKeys;
 import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
+import org.weakref.nitro.function.scalar.builtin.NotBoolean;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
@@ -117,11 +119,13 @@ public final class TestPrimitiveFunctions
                 IsNullI64.class,
                 InUtf8.class,
                 LessThanI64.class,
+                LikeUtf8.class,
                 LessThanUtf8.class,
                 LengthUtf8.class,
                 MapContainsKeyUtf8.class,
                 MapKeys.class,
                 MapValues.class,
+                NotBoolean.class,
                 NullI64.class,
                 ScaledRelativeDifferenceGtI64.class,
                 AddExactI64.class,

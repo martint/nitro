@@ -1,0 +1,216 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.function.scalar.builtin;
+
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.ScalarFunction;
+import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import static com.google.common.base.Preconditions.checkArgument;
+
+/**
+ * SQL LIKE over a constant {@code %}-wildcard pattern (no {@code _} support -- TPC-H has none): the pattern
+ * splits into literal segments that must appear in order, the first anchored to the start and the last to the
+ * end unless the pattern opens/closes with {@code %}. A dictionary input evaluates per distinct entry.
+ */
+@ScalarFunction(name = "like_utf8")
+public final class LikeUtf8
+        implements PrimitiveFunction
+{
+    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LikeUtf8");
+
+    @Override
+    public Set<Allocator.Context> allocationContexts()
+    {
+        return Set.of(ALLOCATION_CONTEXT);
+    }
+
+    @Override
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+    {
+        return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
+    }
+
+    @Override
+    public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    {
+        checkArgument(inputs.size() == 2, "Unexpected argument count for like_utf8");
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
+            return Streams.empty();
+        }
+
+        Pattern pattern = parsePattern(constantPatternBytes(inputs.get(1).values()));
+        Vector input = inputs.getFirst().values();
+        Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
+        int requiredLength = Math.max(mask.maxPosition() + 1, input.length());
+
+        Streams result = Streams.empty();
+        if (requestedStreams.contains(Stream.NULLS)) {
+            if (inputNulls != null) {
+                result = result.with(Stream.NULLS, inputNulls);
+            }
+            else {
+                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), ALLOCATION_CONTEXT, null, requiredLength);
+                java.util.Arrays.fill(nulls.values(), 0, nulls.length(), false);
+                result = result.with(Stream.NULLS, nulls);
+            }
+        }
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return result;
+        }
+
+        BooleanVector values = VectorAccess.writableBooleanVector(
+                context.allocator(),
+                ALLOCATION_CONTEXT,
+                output != null ? output.getOrNull(Stream.VALUES) : null,
+                requiredLength);
+        boolean[] outputValues = values.values();
+        switch (input) {
+            case BinaryVector binary -> {
+                for (int position : mask) {
+                    outputValues[position] = pattern.matches(binary.data(), binary.startOffset(position), binary.length(position));
+                }
+            }
+            case DictionaryVector dictionary when dictionary.values() instanceof BinaryVector entries -> {
+                boolean[] entryMatches = new boolean[entries.length()];
+                for (int entry = 0; entry < entries.length(); entry++) {
+                    entryMatches[entry] = pattern.matches(entries.data(), entries.startOffset(entry), entries.length(entry));
+                }
+                int[] ids = dictionary.ids();
+                for (int position : mask) {
+                    outputValues[position] = entryMatches[ids[position]];
+                }
+            }
+            case RleVector rle when rle.values() instanceof BinaryVector entries -> {
+                for (int position : mask) {
+                    int index = rle.runIndex(position);
+                    outputValues[position] = pattern.matches(entries.data(), entries.startOffset(index), entries.length(index));
+                }
+            }
+            default -> throw new IllegalArgumentException("Unsupported like_utf8 input vector: " + input.getClass().getSimpleName());
+        }
+        return result.with(Stream.VALUES, values);
+    }
+
+    private static byte[] constantPatternBytes(Vector pattern)
+    {
+        return switch (pattern) {
+            case BinaryVector binary -> {
+                byte[] bytes = new byte[binary.length(0)];
+                System.arraycopy(binary.data(), binary.startOffset(0), bytes, 0, bytes.length);
+                yield bytes;
+            }
+            case DictionaryVector dictionary when dictionary.values() instanceof BinaryVector entries -> {
+                int entry = dictionary.ids()[0];
+                byte[] bytes = new byte[entries.length(entry)];
+                System.arraycopy(entries.data(), entries.startOffset(entry), bytes, 0, bytes.length);
+                yield bytes;
+            }
+            case RleVector rle when rle.values() instanceof BinaryVector entries -> {
+                byte[] bytes = new byte[entries.length(0)];
+                System.arraycopy(entries.data(), entries.startOffset(0), bytes, 0, bytes.length);
+                yield bytes;
+            }
+            default -> throw new IllegalArgumentException("like_utf8 pattern must be a constant string");
+        };
+    }
+
+    private static Pattern parsePattern(byte[] pattern)
+    {
+        String text = new String(pattern, StandardCharsets.UTF_8);
+        checkArgument(text.indexOf('_') < 0, "like_utf8 does not support the _ wildcard: %s", text);
+        boolean anchoredStart = !text.startsWith("%");
+        boolean anchoredEnd = !text.endsWith("%");
+        List<byte[]> segments = new ArrayList<>();
+        for (String segment : text.split("%", -1)) {
+            if (!segment.isEmpty()) {
+                segments.add(segment.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        return new Pattern(anchoredStart, anchoredEnd, segments);
+    }
+
+    private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<byte[]> segments)
+    {
+        boolean matches(byte[] data, int offset, int length)
+        {
+            if (segments.isEmpty()) {
+                return !anchoredStart || !anchoredEnd || length == 0;
+            }
+            int cursor = offset;
+            int end = offset + length;
+            for (int index = 0; index < segments.size(); index++) {
+                byte[] segment = segments.get(index);
+                boolean last = index == segments.size() - 1;
+                if (index == 0 && anchoredStart) {
+                    if (length < segment.length || !regionEquals(data, offset, segment)) {
+                        return false;
+                    }
+                    cursor = offset + segment.length;
+                }
+                else if (last && anchoredEnd) {
+                    int start = end - segment.length;
+                    return start >= cursor && regionEquals(data, start, segment);
+                }
+                else {
+                    int found = indexOf(data, cursor, end, segment);
+                    if (found < 0) {
+                        return false;
+                    }
+                    cursor = found + segment.length;
+                }
+                if (last && anchoredEnd && index == 0 && anchoredStart) {
+                    return cursor == end;
+                }
+            }
+            // The single anchored-both case is handled above; with a trailing %, reaching here is a match.
+            return !anchoredEnd || segments.size() == 1 && anchoredStart && cursor == end;
+        }
+
+        private static boolean regionEquals(byte[] data, int offset, byte[] segment)
+        {
+            for (int index = 0; index < segment.length; index++) {
+                if (data[offset + index] != segment[index]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int indexOf(byte[] data, int from, int end, byte[] segment)
+        {
+            int limit = end - segment.length;
+            for (int start = from; start <= limit; start++) {
+                if (regionEquals(data, start, segment)) {
+                    return start;
+                }
+            }
+            return -1;
+        }
+    }
+}
