@@ -15,6 +15,7 @@ package org.weakref.nitro;
 
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
+import org.weakref.nitro.function.scalar.builtin.AddF64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayContainsI64;
@@ -39,7 +40,9 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanF64;
+import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
+import org.weakref.nitro.function.scalar.builtin.IfF64;
 import org.weakref.nitro.function.scalar.builtin.IfI32;
 import org.weakref.nitro.function.scalar.builtin.IfI64;
 import org.weakref.nitro.function.scalar.builtin.IfUtf8;
@@ -47,12 +50,15 @@ import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.IsNullI32;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.function.scalar.builtin.LengthUtf8;
+import org.weakref.nitro.function.scalar.builtin.LessThanF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapContainsKeyUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapKeys;
 import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
+import org.weakref.nitro.function.scalar.builtin.MultiplyF64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
@@ -61,6 +67,7 @@ import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
+import org.weakref.nitro.function.scalar.builtin.SubtractF64;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -94,7 +101,14 @@ public final class TestPrimitiveFunctions
                 EqualI64.class,
                 EqualUtf8.class,
                 GreaterThanF64.class,
+                GreaterThanOrEqualF64.class,
+                LessThanF64.class,
+                LessThanOrEqualF64.class,
+                MultiplyF64.class,
+                SubtractF64.class,
+                AddF64.class,
                 HashUtf8.class,
+                IfF64.class,
                 IfI32.class,
                 IfI64.class,
                 IfUtf8.class,

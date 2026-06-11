@@ -46,6 +46,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -363,6 +364,7 @@ public final class TrinoParquetScanOperator
                     kind = switch (primitive.getPrimitiveTypeName()) {
                         case INT32 -> primitive.getLogicalTypeAnnotation() instanceof DateLogicalTypeAnnotation ? ColumnKind.DATE : ColumnKind.I32;
                         case INT64 -> ColumnKind.I64;
+                        case DOUBLE -> ColumnKind.F64;
                         case BOOLEAN -> ColumnKind.BOOLEAN;
                         case BINARY, FIXED_LEN_BYTE_ARRAY -> ColumnKind.BINARY;
                         default -> throw new IllegalArgumentException("Unsupported Trino Parquet primitive type for column %s: %s".formatted(name, primitive.getPrimitiveTypeName()));
@@ -472,6 +474,7 @@ public final class TrinoParquetScanOperator
             case DATE -> copyI32(block);
             case I64 -> copyI64(block);
             case SHORT_DECIMAL -> copyI64(block);
+            case F64 -> copyF64(block);
             case BOOLEAN -> copyBoolean(block);
             case BINARY -> copyBinary(column, block);
         };
@@ -484,6 +487,7 @@ public final class TrinoParquetScanOperator
             case DATE -> copyMaskedI32(block, mask);
             case I64 -> copyMaskedI64(block, mask);
             case SHORT_DECIMAL -> copyMaskedI64(block, mask);
+            case F64 -> copyMaskedF64(block, mask);
             case BOOLEAN -> copyMaskedBoolean(block, mask);
             case BINARY -> copyMaskedBinary(column, block, mask);
         };
@@ -495,6 +499,7 @@ public final class TrinoParquetScanOperator
             case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
             case DATE -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
             case I64, SHORT_DECIMAL -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new);
+            case F64 -> allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, size, F64Vector::new);
             case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, size, BooleanVector::new);
             case BINARY -> {
                 BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, size, 0);
@@ -671,6 +676,31 @@ public final class TrinoParquetScanOperator
                 offsets[index] -= firstOffset;
             }
         }
+        return values;
+    }
+
+    /** A Trino DOUBLE block carries raw double bits in long lanes; widen into an F64Vector. */
+    private F64Vector copyF64(Block block)
+    {
+        F64Vector values = allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, block.getPositionCount(), F64Vector::new);
+        double[] output = values.values();
+        for (int position = 0; position < block.getPositionCount(); position++) {
+            if (!block.isNull(position)) {
+                output[position] = Double.longBitsToDouble(readLong(block, position));
+            }
+        }
+        return values;
+    }
+
+    private F64Vector copyMaskedF64(Block block, Mask mask)
+    {
+        F64Vector values = allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, block.getPositionCount(), F64Vector::new);
+        double[] output = values.values();
+        forEachSelected(mask, position -> {
+            if (!block.isNull(position)) {
+                output[position] = Double.longBitsToDouble(readLong(block, position));
+            }
+        });
         return values;
     }
 
@@ -979,6 +1009,7 @@ public final class TrinoParquetScanOperator
         I32(io.trino.spi.type.IntegerType.INTEGER),
         DATE(io.trino.spi.type.DateType.DATE),
         I64(io.trino.spi.type.BigintType.BIGINT),
+        F64(io.trino.spi.type.DoubleType.DOUBLE),
         SHORT_DECIMAL(io.trino.spi.type.BigintType.BIGINT),
         BOOLEAN(io.trino.spi.type.BooleanType.BOOLEAN),
         BINARY(io.trino.spi.type.VarbinaryType.VARBINARY);

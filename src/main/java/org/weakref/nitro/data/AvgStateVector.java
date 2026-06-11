@@ -138,6 +138,24 @@ public final class AvgStateVector
         countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
     }
 
+    /**
+     * The double-summing form: the sum chunk holds the running double's raw bits (an accumulator instance uses
+     * either the long or the double form exclusively; the position-copying paths are bit-preserving, so both
+     * survive group compaction).
+     */
+    public void incrementDouble(int index, double sum)
+    {
+        long[] chunk = sumChunks[index >> CHUNK_SHIFT];
+        int offset = index & CHUNK_MASK;
+        chunk[offset] = Double.doubleToRawLongBits(Double.longBitsToDouble(chunk[offset]) + sum);
+        countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK]++;
+    }
+
+    public double doubleSum(int index)
+    {
+        return Double.longBitsToDouble(sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK]);
+    }
+
     public long sum(int index)
     {
         return sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
