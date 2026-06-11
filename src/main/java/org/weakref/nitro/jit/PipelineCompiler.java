@@ -241,23 +241,61 @@ public final class PipelineCompiler
             out.append("      int rowCount = source.rows();\n");
             out.append("      if (selection.length < rowCount) { selection = new int[org.weakref.nitro.jit.StreamingScratch.grow(selection.length, rowCount)]; }\n");
             out.append("      int selected = rowCount;\n");
-            out.append("      for (int i = 0; i < rowCount; i++) { selection[i] = i; }\n");
-            for (Plan.Condition conjunct : conjuncts) {
+            for (int conjunctIndex = 0; conjunctIndex < conjuncts.size(); conjunctIndex++) {
+                Plan.Condition conjunct = conjuncts.get(conjunctIndex);
+                // The first conjunct sees the identity selection -- iterate row indices directly and build the
+                // selection from scratch, skipping the per-batch identity fill (the loader serves a full-batch
+                // materialize without reading the selection array).
+                boolean identity = conjunctIndex == 0;
+                String rows = identity ? "rowCount" : "selected";
+                String row = identity ? "i" : "selection[i]";
                 TreeSet<Integer> columns = new TreeSet<>();
                 collectConditionColumns(conjunct, columns);
                 List<Plan.Condition> matches = new ArrayList<>();
                 collectStringMatches(conjunct, matches);
+                int fusedColumn = fusedViewConjunctColumn(pipeline, encodings, nullable, conjunct);
                 out.append("      {\n");
                 out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
                 for (int column : columns) {
-                    emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
+                    emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), rows);
+                }
+                if (fusedColumn >= 0) {
+                    // View batch: evaluate the leaf in place per surviving row -- one pass, no mask array.
+                    int id = stringMaskIds.get(conjunct);
+                    out.append("        if (cView").append(fusedColumn).append(" != null) {\n");
+                    emitFusedViewLiterals(out, body, conjunct, id);
+                    if (identity && conjunct instanceof Plan.LikeMatch like && !like.negated()) {
+                        // Full batch + positive containment: one SIMD sweep over the concatenated buffer,
+                        // mapping hits back to rows -- instead of restarting the vector loop per row.
+                        out.append("          selected = org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.containsSweep(cView")
+                                .append(fusedColumn).append(", cViewOff").append(fusedColumn).append(", rowCount, sNeedle").append(id).append(", selection);\n");
+                    }
+                    else {
+                        out.append("          int kept = 0;\n");
+                        out.append("          for (int i = 0; i < ").append(rows).append("; i++) {\n");
+                        out.append("            int sRow = ").append(row).append(";\n");
+                        out.append("            if (").append(fusedViewPredicate(conjunct, id, fusedColumn, "sRow")).append(") { selection[kept++] = sRow; }\n");
+                        out.append("          }\n");
+                        out.append("          selected = kept;\n");
+                    }
+                    out.append("        }\n");
+                    out.append("        else {\n");
+                    emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, conjunct, id, rows);
+                    out.append("          int kept = 0;\n");
+                    out.append("          for (int i = 0; i < ").append(rows).append("; i++) {\n");
+                    out.append("            if (").append(conditionTrue(conjunct, resolver, nullResolver, stringMaskIds)).append(") { selection[kept++] = ").append(row).append("; }\n");
+                    out.append("          }\n");
+                    out.append("          selected = kept;\n");
+                    out.append("        }\n");
+                    out.append("      }\n");
+                    continue;
                 }
                 for (Plan.Condition match : matches) {
-                    emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, match, stringMaskIds.get(match), "selected");
+                    emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, match, stringMaskIds.get(match), rows);
                 }
                 out.append("        int kept = 0;\n");
-                out.append("        for (int i = 0; i < selected; i++) {\n");
-                out.append("          if (").append(conditionTrue(conjunct, resolver, nullResolver, stringMaskIds)).append(") { selection[kept++] = selection[i]; }\n");
+                out.append("        for (int i = 0; i < ").append(rows).append("; i++) {\n");
+                out.append("          if (").append(conditionTrue(conjunct, resolver, nullResolver, stringMaskIds)).append(") { selection[kept++] = ").append(row).append("; }\n");
                 out.append("        }\n");
                 out.append("        selected = kept;\n");
                 out.append("      }\n");
@@ -1009,6 +1047,66 @@ public final class PipelineCompiler
             return -1;
         }
         return col.index();
+    }
+
+    /**
+     * A conjunct that can fuse its evaluation into the selection build over a VIEW batch: a single exact-match
+     * or LIKE-containment leaf on a column that may arrive as a bytes view. The fused loop evaluates the
+     * predicate in place per surviving row -- one pass, no mask array -- where the mask form pays a fill pass
+     * plus a lookup pass. Dictionary-page batches keep the (cheaper) entry-mask path at runtime.
+     */
+    private static int fusedViewConjunctColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, Plan.Condition conjunct)
+    {
+        boolean supported = conjunct instanceof Plan.StringMatch
+                || (conjunct instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
+        if (!supported) {
+            return -1;
+        }
+        int column = stringMatchColumn(conjunct);
+        if (encodingOf(encodings, 0, column) != ColumnEncoding.STRING) {
+            return -1;
+        }
+        if (stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullable, column)) {
+            return column;
+        }
+        return -1;
+    }
+
+    /** The fused view evaluation of a single string leaf at page position {@code row} (no mask indirection). */
+    private static String fusedViewPredicate(Plan.Condition conjunct, int id, int column, String row)
+    {
+        if (conjunct instanceof Plan.LikeMatch like) {
+            String matches = "org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.contains(cView" + column
+                    + ", cViewOff" + column + "[" + row + "], cViewOff" + column + "[" + row + " + 1] - cViewOff" + column + "[" + row + "], sNeedle" + id + ")";
+            return like.negated() ? "!(" + matches + ")" : "(" + matches + ")";
+        }
+        Plan.StringMatch exact = (Plan.StringMatch) conjunct;
+        StringBuilder member = new StringBuilder();
+        for (int v = 0; v < exact.values().size(); v++) {
+            member.append(member.length() == 0 ? "" : " || ")
+                    .append("java.util.Arrays.equals(cView").append(column).append(", cViewOff").append(column).append("[").append(row)
+                    .append("], cViewOff").append(column).append("[").append(row).append(" + 1], sLit").append(id).append("_").append(v)
+                    .append(", 0, sLit").append(id).append("_").append(v).append(".length)");
+        }
+        String matches = exact.values().isEmpty() ? "false" : member.toString();
+        return exact.negated() ? "!(" + matches + ")" : "(" + matches + ")";
+    }
+
+    /** The fused-leaf literal/needle declarations (shared by the fused loop and the entry-mask fallback). */
+    private static void emitFusedViewLiterals(StringBuilder out, ClassBody body, Plan.Condition conjunct, int id)
+    {
+        if (conjunct instanceof Plan.LikeMatch like) {
+            body.field("org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.ContainsNeedle", "sNeedle" + id);
+            out.append("        if (sNeedle").append(id).append(" == null) { sNeedle").append(id)
+                    .append(" = org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.containsNeedle(")
+                    .append(javaStringLiteral(likeContainsLiteral(like.pattern()))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8)); }\n");
+            return;
+        }
+        Plan.StringMatch exact = (Plan.StringMatch) conjunct;
+        for (int v = 0; v < exact.values().size(); v++) {
+            out.append("        byte[] sLit").append(id).append("_").append(v).append(" = ")
+                    .append(javaStringLiteral(exact.values().get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
+        }
     }
 
     /**

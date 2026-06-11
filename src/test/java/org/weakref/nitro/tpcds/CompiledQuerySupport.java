@@ -573,6 +573,11 @@ public final class CompiledQuerySupport
                 long[] values = valueBuffer(column, count);
                 boolean[] nullMask = nullable ? nullBuffer(column, count) : null;
                 boolean allSelected = batchMask.all();
+                // A full-batch selection is identity by construction; serve it without reading the (possibly
+                // unfilled) selection array so generated code can skip the per-batch identity fill.
+                if (allSelected && count == currentRows) {
+                    selection = identity(count);
+                }
                 boolean[] nullBacking = nulls instanceof BooleanVector booleans ? booleans.values() : null;
                 if (vector instanceof I64Vector i64) {
                     long[] backing = i64.values();
@@ -622,6 +627,9 @@ public final class CompiledQuerySupport
             {
                 int[] ids = new int[count];
                 boolean[] nullMask = nullable ? new boolean[count] : null;
+                if (batchMask == null && count == currentRows) {
+                    selection = identity(count);
+                }
                 // A viewable full-batch plain page passes through in place even for a globally-interned column:
                 // in a bounded top-N pipeline only the filter stage sees full batches, and it evaluates on the
                 // view; the payload stage's partial candidate selections fall through to the interned path.

@@ -62,9 +62,15 @@ public interface StreamingPipeline
          * <p>
          * The default gathers from {@link #columns()} (correct for any source); a lazy source overrides it to defer
          * the conversion of each column until it is requested and to convert only the selected rows.
+         * <p>
+         * Contract: a full-batch call ({@code count == rows()}) selects every row in order, and the source must
+         * serve it without reading {@code selection} -- generated code skips the per-batch identity fill.
          */
         default Column[] materialize(int[] columns, int[] selection, int count)
         {
+            if (count == rows()) {
+                return materialize(columns);
+            }
             Column[] full = columns();
             Column[] gathered = new Column[full.length];
             for (int column : columns) {

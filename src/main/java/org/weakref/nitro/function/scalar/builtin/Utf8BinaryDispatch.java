@@ -1192,6 +1192,73 @@ public final class Utf8BinaryDispatch
                 needle.secondProbeByte());
     }
 
+    /**
+     * Sweep containment over a concatenated row buffer: select the rows of {@code [0, rowCount)} whose
+     * {@code [offsets[row], offsets[row + 1])} slice contains the needle, writing them to {@code selection}
+     * (ascending, deduplicated) and returning the count. One SIMD pass over the whole region -- candidate hits
+     * are mapped back to rows through the monotone offsets with a forward-walking pointer, and a textual match
+     * spanning a row boundary is rejected by the containment check -- where the per-row form restarts the
+     * vector loop (and pays its setup) for every row, most shorter than one vector.
+     */
+    public static int containsSweep(byte[] data, int[] offsets, int rowCount, ContainsNeedle needle, int[] selection)
+    {
+        int needleLength = needle.length();
+        if (needleLength == 0) {
+            for (int row = 0; row < rowCount; row++) {
+                selection[row] = row;
+            }
+            return rowCount;
+        }
+        int regionStart = offsets[0];
+        int candidateCount = offsets[rowCount] - needleLength - regionStart + 1;
+        if (candidateCount <= 0) {
+            return 0;
+        }
+        byte[] needleData = needle.data();
+        int needleStart = needle.start();
+        int firstProbeOffset = needle.firstProbeOffset();
+        int secondProbeOffset = needle.secondProbeOffset();
+        byte firstProbeByte = needle.firstProbeByte();
+        byte secondProbeByte = needle.secondProbeByte();
+        int selected = 0;
+        int row = 0;
+        int fullLength = CONTAINS_SPECIES.loopBound(candidateCount);
+        int offset = 0;
+        while (offset < fullLength) {
+            jdk.incubator.vector.ByteVector firstProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, data, regionStart + offset + firstProbeOffset);
+            jdk.incubator.vector.ByteVector secondProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, data, regionStart + offset + secondProbeOffset);
+            long candidateBits = firstProbe.eq(firstProbeByte).toLong() & secondProbe.eq(secondProbeByte).toLong();
+            while (candidateBits != 0) {
+                int lane = Long.numberOfTrailingZeros(candidateBits);
+                candidateBits &= candidateBits - 1;
+                int position = regionStart + offset + lane;
+                if (binaryMatchesAt(data, position, needleData, needleStart, needleLength)) {
+                    while (offsets[row + 1] <= position) {
+                        row++;
+                    }
+                    if (position + needleLength <= offsets[row + 1] && (selected == 0 || selection[selected - 1] != row)) {
+                        selection[selected++] = row;
+                    }
+                }
+            }
+            offset += CONTAINS_SPECIES.length();
+        }
+        for (int candidate = offset; candidate < candidateCount; candidate++) {
+            int position = regionStart + candidate;
+            if (data[position + firstProbeOffset] == firstProbeByte &&
+                    data[position + secondProbeOffset] == secondProbeByte &&
+                    binaryMatchesAt(data, position, needleData, needleStart, needleLength)) {
+                while (offsets[row + 1] <= position) {
+                    row++;
+                }
+                if (position + needleLength <= offsets[row + 1] && (selected == 0 || selection[selected - 1] != row)) {
+                    selection[selected++] = row;
+                }
+            }
+        }
+        return selected;
+    }
+
     private static ContainsNeedle compileContainsNeedle(BinaryVector needleVector, int needlePosition)
     {
         byte[] needleData = needleVector.data();
