@@ -812,9 +812,27 @@ public final class PipelineCompiler
             return;
         }
         out.append("    int n = result.rowCount(); long[][] cols = result.columns(); boolean[][] on = result.nulls();\n");
-        out.append("    Integer[] order = new Integer[n];\n");
+        out.append("    int[] order = new int[n];\n");
         out.append("    for (int i = 0; i < n; i++) { order[i] = i; }\n");
-        out.append("    java.util.Arrays.sort(order, (a, b) -> {\n");
+        out.append("    sortOrder(order, 0, n, cols, on);\n");
+        // OFFSET skips the first rows of the sorted order; LIMIT then bounds what remains (SQL OFFSET/LIMIT).
+        int offset = ordering.offset();
+        out.append("    int skip = Math.min(").append(offset).append(", n);\n");
+        String limit = ordering.limit() < 0 ? "(n - skip)" : "Math.min(" + ordering.limit() + ", n - skip)";
+        out.append("    int outN = ").append(limit).append(";\n");
+        out.append("    long[][] sorted = new long[cols.length][outN];\n");
+        out.append("    for (int w = 0; w < outN; w++) { int s = order[skip + w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
+        emitGatherNulls(out, "order[skip + g]");
+        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types(), outNulls);\n");
+        out.append("  }\n");
+        emitCompareOrder(out, ordering, types, stringSources);
+        emitOrderSort(out);
+    }
+
+    /** The ordering's key-comparison chain as a primitive method (ties break by index, matching a stable sort). */
+    private static void emitCompareOrder(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
+    {
+        out.append("  private static int compareOrder(int a, int b, long[][] cols, boolean[][] on) {\n");
         out.append("      int c;\n");
         for (Plan.SortKey key : ordering.keys()) {
             if (key.expr() != null) {
@@ -848,17 +866,45 @@ public final class PipelineCompiler
             }
             out.append(" if (c != 0) { return c; } }\n");
         }
-        out.append("      return 0;\n");
-        out.append("    });\n");
-        // OFFSET skips the first rows of the sorted order; LIMIT then bounds what remains (SQL OFFSET/LIMIT).
-        int offset = ordering.offset();
-        out.append("    int skip = Math.min(").append(offset).append(", n);\n");
-        String limit = ordering.limit() < 0 ? "(n - skip)" : "Math.min(" + ordering.limit() + ", n - skip)";
-        out.append("    int outN = ").append(limit).append(";\n");
-        out.append("    long[][] sorted = new long[cols.length][outN];\n");
-        out.append("    for (int w = 0; w < outN; w++) { int s = order[skip + w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
-        emitGatherNulls(out, "order[skip + g]");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types(), outNulls);\n");
+        out.append("      return Integer.compare(a, b);\n");
+        out.append("  }\n");
+    }
+
+    /**
+     * A primitive in-place quicksort over the row-index permutation (median-of-three pivot, insertion sort for
+     * small ranges, recursing into the smaller partition). The boxed {@code Arrays.sort(Integer[], comparator)}
+     * this replaces paid one boxed allocation per result row plus TimSort's comparator dispatch; the index
+     * tie-break in compareOrder makes the comparison total, so the output is identical to the stable sort's.
+     */
+    private static void emitOrderSort(StringBuilder out)
+    {
+        out.append("  private static void sortOrder(int[] order, int lo, int hi, long[][] cols, boolean[][] on) {\n");
+        out.append("    while (true) {\n");
+        out.append("      int len = hi - lo;\n");
+        out.append("      if (len <= 24) {\n");
+        out.append("        for (int i = lo + 1; i < hi; i++) {\n");
+        out.append("          int v = order[i]; int j = i - 1;\n");
+        out.append("          while (j >= lo && compareOrder(order[j], v, cols, on) > 0) { order[j + 1] = order[j]; j--; }\n");
+        out.append("          order[j + 1] = v;\n");
+        out.append("        }\n");
+        out.append("        return;\n");
+        out.append("      }\n");
+        out.append("      int mid = (lo + hi) >>> 1;\n");
+        out.append("      if (compareOrder(order[mid], order[lo], cols, on) < 0) { int t = order[mid]; order[mid] = order[lo]; order[lo] = t; }\n");
+        out.append("      if (compareOrder(order[hi - 1], order[mid], cols, on) < 0) {\n");
+        out.append("        int t = order[hi - 1]; order[hi - 1] = order[mid]; order[mid] = t;\n");
+        out.append("        if (compareOrder(order[mid], order[lo], cols, on) < 0) { int t2 = order[mid]; order[mid] = order[lo]; order[lo] = t2; }\n");
+        out.append("      }\n");
+        out.append("      int pivot = order[mid];\n");
+        out.append("      int i = lo; int j = hi - 1;\n");
+        out.append("      while (i <= j) {\n");
+        out.append("        while (compareOrder(order[i], pivot, cols, on) < 0) { i++; }\n");
+        out.append("        while (compareOrder(order[j], pivot, cols, on) > 0) { j--; }\n");
+        out.append("        if (i <= j) { int t = order[i]; order[i] = order[j]; order[j] = t; i++; j--; }\n");
+        out.append("      }\n");
+        out.append("      if (j + 1 - lo < hi - i) { sortOrder(order, lo, j + 1, cols, on); lo = i; }\n");
+        out.append("      else { sortOrder(order, i, hi, cols, on); hi = j + 1; }\n");
+        out.append("    }\n");
         out.append("  }\n");
     }
 
