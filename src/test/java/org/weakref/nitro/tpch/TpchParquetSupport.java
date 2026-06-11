@@ -30,6 +30,7 @@ import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.MaxF64;
+import org.weakref.nitro.operator.aggregation.MinF64;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -1121,6 +1122,259 @@ final class TpchParquetSupport
                         new Reference(new Input(leftInputIndex), Stream.VALUES),
                         new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    /**
+     * Q2: the minimum EUROPE supplycost per partkey joins back by (partkey, cost-equality); the brand-15
+     * %BRASS parts ride the partsupp / supplier / nation / region chain; top 100 by (acctbal DESC, n_name,
+     * s_name, partkey).
+     */
+    public static Operator query02(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        // minimum EUROPE supplycost per partkey
+        Operator minimumCosts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new MinF64(2)),
+                query02EuropePartsupp(allocator, primitiveRegistry, tables, "ps_partkey", "ps_suppkey", "ps_supplycost"));
+
+        Operator part = filter(allocator, primitiveRegistry,
+                scannedTable(allocator, tables, "part", "p_partkey", "p_mfgr", "p_size", "p_type"),
+                and(comparison("eq", 2, new Literal(15L)), likeUtf8(3, "%BRASS")));
+        Operator partsupp = scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_supplycost");
+        // [ps_partkey, ps_suppkey, ps_supplycost, p_partkey, p_mfgr, p_size, p_type]
+        Operator joined = new HashJoinOperator(allocator, partsupp, 0, part, 0);
+        Operator supplier = scannedTable(allocator, tables, "supplier",
+                "s_suppkey", "s_name", "s_address", "s_nationkey", "s_phone", "s_acctbal", "s_comment");
+        // + s x7 -> 7..13
+        joined = new HashJoinOperator(allocator, joined, 1, supplier, 0);
+        Operator nation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_name", "n_regionkey");
+        // + n x3 -> 14..16
+        joined = new HashJoinOperator(allocator, joined, 10, nation, 0);
+        Operator region = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "region", "r_regionkey", "r_name"),
+                        equalUtf8(1, "EUROPE")),
+                0);
+        // + r_regionkey -> 17
+        joined = new HashJoinOperator(allocator, joined, 16, region, 0);
+        // + [m_partkey, minCost] -> 18,19
+        joined = new HashJoinOperator(allocator, joined, 0, minimumCosts, 0);
+        Operator best = filter(allocator, primitiveRegistry, joined, equalColumnsF64(2, 19));
+
+        // SQL order: s_acctbal(12), s_name(8), n_name(15), p_partkey(0), p_mfgr(4), s_address(9), s_phone(11), s_comment(13)
+        Operator projected = projectInputs(allocator, primitiveRegistry, best, 12, 8, 15, 0, 4, 9, 11, 13);
+        return new TopNOperator(allocator, 100, new int[] {0, 2, 1, 3}, new boolean[] {true, false, false, false}, projected);
+    }
+
+    private static Operator query02EuropePartsupp(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables, String... partsuppColumns)
+    {
+        Operator region = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "region", "r_regionkey", "r_name"),
+                        equalUtf8(1, "EUROPE")),
+                0);
+        Operator nation = projectInputs(allocator, primitiveRegistry,
+                new HashJoinOperator(allocator,
+                        scannedTable(allocator, tables, "nation", "n_nationkey", "n_regionkey"), 1, region, 0),
+                0);
+        Operator supplier = projectInputs(allocator, primitiveRegistry,
+                new HashJoinOperator(allocator,
+                        scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey"), 1, nation, 0),
+                0);
+        Operator partsupp = scannedTable(allocator, tables, "partsupp", partsuppColumns);
+        return new HashJoinOperator(allocator, partsupp, 1, supplier, 0);
+    }
+
+    /**
+     * Q20: the forest-part partsupp rows whose availqty exceeds half the 1994 shipped quantity for that
+     * (partkey, suppkey) key the CANADA suppliers via a semi join, sorted by name.
+     */
+    public static Operator query20(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator forestParts = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "part", "p_partkey", "p_name"),
+                        likeUtf8(1, "forest%")),
+                0);
+        Operator partsupp = scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_availqty");
+        // [ps_partkey, ps_suppkey, ps_availqty, p_partkey]
+        Operator forestPartsupp = new HashJoinOperator(allocator, partsupp, 0, forestParts, 0);
+
+        Operator shipped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new SumF64(2)),
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "lineitem", "l_partkey", "l_suppkey", "l_quantity", "l_shipdate"),
+                        and(
+                                greaterThan(3, LocalDate.of(1994, 1, 1).toEpochDay() - 1),
+                                lessThan(3, LocalDate.of(1995, 1, 1).toEpochDay()))));
+        Variable half = new Variable(0);
+        Variable threshold = new Variable(1);
+        Operator thresholds = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(half, new Literal(0.5), AllMask.ALL),
+                                new Assignment(threshold, new Call("multiply_f64", List.of(
+                                        new Reference(half, Stream.VALUES),
+                                        new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(threshold, Stream.VALUES))),
+                primitiveRegistry,
+                shipped);
+        // + [t_partkey, t_suppkey, threshold] -> 4,5,6
+        Operator withThresholds = new HashJoinOperator(allocator, forestPartsupp, new int[] {0, 1}, thresholds, new int[] {0, 1});
+
+        Variable available = new Variable(0);
+        Operator castAvailable = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(new Assignment(available, new Call("cast_i64_to_f64", List.of(
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(available, Stream.VALUES),
+                                new Reference(new Input(6), Stream.VALUES))),
+                primitiveRegistry,
+                withThresholds);
+        // [ps_suppkey] with availqty > threshold
+        Operator qualifiedSuppliers = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry, castAvailable, greaterThanColumnsF64(1, 2)),
+                0);
+
+        Operator canadaNation = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "nation", "n_nationkey", "n_name"),
+                        equalUtf8(1, "CANADA")),
+                0);
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_name", "s_address", "s_nationkey");
+        Operator canadaSuppliers = new HashJoinOperator(allocator, supplier, 3, canadaNation, 0);
+        Operator matched = new SemiJoinOperator(allocator, canadaSuppliers, 0, qualifiedSuppliers, 0);
+        Operator projected = projectInputs(allocator, primitiveRegistry, matched, 1, 2);
+        return new SortOperator(allocator, new int[] {0}, new boolean[] {false}, projected);
+    }
+
+    /**
+     * Q21: per-order distinct-supplier statistics decorrelate the inequality EXISTS pair -- a qualifying l1
+     * row needs other suppliers on the order (count >= 2) and no OTHER late supplier (late count == 1);
+     * counts per SAUDI ARABIA supplier name, top 100 by (numwait DESC, name).
+     */
+    public static Operator query21(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        // distinct suppliers per order
+        Operator supplierCounts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1),
+                        List.of(),
+                        scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey")));
+        // distinct LATE suppliers per order
+        Operator lateCounts = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1),
+                        List.of(),
+                        filter(allocator, primitiveRegistry,
+                                scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"),
+                                lessThanColumns(2, 3))));
+
+        Operator l1 = filter(allocator, primitiveRegistry,
+                scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate"),
+                lessThanColumns(2, 3));
+        Operator orders = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "orders", "o_orderkey", "o_orderstatus"),
+                        equalUtf8(1, "F")),
+                0);
+        // [l1 x4, o_orderkey]
+        Operator joined = new HashJoinOperator(allocator, l1, 0, orders, 0);
+        Operator saudiNation = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "nation", "n_nationkey", "n_name"),
+                        equalUtf8(1, "SAUDI ARABIA")),
+                0);
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_name", "s_nationkey");
+        Operator saudiSuppliers = new HashJoinOperator(allocator, supplier, 2, saudiNation, 0);
+        // + [s_suppkey, s_name, s_nationkey, n_nationkey] -> 5..8
+        joined = new HashJoinOperator(allocator, joined, 1, saudiSuppliers, 0);
+        // + [c_orderkey, numSuppliers] -> 9,10
+        joined = new HashJoinOperator(allocator, joined, 0, supplierCounts, 0);
+        // + [c_orderkey, numLate] -> 11,12
+        joined = new HashJoinOperator(allocator, joined, 0, lateCounts, 0);
+        Operator qualified = filter(allocator, primitiveRegistry, joined,
+                and(
+                        greaterThan(10, 1),
+                        comparison("eq", 12, new Literal(1L))));
+
+        Operator counted = new GroupedAggregationOperator(allocator, List.of(0), List.of(new CountAll()),
+                projectInputs(allocator, primitiveRegistry, qualified, 6));
+        return new TopNOperator(allocator, 100, new int[] {1, 0}, new boolean[] {true, false}, counted);
+    }
+
+    /**
+     * Q22: country codes from the phone prefix; the positive-balance average over the seven codes broadcasts
+     * as a scalar; customers above it with no orders aggregate per code.
+     */
+    public static Operator query22(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        List<String> codes = List.of("13", "31", "23", "29", "30", "18", "17");
+        // [cntrycode, c_acctbal, c_custkey]
+        Operator coded = query22CodedCustomers(allocator, primitiveRegistry, tables, codes);
+
+        Operator average = new AggregationOperator(
+                allocator,
+                List.of(new AvgF64(1)),
+                filter(allocator, primitiveRegistry,
+                        query22CodedCustomers(allocator, primitiveRegistry, tables, codes),
+                        compareF64("gt_f64", 1, 0.0)));
+        // + avg -> 3
+        Operator withAverage = new NestedLoopJoinOperator(allocator, coded, average);
+        Operator above = filter(allocator, primitiveRegistry, withAverage, greaterThanColumnsF64(1, 3));
+
+        Operator orders = scannedTable(allocator, tables, "orders", "o_custkey");
+        Operator withoutOrders = new SemiJoinOperator(allocator, above, 2, orders, 0, false);
+
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll(), new SumF64(1)),
+                withoutOrders);
+        return new SortOperator(allocator, new int[] {0}, new boolean[] {false}, aggregated);
+    }
+
+    private static Operator query22CodedCustomers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables, List<String> codes)
+    {
+        Operator customer = scannedTable(allocator, tables, "customer", "c_phone", "c_acctbal", "c_custkey");
+        Variable from = new Variable(0);
+        Variable length = new Variable(1);
+        Variable code = new Variable(2);
+        Operator coded = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(from, new Literal(1L), AllMask.ALL),
+                                new Assignment(length, new Literal(2L), AllMask.ALL),
+                                new Assignment(code, new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(from, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(code, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))),
+                primitiveRegistry,
+                customer);
+        return filter(allocator, primitiveRegistry, coded, inUtf8(0, codes));
     }
 
     // ---- scan / filter plumbing ----

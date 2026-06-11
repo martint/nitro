@@ -151,6 +151,30 @@ public class TestTpchQueries
         assertMatchesReference("17", tables -> TpchParquetSupport.query17(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
+    @Test
+    void query02()
+    {
+        assertMatchesReference("02", tables -> TpchParquetSupport.query02(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query20()
+    {
+        assertMatchesReference("20", tables -> TpchParquetSupport.query20(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query21()
+    {
+        assertMatchesReference("21", tables -> TpchParquetSupport.query21(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query22()
+    {
+        assertMatchesReference("22", tables -> TpchParquetSupport.query22(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
     private static void assertMatchesReferenceWithTies(String queryId, int sortKeyColumn, java.util.function.Function<TpchParquetTables, Operator> query)
     {
         var tables = TpchParquetTables.actualIfPresent();
