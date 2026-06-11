@@ -211,6 +211,8 @@ public final class PipelineCompiler
         boolean grouped = !pipeline.groupKeys().isEmpty();
         int stringIdKey = streamedStringIdKey(pipeline, encodings, nullable);
         int boundedTopKey = boundedTopKeyColumn(pipeline, encodings, nullable);
+        int boundedTopStringKey = boundedTopStringKeyColumn(pipeline, encodings, nullable);
+        int[] boundedTopPairKeys = boundedTopLongStringKeyColumns(pipeline, encodings, nullable);
         // A wide global aggregation (q30: 90 sums = 180 cells) splits into one small per-aggregate update
         // method per batch -- a single fused row loop would push execute() past the JIT's huge-method limit
         // and run interpreted. Split cells live in fields so the update methods can reach them.
@@ -230,6 +232,15 @@ public final class PipelineCompiler
             if (boundedTopKey >= 0) {
                 out.append("    long[] btKeys = new long[").append(pipeline.ordering().limit()).append("];\n");
                 out.append("    int btCount = 0; long btWorst = 0;\n");
+            }
+            else if (boundedTopStringKey >= 0) {
+                out.append("    byte[][] btKeys = new byte[").append(pipeline.ordering().limit()).append("][];\n");
+                out.append("    int btCount = 0; byte[] btWorst = null;\n");
+            }
+            else if (boundedTopPairKeys != null) {
+                out.append("    long[] btK0 = new long[").append(pipeline.ordering().limit()).append("];\n");
+                out.append("    byte[][] btKeys = new byte[").append(pipeline.ordering().limit()).append("][];\n");
+                out.append("    int btCount = 0; long btWorst0 = 0; byte[] btWorst1 = null;\n");
             }
         }
         else if (splitGlobalAggregates) {
@@ -336,6 +347,12 @@ public final class PipelineCompiler
             // For a bounded top-N, a key-only stage shrinks the survivors to threshold-beating rows first.
             if (boundedTopKey >= 0) {
                 emitBoundedTopKeyStage(out, pipeline, boundedTopKey);
+            }
+            else if (boundedTopStringKey >= 0) {
+                emitBoundedTopStringKeyStage(out, body, pipeline, encodings, nullable, boundedTopStringKey);
+            }
+            else if (boundedTopPairKeys != null) {
+                emitBoundedTopLongStringKeyStage(out, body, pipeline, encodings, nullable, boundedTopPairKeys);
             }
             // Payload stage: materialize the columns the aggregation reads (group keys, measures) for the
             // survivors -- but only when there ARE survivors: materializing a column borrows (hence decodes)
@@ -1220,6 +1237,149 @@ public final class PipelineCompiler
      * beat the current k-th best key (tracked exactly in a small array), and shrink the selection to them --
      * the payload stage then materializes just those rows.
      */
+    /**
+     * The two-key twin of {@link #boundedTopKeyColumn}: a non-null FLAT primary and a non-null STRING secondary
+     * sort key. Returns {primary, secondary} scan columns, or null.
+     */
+    private static int[] boundedTopLongStringKeyColumns(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        if (!projectionOnly(pipeline) || !pipeline.joins().isEmpty() || pipeline.filters().isEmpty()
+                || pipeline.ordering() == null || pipeline.ordering().offset() != 0
+                || pipeline.ordering().limit() <= 0 || pipeline.ordering().limit() > 1024
+                || pipeline.ordering().keys().size() != 2) {
+            return null;
+        }
+        Plan.SortKey primary = pipeline.ordering().keys().get(0);
+        Plan.SortKey secondary = pipeline.ordering().keys().get(1);
+        if (primary.expr() != null || secondary.expr() != null
+                || primary.column() >= pipeline.projections().size() || secondary.column() >= pipeline.projections().size()
+                || !(pipeline.projections().get(primary.column()) instanceof Plan.Col primaryCol)
+                || !(pipeline.projections().get(secondary.column()) instanceof Plan.Col secondaryCol)
+                || encodingOf(encodings, 0, primaryCol.index()) != ColumnEncoding.FLAT
+                || nullableOf(nullable, 0, primaryCol.index())
+                || encodingOf(encodings, 0, secondaryCol.index()) != ColumnEncoding.STRING
+                || nullableOf(nullable, 0, secondaryCol.index())) {
+            return null;
+        }
+        return new int[] {primaryCol.index(), secondaryCol.index()};
+    }
+
+    /**
+     * The (long, string) bounded top-N key stage: the threshold is the k-th best (primary, secondary) pair,
+     * compared lexicographically with the secondary's bytes read in place.
+     */
+    private static void emitBoundedTopLongStringKeyStage(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] keyColumns)
+    {
+        int primary = keyColumns[0];
+        int secondary = keyColumns[1];
+        boolean primaryDescending = pipeline.ordering().keys().get(0).descending();
+        boolean secondaryDescending = pipeline.ordering().keys().get(1).descending();
+        int limit = pipeline.ordering().limit();
+        out.append("      {\n");
+        out.append("        org.weakref.nitro.jit.Column[] in = source.materializeFiltering(").append(intArrayLiteral(new TreeSet<>(List.of(primary, secondary)))).append(", selection, selected);\n");
+        out.append("        long[] c").append(primary).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(primary).append("]).values();\n");
+        emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, secondary, ColumnEncoding.STRING, false, "selected", true);
+        // worse-than comparison between candidate (k0, bytes) and entry b of the kept set
+        String entryWorse = pairCompare("btK0[b]", "btKeys[b], 0, btKeys[b].length", "btWorst0", "btWorst1, 0, btWorst1.length", primaryDescending, secondaryDescending);
+        out.append("        int kept = 0;\n");
+        out.append("        for (int i = 0; i < selected; i++) {\n");
+        out.append("          long btP = c").append(primary).append("[i];\n");
+        out.append("          byte[] btD; int btF; int btT;\n");
+        out.append("          if (cView").append(secondary).append(" != null) { int sRow = selection[i]; btD = cView").append(secondary)
+                .append("; btF = cViewOff").append(secondary).append("[sRow]; btT = cViewOff").append(secondary).append("[sRow + 1]; }\n");
+        out.append("          else { btD = cStr").append(secondary).append("[cIds").append(secondary).append("[i]]; btF = 0; btT = btD.length; }\n");
+        out.append("          if (btCount < ").append(limit).append(") {\n");
+        out.append("            btK0[btCount] = btP; btKeys[btCount] = java.util.Arrays.copyOfRange(btD, btF, btT); btCount++;\n");
+        out.append("            if (btCount == ").append(limit).append(") { ").append(recomputeWorstPair(entryWorse)).append(" }\n");
+        out.append("            selection[kept++] = selection[i];\n");
+        out.append("          }\n");
+        out.append("          else if (").append(pairCompare("btP", "btD, btF, btT", "btWorst0", "btWorst1, 0, btWorst1.length", !primaryDescending, !secondaryDescending)).append(") {\n");
+        out.append("            int btWorstSlot = 0;\n");
+        out.append("            for (int b = 1; b < btCount; b++) { if (").append(pairCompare("btK0[b]", "btKeys[b], 0, btKeys[b].length", "btK0[btWorstSlot]", "btKeys[btWorstSlot], 0, btKeys[btWorstSlot].length", primaryDescending, secondaryDescending)).append(") { btWorstSlot = b; } }\n");
+        out.append("            btK0[btWorstSlot] = btP; btKeys[btWorstSlot] = java.util.Arrays.copyOfRange(btD, btF, btT);\n");
+        out.append("            ").append(recomputeWorstPair(entryWorse)).append("\n");
+        out.append("            selection[kept++] = selection[i];\n");
+        out.append("          }\n");
+        out.append("        }\n");
+        out.append("        selected = kept;\n");
+        out.append("      }\n");
+    }
+
+    /** "left pair sorts strictly after right pair" under per-key directions (after = worse for ascending). */
+    private static String pairCompare(String leftPrimary, String leftSecondaryRange, String rightPrimary, String rightSecondaryRange, boolean primaryDescending, boolean secondaryDescending)
+    {
+        String primaryAfter = primaryDescending ? "<" : ">";
+        String secondaryAfter = secondaryDescending ? "< 0" : "> 0";
+        return "(" + leftPrimary + " " + primaryAfter + " " + rightPrimary + " || (" + leftPrimary + " == " + rightPrimary
+                + " && java.util.Arrays.compareUnsigned(" + leftSecondaryRange + ", " + rightSecondaryRange + ") " + secondaryAfter + "))";
+    }
+
+    private static String recomputeWorstPair(String entryWorse)
+    {
+        return "btWorst0 = btK0[0]; btWorst1 = btKeys[0]; for (int b = 1; b < btCount; b++) { if (" + entryWorse + ") { btWorst0 = btK0[b]; btWorst1 = btKeys[b]; } }";
+    }
+
+    /** The string-key twin of {@link #boundedTopKeyColumn}: a single non-null STRING value sort key. */
+    private static int boundedTopStringKeyColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        if (!projectionOnly(pipeline) || !pipeline.joins().isEmpty() || pipeline.filters().isEmpty()
+                || pipeline.ordering() == null || pipeline.ordering().offset() != 0
+                || pipeline.ordering().limit() <= 0 || pipeline.ordering().limit() > 1024
+                || pipeline.ordering().keys().size() != 1) {
+            return -1;
+        }
+        Plan.SortKey key = pipeline.ordering().keys().getFirst();
+        if (key.expr() != null || key.column() >= pipeline.projections().size()
+                || !(pipeline.projections().get(key.column()) instanceof Plan.Col col)
+                || encodingOf(encodings, 0, col.index()) != ColumnEncoding.STRING
+                || nullableOf(nullable, 0, col.index())) {
+            return -1;
+        }
+        return col.index();
+    }
+
+    /**
+     * The bounded top-N key stage for a string sort key: compare each surviving row's bytes in place (view
+     * slice or dictionary entry) against the current k-th best, keep only threshold-beating rows (copying just
+     * those few keys), and let the ordinary ordering cut the over-collected candidates exactly. The payload
+     * then interns only the candidates -- the unbounded form appended and sorted every filter survivor.
+     */
+    private static void emitBoundedTopStringKeyStage(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int keyColumn)
+    {
+        boolean descending = pipeline.ordering().keys().getFirst().descending();
+        int limit = pipeline.ordering().limit();
+        String better = descending ? "> 0" : "< 0";
+        String worse = descending ? "< 0" : "> 0";
+        out.append("      {\n");
+        out.append("        org.weakref.nitro.jit.Column[] in = source.materializeFiltering(new int[] {").append(keyColumn).append("}, selection, selected);\n");
+        emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, keyColumn, ColumnEncoding.STRING, false, "selected", true);
+        out.append("        int kept = 0;\n");
+        out.append("        for (int i = 0; i < selected; i++) {\n");
+        out.append("          byte[] btD; int btF; int btT;\n");
+        out.append("          if (cView").append(keyColumn).append(" != null) { int sRow = selection[i]; btD = cView").append(keyColumn)
+                .append("; btF = cViewOff").append(keyColumn).append("[sRow]; btT = cViewOff").append(keyColumn).append("[sRow + 1]; }\n");
+        out.append("          else { btD = cStr").append(keyColumn).append("[cIds").append(keyColumn).append("[i]]; btF = 0; btT = btD.length; }\n");
+        out.append("          if (btCount < ").append(limit).append(") {\n");
+        out.append("            btKeys[btCount++] = java.util.Arrays.copyOfRange(btD, btF, btT);\n");
+        out.append("            if (btCount == ").append(limit).append(") {\n");
+        out.append("              btWorst = btKeys[0];\n");
+        out.append("              for (int b = 1; b < btCount; b++) { if (java.util.Arrays.compareUnsigned(btKeys[b], btWorst) ").append(worse).append(") { btWorst = btKeys[b]; } }\n");
+        out.append("            }\n");
+        out.append("            selection[kept++] = selection[i];\n");
+        out.append("          }\n");
+        out.append("          else if (java.util.Arrays.compareUnsigned(btD, btF, btT, btWorst, 0, btWorst.length) ").append(better).append(") {\n");
+        out.append("            int btWorstSlot = 0;\n");
+        out.append("            for (int b = 1; b < btCount; b++) { if (java.util.Arrays.compareUnsigned(btKeys[b], btKeys[btWorstSlot]) ").append(worse).append(") { btWorstSlot = b; } }\n");
+        out.append("            btKeys[btWorstSlot] = java.util.Arrays.copyOfRange(btD, btF, btT);\n");
+        out.append("            btWorst = btKeys[0];\n");
+        out.append("            for (int b = 1; b < btCount; b++) { if (java.util.Arrays.compareUnsigned(btKeys[b], btWorst) ").append(worse).append(") { btWorst = btKeys[b]; } }\n");
+        out.append("            selection[kept++] = selection[i];\n");
+        out.append("          }\n");
+        out.append("        }\n");
+        out.append("        selected = kept;\n");
+        out.append("      }\n");
+    }
+
     private static void emitBoundedTopKeyStage(StringBuilder out, Plan.Pipeline pipeline, int keyColumn)
     {
         boolean descending = pipeline.ordering().keys().getFirst().descending();
