@@ -211,6 +211,12 @@ public final class PipelineCompiler
         boolean grouped = !pipeline.groupKeys().isEmpty();
         int stringIdKey = streamedStringIdKey(pipeline, encodings, nullable);
         int boundedTopKey = boundedTopKeyColumn(pipeline, encodings, nullable);
+        // A wide global aggregation (q30: 90 sums = 180 cells) splits into one small per-aggregate update
+        // method per batch -- a single fused row loop would push execute() past the JIT's huge-method limit
+        // and run interpreted. Split cells live in fields so the update methods can reach them.
+        boolean splitGlobalAggregates = !grouped && !projectionOnly && pipeline.filters().isEmpty()
+                && pipeline.joins().isEmpty() && splittableGlobalAggregates(pipeline, encodings, nullable)
+                && cellCount(pipeline.aggregates()) > 16;
         // State lives across batches: initialize it once, before the batch loop. A join-less projection-only
         // pipeline (a plain scan-and-project, e.g. a raw union branch) appends to projection output arrays.
         if (grouped && stringIdKey >= 0) {
@@ -224,6 +230,15 @@ public final class PipelineCompiler
             if (boundedTopKey >= 0) {
                 out.append("    long[] btKeys = new long[").append(pipeline.ordering().limit()).append("];\n");
                 out.append("    int btCount = 0; long btWorst = 0;\n");
+            }
+        }
+        else if (splitGlobalAggregates) {
+            for (int c = 0; c < cellCount(pipeline.aggregates()); c++) {
+                body.field("long", "a" + c);
+                out.append("    a").append(c).append(" = 0L;\n");
+            }
+            for (int a = 0; a < pipeline.aggregates().size(); a++) {
+                aggregator(pipeline.aggregates().get(a)).emitIdentity(out, "    ", cells(pipeline.aggregates(), a, "a", null));
             }
         }
         else {
@@ -384,13 +399,39 @@ public final class PipelineCompiler
                 emitStringIdGroupedGrowth(out, pipeline.aggregates(), stringIdKey);
                 out.append("      for (int i = 0; i < rowCount; i++) {\n");
                 emitStringIdGroupedAccumulate(out, body, "        ", pipeline, stringIdKey, resolver, nullResolver, stringMaskIds);
+                out.append("      }\n");
+                out.append("    }\n");
+            }
+            else if (splitGlobalAggregates) {
+                // One small per-batch update method per aggregate (see the state emission above).
+                for (int a = 0; a < pipeline.aggregates().size(); a++) {
+                    Plan.Aggregate aggregate = pipeline.aggregates().get(a);
+                    TreeSet<Integer> columns = new TreeSet<>();
+                    if (aggregate.input() != null) {
+                        collectColumns(aggregate.input(), columns);
+                    }
+                    StringBuilder parameters = new StringBuilder();
+                    StringBuilder callArguments = new StringBuilder();
+                    for (int column : columns) {
+                        parameters.append("long[] c").append(column).append(", ");
+                        callArguments.append("c").append(column).append(", ");
+                    }
+                    out.append("      updateAggregate").append(a).append("(").append(callArguments).append("rowCount);\n");
+                    StringBuilder method = body.methods();
+                    method.append("  private void updateAggregate").append(a).append("(").append(parameters).append("int rowCount) {\n");
+                    method.append("    for (int i = 0; i < rowCount; i++) {\n");
+                    emitAggregateUpdate(method, "      ", pipeline, body, aggregate, a, cells(pipeline.aggregates(), a, "a", null), "1L", resolver, nullResolver, stringMaskIds);
+                    method.append("    }\n");
+                    method.append("  }\n");
+                }
+                out.append("    }\n");
             }
             else {
                 out.append("      for (int i = 0; i < rowCount; i++) {\n");
                 emitRowBody(out, body, "        ", pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false);
+                out.append("      }\n");
+                out.append("    }\n");
             }
-            out.append("      }\n");
-            out.append("    }\n");
         }
 
         if (grouped && stringIdKey >= 0) {
@@ -3291,6 +3332,32 @@ public final class PipelineCompiler
         for (int a = 0; a < aggregates.size(); a++) {
             aggregator(aggregates.get(a)).emitIdentity(out, "    ", cells(aggregates, a, "a", null));
         }
+    }
+
+    /**
+     * Can the global aggregates each run in their own batch loop? True when every aggregate is a plain
+     * cell-updating accumulator over scan values -- no fused distinct set, no winners-mode string minimum,
+     * no dictionary-indexed input -- so the loops are independent and need no shared per-row context.
+     */
+    private static boolean splittableGlobalAggregates(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    {
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.fn().equals("count_distinct") || aggregate.fn().equals("min_utf8")) {
+                return false;
+            }
+            // The split methods take plain long[] column parameters: every referenced column must be a
+            // non-null FLAT scan column.
+            TreeSet<Integer> columns = new TreeSet<>();
+            if (aggregate.input() != null) {
+                collectColumns(aggregate.input(), columns);
+            }
+            for (int column : columns) {
+                if (encodingOf(encodings, 0, column) != ColumnEncoding.FLAT || nullableOf(nullable, 0, column)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static void emitGlobalAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
