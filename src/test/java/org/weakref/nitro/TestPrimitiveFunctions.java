@@ -70,6 +70,7 @@ import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.function.scalar.builtin.SubtractF64;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
+import org.weakref.nitro.function.scalar.builtin.YearOfDate;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.util.List;
@@ -138,7 +139,8 @@ public final class TestPrimitiveFunctions
                 RegexpReplaceUtf8.class,
                 StartsWithUtf8.class,
                 SubstringUtf8.class,
-                UpperUtf8.class)) {
+                UpperUtf8.class,
+                YearOfDate.class)) {
             primitiveRegistry.register(scalarRegistry.register(functionClass));
         }
         return primitiveRegistry;
