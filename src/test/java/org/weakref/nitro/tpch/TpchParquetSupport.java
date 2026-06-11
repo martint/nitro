@@ -19,6 +19,7 @@ import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.MultiStageOperator;
+import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SemiJoinOperator;
@@ -28,6 +29,7 @@ import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
+import org.weakref.nitro.operator.aggregation.MaxF64;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -920,6 +922,205 @@ final class TpchParquetSupport
             result = result == null ? equals : combineBoolean("or", result, equals);
         }
         return result;
+    }
+
+    /**
+     * Q15: the quarter's revenue per supplier (the CTE), its max broadcast as a scalar, and supplier rows
+     * whose total equals the max, sorted by suppkey.
+     */
+    public static Operator query15(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator revenue = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new SumF64(1)),
+                projectWithDiscPrice(allocator, primitiveRegistry,
+                        filter(allocator, primitiveRegistry,
+                                scannedTable(allocator, tables, "lineitem", "l_suppkey", "l_extendedprice", "l_discount", "l_shipdate"),
+                                and(
+                                        greaterThan(3, LocalDate.of(1996, 1, 1).toEpochDay() - 1),
+                                        lessThan(3, LocalDate.of(1996, 4, 1).toEpochDay()))),
+                        1, 2, 0));
+        Operator maxRevenue = new AggregationOperator(
+                allocator,
+                List.of(new MaxF64(1)),
+                revenueCopy(allocator, primitiveRegistry, tables));
+        // [supplier_no, total_revenue, max_revenue]
+        Operator withMax = new NestedLoopJoinOperator(allocator, revenue, maxRevenue);
+        Operator best = filter(allocator, primitiveRegistry, withMax, equalColumnsF64(1, 2));
+
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_name", "s_address", "s_phone");
+        // [s..4, supplier_no, total_revenue, max]
+        Operator joined = new HashJoinOperator(allocator, supplier, 0, best, 0);
+        Operator projected = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 5);
+        return new SortOperator(allocator, new int[] {0}, new boolean[] {false}, projected);
+    }
+
+    // The engine does not support operator-result reuse: the harness assembles the revenue subplan again for
+    // the max (the SQL references the view twice), per the no-replay test discipline.
+    private static Operator revenueCopy(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        return new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new SumF64(1)),
+                projectWithDiscPrice(allocator, primitiveRegistry,
+                        filter(allocator, primitiveRegistry,
+                                scannedTable(allocator, tables, "lineitem", "l_suppkey", "l_extendedprice", "l_discount", "l_shipdate"),
+                                and(
+                                        greaterThan(3, LocalDate.of(1996, 1, 1).toEpochDay() - 1),
+                                        lessThan(3, LocalDate.of(1996, 4, 1).toEpochDay()))),
+                        1, 2, 0));
+    }
+
+    /**
+     * Q17: Brand#23 / MED BOX parts restrict lineitem; the per-partkey 0.2 * avg(quantity) threshold joins
+     * back; quantities below it contribute extendedprice / 7 to the single output row.
+     */
+    public static Operator query17(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator part = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "part", "p_partkey", "p_brand", "p_container"),
+                        and(equalUtf8(1, "Brand#23"), equalUtf8(2, "MED BOX"))),
+                0);
+        Operator lineitem = scannedTable(allocator, tables, "lineitem", "l_partkey", "l_quantity", "l_extendedprice");
+        // [l_partkey, l_quantity, l_extendedprice, p_partkey]
+        Operator joined = new HashJoinOperator(allocator, lineitem, 0, part, 0);
+
+        // per-partkey threshold = 0.2 * avg(l_quantity) over ALL lineitems of the part
+        Operator thresholds = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new AvgF64(1)),
+                scannedTable(allocator, tables, "lineitem", "l_partkey", "l_quantity"));
+        Variable scale = new Variable(0);
+        Variable threshold = new Variable(1);
+        Operator scaledThresholds = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(scale, new Literal(0.2), AllMask.ALL),
+                                new Assignment(threshold, new Call("multiply_f64", List.of(
+                                        new Reference(scale, Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(threshold, Stream.VALUES))),
+                primitiveRegistry,
+                thresholds);
+        // + [t_partkey, threshold] -> 4,5
+        joined = new HashJoinOperator(allocator, joined, 0, scaledThresholds, 0);
+        Operator below = filter(allocator, primitiveRegistry, joined, lessThanColumnsF64(1, 5));
+
+        Operator summed = new AggregationOperator(allocator, List.of(new SumF64(0)),
+                projectInputs(allocator, primitiveRegistry, below, 2));
+        Variable seven = new Variable(0);
+        Variable avgYearly = new Variable(1);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(seven, new Literal(7.0), AllMask.ALL),
+                                new Assignment(avgYearly, new Call("divide_f64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(seven, Stream.VALUES))), AllMask.ALL)),
+                        List.of(new Reference(avgYearly, Stream.VALUES))),
+                primitiveRegistry,
+                summed);
+    }
+
+    /**
+     * Q11: the German partsupp value per partkey, the global value * 0.00001 threshold broadcast as a scalar,
+     * and the parts above it, sorted by value descending.
+     */
+    public static Operator query11(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator perPart = query11GermanValue(allocator, primitiveRegistry, tables, true);
+        Operator total = new AggregationOperator(
+                allocator,
+                List.of(new SumF64(1)),
+                query11GermanValue(allocator, primitiveRegistry, tables, false));
+        Variable fraction = new Variable(0);
+        Variable threshold = new Variable(1);
+        Operator scaledTotal = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(fraction, new Literal(0.00001), AllMask.ALL),
+                                new Assignment(threshold, new Call("multiply_f64", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(fraction, Stream.VALUES))), AllMask.ALL)),
+                        List.of(new Reference(threshold, Stream.VALUES))),
+                primitiveRegistry,
+                total);
+        // [ps_partkey, value, threshold]
+        Operator withThreshold = new NestedLoopJoinOperator(allocator, perPart, scaledTotal);
+        Operator filtered = filter(allocator, primitiveRegistry, withThreshold, greaterThanColumnsF64(1, 2));
+        Operator projected = projectInputs(allocator, primitiveRegistry, filtered, 0, 1);
+        return new SortOperator(allocator, new int[] {1}, new boolean[] {true}, projected);
+    }
+
+    private static Operator query11GermanValue(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables, boolean grouped)
+    {
+        Operator nation = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "nation", "n_nationkey", "n_name"),
+                        equalUtf8(1, "GERMANY")),
+                0);
+        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey");
+        Operator germanSuppliers = projectInputs(allocator, primitiveRegistry,
+                new HashJoinOperator(allocator, supplier, 1, nation, 0),
+                0);
+        Operator partsupp = scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_supplycost", "ps_availqty");
+        // [ps_partkey, ps_suppkey, ps_supplycost, ps_availqty, s_suppkey]
+        Operator joined = new HashJoinOperator(allocator, partsupp, 1, germanSuppliers, 0);
+
+        Variable availableQuantity = new Variable(0);
+        Variable value = new Variable(1);
+        Operator projected = new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(availableQuantity, new Call("cast_i64_to_f64", List.of(
+                                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(value, new Call("multiply_f64", List.of(
+                                        new Reference(new Input(2), Stream.VALUES),
+                                        new Reference(availableQuantity, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(value, Stream.VALUES))),
+                primitiveRegistry,
+                joined);
+        if (!grouped) {
+            return projected;
+        }
+        return new GroupedAggregationOperator(allocator, List.of(0), List.of(new SumF64(1)), projected);
+    }
+
+    private static FilterSpec equalColumnsF64(int leftInputIndex, int rightInputIndex)
+    {
+        return columnsComparisonF64("eq_f64", leftInputIndex, rightInputIndex);
+    }
+
+    private static FilterSpec lessThanColumnsF64(int leftInputIndex, int rightInputIndex)
+    {
+        return columnsComparisonF64("lt_f64", leftInputIndex, rightInputIndex);
+    }
+
+    private static FilterSpec greaterThanColumnsF64(int leftInputIndex, int rightInputIndex)
+    {
+        return columnsComparisonF64("gt_f64", leftInputIndex, rightInputIndex);
+    }
+
+    private static FilterSpec columnsComparisonF64(String function, int leftInputIndex, int rightInputIndex)
+    {
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(result, new Call(function, List.of(
+                        new Reference(new Input(leftInputIndex), Stream.VALUES),
+                        new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
     }
 
     // ---- scan / filter plumbing ----

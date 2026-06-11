@@ -131,6 +131,73 @@ public class TestTpchQueries
         assertMatchesReference("18", tables -> TpchParquetSupport.query18(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
+    @Test
+    void query11()
+    {
+        // The output sorts by a double sum: near-equal values order differently across engines, so rows
+        // within a tolerance-tied run of the sort key compare as sets.
+        assertMatchesReferenceWithTies("11", 1, tables -> TpchParquetSupport.query11(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query15()
+    {
+        assertMatchesReference("15", tables -> TpchParquetSupport.query15(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    @Test
+    void query17()
+    {
+        assertMatchesReference("17", tables -> TpchParquetSupport.query17(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+    }
+
+    private static void assertMatchesReferenceWithTies(String queryId, int sortKeyColumn, java.util.function.Function<TpchParquetTables, Operator> query)
+    {
+        var tables = TpchParquetTables.actualIfPresent();
+        assumeTrue(tables.isPresent(), "TPC-H parquet data not present");
+
+        List<Row> actual = OperatorAssertions.OperatorAssert.toRows(query.apply(tables.orElseThrow()));
+        List<List<String>> expected = readExpected(queryId);
+        assertThat(actual).as("q%s row count", queryId).hasSize(expected.size());
+
+        int rowIndex = 0;
+        while (rowIndex < expected.size()) {
+            // A tie run: consecutive expected rows whose sort keys agree within tolerance.
+            double key = Double.parseDouble(expected.get(rowIndex).get(sortKeyColumn));
+            int runEnd = rowIndex + 1;
+            while (runEnd < expected.size() && nearlyEqual(Double.parseDouble(expected.get(runEnd).get(sortKeyColumn)), key)) {
+                runEnd++;
+            }
+            if (runEnd - rowIndex == 1) {
+                List<String> expectedRow = expected.get(rowIndex);
+                Object[] actualRow = actual.get(rowIndex).values();
+                for (int column = 0; column < expectedRow.size(); column++) {
+                    assertCell(queryId, rowIndex, column, expectedRow.get(column), actualRow[column]);
+                }
+            }
+            else {
+                // Within the run, compare the rows' non-key cells as a multiset keyed by their first column.
+                java.util.Set<String> expectedKeys = new java.util.HashSet<>();
+                java.util.Set<String> actualKeys = new java.util.HashSet<>();
+                for (int run = rowIndex; run < runEnd; run++) {
+                    expectedKeys.add(expected.get(run).get(0));
+                    Object value = actual.get(run).values()[0];
+                    actualKeys.add(value instanceof byte[] bytes ? new String(bytes, StandardCharsets.UTF_8) : String.valueOf(value));
+                }
+                assertThat(actualKeys).as("q%s tie run at %s", queryId, rowIndex).isEqualTo(expectedKeys);
+            }
+            rowIndex = runEnd;
+        }
+    }
+
+    private static boolean nearlyEqual(double left, double right)
+    {
+        if (left == right) {
+            return true;
+        }
+        return Math.abs(left - right) <= Math.max(Math.abs(left), Math.abs(right)) * 1e-9;
+    }
+
     private static void assertMatchesReference(String queryId, java.util.function.Function<TpchParquetTables, Operator> query)
     {
         var tables = TpchParquetTables.actualIfPresent();
