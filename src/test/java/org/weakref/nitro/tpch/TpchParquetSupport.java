@@ -27,6 +27,7 @@ import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -774,6 +775,151 @@ final class TpchParquetSupport
                         new Reference(new Input(inputIndex), Stream.VALUES),
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
         return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    /**
+     * Q13: customer LEFT-joins the NOT-LIKE-filtered orders (the build filter must precede the outer join);
+     * count(o_orderkey) per customer counts only matches, then the count distribution sorts (custdist,
+     * c_count) descending.
+     */
+    public static Operator query13(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator customer = scannedTable(allocator, tables, "customer", "c_custkey");
+        Operator orders = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_comment"),
+                        notLikeUtf8(2, "%special%requests%")),
+                0, 1);
+        // [c_custkey, o_orderkey, o_custkey] with nulls on the order side for unmatched customers
+        Operator joined = new HashJoinOperator(allocator, customer, 0, orders, 1, true);
+        // [c_custkey, c_count]
+        Operator perCustomer = new GroupedAggregationOperator(allocator, List.of(0), List.of(new CountColumn(1)), joined);
+        // [c_count, custdist]
+        Operator distribution = new GroupedAggregationOperator(allocator, List.of(1), List.of(new CountAll()),
+                projectInputs(allocator, primitiveRegistry, perCustomer, 0, 1));
+        return new SortOperator(allocator, new int[] {1, 0}, new boolean[] {true, true}, distribution);
+    }
+
+    /**
+     * Q16: partsupp joins the brand/type/size-filtered part, anti-joins the complaining suppliers, then the
+     * plan's two-level distinct count: group by (brand, type, size, suppkey), then count per (brand, type,
+     * size), sorted (supplier_cnt DESC, brand, type, size).
+     */
+    public static Operator query16(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator part = filter(allocator, primitiveRegistry,
+                scannedTable(allocator, tables, "part", "p_partkey", "p_brand", "p_type", "p_size"),
+                and(
+                        notEqualUtf8(1, "Brand#45"),
+                        notLikeUtf8(2, "MEDIUM POLISHED%"),
+                        inI64(3, List.of(3L, 9L, 14L, 19L, 23L, 36L, 45L, 49L))));
+        Operator partsupp = scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey");
+        // [ps_partkey, ps_suppkey, p_partkey, p_brand, p_type, p_size]
+        Operator joined = new HashJoinOperator(allocator, partsupp, 0, part, 0);
+
+        Operator complainingSuppliers = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        scannedTable(allocator, tables, "supplier", "s_suppkey", "s_comment"),
+                        likeUtf8(1, "%Customer%Complaints%")),
+                0);
+        Operator surviving = new SemiJoinOperator(allocator, joined, 1, complainingSuppliers, 0, false);
+
+        // distinct (brand, type, size, suppkey) -> count per (brand, type, size)
+        Operator distinctSuppliers = new GroupedAggregationOperator(allocator, List.of(3, 4, 5, 1), List.of(), surviving);
+        Operator counted = new GroupedAggregationOperator(allocator, List.of(0, 1, 2), List.of(new CountAll()), distinctSuppliers);
+        // SQL order: p_brand, p_type, p_size, supplier_cnt; sort: cnt DESC, brand, type, size
+        Operator sorted = new SortOperator(allocator, new int[] {3, 0, 1, 2}, new boolean[] {true, false, false, false}, counted);
+        return sorted;
+    }
+
+    /**
+     * Q18: lineitem grouped per order with sum(quantity) > 300 keys the customer/orders/lineitem join;
+     * quantity sums per (name, custkey, orderkey, orderdate, totalprice); TopN 100 by (totalprice DESC,
+     * orderdate).
+     */
+    public static Operator query18(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
+    {
+        Operator bigOrders = projectInputs(allocator, primitiveRegistry,
+                filter(allocator, primitiveRegistry,
+                        new GroupedAggregationOperator(
+                                allocator,
+                                List.of(0),
+                                List.of(new SumF64(1)),
+                                scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_quantity")),
+                        compareF64("gt_f64", 1, 300.0)),
+                0);
+        Operator orders = scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_orderdate", "o_totalprice");
+        // [o..4, bigOrderKey]
+        Operator filteredOrders = new HashJoinOperator(allocator, orders, 0, bigOrders, 0);
+        Operator customer = scannedTable(allocator, tables, "customer", "c_custkey", "c_name");
+        // + [c_custkey, c_name] -> 5,6
+        Operator joined = new HashJoinOperator(allocator, filteredOrders, 1, customer, 0);
+        Operator lineitem = scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_quantity");
+        // [l_orderkey, l_quantity, o..4, bigOrderKey, c_custkey, c_name]
+        joined = new HashJoinOperator(allocator, lineitem, 0, joined, 0);
+
+        // group keys (c_name 8, c_custkey 7, o_orderkey 2, o_orderdate 4, o_totalprice 5), sum qty 1
+        Operator aggregated = new GroupedAggregationOperator(
+                allocator,
+                List.of(8, 7, 2, 4, 5),
+                List.of(new SumF64(1)),
+                joined);
+        Operator top = new TopNOperator(allocator, 100, new int[] {4, 3}, new boolean[] {true, false}, aggregated);
+        return top;
+    }
+
+    private static FilterSpec likeUtf8(int inputIndex, String pattern)
+    {
+        Variable literal = new Variable(0);
+        Variable result = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(pattern), AllMask.ALL),
+                new Assignment(result, new Call("like_utf8", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    private static FilterSpec notLikeUtf8(int inputIndex, String pattern)
+    {
+        // The negation lives in the VALUE stream (a "not" call), not a NotMask, so the spec composes
+        // through the boolean combinators (combineBoolean reads the last assignment as the predicate).
+        Variable literal = new Variable(0);
+        Variable like = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(pattern), AllMask.ALL),
+                new Assignment(like, new Call("like_utf8", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("not", List.of(
+                        new Reference(like, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    private static FilterSpec notEqualUtf8(int inputIndex, String constant)
+    {
+        Variable literal = new Variable(0);
+        Variable equals = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(constant), AllMask.ALL),
+                new Assignment(equals, new Call("eq_utf8", List.of(
+                        new Reference(new Input(inputIndex), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("not", List.of(
+                        new Reference(equals, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+    }
+
+    private static FilterSpec inI64(int inputIndex, List<Long> values)
+    {
+        FilterSpec result = null;
+        for (long value : values) {
+            FilterSpec equals = comparison("eq", inputIndex, new Literal(value));
+            result = result == null ? equals : combineBoolean("or", result, equals);
+        }
+        return result;
     }
 
     // ---- scan / filter plumbing ----
