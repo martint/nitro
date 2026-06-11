@@ -998,6 +998,7 @@ public final class PlanEvaluator
     {
         return switch (vector) {
             case BooleanVector values -> values.values()[position];
+            case org.weakref.nitro.data.ConcatenatedBooleanVector values -> values.value(position);
             case DictionaryVector values -> readBoolean(values.values(), values.ids()[position]);
             case RleVector values -> readBoolean(values.values(), values.runIndex(position));
             default -> throw new IllegalArgumentException("Expected boolean vector but found " + vector.getClass().getSimpleName());
