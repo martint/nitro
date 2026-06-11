@@ -103,6 +103,20 @@ public final class PipelineCompiler
      */
     public static StreamingPipeline compileStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
+        if (System.getenv("NITRO_JIT_DUMP") != null) {
+            String source = renderStreaming(pipeline, encodings, nullable, "Streaming_dump");
+            String[] lines = source.split("\n", -1);
+            StringBuilder numbered = new StringBuilder();
+            for (int i = 0; i < lines.length; i++) {
+                numbered.append(String.format("%4d  %s%n", i + 1, lines[i]));
+            }
+            try {
+                java.nio.file.Files.writeString(java.nio.file.Path.of(System.getenv("NITRO_JIT_DUMP"), "streaming-" + Math.abs(source.hashCode()) + ".java"), numbered.toString());
+            }
+            catch (Exception e) {
+                System.err.println("NITRO_JIT_DUMP failed: " + e);
+            }
+        }
         Class<?> compiled = cachedClass("S|" + renderStreaming(pipeline, encodings, nullable, CACHE_NAME), "Streaming_",
                 name -> renderStreaming(pipeline, encodings, nullable, name));
         try {
