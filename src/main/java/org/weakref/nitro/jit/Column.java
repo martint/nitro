@@ -53,6 +53,16 @@ public sealed interface Column
                 }
                 yield new DictionaryColumn(ids, dictionary.dictionary(), nulls);
             }
+            case BytesViewColumn view -> {
+                int[] ids = new int[count];
+                byte[][] dictionary = new byte[count][];
+                for (int j = 0; j < count; j++) {
+                    int position = selection[j];
+                    dictionary[j] = java.util.Arrays.copyOfRange(view.data(), view.offsets()[position], view.offsets()[position + 1]);
+                    ids[j] = j;
+                }
+                yield new StringColumn(ids, dictionary);
+            }
             case StringColumn string -> {
                 int[] ids = new int[count];
                 boolean[] nulls = string.nulls() == null ? null : new boolean[count];
@@ -99,6 +109,16 @@ public sealed interface Column
             this(value, false);
         }
     }
+
+    /**
+     * A zero-copy view of a plain-encoded string page: row {@code i} is the bytes
+     * {@code data[offsets[i], offsets[i + 1])}. Handed out for filter-only plain pages, where per-row predicates
+     * evaluate in place -- no interning, no per-row copies. Never carries nulls (the source falls back to the
+     * dictionary form for nullable columns).
+     */
+    record BytesViewColumn(byte[] data, int[] offsets)
+            implements Column
+    {}
 
     /**
      * Dictionary-encoded string column: row {@code i} is the UTF-8 bytes {@code dictionary[ids[i]]} (null when

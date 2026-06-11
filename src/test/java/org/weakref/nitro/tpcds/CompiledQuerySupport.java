@@ -358,6 +358,7 @@ public final class CompiledQuerySupport
         // String columns whose ids land in cross-batch state (group keys, aggregate inputs, projected outputs)
         // are interned into a per-query global dictionary; filter-only strings keep cheap page-local dictionaries.
         GlobalStringDictionary[] globalDictionaries = new GlobalStringDictionary[width];
+        boolean[] viewable = new boolean[width];
         for (int c = 0; c < width; c++) {
             org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
             if (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
@@ -366,6 +367,24 @@ public final class CompiledQuerySupport
             }
             else if (spec.regexpPattern() != null) {
                 throw new UnsupportedOperationException("regexp-derived column " + spec.name() + " requires a globally-interned streamed load");
+            }
+            // A maybe-view string column's plain pages pass through as a zero-copy bytes view (the generated
+            // masks and winners-mode min compare per row in place); requires the full batch in page order and
+            // no nulls.
+            viewable[c] = spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+                    && !spec.nullable()
+                    && PipelineCompiler.stringMaybeView(pipeline, c);
+        }
+        // Winners dictionaries for winners-mode min inputs: appended to only on a new minimum, snapshotted for
+        // the result reconstruction.
+        boolean[] minWinners = new boolean[width];
+        byte[][][] winners = new byte[width][][];
+        int[] winnersSizes = new int[width];
+        for (int c = 0; c < width; c++) {
+            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+                    && PipelineCompiler.stringMinWinners(pipeline, c)) {
+                minWinners[c] = true;
+                winners[c] = new byte[16][];
             }
         }
         Operator operator = scan(allocator, tables, table, names);
@@ -657,6 +676,12 @@ public final class CompiledQuerySupport
                         ids[j] = isNull ? 0 : vectorIds[position];
                     }
                 }
+                else if (viewable[column] && vector instanceof org.weakref.nitro.data.BinaryVector binary
+                        && batchMask == null && count == currentRows) {
+                    // Zero-copy: the full batch in page order passes through as a bytes view; the generated
+                    // mask evaluates the predicate per row in place (vectorized containment / byte equality).
+                    return new org.weakref.nitro.jit.Column.BytesViewColumn(binary.data(), binary.offsets());
+                }
                 else {
                     // A filter-only plain page: no cross-batch ids are needed, so skip interning entirely --
                     // identity ids over the rows' bytes, and the per-batch mask evaluates each row directly
@@ -676,8 +701,27 @@ public final class CompiledQuerySupport
             }
 
             @Override
+            public byte[][] winners(int column)
+            {
+                return winners[column];
+            }
+
+            @Override
+            public int addWinner(int column, byte[] data, int offset, int length)
+            {
+                if (winnersSizes[column] == winners[column].length) {
+                    winners[column] = java.util.Arrays.copyOf(winners[column], winnersSizes[column] * 2);
+                }
+                winners[column][winnersSizes[column]] = java.util.Arrays.copyOfRange(data, offset, offset + length);
+                return winnersSizes[column]++;
+            }
+
+            @Override
             public byte[][] finalDictionary(int column)
             {
+                if (minWinners[column]) {
+                    return java.util.Arrays.copyOf(winners[column], winnersSizes[column]);
+                }
                 return globalDictionaries[column] == null ? null : globalDictionaries[column].snapshot();
             }
         };
@@ -1773,9 +1817,9 @@ public final class CompiledQuerySupport
      * stay stable across batches (required for group keys, aggregate inputs, and projected string outputs).
      */
     public interface StringInterningSource
-            extends org.weakref.nitro.jit.StreamingPipeline.Source
+            extends org.weakref.nitro.jit.StreamingPipeline.Source, org.weakref.nitro.jit.StreamingPipeline.Source.StringWinners
     {
-        /** The final interned dictionary for {@code column}, exact-sized; null when the column was not globally interned. */
+        /** The final reconstruction dictionary for {@code column} (global intern or winners), exact-sized; null when neither applies. */
         byte[][] finalDictionary(int column);
     }
 

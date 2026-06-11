@@ -155,6 +155,20 @@ public final class PipelineCompiler
         out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
                 + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
         emitOrderingDictionaryCapture(out, buildOrderingSources, input -> "builds[" + (input - 1) + "]");
+        List<Integer> winnersColumns = new ArrayList<>();
+        for (int c = 0; c < pipeline.columnCount(); c++) {
+            if (encodingOf(encodings, 0, c) == ColumnEncoding.STRING && stringMinWinners(pipeline, c)) {
+                winnersColumns.add(c);
+            }
+        }
+        if (!winnersColumns.isEmpty()) {
+            // Winners-mode min inputs: the source owns the winner dictionaries (the contract of routing such a
+            // pipeline through a winners-capable source).
+            out.append("    org.weakref.nitro.jit.StreamingPipeline.Source.StringWinners sWinnersSource = (org.weakref.nitro.jit.StreamingPipeline.Source.StringWinners) source;\n");
+            for (int c : winnersColumns) {
+                out.append("    byte[][] sWinners").append(c).append(" = sWinnersSource.winners(").append(c).append(");\n");
+            }
+        }
 
         if (pipeline.window() != null) {
             // A window is a pipeline breaker: drain all probe batches into a buffer, then run the eager ranking logic.
@@ -231,10 +245,10 @@ public final class PipelineCompiler
                 out.append("      {\n");
                 out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
                 for (int column : columns) {
-                    emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+                    emitStreamingScanColumnLoad(out, body, pipeline, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
                 }
                 for (Plan.Condition match : matches) {
-                    emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
+                    emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match), "selected");
                 }
                 out.append("        int kept = 0;\n");
                 out.append("        for (int i = 0; i < selected; i++) {\n");
@@ -254,11 +268,11 @@ public final class PipelineCompiler
             out.append("      {\n");
             out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(payloadColumns)).append(", selection, selected);\n");
             for (int column : payloadColumns) {
-                emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+                emitStreamingScanColumnLoad(out, body, pipeline, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
             }
             emitProbeOrderingDictionaryCapture(out, probeOrderingSources, payloadColumns);
             for (Plan.Condition match : aggregateMatches) {
-                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
+                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match), "selected");
             }
             for (Plan.Call derivation : collectStringDerivations(pipeline)) {
                 int column = stringDerivationColumn(derivation);
@@ -278,7 +292,7 @@ public final class PipelineCompiler
                 emitProjectionAppend(out, "          ", pipeline, encodings, nullable, resolver, nullResolver, stringMaskIds);
             }
             else {
-                emitGlobalAccumulate(out, body, "          ", pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
+                emitGlobalAccumulate(out, body, "          ", pipeline, resolver, nullResolver, stringMaskIds);
             }
             out.append("        }\n");
             out.append("      }\n");
@@ -289,11 +303,11 @@ public final class PipelineCompiler
             out.append("      int rowCount = source.rows();\n");
             out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
             for (int column : referencedColumns(pipeline)) {
-                emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
+                emitStreamingScanColumnLoad(out, body, pipeline, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "rowCount");
             }
             emitProbeOrderingDictionaryCapture(out, probeOrderingSources, referencedColumns(pipeline));
             for (Plan.Condition match : stringMatches) {
-                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match));
+                emitStreamingStringConditionPrelude(out, body, pipeline, match, stringMaskIds.get(match), "rowCount");
             }
             for (Plan.Call derivation : collectStringDerivations(pipeline)) {
                 int column = stringDerivationColumn(derivation);
@@ -1621,6 +1635,56 @@ public final class PipelineCompiler
         return "(" + differ + ")";
     }
 
+    /**
+     * The streaming variant of {@link #emitScanColumnLoad}: a viewable filter-only string column may arrive as a
+     * zero-copy bytes view (plain pages) or a dictionary form (dictionary pages), decided per batch by the
+     * source -- load both shapes behind a runtime dispatch, aliasing the view's ids to identity so the row loop
+     * reads the row-indexed mask unchanged.
+     */
+    private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, int column, ColumnEncoding encoding, boolean nullable, String rowsVar)
+    {
+        if (encoding != ColumnEncoding.STRING || !stringMaybeView(pipeline, column)) {
+            emitScanColumnLoad(out, column, encoding, nullable);
+            return;
+        }
+        emitIdentityIdsHelper(body);
+        out.append("    int[] cIds").append(column).append("; byte[][] cStr").append(column).append("; int cStrLen").append(column)
+                .append("; byte[] cView").append(column).append("; int[] cViewOff").append(column).append(";\n");
+        out.append("    if (in[").append(column).append("] instanceof org.weakref.nitro.jit.Column.BytesViewColumn view").append(column).append(") {\n");
+        out.append("      cView").append(column).append(" = view").append(column).append(".data(); cViewOff").append(column)
+                .append(" = view").append(column).append(".offsets();\n");
+        out.append("      cIds").append(column).append(" = identityIds(").append(rowsVar).append("); cStr").append(column)
+                .append(" = NO_ENTRIES; cStrLen").append(column).append(" = 0;\n");
+        out.append("    }\n");
+        out.append("    else {\n");
+        out.append("      org.weakref.nitro.jit.Column.StringColumn s").append(column).append(" = (org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("];\n");
+        out.append("      cIds").append(column).append(" = s").append(column).append(".ids(); cStr").append(column)
+                .append(" = s").append(column).append(".dictionary(); cStrLen").append(column).append(" = s").append(column).append(".dictionarySize();\n");
+        out.append("      cView").append(column).append(" = null; cViewOff").append(column).append(" = null;\n");
+        out.append("    }\n");
+        if (nullable) {
+            out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).nulls();\n");
+        }
+    }
+
+    /** Emit (once) the shared identity-ids scratch: a growing {@code [0, n)} array reused across batches. */
+    private static void emitIdentityIdsHelper(ClassBody body)
+    {
+        if (body.methods().indexOf("int[] identityIds(") >= 0) {
+            return;
+        }
+        body.field("int[]", "identityIdsScratch");
+        StringBuilder method = body.methods();
+        method.append("  private static final byte[][] NO_ENTRIES = new byte[0][];\n");
+        method.append("  private int[] identityIds(int n) {\n");
+        method.append("    if (identityIdsScratch == null || identityIdsScratch.length < n) {\n");
+        method.append("      identityIdsScratch = new int[Math.max(n, identityIdsScratch == null ? 16 : identityIdsScratch.length * 2)];\n");
+        method.append("      for (int i = 0; i < identityIdsScratch.length; i++) { identityIdsScratch[i] = i; }\n");
+        method.append("    }\n");
+        method.append("    return identityIdsScratch;\n");
+        method.append("  }\n");
+    }
+
     /** Declare the local(s) for a scan column according to its encoding: flat values, dict ids + dictionary, or a constant; plus a null mask when nullable. */
     private static void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding, boolean nullable)
     {
@@ -2587,7 +2651,7 @@ public final class PipelineCompiler
                 emitGroupedAccumulate(out, body, "          ", pipeline, nullable, lazyResolver, lazyResolver, lazyNullResolver, stringMaskIds, false);
             }
             else {
-                emitGlobalAccumulate(out, body, "          ", pipeline.aggregates(), lazyResolver, lazyNullResolver, stringMaskIds);
+                emitGlobalAccumulate(out, body, "          ", pipeline, lazyResolver, lazyNullResolver, stringMaskIds);
             }
             out.append("        }\n");
             out.append("      }\n");
@@ -2966,7 +3030,7 @@ public final class PipelineCompiler
             emitGroupedAccumulate(out, body, bodyIndent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate);
         }
         else {
-            emitGlobalAccumulate(out, body, bodyIndent, pipeline.aggregates(), resolver, nullResolver, stringMaskIds);
+            emitGlobalAccumulate(out, body, bodyIndent, pipeline, resolver, nullResolver, stringMaskIds);
         }
         if (emitFilter) {
             out.append(indent).append("}\n");
@@ -2986,17 +3050,23 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGlobalAccumulate(StringBuilder out, ClassBody body, String indent, List<Plan.Aggregate> aggregates, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private static void emitGlobalAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
+        List<Plan.Aggregate> aggregates = pipeline.aggregates();
         for (int a = 0; a < aggregates.size(); a++) {
             // A global COUNT(DISTINCT) fuses like the grouped one, with the constant group identity 1.
-            emitAggregateUpdate(out, indent, body, aggregates.get(a), a, cells(aggregates, a, "a", null), "1L", resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, cells(aggregates, a, "a", null), "1L", resolver, nullResolver, stringMaskIds);
         }
     }
 
     private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
-        emitAggregateUpdate(out, indent, null, aggregate, -1, cells, null, resolver, nullResolver, stringMaskIds);
+        emitAggregateUpdate(out, indent, null, null, aggregate, -1, cells, null, resolver, nullResolver, stringMaskIds);
+    }
+
+    private static void emitAggregateUpdate(StringBuilder out, String indent, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    {
+        emitAggregateUpdate(out, indent, null, body, aggregate, index, cells, groupId, resolver, nullResolver, stringMaskIds);
     }
 
     /**
@@ -3006,8 +3076,28 @@ public final class PipelineCompiler
      * only when {@code distinctAdd<index>(groupId, input)} inserts a new (group, value) pair into the emitted
      * open-addressing set.
      */
-    private static void emitAggregateUpdate(StringBuilder out, String indent, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
+        if (pipeline != null && aggregate.fn().equals("min_utf8") && aggregate.input() instanceof Plan.Col col
+                && stringMinWinners(pipeline, col.index())) {
+            // Winners-mode: compare the candidate's bytes in place (view slice, or a dictionary page's entry)
+            // against the current minimum, appending to the source's winners dictionary only on a win -- the
+            // column never pays a per-row intern. The cell holds the winner id (-1 = none yet).
+            int column = col.index();
+            String cell = cells.get(0);
+            out.append(indent).append("{ byte[] mwD; int mwF; int mwT;\n");
+            out.append(indent).append("  if (cView").append(column).append(" != null) { mwD = cView").append(column)
+                    .append("; mwF = cViewOff").append(column).append("[i]; mwT = cViewOff").append(column).append("[i + 1]; }\n");
+            out.append(indent).append("  else { mwD = cStr").append(column).append("[cIds").append(column)
+                    .append("[i]]; mwF = 0; mwT = mwD.length; }\n");
+            out.append(indent).append("  long mwCur = ").append(cell).append(";\n");
+            out.append(indent).append("  if (mwCur == -1L || java.util.Arrays.compareUnsigned(mwD, mwF, mwT, sWinners").append(column)
+                    .append("[(int) mwCur], 0, sWinners").append(column).append("[(int) mwCur].length) < 0) {\n");
+            out.append(indent).append("    ").append(cell).append(" = sWinnersSource.addWinner(").append(column).append(", mwD, mwF, mwT);\n");
+            out.append(indent).append("    sWinners").append(column).append(" = sWinnersSource.winners(").append(column).append(");\n");
+            out.append(indent).append("  } }\n");
+            return;
+        }
         AggregateLibrary.AggregateCompiler aggregator = aggregator(aggregate);
         String inputExpr = input(aggregate, resolver, nullResolver, stringMaskIds);
         String dictionary = aggregateInputDictionary(aggregate);
@@ -3179,7 +3269,7 @@ public final class PipelineCompiler
             String b = indent + "  ";
             out.append(b).append("int gbase = findGroupSet").append(s).append("(").append(arguments).append(");\n");
             for (int a = 0; a < aggregates.size(); a++) {
-                emitAggregateUpdate(out, b, body, aggregates.get(a), a, slotCells(aggregates, a, "gsT", "gbase", keyCount + 2), "(gsT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
+                emitAggregateUpdate(out, b, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "gsT", "gbase", keyCount + 2), "(gsT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
             }
             out.append(indent).append("}\n");
             if (body.methods().indexOf("int findGroupSet" + s + "(") >= 0) {
@@ -3450,7 +3540,7 @@ public final class PipelineCompiler
         emitStateIdentity(out, indent + "  ", aggregates, "sgA", "sgid");
         out.append(indent).append("}\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, body, aggregates.get(a), a, cells(aggregates, a, "sgA", "sgid"), "(sgid + 1L)", resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, cells(aggregates, a, "sgA", "sgid"), "(sgid + 1L)", resolver, nullResolver, stringMaskIds);
         }
     }
 
@@ -3558,7 +3648,7 @@ public final class PipelineCompiler
         }
         out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", resolver, nullResolver, stringMaskIds);
         }
         if (body.methods().indexOf("int findGroup(") >= 0) {
             return;
@@ -3952,15 +4042,106 @@ public final class PipelineCompiler
     }
 
     /**
+     * Can a streamed string column's plain pages be handed through as a zero-copy bytes view? True when every
+     * predicate over the column has a per-row view evaluation (exact match or LIKE containment) and the column's
+     * only other consumers, if any, are direct {@code min_utf8} aggregates (the winners-mode aggregate compares
+     * candidate bytes in place). The generated prelude then evaluates predicates over the page bytes -- no
+     * interning, no per-row copies -- aliasing the row ids to identity so the row loop is unchanged.
+     */
+    public static boolean stringMaybeView(Plan.Pipeline pipeline, int column)
+    {
+        if (pipeline.groupKeys().stream().anyMatch(key -> referencesColumn(key, column))
+                || (projectionOnly(pipeline) && pipeline.projections().stream().anyMatch(projection -> referencesColumn(projection, column)))) {
+            return false;
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() == null || !referencesColumn(aggregate.input(), column)) {
+                continue;
+            }
+            // Only a direct min_utf8 reads a view column (winners-mode); anything else (a derivation, another
+            // aggregate) needs stable ids or per-entry arrays, which a view cannot provide.
+            if (!aggregate.fn().equals("min_utf8") || !(aggregate.input() instanceof Plan.Col)) {
+                return false;
+            }
+        }
+        boolean any = false;
+        for (Plan.Condition match : collectPipelineStringMatches(pipeline)) {
+            if (match instanceof Plan.StringColumnCompare compare) {
+                if (compare.left() == column || compare.right() == column) {
+                    return false;
+                }
+                continue;
+            }
+            if (stringMatchColumn(match) != column) {
+                continue;
+            }
+            any = true;
+            boolean supported = match instanceof Plan.StringMatch
+                    || (match instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
+            if (!supported) {
+                return false;
+            }
+        }
+        return any || stringMinWinners(pipeline, column);
+    }
+
+    /** Is {@code column} a winners-mode min input: a maybe-view column some {@code min_utf8} reads directly? */
+    public static boolean stringMinWinners(Plan.Pipeline pipeline, int column)
+    {
+        boolean min = pipeline.aggregates().stream().anyMatch(aggregate -> aggregate.fn().equals("min_utf8")
+                && aggregate.input() instanceof Plan.Col col && col.index() == column);
+        return min && minWinnersShape(pipeline, column);
+    }
+
+    /** The structural half of winners-mode eligibility (everything except requiring a min consumer). */
+    private static boolean minWinnersShape(Plan.Pipeline pipeline, int column)
+    {
+        if (pipeline.groupKeys().stream().anyMatch(key -> referencesColumn(key, column))
+                || (projectionOnly(pipeline) && pipeline.projections().stream().anyMatch(projection -> referencesColumn(projection, column)))) {
+            return false;
+        }
+        for (Plan.Aggregate aggregate : pipeline.aggregates()) {
+            if (aggregate.input() != null && referencesColumn(aggregate.input(), column)
+                    && (!aggregate.fn().equals("min_utf8") || !(aggregate.input() instanceof Plan.Col))) {
+                return false;
+            }
+        }
+        for (Plan.Condition match : collectPipelineStringMatches(pipeline)) {
+            if (match instanceof Plan.StringColumnCompare compare) {
+                if (compare.left() == column || compare.right() == column) {
+                    return false;
+                }
+                continue;
+            }
+            if (stringMatchColumn(match) != column) {
+                continue;
+            }
+            boolean supported = match instanceof Plan.StringMatch
+                    || (match instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
+            if (!supported) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean referencesColumn(Plan.Expr expr, int column)
+    {
+        TreeSet<Integer> referenced = new TreeSet<>();
+        collectColumns(expr, referenced);
+        return referenced.contains(column);
+    }
+
+    /**
      * Does a streamed string column's id numbering have to be stable across batches? True when the column is
      * consumed beyond filter predicates (group key, aggregate input, or projected output): those ids land in
      * cross-batch state, so the source must intern the column into a per-query global dictionary, and its
      * predicate masks extend incrementally rather than rebuilding per batch. A filter-only column's ids die with
-     * the batch, so a per-batch (page-local) dictionary suffices.
+     * the batch (page-local dictionary), and a winners-mode min input compares bytes in place (no ids at all).
      */
     public static boolean stringIdsCrossBatches(Plan.Pipeline pipeline, int column)
     {
-        return accumulateColumns(pipeline).contains(column);
+        return accumulateColumns(pipeline).contains(column) && !stringMinWinners(pipeline, column);
     }
 
     /** Order top-level (AND-ed) conjuncts most-selective-first by a static heuristic; AND is commutative so this is safe. */
@@ -4427,7 +4608,7 @@ public final class PipelineCompiler
      * (ids stable across batches, see {@link #stringIdsCrossBatches}) gets an incremental field-held mask;
      * everything else rebuilds per batch over the page-local dictionary, as in the materialized path.
      */
-    private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id)
+    private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id, String rowsVar)
     {
         if (match instanceof Plan.StringColumnCompare) {
             emitStringConditionPrelude(out, match, id, column -> "cStr" + column);
@@ -4438,7 +4619,67 @@ public final class PipelineCompiler
             emitIncrementalStringMaskPrelude(out, body, match, id, "cStr" + column, "cStrLen" + column);
             return;
         }
+        if (stringMaybeView(pipeline, column)) {
+            emitViewOrCachedStringMaskPrelude(out, body, pipeline, match, id, column, rowsVar);
+            return;
+        }
         emitIdentityCachedStringMaskPrelude(out, body, match, id, "cStr" + column);
+    }
+
+    /**
+     * Mask prelude for a viewable filter-only column: a bytes-view batch evaluates the predicate per row in
+     * place (vectorized containment / byte equality over the page data) into a row-indexed mask, with the ids
+     * aliased to identity by the column load; a dictionary-page batch keeps the identity-cached entry mask.
+     */
+    private static void emitViewOrCachedStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id, int column, String rowsVar)
+    {
+        body.field("boolean[]", "sMask" + id);
+        body.field("byte[][]", "sMaskDict" + id);
+        out.append("    if (cView").append(column).append(" != null) {\n");
+        out.append("      if (sMask").append(id).append(" == null || sMask").append(id).append(".length < ").append(rowsVar).append(") { sMask").append(id)
+                .append(" = new boolean[Math.max(").append(rowsVar).append(", sMask").append(id).append(" == null ? 0 : sMask").append(id).append(".length * 2)]; }\n");
+        out.append("      sMaskDict").append(id).append(" = null;\n");
+        emitViewMaskFill(out, body, match, id, column, rowsVar);
+        out.append("    }\n");
+        out.append("    else if (sMaskDict").append(id).append(" != cStr").append(column).append(") {\n");
+        out.append("      sMask").append(id).append(" = new boolean[cStr").append(column).append(".length];\n");
+        emitStringMaskFill(out, match, id, "cStr" + column, "0", "cStr" + column + ".length");
+        out.append("      sMaskDict").append(id).append(" = cStr").append(column).append(";\n");
+        out.append("    }\n");
+    }
+
+    /** Per-row in-place fill of a view batch's mask: vectorized containment for LIKE, byte equality for IN. */
+    private static void emitViewMaskFill(StringBuilder out, ClassBody body, Plan.Condition match, int id, int column, String rowsVar)
+    {
+        if (match instanceof Plan.LikeMatch like) {
+            String literal = likeContainsLiteral(like.pattern());
+            body.field("org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.ContainsNeedle", "sNeedle" + id);
+            out.append("      if (sNeedle").append(id).append(" == null) { sNeedle").append(id)
+                    .append(" = org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.containsNeedle(")
+                    .append(javaStringLiteral(literal)).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8)); }\n");
+            out.append("      for (int e = 0; e < ").append(rowsVar).append("; e++) {\n");
+            String matches = "org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.contains(cView" + column
+                    + ", cViewOff" + column + "[e], cViewOff" + column + "[e + 1] - cViewOff" + column + "[e], sNeedle" + id + ")";
+            out.append("        sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+            out.append("      }\n");
+            return;
+        }
+        Plan.StringMatch exact = (Plan.StringMatch) match;
+        for (int v = 0; v < exact.values().size(); v++) {
+            out.append("      byte[] sLit").append(id).append("_").append(v).append(" = ")
+                    .append(javaStringLiteral(exact.values().get(v))).append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
+        }
+        out.append("      for (int e = 0; e < ").append(rowsVar).append("; e++) {\n");
+        out.append("        int sFrom = cViewOff").append(column).append("[e]; int sTo = cViewOff").append(column).append("[e + 1];\n");
+        StringBuilder member = new StringBuilder();
+        for (int v = 0; v < exact.values().size(); v++) {
+            member.append(member.length() == 0 ? "" : " || ")
+                    .append("java.util.Arrays.equals(cView").append(column).append(", sFrom, sTo, sLit").append(id).append("_").append(v)
+                    .append(", 0, sLit").append(id).append("_").append(v).append(".length)");
+        }
+        String matches = exact.values().isEmpty() ? "false" : member.toString();
+        out.append("        sMask").append(id).append("[e] = ").append(exact.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
+        out.append("      }\n");
     }
 
     /**

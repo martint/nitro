@@ -33,6 +33,20 @@ public interface StreamingPipeline
         /** Advance to the next batch; returns false when the input is exhausted. */
         boolean advance();
 
+        /**
+         * Optional capability: per-column winner dictionaries backing min/max-style string aggregates over
+         * streamed view columns -- the aggregate compares candidate bytes in place and appends only the rare
+         * winners, so the column never pays a per-row intern. {@link #winners} returns the growing backing
+         * (entries beyond the current count are unset); {@link #addWinner} copies the bytes in and returns the
+         * new entry's id. A source that does not serve such columns returns null from {@link #winners}.
+         */
+        interface StringWinners
+        {
+            byte[][] winners(int column);
+
+            int addWinner(int column, byte[] data, int offset, int length);
+        }
+
         /** Row count of the current batch. */
         int rows();
 

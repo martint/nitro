@@ -1157,6 +1157,41 @@ public final class Utf8BinaryDispatch
         return false;
     }
 
+    /** Precompile a containment needle from raw bytes, for repeated probes (the compiled LIKE '%literal%' mask). */
+    public static ContainsNeedle containsNeedle(byte[] needle)
+    {
+        int firstProbeOffset = 0;
+        int secondProbeOffset = needle.length <= 1 ? 0 : selectSecondProbeOffset(needle, 0, needle.length);
+        byte firstProbeByte = needle.length == 0 ? 0 : needle[firstProbeOffset];
+        byte secondProbeByte = needle.length <= 1 ? firstProbeByte : needle[secondProbeOffset];
+        return new ContainsNeedle(needle, 0, needle.length, firstProbeOffset, secondProbeOffset, firstProbeByte, secondProbeByte);
+    }
+
+    /** Vectorized containment of a precompiled needle in {@code data[offset, offset+length)}. */
+    public static boolean contains(byte[] data, int offset, int length, ContainsNeedle needle)
+    {
+        if (needle.length() == 0) {
+            return true;
+        }
+        if (length < needle.length()) {
+            return false;
+        }
+        if (needle.length() == 1) {
+            return binaryContainsSingleByte(data, offset, length, needle.firstProbeByte());
+        }
+        return binaryContainsVectorized(
+                data,
+                offset,
+                length,
+                needle.data(),
+                needle.start(),
+                needle.length(),
+                needle.firstProbeOffset(),
+                needle.secondProbeOffset(),
+                needle.firstProbeByte(),
+                needle.secondProbeByte());
+    }
+
     private static ContainsNeedle compileContainsNeedle(BinaryVector needleVector, int needlePosition)
     {
         byte[] needleData = needleVector.data();
@@ -1282,7 +1317,7 @@ public final class Utf8BinaryDispatch
         CONTAINS,
     }
 
-    private record ContainsNeedle(
+    public record ContainsNeedle(
             byte[] data,
             int start,
             int length,
