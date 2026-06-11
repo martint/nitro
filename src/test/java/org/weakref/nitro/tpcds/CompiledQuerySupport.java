@@ -861,6 +861,31 @@ public final class CompiledQuerySupport
             }
             return;
         }
+        if (valueVector instanceof org.weakref.nitro.data.F64Vector f64) {
+            // F64 lanes carry raw double bits in the long buffer.
+            double[] backing = f64.values();
+            for (int i = 0; i < count; i++) {
+                boolean isNull = nullVector != null && isNull(nullVector, i);
+                nulls[offset + i] = isNull;
+                values[offset + i] = isNull ? 0 : Double.doubleToRawLongBits(backing[i]);
+            }
+            return;
+        }
+        if (valueVector instanceof org.weakref.nitro.data.DictionaryVector dictionary
+                && !(dictionary.values() instanceof org.weakref.nitro.data.BinaryVector)) {
+            // A dictionary-encoded NUMERIC page: decode through the ids.
+            int[] ids = dictionary.ids();
+            Vector entries = dictionary.values();
+            double[] doubleEntries = entries instanceof org.weakref.nitro.data.F64Vector f64Entries ? f64Entries.values() : null;
+            for (int i = 0; i < count; i++) {
+                boolean isNull = nullVector != null && isNull(nullVector, i);
+                nulls[offset + i] = isNull;
+                values[offset + i] = isNull ? 0
+                        : doubleEntries != null ? Double.doubleToRawLongBits(doubleEntries[ids[i]])
+                        : longValue(entries, ids[i]);
+            }
+            return;
+        }
         throw new IllegalArgumentException("Unsupported column vector type: " + valueVector.getClass().getName());
     }
 

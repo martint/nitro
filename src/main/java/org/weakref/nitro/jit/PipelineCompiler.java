@@ -931,8 +931,8 @@ public final class PipelineCompiler
                 Type type = key.type();
                 IntFunction<String> decodeA = index -> types.get(index).decode("cols[" + index + "][a]");
                 IntFunction<String> decodeB = index -> types.get(index).decode("cols[" + index + "][b]");
-                String valueA = encodeSlot(type, expr(key.expr(), decodeA));
-                String valueB = encodeSlot(type, expr(key.expr(), decodeB));
+                String valueA = encodeSlot(type, decodedExpr(key.expr(), decodeA, NEVER_NULL));
+                String valueB = encodeSlot(type, decodedExpr(key.expr(), decodeB, NEVER_NULL));
                 out.append("      { c = ").append(type.compare(valueA, valueB)).append(";");
                 if (key.descending()) {
                     out.append(" c = -c;");
@@ -1040,7 +1040,7 @@ public final class PipelineCompiler
             Type type = projectionType(projection, inputTypes);
             outputTypes.add(type);
             out.append("    for (int r = 0; r < n; r++) { proj[").append(p).append("][r] = ")
-                    .append(encodeSlot(type, expr(projection, decode, columnNull))).append("; }\n");
+                    .append(encodeSlot(type, decodedExpr(projection, decode, columnNull))).append("; }\n");
             if (projection instanceof Plan.Col col) {
                 out.append("    if (inNulls != null && inNulls[").append(col.index()).append("] != null) { if (projNulls == null) { projNulls = new boolean[")
                         .append(outCount).append("][]; } projNulls[").append(p).append("] = inNulls[").append(col.index()).append("]; }\n");
@@ -3158,6 +3158,14 @@ public final class PipelineCompiler
             for (int column : payloadProbe) {
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
             }
+            // A value-ordered string sort key sourced from the streamed probe re-captures its growing global
+            // dictionary here, exactly as the single-input payload does.
+            for (Map.Entry<Integer, int[]> orderingSource : orderingStringSources(pipeline, resultTypes).entrySet()) {
+                int sourceColumn = orderingSource.getValue()[1];
+                if (orderingSource.getValue()[0] == 0 && payloadProbe.contains(sourceColumn) && stringIdsCrossBatches(pipeline, sourceColumn)) {
+                    out.append("        orderingDictionary").append(orderingSource.getKey()).append(" = ").append(probeVars(sourceColumn).stringDict()).append(";\n");
+                }
+            }
             for (Plan.Condition match : aggregateMatches) {
                 if (stringMatchColumn(match) < probeColumns) {
                     emitStringMaskPrelude(out, match, stringMaskIds.get(match), probeVars(stringMatchColumn(match)).stringDict());
@@ -4675,6 +4683,10 @@ public final class PipelineCompiler
      */
     public static boolean stringMaybeView(Plan.Pipeline pipeline, int column)
     {
+        // Views are a single-input mechanism: the join phases load plain string columns.
+        if (!pipeline.joins().isEmpty()) {
+            return false;
+        }
         if (pipeline.groupKeys().stream().anyMatch(key -> referencesColumn(key, column))
                 || (projectionOnly(pipeline) && pipeline.projections().stream().anyMatch(projection -> referencesColumn(projection, column)))) {
             return false;
@@ -4763,7 +4775,7 @@ public final class PipelineCompiler
      */
     public static boolean stringFilterViewable(Plan.Pipeline pipeline, boolean[][] nullable, int column)
     {
-        if (nullableOf(nullable, 0, column)) {
+        if (!pipeline.joins().isEmpty() || nullableOf(nullable, 0, column)) {
             return false;
         }
         boolean any = false;
@@ -5085,6 +5097,35 @@ public final class PipelineCompiler
     private static String expr(Plan.Expr expr, IntFunction<String> resolver)
     {
         return expr(expr, resolver, NEVER_NULL);
+    }
+
+    /**
+     * The result-boundary form of {@link #expr}: post-aggregation projections and expression sort keys read
+     * DECODED column values (a DOUBLE column arrives as a Java double via {@link Type#decode}), so double
+     * literals render plainly and arithmetic uses the untyped operators -- unlike the row loops, where F64
+     * rides as raw bits and the {@code _f64} vocabulary unwraps it.
+     */
+    private static String decodedExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        return switch (expr) {
+            case Plan.LitF64 lit -> String.valueOf(lit.value());
+            case Plan.Bin bin -> ScalarLibrary.get(decodedOperator(bin.op())).emit(List.of(
+                    decodedExpr(bin.left(), resolver, nullResolver),
+                    decodedExpr(bin.right(), resolver, nullResolver)));
+            default -> expr(expr, resolver, nullResolver);
+        };
+    }
+
+    /** Map the {@code _f64} vocabulary to the plain operators in decoded contexts (doubles are already unwrapped). */
+    private static String decodedOperator(String op)
+    {
+        return switch (op) {
+            case "add_f64" -> "+";
+            case "subtract_f64" -> "-";
+            case "multiply_f64" -> "*";
+            case "divide_f64" -> "/";
+            default -> op;
+        };
     }
 
     private static String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
