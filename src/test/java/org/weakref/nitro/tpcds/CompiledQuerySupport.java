@@ -2022,15 +2022,45 @@ public final class CompiledQuerySupport
             }
         }
 
+        private static final java.lang.invoke.VarHandle LONG_HANDLE =
+                java.lang.invoke.MethodHandles.byteArrayViewVarHandle(long[].class, java.nio.ByteOrder.LITTLE_ENDIAN);
+
         private int hashBytes(byte[] data, int offset, int length)
         {
-            long hash = 0x9E3779B97F4A7C15L;
-            for (int i = offset; i < offset + length; i++) {
-                hash = (hash ^ data[i]) * 0x100000001B3L;
+            // Word-at-a-time (the grouping/join-table scheme): the byte-at-a-time FNV this replaces showed as
+            // ~20% of ClickBench q13 (every row's phrase interned for the string GROUP BY).
+            long hash = 0x9E37_79B9_7F4A_7C15L ^ length;
+            int index = offset;
+            int end = offset + length;
+            while (index + Long.BYTES <= end) {
+                hash ^= mix64((long) LONG_HANDLE.get(data, index));
+                hash = Long.rotateLeft(hash, 27) * 0x9FB2_1C65_1E98_DF25L + 0x52DC_E729L;
+                index += Long.BYTES;
             }
-            int folded = (int) (hash ^ (hash >>> 32));
+            long tail = 0;
+            int shift = 0;
+            while (index < end) {
+                tail |= (data[index] & 0xFFL) << shift;
+                shift += Byte.SIZE;
+                index++;
+            }
+            hash ^= mix64(tail);
+            hash ^= hash >>> 33;
+            hash *= 0xFF51_AFD7_ED55_8CCDL;
+            hash ^= hash >>> 33;
+            hash *= 0xC4CE_B9FE_1A85_EC53L;
+            hash ^= hash >>> 33;
+            int folded = (int) (hash ^ (hash >>> Integer.SIZE));
             pendingHash = folded;
             return folded;
+        }
+
+        private static long mix64(long value)
+        {
+            long mixed = value * 0x9FB2_1C65_1E98_DF25L;
+            mixed ^= mixed >>> 33;
+            mixed *= 0xC2B2_AE3D_27D4_EB4FL;
+            return mixed ^ (mixed >>> 29);
         }
     }
 

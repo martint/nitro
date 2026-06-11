@@ -3312,8 +3312,10 @@ public final class PipelineCompiler
             if (body == null || groupId == null) {
                 throw new IllegalStateException("count_distinct requires a grouped context with a stable group identity");
             }
-            emitDistinctSet(body, index);
-            String update = "if (distinctAdd" + index + "(" + groupId + ", " + inputExpr + ")) { " + cells.get(0) + " += 1L; }";
+            boolean global = groupId.equals("1L");
+            emitDistinctSet(body, index, global);
+            String arguments = global ? inputExpr : groupId + ", " + inputExpr;
+            String update = "if (distinctAdd" + index + "(" + arguments + ")) { " + cells.get(0) + " += 1L; }";
             if (guard.equals("false")) {
                 out.append(indent).append(update).append("\n");
             }
@@ -3331,8 +3333,12 @@ public final class PipelineCompiler
         out.append(indent).append("}\n");
     }
 
-    /** Emit (once) aggregate {@code index}'s distinct set: interleaved [groupId, value] open addressing, groupId nonzero. */
-    private static void emitDistinctSet(ClassBody body, int index)
+    /**
+     * Emit (once) aggregate {@code index}'s distinct set. Grouped: interleaved [groupId, value] open addressing,
+     * groupId nonzero. Global (the group identity is the constant 1): value-only slots -- half the footprint, so
+     * half the cache misses per probe on a high-cardinality input -- with the zero value held in a sentinel flag.
+     */
+    private static void emitDistinctSet(ClassBody body, int index, boolean global)
     {
         String set = "dSet" + index;
         if (body.methods().indexOf("boolean distinctAdd" + index + "(") >= 0) {
@@ -3341,6 +3347,38 @@ public final class PipelineCompiler
         body.field("long[]", set);
         body.field("int", set + "Count");
         StringBuilder method = body.methods();
+        if (global) {
+            body.field("boolean", set + "HasZero");
+            method.append("  private boolean distinctAdd").append(index).append("(long value) {\n");
+            method.append("    if (value == 0L) {\n");
+            method.append("      if (").append(set).append("HasZero) { return false; }\n");
+            method.append("      ").append(set).append("HasZero = true; return true;\n");
+            method.append("    }\n");
+            method.append("    if (").append(set).append(" == null) { ").append(set).append(" = new long[2048]; }\n");
+            method.append("    if ((long) (").append(set).append("Count + 1) * 2 >= ").append(set).append(".length) {\n");
+            method.append("      long[] old = ").append(set).append("; ").append(set).append(" = new long[old.length * 2];\n");
+            method.append("      int rmask = ").append(set).append(".length - 1;\n");
+            method.append("      for (int s = 0; s < old.length; s++) {\n");
+            method.append("        if (old[s] != 0L) {\n");
+            method.append("          long rh = old[s] * 0x9E3779B97F4A7C15L;\n");
+            method.append("          int rslot = (int) ((rh ^ (rh >>> 32)) & rmask);\n");
+            method.append("          while (").append(set).append("[rslot] != 0L) { rslot = (rslot + 1) & rmask; }\n");
+            method.append("          ").append(set).append("[rslot] = old[s];\n");
+            method.append("        }\n");
+            method.append("      }\n");
+            method.append("    }\n");
+            method.append("    int mask = ").append(set).append(".length - 1;\n");
+            method.append("    long h = value * 0x9E3779B97F4A7C15L;\n");
+            method.append("    int slot = (int) ((h ^ (h >>> 32)) & mask);\n");
+            method.append("    while (true) {\n");
+            method.append("      long v = ").append(set).append("[slot];\n");
+            method.append("      if (v == 0L) { ").append(set).append("[slot] = value; ").append(set).append("Count++; return true; }\n");
+            method.append("      if (v == value) { return false; }\n");
+            method.append("      slot = (slot + 1) & mask;\n");
+            method.append("    }\n");
+            method.append("  }\n");
+            return;
+        }
         method.append("  private boolean distinctAdd").append(index).append("(long gid, long value) {\n");
         method.append("    if (").append(set).append(" == null) { ").append(set).append(" = new long[2048]; }\n");
         // Grow at half-full (count pairs vs len/2 slots); rehash every occupied pair into the doubled table.
