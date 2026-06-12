@@ -316,6 +316,7 @@ final class TrinoClickBenchPageReader
                         ? io.trino.spi.type.DateType.DATE
                         : io.trino.spi.type.IntegerType.INTEGER;
                 case INT64 -> io.trino.spi.type.BigintType.BIGINT;
+                case DOUBLE -> io.trino.spi.type.DoubleType.DOUBLE;
                 case BOOLEAN -> io.trino.spi.type.BooleanType.BOOLEAN;
                 case BINARY, FIXED_LEN_BYTE_ARRAY -> primitive.getLogicalTypeAnnotation() != null && primitive.getLogicalTypeAnnotation().equals(stringType())
                         ? io.trino.spi.type.VarcharType.VARCHAR
@@ -359,6 +360,7 @@ final class TrinoClickBenchPageReader
                     ? io.trino.spi.type.DateType.DATE
                     : io.trino.spi.type.IntegerType.INTEGER;
             case INT64 -> io.trino.spi.type.BigintType.BIGINT;
+            case DOUBLE -> io.trino.spi.type.DoubleType.DOUBLE;
             case BOOLEAN -> io.trino.spi.type.BooleanType.BOOLEAN;
             case BINARY, FIXED_LEN_BYTE_ARRAY -> primitive.getLogicalTypeAnnotation() != null && primitive.getLogicalTypeAnnotation().equals(stringType())
                     ? io.trino.spi.type.VarcharType.VARCHAR
