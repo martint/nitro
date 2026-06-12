@@ -64,6 +64,89 @@ public final class StringMatching
         return count;
     }
 
+    /**
+     * A {@code %}-only LIKE pattern as anchored byte segments: each segment must appear in order, the first
+     * anchored to the start unless the pattern opens with {@code %}, the last anchored to the end unless it
+     * closes with one. Sequential byte scans instead of the regex engine -- a multi-segment pattern over a
+     * high-cardinality column (TPC-H Q13's {@code %special%requests%} per order comment) pays an order of
+     * magnitude less per value. Callers route patterns containing {@code _} to {@link #likePattern} instead.
+     */
+    public static LikeSegments likeSegments(String like)
+    {
+        boolean anchoredStart = !like.startsWith("%");
+        boolean anchoredEnd = !like.endsWith("%");
+        java.util.List<byte[]> segments = new java.util.ArrayList<>();
+        for (String segment : like.split("%", -1)) {
+            if (!segment.isEmpty()) {
+                segments.add(segment.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        return new LikeSegments(anchoredStart, anchoredEnd, segments.toArray(new byte[0][]));
+    }
+
+    public record LikeSegments(boolean anchoredStart, boolean anchoredEnd, byte[][] segments)
+    {
+        public boolean matches(byte[] value)
+        {
+            int length = value.length;
+            if (segments.length == 0) {
+                return !anchoredStart || !anchoredEnd || length == 0;
+            }
+            int cursor = 0;
+            for (int index = 0; index < segments.length; index++) {
+                byte[] segment = segments[index];
+                boolean last = index == segments.length - 1;
+                if (index == 0 && anchoredStart) {
+                    if (length < segment.length || !regionEquals(value, 0, segment)) {
+                        return false;
+                    }
+                    cursor = segment.length;
+                }
+                else if (last && anchoredEnd) {
+                    int start = length - segment.length;
+                    return start >= cursor && regionEquals(value, start, segment);
+                }
+                else {
+                    int found = indexOf(value, cursor, length, segment);
+                    if (found < 0) {
+                        return false;
+                    }
+                    cursor = found + segment.length;
+                }
+                if (last && anchoredEnd && index == 0 && anchoredStart) {
+                    return cursor == length;
+                }
+            }
+            // The single anchored-both case returned above; with a trailing %, reaching here is a match.
+            return !anchoredEnd || segments.length == 1 && anchoredStart && cursor == length;
+        }
+
+        private static boolean regionEquals(byte[] value, int offset, byte[] segment)
+        {
+            for (int index = 0; index < segment.length; index++) {
+                if (value[offset + index] != segment[index]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int indexOf(byte[] value, int from, int end, byte[] segment)
+        {
+            int limit = end - segment.length;
+            outer:
+            for (int start = from; start <= limit; start++) {
+                for (int index = 0; index < segment.length; index++) {
+                    if (value[start + index] != segment[index]) {
+                        continue outer;
+                    }
+                }
+                return start;
+            }
+            return -1;
+        }
+    }
+
     public static Pattern likePattern(String like)
     {
         StringBuilder regex = new StringBuilder();

@@ -2481,6 +2481,16 @@ public final class PipelineCompiler
                 out.append("    }\n");
                 return;
             }
+            if (like.pattern().indexOf('_') < 0) {
+                // Any %-only pattern runs as anchored byte segments; the regex engine is reserved for _ wildcards.
+                out.append("    org.weakref.nitro.jit.StringMatching.LikeSegments sLikeSeg").append(id)
+                        .append(" = org.weakref.nitro.jit.StringMatching.likeSegments(").append(javaStringLiteral(like.pattern())).append(");\n");
+                out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
+                String segmentMatches = "sLikeSeg" + id + ".matches(" + dictionaryVar + "[e])";
+                out.append("      sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + segmentMatches + ")" : "(" + segmentMatches + ")").append(";\n");
+                out.append("    }\n");
+                return;
+            }
             out.append("    java.util.regex.Pattern sLikePat").append(id).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
                     .append(javaStringLiteral(like.pattern())).append(");\n");
             out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
