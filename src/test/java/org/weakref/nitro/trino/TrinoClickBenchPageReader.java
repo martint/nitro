@@ -57,7 +57,7 @@ import static java.util.Objects.requireNonNull;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
 
-final class TrinoClickBenchPageReader
+public final class TrinoClickBenchPageReader
         implements AutoCloseable
 {
     private static final String MAX_BATCH_ROWS_PROPERTY = "nitro.trino.scan.maxBatchRows";
@@ -80,7 +80,7 @@ final class TrinoClickBenchPageReader
         this(resolveFiles(input), columnNames);
     }
 
-    TrinoClickBenchPageReader(List<Path> files, List<String> columnNames)
+    public TrinoClickBenchPageReader(List<Path> files, List<String> columnNames)
     {
         requireNonNull(files, "files is null");
         requireNonNull(columnNames, "columnNames is null");
@@ -165,6 +165,19 @@ final class TrinoClickBenchPageReader
             throw new IllegalStateException("No more ClickBench pages");
         }
         return currentFile.nextPage();
+    }
+
+    /**
+     * The next batch as a lazy {@link SourcePage}: blocks decode per channel on {@link SourcePage#getBlock(int)},
+     * so a consumer whose first filter empties the batch never decodes the remaining columns -- the same per-column
+     * laziness the operator scan gives its callers, where {@link #nextPage()} would decode every channel upfront.
+     */
+    public SourcePage nextSourcePage()
+    {
+        if (!hasNext()) {
+            throw new IllegalStateException("No more ClickBench pages");
+        }
+        return currentFile.nextSourcePage();
     }
 
     @Override
@@ -257,6 +270,16 @@ final class TrinoClickBenchPageReader
             SourcePage page = nextPage;
             nextPage = null;
             return page.getPage();
+        }
+
+        public SourcePage nextSourcePage()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more Trino Parquet pages");
+            }
+            SourcePage page = nextPage;
+            nextPage = null;
+            return page;
         }
 
         @Override

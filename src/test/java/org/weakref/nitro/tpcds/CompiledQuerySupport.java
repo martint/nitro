@@ -1100,7 +1100,9 @@ public final class CompiledQuerySupport
             resolveInput(allocator, tables, sources.get(b + 1), virtuals, builds, buildRowCounts, b);
             inputsForDictRef[b + 1] = builds[b];
         }
-        org.weakref.nitro.jit.StreamingPipeline.Source source = parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline());
+        org.weakref.nitro.jit.StreamingPipeline.Source source = usePageSource(probe, lowered)
+                ? parquetPageSource(tables, probe.table(), probe.columns())
+                : parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline());
         CompiledPipeline.Result result = streaming.execute(source, builds, buildRowCounts);
         inputsForDictRef[0] = internedProbeDictionaries(source, probe.columns().size());
         return new LoweredResult(result, inputsForDictRef);
@@ -1400,14 +1402,35 @@ public final class CompiledQuerySupport
             buildRowCounts[b] = loaded.rows;
         }
         org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
-        org.weakref.nitro.jit.StreamingPipeline.Source source = lazyProbe
-                ? parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline())
-                : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
+        org.weakref.nitro.jit.StreamingPipeline.Source source = usePageSource(probe, lowered)
+                ? parquetPageSource(tables, probe.table(), probe.columns())
+                : lazyProbe
+                        ? parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline())
+                        : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
         return new StreamedResult(streaming.execute(source, builds, buildRowCounts), builds, source);
     }
 
     /**
-     * A streaming source reading parquet pages DIRECTLY -- no operator bridge -- for all-numeric column sets.
+     * Whether an all-numeric probe should read through the direct {@link #parquetPageSource} rather than the
+     * operator-bridge source. The page source pays off by skipping the bridge's per-column-per-batch conversion --
+     * which it does for a selective scan (a filter prunes most rows before the later columns decode, and its first
+     * stage answers dictionary pages by entry mask) or a wide one (the per-column saving multiplies). A SINGLE
+     * column with NO filter is the one case it loses: there is nothing to prune or amortize, and the bridge already
+     * adopts a dense page's lane zero-copy, so the page source's per-batch block handling is pure overhead (a
+     * high-cardinality count-distinct over one column regressed ~14% through it). Keep the bridge there.
+     */
+    private static boolean usePageSource(org.weakref.nitro.jit.QueryLowering.Input probe, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    {
+        boolean numeric = probe.columns().stream().allMatch(column ->
+                column.encoding() == org.weakref.nitro.jit.ColumnEncoding.FLAT
+                        || column.encoding() == org.weakref.nitro.jit.ColumnEncoding.F64);
+        if (!numeric) {
+            return false;
+        }
+        return !lowered.pipeline().filters().isEmpty() || probe.columns().size() > 1;
+    }
+
+    /** A streaming source reading parquet pages DIRECTLY -- no operator bridge -- for all-numeric column sets.
      * Long lanes come zero-copy from the page's {@code LongArrayBlock}s (BIGINT values and DOUBLE bits alike),
      * ints widen once into reused buffers, RLE pages expand, and a dictionary-encoded page serves its raw ids
      * zero-copy to the dictionary-mask filter stages via {@code materializeDictionaryIds} -- the page is never
@@ -1415,6 +1438,351 @@ public final class CompiledQuerySupport
      * Batch/Vector conversion per column per batch; on a scan-dominated query that overhead is the entire
      * compiled-vs-Trino gap, since both engines drive the same page reader underneath.
      */
+    private static final java.lang.reflect.Method LONG_ARRAY_RAW_VALUES = blockAccessor(io.trino.spi.block.LongArrayBlock.class, "getRawValues");
+    private static final java.lang.reflect.Method LONG_ARRAY_RAW_VALUES_OFFSET = blockAccessor(io.trino.spi.block.LongArrayBlock.class, "getRawValuesOffset");
+    private static final java.lang.reflect.Method LONG_ARRAY_RAW_NULLS = blockAccessor(io.trino.spi.block.LongArrayBlock.class, "getRawValueIsNull");
+    private static final java.lang.reflect.Method INT_ARRAY_RAW_NULLS = blockAccessor(io.trino.spi.block.IntArrayBlock.class, "getRawValueIsNull");
+
+    private static java.lang.reflect.Method blockAccessor(Class<?> blockClass, String name)
+    {
+        try {
+            java.lang.reflect.Method method = blockClass.getDeclaredMethod(name);
+            method.setAccessible(true);
+            return method;
+        }
+        catch (NoSuchMethodException exception) {
+            throw new IllegalStateException("Unable to access Trino block internals", exception);
+        }
+    }
+
+    /** The block's raw null flags (aligned with the raw values, including their offset), or null when none. */
+    private static boolean[] rawNulls(io.trino.spi.block.Block block)
+    {
+        try {
+            if (block instanceof io.trino.spi.block.LongArrayBlock) {
+                return (boolean[]) LONG_ARRAY_RAW_NULLS.invoke(block);
+            }
+            return (boolean[]) INT_ARRAY_RAW_NULLS.invoke(block);
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Unable to access Trino block null flags", exception);
+        }
+    }
+
+    private static long[] rawValues(io.trino.spi.block.LongArrayBlock block)
+    {
+        try {
+            return (long[]) LONG_ARRAY_RAW_VALUES.invoke(block);
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Unable to access Trino LongArrayBlock values", exception);
+        }
+    }
+
+    private static int rawValuesOffset(io.trino.spi.block.LongArrayBlock block)
+    {
+        try {
+            return (int) LONG_ARRAY_RAW_VALUES_OFFSET.invoke(block);
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Unable to access Trino LongArrayBlock values", exception);
+        }
+    }
+
+    private static org.weakref.nitro.jit.StreamingPipeline.Source parquetPageSource(ParquetTables tables, String table,
+            List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        List<String> names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toList();
+        org.weakref.nitro.trino.TrinoClickBenchPageReader reader =
+                new org.weakref.nitro.trino.TrinoClickBenchPageReader(tables.tableFiles(table), names);
+        int width = specs.size();
+        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        {
+            private io.trino.spi.connector.SourcePage page;
+            private final io.trino.spi.block.Block[] blocks = new io.trino.spi.block.Block[width];
+            private boolean[] noNulls = new boolean[0];   // shared all-false mask for nullable specs over null-free blocks
+            private int rows;
+            private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+            private final long[][] valueBuffers = new long[width][];
+            private final boolean[][] nullBuffers = new boolean[width][];
+            private final int[][] idBuffers = new int[width][];
+            private int[] identity;
+            // Per-column dictionary cache, keyed by the entries block's identity: the SAME parquet dictionary is
+            // served across every batch of its pages, so the converted lanes (and entry null flags) convert once,
+            // and a stable array reference lets the generated stage skip rebuilding its entry mask.
+            private final io.trino.spi.block.Block[] entryBlocks = new io.trino.spi.block.Block[width];
+            private final long[][] entryLanes = new long[width][];
+            private final boolean[][] entryNullFlags = new boolean[width][];
+
+            @Override
+            public boolean advance()
+            {
+                if (!reader.hasNext()) {
+                    reader.close();
+                    return false;
+                }
+                page = reader.nextSourcePage();
+                java.util.Arrays.fill(blocks, null);
+                rows = page.getPositionCount();
+                if (noNulls.length < rows) {
+                    noNulls = new boolean[rows];   // stays all-false; consumers only read masks
+                }
+                return true;
+            }
+
+            /** Decode column {@code c}'s block on first touch this batch -- a filter that empties the batch spares the rest. */
+            private io.trino.spi.block.Block block(int c)
+            {
+                io.trino.spi.block.Block block = blocks[c];
+                if (block == null) {
+                    block = page.getBlock(c);
+                    blocks[c] = block;
+                }
+                return block;
+            }
+
+            @Override
+            public int rows()
+            {
+                return rows;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] columns()
+            {
+                return materialize(allColumns());
+            }
+
+            private int[] allColumns()
+            {
+                int[] all = new int[width];
+                for (int c = 0; c < width; c++) {
+                    all[c] = c;
+                }
+                return all;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+            {
+                for (int c : columns) {
+                    out[c] = convert(c, identity(rows), rows, true);
+                }
+                return out;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+            {
+                boolean full = count == rows;
+                for (int c : columns) {
+                    out[c] = convert(c, full ? identity(rows) : selection, count, full);
+                }
+                return out;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column.DictionaryColumn materializeDictionaryIds(int c, int[] selection, int count)
+            {
+                if (specs.get(c).nullable()) {
+                    return null;
+                }
+                io.trino.spi.block.Block block = block(c);
+                if (!(block instanceof io.trino.spi.block.DictionaryBlock dictionaryBlock) || block.mayHaveNull()) {
+                    return null;
+                }
+                io.trino.spi.block.Block entriesBlock = dictionaryBlock.getDictionary();
+                long[] entries = entryLanes(c, entriesBlock);
+                if (entries == null || entryNullFlags[c] != null) {
+                    return null;
+                }
+                int[] rawIds = dictionaryBlock.getRawIds();
+                int idsOffset = dictionaryBlock.getRawIdsOffset();
+                if (count == rows && idsOffset == 0 && rawIds.length == rows) {
+                    return new org.weakref.nitro.jit.Column.DictionaryColumn(rawIds, entries);   // identity: no gather
+                }
+                int[] ids = idBuffer(c, count);
+                boolean full = count == rows;
+                for (int j = 0; j < count; j++) {
+                    ids[j] = rawIds[idsOffset + (full ? j : selection[j])];
+                }
+                return new org.weakref.nitro.jit.Column.DictionaryColumn(ids, entries);
+            }
+
+            /**
+             * The dictionary entries as long lanes (BIGINT/DOUBLE-bits verbatim, ints widened); null when
+             * unsupported. Cached by the entries block's identity: one conversion per parquet dictionary, and a
+             * stable array reference lets consumers (the generated entry-mask stage) recognize an unchanged
+             * dictionary across batches.
+             */
+            private long[] entryLanes(int c, io.trino.spi.block.Block entriesBlock)
+            {
+                if (entryBlocks[c] == entriesBlock) {
+                    return entryLanes[c];
+                }
+                int entryCount = entriesBlock.getPositionCount();
+                long[] entries;
+                if (entriesBlock instanceof io.trino.spi.block.LongArrayBlock longEntries
+                        && rawValuesOffset(longEntries) == 0 && rawValues(longEntries).length == entryCount) {
+                    entries = rawValues(longEntries);
+                }
+                else if (entriesBlock instanceof io.trino.spi.block.LongArrayBlock longEntries) {
+                    int offset = rawValuesOffset(longEntries);
+                    long[] raw = rawValues(longEntries);
+                    entries = new long[entryCount];
+                    for (int e = 0; e < entryCount; e++) {
+                        entries[e] = raw[offset + e];
+                    }
+                }
+                else if (entriesBlock instanceof io.trino.spi.block.IntArrayBlock intEntries) {
+                    int offset = intEntries.getRawValuesOffset();
+                    int[] raw = intEntries.getRawValues();
+                    entries = new long[entryCount];
+                    for (int e = 0; e < entryCount; e++) {
+                        entries[e] = raw[offset + e];
+                    }
+                }
+                else {
+                    return null;
+                }
+                entryBlocks[c] = entriesBlock;
+                entryLanes[c] = entries;
+                boolean[] nulls = null;
+                if (entriesBlock.mayHaveNull()) {
+                    nulls = new boolean[entryCount];
+                    for (int e = 0; e < entryCount; e++) {
+                        nulls[e] = entriesBlock.isNull(e);
+                    }
+                }
+                entryNullFlags[c] = nulls;
+                return entries;
+            }
+
+            private int[] identity(int n)
+            {
+                if (identity == null || identity.length < n) {
+                    identity = new int[Math.max(n, identity == null ? 16 : identity.length * 2)];
+                    for (int i = 0; i < identity.length; i++) {
+                        identity[i] = i;
+                    }
+                }
+                return identity;
+            }
+
+            private int[] idBuffer(int c, int count)
+            {
+                int[] ids = idBuffers[c];
+                if (ids == null || ids.length < count) {
+                    ids = new int[Math.max(count, ids == null ? 16 : ids.length * 2)];
+                    idBuffers[c] = ids;
+                }
+                return ids;
+            }
+
+            private org.weakref.nitro.jit.Column convert(int c, int[] selection, int count, boolean full)
+            {
+                io.trino.spi.block.Block block = block(c);
+                boolean nullable = specs.get(c).nullable();
+                boolean blockNulls = block.mayHaveNull();
+                // Zero-copy: a dense long page IS the lane, its raw null flags (or the shared all-false mask --
+                // a nullable spec must carry one, the compiled routine loads it unconditionally) the mask.
+                if (full && block instanceof io.trino.spi.block.LongArrayBlock longBlock
+                        && rawValuesOffset(longBlock) == 0 && rawValues(longBlock).length == rows) {
+                    if (!nullable && !blockNulls) {
+                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock));
+                    }
+                    if (nullable) {
+                        boolean[] nulls = blockNulls ? rawNulls(longBlock) : null;
+                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock), nulls != null ? nulls : noNulls);
+                    }
+                }
+                long[] values = valueBuffer(c, count);
+                boolean[] nullMask = null;
+                if (nullable) {
+                    nullMask = nullBuffers[c];
+                    if (nullMask == null || nullMask.length < count) {
+                        nullMask = new boolean[Math.max(count, 16)];
+                        nullBuffers[c] = nullMask;
+                    }
+                }
+                switch (block) {
+                    case io.trino.spi.block.LongArrayBlock longBlock -> {
+                        int offset = rawValuesOffset(longBlock);
+                        long[] raw = rawValues(longBlock);
+                        boolean[] nulls = blockNulls ? rawNulls(longBlock) : null;
+                        for (int j = 0; j < count; j++) {
+                            int position = selection[j];
+                            boolean isNull = nulls != null && nulls[offset + position];
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = isNull ? 0 : raw[offset + position];
+                        }
+                    }
+                    case io.trino.spi.block.IntArrayBlock intBlock -> {
+                        int offset = intBlock.getRawValuesOffset();
+                        int[] raw = intBlock.getRawValues();
+                        boolean[] nulls = blockNulls ? rawNulls(intBlock) : null;
+                        for (int j = 0; j < count; j++) {
+                            int position = selection[j];
+                            boolean isNull = nulls != null && nulls[offset + position];
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = isNull ? 0 : raw[offset + position];
+                        }
+                    }
+                    case io.trino.spi.block.DictionaryBlock dictionaryBlock -> {
+                        long[] entries = entryLanes(c, dictionaryBlock.getDictionary());
+                        if (entries == null) {
+                            throw new IllegalArgumentException("Unsupported dictionary entries: " + dictionaryBlock.getDictionary().getClass().getName());
+                        }
+                        boolean[] entryNulls = entryNullFlags[c];
+                        int[] rawIds = dictionaryBlock.getRawIds();
+                        int idsOffset = dictionaryBlock.getRawIdsOffset();
+                        for (int j = 0; j < count; j++) {
+                            int id = rawIds[idsOffset + selection[j]];
+                            boolean isNull = entryNulls != null && entryNulls[id];
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = isNull ? 0 : entries[id];
+                        }
+                    }
+                    case io.trino.spi.block.RunLengthEncodedBlock rleBlock -> {
+                        io.trino.spi.block.Block value = rleBlock.getValue();
+                        boolean isNull = value.isNull(0);
+                        long constant = isNull ? 0
+                                : value instanceof io.trino.spi.block.LongArrayBlock longValue ? rawValues(longValue)[rawValuesOffset(longValue)]
+                                : value instanceof io.trino.spi.block.IntArrayBlock intValue ? intValue.getRawValues()[intValue.getRawValuesOffset()]
+                                : Long.MIN_VALUE;
+                        if (constant == Long.MIN_VALUE && !isNull) {
+                            throw new IllegalArgumentException("Unsupported RLE value block: " + value.getClass().getName());
+                        }
+                        for (int j = 0; j < count; j++) {
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = constant;
+                        }
+                    }
+                    default -> throw new IllegalArgumentException("Unsupported page block: " + block.getClass().getName());
+                }
+                return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+            }
+
+            private long[] valueBuffer(int c, int count)
+            {
+                long[] values = valueBuffers[c];
+                if (values == null || values.length < count) {
+                    values = new long[Math.max(count, values == null ? 16 : values.length * 2)];
+                    valueBuffers[c] = values;
+                }
+                return values;
+            }
+        };
+    }
+
     /** Load a lowered query's inputs from Parquet and run it. */
     public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
