@@ -273,7 +273,7 @@ public final class PipelineCompiler
         // most-selective-first by a static heuristic (AND is commutative, so this is safe) to shrink the selection
         // as early as possible. No filter -> every row survives, so a single eager pass is cheaper.
         if (!pipeline.filters().isEmpty()) {
-            List<Plan.Condition> conjuncts = orderBySelectivity(pipeline.filters());
+            List<Plan.Condition> conjuncts = fuseSameColumnConjuncts(orderBySelectivity(pipeline.filters()));
             // The per-batch selection index is transient scratch reused across batches: allocated once, grown
             // geometrically when a batch is larger, and refilled to the identity each batch (the batch is fully
             // processed before the next advance()).
@@ -299,6 +299,44 @@ public final class PipelineCompiler
                 // even for zero rows, so a selective earlier conjunct must short-circuit the rest of the batch
                 // (q37: CounterID = 62 empties ~99.9% of batches; the URL stage was still decoding every chunk).
                 out.append(identity ? "      {\n" : "      if (selected > 0) {\n");
+                // A single-column numeric FIRST stage over a dictionary-encoded page evaluates the predicate once
+                // per ENTRY and tests rows through their zero-copy page ids (a boolean mask lookup) -- no per-row
+                // decode into a value buffer. Plain pages (and null-bearing ones) fall back to the flat materialize
+                // below. This is the numeric counterpart of the string predicate-over-dictionary masks. Later
+                // stages keep the flat gather: gathering ids by the selection costs the same as gathering values,
+                // so the mask lookup would be pure overhead there.
+                boolean dictionaryStage = identity && matches.isEmpty() && columns.size() == 1
+                        && !nullableOf(nullable, 0, columns.first())
+                        && (encodingOf(encodings, 0, columns.first()) == ColumnEncoding.FLAT
+                                || encodingOf(encodings, 0, columns.first()) == ColumnEncoding.F64);
+                if (dictionaryStage) {
+                    int dictColumn = columns.first();
+                    body.field("boolean[]", "entryMask" + dictColumn);
+                    body.field("long[]", "entryMaskDict" + dictColumn);
+                    out.append("        org.weakref.nitro.jit.Column.DictionaryColumn cDictCol").append(dictColumn)
+                            .append(" = source.materializeDictionaryIds(").append(dictColumn).append(", selection, selected);\n");
+                    out.append("        if (cDictCol").append(dictColumn).append(" != null) {\n");
+                    out.append("          long[] cDict = cDictCol").append(dictColumn).append(".dictionary();\n");
+                    out.append("          int[] cIds = cDictCol").append(dictColumn).append(".ids();\n");
+                    // The source caches converted entries by dictionary identity, so an unchanged reference means an
+                    // unchanged dictionary: rebuild the mask only when it flips (once per parquet dictionary, not per batch).
+                    out.append("          if (cDict != entryMaskDict").append(dictColumn).append(") {\n");
+                    out.append("            if (entryMask").append(dictColumn).append(" == null || entryMask").append(dictColumn)
+                            .append(".length < cDict.length) { entryMask").append(dictColumn).append(" = new boolean[cDict.length]; }\n");
+                    out.append("            boolean[] fill = entryMask").append(dictColumn).append(";\n");
+                    out.append("            for (int e = 0; e < cDict.length; e++) { fill[e] = ")
+                            .append(conditionTrue(conjunct, index -> "cDict[e]", index -> "false", stringMaskIds)).append("; }\n");
+                    out.append("            entryMaskDict").append(dictColumn).append(" = cDict;\n");
+                    out.append("          }\n");
+                    out.append("          boolean[] eMask = entryMask").append(dictColumn).append(";\n");
+                    out.append("          int kept = 0;\n");
+                    out.append("          for (int i = 0; i < ").append(rows).append("; i++) {\n");
+                    out.append("            if (eMask[cIds[i]]) { selection[kept++] = ").append(row).append("; }\n");
+                    out.append("          }\n");
+                    out.append("          selected = kept;\n");
+                    out.append("        }\n");
+                    out.append("        else {\n");
+                }
                 // A fused single-leaf stage asks the source for the filtering shape: plain pages of the leaf's
                 // column arrive as a zero-copy view even when the column is globally interned elsewhere -- the
                 // payload stage then interns only the survivors.
@@ -346,6 +384,9 @@ public final class PipelineCompiler
                 out.append("          if (").append(conditionTrue(conjunct, resolver, nullResolver, stringMaskIds)).append(") { selection[kept++] = ").append(row).append("; }\n");
                 out.append("        }\n");
                 out.append("        selected = kept;\n");
+                if (dictionaryStage) {
+                    out.append("        }\n");
+                }
                 out.append("      }\n");
             }
             // For a bounded top-N, a key-only stage shrinks the survivors to threshold-beating rows first.
@@ -4977,6 +5018,50 @@ public final class PipelineCompiler
         List<Plan.Condition> ordered = new ArrayList<>(conjuncts);
         ordered.sort(java.util.Comparator.comparingInt(PipelineCompiler::selectivityRank));
         return ordered;
+    }
+
+    /**
+     * Fuse numeric conjuncts that read the same columns into one AND stage. A staged filter materializes its
+     * columns per conjunct, so a range pair like {@code shipdate >= a AND shipdate < b} converted (and, for a
+     * dictionary page, decoded) the column twice per batch; fused, it is one materialize and one pass. The input
+     * is already selectivity-ordered, so first appearance keeps the group at its best member's position. String
+     * conjuncts stay unfused -- a single-leaf string stage rides the zero-copy view / predicate-over-dictionary
+     * machinery that fusing would forfeit.
+     */
+    private static List<Plan.Condition> fuseSameColumnConjuncts(List<Plan.Condition> conjuncts)
+    {
+        Map<TreeSet<Integer>, List<Plan.Condition>> groups = new java.util.LinkedHashMap<>();
+        List<Plan.Condition> passthrough = new ArrayList<>();   // string-bearing or column-less, in order
+        List<Object> order = new ArrayList<>();                 // group key or the passthrough condition itself
+        for (Plan.Condition conjunct : conjuncts) {
+            List<Plan.Condition> matches = new ArrayList<>();
+            collectStringMatches(conjunct, matches);
+            TreeSet<Integer> columns = new TreeSet<>();
+            collectConditionColumns(conjunct, columns);
+            if (!matches.isEmpty() || columns.isEmpty()) {
+                passthrough.add(conjunct);
+                order.add(conjunct);
+                continue;
+            }
+            List<Plan.Condition> group = groups.get(columns);
+            if (group == null) {
+                group = new ArrayList<>();
+                groups.put(columns, group);
+                order.add(columns);
+            }
+            group.add(conjunct);
+        }
+        List<Plan.Condition> fused = new ArrayList<>();
+        for (Object key : order) {
+            if (key instanceof TreeSet<?> columns) {
+                List<Plan.Condition> group = groups.get(columns);
+                fused.add(group.size() == 1 ? group.getFirst() : new Plan.And(List.copyOf(group)));
+            }
+            else {
+                fused.add((Plan.Condition) key);
+            }
+        }
+        return fused;
     }
 
     /**

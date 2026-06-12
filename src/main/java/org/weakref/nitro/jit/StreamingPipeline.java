@@ -50,6 +50,19 @@ public interface StreamingPipeline
         /** Row count of the current batch. */
         int rows();
 
+        /**
+         * Optional capability: the current batch's {@code column} as dictionary ids over numeric long-lane
+         * entries, the ids gathered to the first {@code count} positions of {@code selection} -- or null when
+         * the batch's page is not dictionary-encoded (or carries nulls), in which case the caller falls back
+         * to {@link #materialize(int[], int[], int)}. A filter stage evaluates its predicate once per ENTRY
+         * and tests rows through their ids, so a range over a dictionary page costs entry-count evaluations
+         * plus one mask lookup per row instead of a per-row decode into a value buffer.
+         */
+        default Column.DictionaryColumn materializeDictionaryIds(int column, int[] selection, int count)
+        {
+            return null;
+        }
+
         /** Columns of the current batch (one per scanned column, in compiled order). */
         Column[] columns();
 

@@ -476,6 +476,75 @@ public final class CompiledQuerySupport
                 return out;
             }
 
+            private final int[][] dictionaryIdBuffers = new int[width][];
+            // Identity-cached per column: one conversion per distinct entry vector, and a stable array reference
+            // lets the generated entry-mask stage skip rebuilding its mask while the dictionary is unchanged.
+            private final org.weakref.nitro.data.Vector[] dictionaryEntryVectors = new org.weakref.nitro.data.Vector[width];
+            private final long[][] dictionaryEntryLanes = new long[width][];
+
+            @Override
+            public org.weakref.nitro.jit.Column.DictionaryColumn materializeDictionaryIds(int c, int[] selection, int count)
+            {
+                if (specs.get(c).nullable()) {
+                    return null;
+                }
+                Vector vector = open.output(c).borrow(Stream.VALUES);
+                if (!(vector instanceof org.weakref.nitro.data.DictionaryVector dictionary)
+                        || dictionary.values() instanceof org.weakref.nitro.data.BinaryVector) {
+                    return null;
+                }
+                Vector nulls = open.output(c).borrowOrNull(Stream.NULLS);
+                if (nulls instanceof BooleanVector) {
+                    return null;   // a null-bearing page: the flat fallback handles the mask
+                }
+                org.weakref.nitro.data.Vector entryVector = dictionary.values();
+                int entryCount = entryVector.length();
+                long[] entries;
+                if (dictionaryEntryVectors[c] == entryVector) {
+                    entries = dictionaryEntryLanes[c];
+                }
+                else if (entryVector instanceof I64Vector i64Entries) {
+                    entries = i64Entries.values();   // raw long lanes (incl. F64 bits): no copy
+                    dictionaryEntryVectors[c] = entryVector;
+                    dictionaryEntryLanes[c] = entries;
+                }
+                else if (entryVector instanceof I32Vector i32Entries) {
+                    entries = new long[entryCount];
+                    int[] backing = i32Entries.values();
+                    for (int e = 0; e < entryCount; e++) {
+                        entries[e] = backing[e];
+                    }
+                    dictionaryEntryVectors[c] = entryVector;
+                    dictionaryEntryLanes[c] = entries;
+                }
+                else if (entryVector instanceof org.weakref.nitro.data.F64Vector f64Entries) {
+                    entries = new long[entryCount];
+                    double[] backing = f64Entries.values();
+                    for (int e = 0; e < entryCount; e++) {
+                        entries[e] = Double.doubleToRawLongBits(backing[e]);
+                    }
+                    dictionaryEntryVectors[c] = entryVector;
+                    dictionaryEntryLanes[c] = entries;
+                }
+                else {
+                    return null;
+                }
+                int[] pageIds = dictionary.ids();
+                boolean allSelected = mask.all();
+                if (allSelected && count == currentRows) {
+                    return new org.weakref.nitro.jit.Column.DictionaryColumn(pageIds, entries);   // identity: no gather
+                }
+                int[] ids = dictionaryIdBuffers[c];
+                if (ids == null || ids.length < count) {
+                    ids = new int[Math.max(count, ids == null ? 16 : ids.length * 2)];
+                    dictionaryIdBuffers[c] = ids;
+                }
+                for (int j = 0; j < count; j++) {
+                    ids[j] = pageIds[allSelected ? selection[j] : mask.position(selection[j])];
+                }
+                return new org.weakref.nitro.jit.Column.DictionaryColumn(ids, entries);
+            }
+
             @Override
             public org.weakref.nitro.jit.Column[] materializeFiltering(int[] columns, int[] selection, int count)
             {
@@ -1337,6 +1406,15 @@ public final class CompiledQuerySupport
         return new StreamedResult(streaming.execute(source, builds, buildRowCounts), builds, source);
     }
 
+    /**
+     * A streaming source reading parquet pages DIRECTLY -- no operator bridge -- for all-numeric column sets.
+     * Long lanes come zero-copy from the page's {@code LongArrayBlock}s (BIGINT values and DOUBLE bits alike),
+     * ints widen once into reused buffers, RLE pages expand, and a dictionary-encoded page serves its raw ids
+     * zero-copy to the dictionary-mask filter stages via {@code materializeDictionaryIds} -- the page is never
+     * decoded into values for a predicate that a per-entry mask can answer. The operator-bridge source pays a
+     * Batch/Vector conversion per column per batch; on a scan-dominated query that overhead is the entire
+     * compiled-vs-Trino gap, since both engines drive the same page reader underneath.
+     */
     /** Load a lowered query's inputs from Parquet and run it. */
     public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
