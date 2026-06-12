@@ -5612,8 +5612,9 @@ public final class CompiledTpcdsQueries
     {
         // Q45: Q2/2001 web sales by the customer's city and zip, keeping sales whose customer lives in one of nine
         // zips OR whose item is in a ten-item list. The item membership (the SQL's IN-subquery, the harness's mark
-        // semi-join) is a LEFT join against the prime-keyed items on the item id string, with IS NOT NULL as the
-        // membership test inside the OR.
+        // semi-join) is a LEFT join against the DISTINCT prime item ids, with IS NOT NULL as the membership test
+        // inside the OR -- the dedup matters: i_item_id is not unique (item versions share ids) and a left join
+        // fans out over duplicate build keys.
         QueryLowering primes = QueryLowering.scan("item",
                 new QueryLowering.Column("i_item_sk", ColumnEncoding.FLAT, false),
                 new QueryLowering.Column("i_item_id", ColumnEncoding.STRING, false));
@@ -5622,7 +5623,9 @@ public final class CompiledTpcdsQueries
             primeKeys.add(new Plan.Predicate("=", primes.column("i_item_sk"), new Plan.Lit(prime)));
         }
         primes.where(new Plan.Or(primeKeys))
-                .select(primes.column("i_item_id"));
+                .groupBy("i_item_id")
+                .count();
+        primes.select(new Plan.Col(0));
 
         // Combined main columns: web_sales(0-3), customer(4-5), address(6-8: sk, city, zip), date(9-11),
         // item(12-13), prime items(14, null when the item is not in the list).

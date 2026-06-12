@@ -64,6 +64,10 @@ public final class ScalarLibrary
         register("subtract_f64", f64Infix("-"));
         register("multiply_f64", f64Infix("*"));
         register("divide_f64", f64Infix("/"));
+        // Widen a long lane to a DOUBLE riding the lane as raw bits (row-loop convention), composing with the
+        // _f64 operators and predicates (TPC-H supplycost * availqty, availqty > threshold).
+        register("cast_i64_to_f64", arguments ->
+                "Double.doubleToRawLongBits((double) (" + arguments.get(0) + "))");
         // The civil-calendar year of an epoch-day lane (TPC-H date columns).
         register("year_of_date", arguments ->
                 "org.weakref.nitro.function.scalar.builtin.YearOfDate.yearOfEpochDay(" + arguments.get(0) + ")");

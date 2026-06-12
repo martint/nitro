@@ -14,6 +14,7 @@
 package org.weakref.nitro.jit;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1123,7 +1124,7 @@ public final class PipelineCompiler
         return pipeline.window() == null && pipeline.groupKeys().isEmpty() && pipeline.aggregates().isEmpty() && !pipeline.projections().isEmpty();
     }
 
-    /** Logical types of every combined input column (probe then each build): STRING for a dictionary column, else LONG. */
+    /** Logical types of every combined input column (probe then each build): STRING for a dictionary column, DOUBLE for an F64 lane, else LONG. */
     private static List<Type> combinedInputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         int total = pipeline.columnCount();
@@ -1132,7 +1133,7 @@ public final class PipelineCompiler
         }
         List<Type> types = new ArrayList<>();
         for (int i = 0; i < total; i++) {
-            types.add(combinedEncoding(pipeline, encodings, i) == ColumnEncoding.STRING ? Types.STRING : Types.LONG);
+            types.add(typeOf(combinedEncoding(pipeline, encodings, i)));
         }
         return types;
     }
@@ -1470,9 +1471,19 @@ public final class PipelineCompiler
             }
         }
         out.append(indent).append("}\n");
+        // A DOUBLE projection is a result boundary: operands decode from their F64 lanes and the expression
+        // runs in plain doubles (decodedExpr), then the slot re-encodes -- the same two-convention split as
+        // the post-aggregate select.
+        List<Type> inputTypes = combinedInputTypes(pipeline, encodings);
+        IntFunction<String> decodedResolver = index -> inputTypes.get(index) == Types.DOUBLE
+                ? "Double.longBitsToDouble(" + resolver.apply(index) + ")"
+                : resolver.apply(index);
         for (int p = 0; p < projections.size(); p++) {
+            String value = types.get(p) == Types.DOUBLE
+                    ? decodedExpr(projections.get(p), decodedResolver, nullResolver)
+                    : expr(projections.get(p), resolver, nullResolver, stringMaskIds);
             out.append(indent).append("out").append(p).append("[outRow] = ")
-                    .append(encodeSlot(types.get(p), expr(projections.get(p), resolver, nullResolver, stringMaskIds))).append(";\n");
+                    .append(encodeSlot(types.get(p), value)).append(";\n");
             if (projectionCarriesNull(pipeline, nullable, p)) {
                 out.append(indent).append("outN").append(p).append("[outRow] = ")
                         .append(nullExpr(projections.get(p), resolver, nullResolver, stringMaskIds)).append(";\n");
@@ -2595,10 +2606,13 @@ public final class PipelineCompiler
      */
     private static int emitProbesWithFilters(StringBuilder out, String baseIndent, Plan.Pipeline pipeline, List<Plan.Join> joins,
             int[] buildOffset, int probeColumns, int joinCount, ColumnEncoding[][] encodings, IntFunction<String> resolver, IntFunction<String> nullResolver,
-            Map<Plan.Condition, Integer> stringMaskIds)
+            Map<Plan.Condition, Integer> stringMaskIds, Set<Plan.Condition> pushedToBuild)
     {
         Map<Integer, List<Plan.Condition>> filtersByLevel = new java.util.LinkedHashMap<>();
         for (Plan.Condition filter : pipeline.filters()) {
+            if (pushedToBuild.contains(filter)) {
+                continue;   // enforced while constructing the build; no matched row to read for semi/anti survivors
+            }
             filtersByLevel.computeIfAbsent(filterLevel(filter, joins, buildOffset, probeColumns), level -> new ArrayList<>()).add(filter);
         }
         String indent = baseIndent;
@@ -2648,6 +2662,15 @@ public final class PipelineCompiler
                 indent += "  ";
                 openBraces++;
             }
+            else {
+                // Left join: fan out over the chain like an inner join, but when there is no match run the body
+                // exactly once with buildRow<k> == -1 (the build columns read NULL through outerValue/outerNull).
+                out.append(indent).append("for (boolean first").append(k).append(" = true; first").append(k).append(" || buildRow").append(k).append(" != -1; ")
+                        .append("first").append(k).append(" = false, buildRow").append(k).append(" = (buildRow").append(k).append(" == -1 || buildNext").append(k)
+                        .append(" == null) ? -1 : buildNext").append(k).append("[buildRow").append(k).append("]) {\n");
+                indent += "  ";
+                openBraces++;
+            }
             List<Plan.Condition> atLevel = filtersByLevel.get(k);
             if (atLevel != null) {
                 out.append(indent).append("if (").append(conjunction(atLevel, resolver, nullResolver, stringMaskIds)).append(") {\n");
@@ -2667,11 +2690,15 @@ public final class PipelineCompiler
      * decode of every later join key and filter column.
      */
     private static void emitStagedSelection(StringBuilder execute, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable,
-            List<Plan.Join> joins, int[] buildOffset, int probeColumns, List<Plan.Condition> filterMatches, Map<Plan.Condition, Integer> stringMaskIds)
+            List<Plan.Join> joins, int[] buildOffset, int probeColumns, List<Plan.Condition> filterMatches, Map<Plan.Condition, Integer> stringMaskIds,
+            Set<Plan.Condition> pushedToBuild)
     {
         int joinCount = joins.size();
         Map<Integer, List<Plan.Condition>> filtersByLevel = new java.util.LinkedHashMap<>();
         for (Plan.Condition filter : pipeline.filters()) {
+            if (pushedToBuild.contains(filter)) {
+                continue;   // enforced while constructing the build; no matched row to read for semi/anti survivors
+            }
             filtersByLevel.computeIfAbsent(filterLevel(filter, joins, buildOffset, probeColumns), level -> new ArrayList<>()).add(filter);
         }
         for (int k = 0; k < joinCount; k++) {
@@ -2786,15 +2813,24 @@ public final class PipelineCompiler
                     indent += "  ";
                     openBraces++;
                 }
+                else {
+                    // Left join: fan out over the chain like an inner join, but when there is no match emit the
+                    // (row, -1) tuple exactly once -- downstream reads resolve through outerValue/outerNull.
+                    out.append(indent).append("for (boolean first").append(k).append(" = true; first").append(k).append(" || buildRow").append(k).append(" != -1; ")
+                            .append("first").append(k).append(" = false, buildRow").append(k).append(" = (buildRow").append(k).append(" == -1 || buildNext").append(k)
+                            .append(" == null) ? -1 : buildNext").append(k).append("[buildRow").append(k).append("]) {\n");
+                    indent += "  ";
+                    openBraces++;
+                }
             }
             if (levelFilters != null) {
                 out.append(indent).append("if (").append(conjunction(levelFilters, stageResolver, stageNullResolver, stringMaskIds)).append(") {\n");
                 indent += "  ";
                 openBraces++;
             }
-            // An inner one-to-many or cross join fans one input tuple out to several survivors, so the Next buffers
-            // can outgrow the input; semi/anti/left emit at most one survivor per tuple.
-            if (joins.get(k).cross() || (!joins.get(k).anti() && !joins.get(k).semi() && !joins.get(k).outer())) {
+            // An inner/left one-to-many or cross join fans one input tuple out to several survivors, so the Next
+            // buffers can outgrow the input; semi/anti emit at most one survivor per tuple.
+            if (joins.get(k).cross() || (!joins.get(k).anti() && !joins.get(k).semi())) {
                 out.append(indent).append("if (kept == selectionNext.length) {\n");
                 out.append(indent).append("  int grown = kept * 2;\n");
                 out.append(indent).append("  selectionNext = java.util.Arrays.copyOf(selectionNext, grown);\n");
@@ -2927,8 +2963,11 @@ public final class PipelineCompiler
         // Filter pushdown: a filter referencing only one build's columns is enforced while constructing that build,
         // so the join prunes the probe early (the same early pruning an operator engine gets by filtering a
         // dimension before its build). Includes string-match filters, whose dictionary mask is emitted just before
-        // the build structures below.
+        // the build structures below. A pushed filter is fully enforced by the build (every retained row passes),
+        // so the probe loop must NOT re-evaluate it -- for a semi/anti join there is no matched build row to read
+        // (an anti survivor's buildRow is -1), and for an inner join it would be wasted work per match.
         String[] buildFilter = new String[joinCount];
+        Set<Plan.Condition> pushedToBuild = new HashSet<>();
         for (int k = 0; k < joinCount; k++) {
             int start = buildOffset[k];
             int end = start + joins.get(k).build().columnCount();
@@ -2941,6 +2980,7 @@ public final class PipelineCompiler
                 for (Plan.Condition filter : pipeline.filters()) {
                     if (pushableToBuild(filter, start, end)) {
                         pushed.add(conditionTrue(filter, buildResolver, buildNullResolver, stringMaskIds));
+                        pushedToBuild.add(filter);
                     }
                 }
             }
@@ -3148,7 +3188,7 @@ public final class PipelineCompiler
             // A selective early join thus prunes the decode of every later join key and filter column, the
             // compiled analogue of the operator scan's constrain() pushback. Each stage compiles into its own
             // method over the field-held selection (seventeen inline stages exceed the huge-method limit).
-            emitStagedSelection(out, body, pipeline, encodings, nullable, joins, buildOffset, probeColumns, filterMatches, stringMaskIds);
+            emitStagedSelection(out, body, pipeline, encodings, nullable, joins, buildOffset, probeColumns, filterMatches, stringMaskIds, pushedToBuild);
             // Phase 2: payload probe columns materialized for the survivors only, then folded in. Skip the whole
             // phase when the batch has no survivors -- materializing would borrow (and so decode) the payload columns
             // over the batch for nothing. This is how an operator scan avoids decoding payload for batches a selective
@@ -3222,7 +3262,7 @@ public final class PipelineCompiler
             out.append("    for (int i = 0; i < probeRows; i++) {\n");
             // Filters are interleaved with the probes (early-out); the body then runs without re-checking them.
             // Nullable join inputs carry a null mask; non-nullable columns resolve to the "false" fast path.
-            int openBraces = emitProbesWithFilters(out, "      ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds);
+            int openBraces = emitProbesWithFilters(out, "      ", pipeline, joins, buildOffset, probeColumns, joinCount, encodings, resolver, nullResolver, stringMaskIds, pushedToBuild);
             String indent = "      " + "  ".repeat(openBraces);
             emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, resolver, nullResolver, stringMaskIds, grouped, false, true);
             for (int brace = 0; brace < openBraces; brace++) {

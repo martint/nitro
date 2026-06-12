@@ -373,8 +373,8 @@ public final class CompiledQuerySupport
                     && PipelineCompiler.stringIdsCrossBatches(pipeline, c)) {
                 globalDictionaries[c] = new GlobalStringDictionary(regexpTransform(spec));
             }
-            else if (spec.regexpPattern() != null) {
-                throw new UnsupportedOperationException("regexp-derived column " + spec.name() + " requires a globally-interned streamed load");
+            else if (spec.regexpPattern() != null || (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING && spec.substringLength() >= 0)) {
+                throw new UnsupportedOperationException("derived column " + spec.name() + " requires a globally-interned streamed load");
             }
             // A maybe-view string column's plain pages pass through as a zero-copy bytes view (the generated
             // masks and winners-mode min compare per row in place); requires the full batch in page order and
@@ -2160,15 +2160,24 @@ public final class CompiledQuerySupport
     }
 
     /** The spec's regexp derivation as a per-value transform (null when the column is loaded verbatim), with the exact replacement semantics of regexp_replace_utf8. */
+    /**
+     * The per-entry derivation a column spec applies before interning: a regexp_replace, a substring, or null
+     * when the column loads its raw values. A globally-interned streamed column derives at intern time, so its
+     * ids (group keys, masks, the captured dictionary) all see the derived values -- mirroring the eager loader's
+     * {@code adaptString}.
+     */
     private static java.util.function.UnaryOperator<byte[]> regexpTransform(org.weakref.nitro.jit.QueryLowering.Column spec)
     {
-        if (spec.regexpPattern() == null) {
-            return null;
+        if (spec.regexpPattern() != null) {
+            io.trino.re2j.Pattern pattern = io.trino.re2j.Pattern.compile(spec.regexpPattern());
+            io.airlift.slice.Slice replacement = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
+                    io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
+            return value -> pattern.matcher(io.airlift.slice.Slices.wrappedBuffer(value)).replaceAll(replacement).getBytes();
         }
-        io.trino.re2j.Pattern pattern = io.trino.re2j.Pattern.compile(spec.regexpPattern());
-        io.airlift.slice.Slice replacement = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
-                io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
-        return value -> pattern.matcher(io.airlift.slice.Slices.wrappedBuffer(value)).replaceAll(replacement).getBytes();
+        if (spec.substringLength() >= 0) {
+            return value -> utf8Substring(value, spec.substringStart(), spec.substringLength());
+        }
+        return null;
     }
 
     private static final byte[] NO_STRING_BYTES = new byte[0];
