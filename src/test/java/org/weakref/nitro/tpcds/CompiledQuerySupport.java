@@ -1558,8 +1558,7 @@ public final class CompiledQuerySupport
      */
     private static org.weakref.nitro.jit.Column concatenateStringColumn(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int c)
     {
-        java.util.Map<String, Integer> index = new java.util.LinkedHashMap<>();
-        List<byte[]> dictionary = new ArrayList<>();
+        BytesDictionary dictionary = new BytesDictionary();
         int[] ids = new int[total];
         boolean[] nulls = null;
         int offset = 0;
@@ -1573,11 +1572,11 @@ public final class CompiledQuerySupport
                     nulls[offset + r] = true;
                     continue;
                 }
-                ids[offset + r] = intern(index, dictionary, part.dictionary()[part.ids()[r]]);
+                ids[offset + r] = dictionary.intern(part.dictionary()[part.ids()[r]]);
             }
             offset += counts[p];
         }
-        return orderedStringColumn(ids, dictionary, total, nulls);
+        return orderedStringColumn(ids, dictionary.entries(), total, nulls);
     }
 
     /** Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s so it can feed a downstream stage as a relation. */
@@ -1696,8 +1695,7 @@ public final class CompiledQuerySupport
         long[][] values = new long[width][];            // flat values (numeric columns only)
         int[][] ids = new int[width][];                 // string ids (string columns only)
         boolean[][] nulls = new boolean[width][16];
-        List<java.util.Map<String, Integer>> dictionaryIndex = new ArrayList<>();
-        List<List<byte[]>> dictionaries = new ArrayList<>();
+        List<BytesDictionary> dictionaries = new ArrayList<>();
         boolean[] verbatim = new boolean[width];
         for (int c = 0; c < width; c++) {
             string[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
@@ -1706,8 +1704,7 @@ public final class CompiledQuerySupport
             verbatim[c] = string[c] && specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.VERBATIM;
             values[c] = string[c] ? emptyLong : new long[16];
             ids[c] = string[c] ? new int[16] : emptyInt;
-            dictionaryIndex.add(new java.util.LinkedHashMap<>());
-            dictionaries.add(new ArrayList<>());
+            dictionaries.add(new BytesDictionary());
         }
         int size = 0;
         try (operator) {
@@ -1747,13 +1744,9 @@ public final class CompiledQuerySupport
                             int dictionarySize = dictionary.length();
                             int[] localToGlobal = new int[dictionarySize];
                             for (int entry = 0; entry < dictionarySize; entry++) {
-                                if (verbatim[c]) {
-                                    localToGlobal[entry] = dictionaries.get(c).size();
-                                    dictionaries.get(c).add(stringBytes(dictionary, entry));
-                                }
-                                else {
-                                    localToGlobal[entry] = intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(dictionary, entry));
-                                }
+                                localToGlobal[entry] = verbatim[c]
+                                        ? dictionaries.get(c).add(stringBytes(dictionary, entry))
+                                        : dictionaries.get(c).intern(stringBytes(dictionary, entry));
                             }
                             for (int index = 0; index < count; index++) {
                                 boolean isNull = isNull(nullVector, index);
@@ -1773,11 +1766,10 @@ public final class CompiledQuerySupport
                                     ids[c][slot] = 0;
                                 }
                                 else if (verbatim[c]) {
-                                    ids[c][slot] = dictionaries.get(c).size();
-                                    dictionaries.get(c).add(stringBytes(valueVector, position));
+                                    ids[c][slot] = dictionaries.get(c).add(stringBytes(valueVector, position));
                                 }
                                 else {
-                                    ids[c][slot] = intern(dictionaryIndex.get(c), dictionaries.get(c), stringBytes(valueVector, position));
+                                    ids[c][slot] = dictionaries.get(c).intern(stringBytes(valueVector, position));
                                 }
                             }
                             else {
@@ -1795,10 +1787,10 @@ public final class CompiledQuerySupport
             boolean[] nullMask = nullable ? java.util.Arrays.copyOf(nulls[c], size) : null;
             if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
                 if (specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.ORDERED) {
-                    columns[c] = orderedStringColumn(ids[c], dictionaries.get(c), size, nullMask);
+                    columns[c] = orderedStringColumn(ids[c], dictionaries.get(c).entries(), size, nullMask);
                 }
                 else {
-                    byte[][] dictionary = dictionaries.get(c).toArray(new byte[0][]);
+                    byte[][] dictionary = dictionaries.get(c).entries().toArray(new byte[0][]);
                     if (specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.DEDUPED) {
                         registerCanonical(dictionary, false);   // interned: duplicate-free by construction
                     }
@@ -2182,12 +2174,47 @@ public final class CompiledQuerySupport
 
     private static final byte[] NO_STRING_BYTES = new byte[0];
 
-    private static int intern(java.util.Map<String, Integer> index, List<byte[]> dictionary, byte[] bytes)
+    /**
+     * A byte[]-keyed intern pool for the eager drain: a {@link BytesInternTable} over a growable entries array.
+     * The former String-keyed HashMap intern allocated a String and a boxed id per VALUE, which dominated the
+     * build drain of high-cardinality string columns (the five customer payload strings of TPC-H Q10 alone are
+     * 7.5M interns over 1.5M rows).
+     */
+    private static final class BytesDictionary
     {
-        return index.computeIfAbsent(new String(bytes, java.nio.charset.StandardCharsets.UTF_8), key -> {
-            dictionary.add(bytes);
-            return dictionary.size() - 1;
-        });
+        private final BytesInternTable index = new BytesInternTable();
+        private byte[][] entries = new byte[16][];
+        private int size;
+
+        int intern(byte[] bytes)
+        {
+            int slot = index.find(bytes, 0, bytes.length, entries, size);
+            if (slot >= 0) {
+                return index.idAt(slot);
+            }
+            index.insertAt(slot, size);
+            return add(bytes);
+        }
+
+        /** Append without interning (verbatim columns: nothing observes id equality, hashing is pure overhead). */
+        int add(byte[] bytes)
+        {
+            if (size == entries.length) {
+                entries = java.util.Arrays.copyOf(entries, size * 2);
+            }
+            entries[size] = bytes;
+            return size++;
+        }
+
+        int size()
+        {
+            return size;
+        }
+
+        List<byte[]> entries()
+        {
+            return java.util.Arrays.asList(java.util.Arrays.copyOf(entries, size));
+        }
     }
 
     private static boolean isNull(Vector nulls, int position)
