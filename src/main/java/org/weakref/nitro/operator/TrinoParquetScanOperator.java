@@ -103,6 +103,7 @@ public final class TrinoParquetScanOperator
     private final java.util.IdentityHashMap<Block, Vector> convertedDictionaries = new java.util.IdentityHashMap<>();
     private final List<Path> files;
     private final List<String> columnNames;
+    private final boolean rawDoubleBits;
 
     private int fileIndex;
     private SingleFileScan currentFile;
@@ -115,12 +116,25 @@ public final class TrinoParquetScanOperator
 
     public TrinoParquetScanOperator(Allocator allocator, List<Path> files, List<String> columns)
     {
+        this(allocator, files, columns, false);
+    }
+
+    /**
+     * As {@link #TrinoParquetScanOperator(Allocator, List, List)}, but with {@code rawDoubleBits} set DOUBLE
+     * columns surface as {@link I64Vector}s holding the raw double bits instead of widening into an
+     * {@link F64Vector}. A Trino DOUBLE block already carries the bits in long lanes, so this copies (or
+     * zero-copy adopts) them verbatim -- the lane representation a bits-consuming engine wants, sparing the
+     * bits-to-double-to-bits round trip.
+     */
+    public TrinoParquetScanOperator(Allocator allocator, List<Path> files, List<String> columns, boolean rawDoubleBits)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(files, "files is null");
         requireNonNull(columns, "columns is null");
         checkArgument(!files.isEmpty(), "files is empty");
         this.files = List.copyOf(files);
         this.columnNames = List.copyOf(columns);
+        this.rawDoubleBits = rawDoubleBits;
     }
 
     @Override
@@ -474,7 +488,7 @@ public final class TrinoParquetScanOperator
             case DATE -> copyI32(block);
             case I64 -> copyI64(block);
             case SHORT_DECIMAL -> copyI64(block);
-            case F64 -> copyF64(block);
+            case F64 -> rawDoubleBits ? copyI64(block) : copyF64(block);
             case BOOLEAN -> copyBoolean(block);
             case BINARY -> copyBinary(column, block);
         };
@@ -487,7 +501,7 @@ public final class TrinoParquetScanOperator
             case DATE -> copyMaskedI32(block, mask);
             case I64 -> copyMaskedI64(block, mask);
             case SHORT_DECIMAL -> copyMaskedI64(block, mask);
-            case F64 -> copyMaskedF64(block, mask);
+            case F64 -> rawDoubleBits ? copyMaskedI64(block, mask) : copyMaskedF64(block, mask);
             case BOOLEAN -> copyMaskedBoolean(block, mask);
             case BINARY -> copyMaskedBinary(column, block, mask);
         };
@@ -499,7 +513,9 @@ public final class TrinoParquetScanOperator
             case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
             case DATE -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
             case I64, SHORT_DECIMAL -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new);
-            case F64 -> allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, size, F64Vector::new);
+            case F64 -> rawDoubleBits
+                    ? allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new)
+                    : allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, size, F64Vector::new);
             case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, size, BooleanVector::new);
             case BINARY -> {
                 BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, size, 0);

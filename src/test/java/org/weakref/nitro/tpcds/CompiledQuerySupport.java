@@ -153,10 +153,12 @@ public final class CompiledQuerySupport
 
     private static Operator scan(Allocator allocator, ParquetTables tables, String table, String... columns)
     {
+        // DOUBLE columns surface as raw bits in long lanes (the compiled engine's F64 representation),
+        // sparing the scan's bits-to-double widening and the loader's double-to-bits conversion.
         return new MultiStageOperator(
                 columns.length,
                 tables.tableFiles(table),
-                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+                path -> new TrinoParquetScanOperator(allocator, List.of(path), List.of(columns), true));
     }
 
     /**
