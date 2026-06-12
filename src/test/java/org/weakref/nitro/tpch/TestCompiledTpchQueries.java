@@ -25,7 +25,11 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
@@ -88,15 +92,172 @@ public class TestCompiledTpchQueries
         assertMatchesReference("19", CompiledTpchQueries.query19());
     }
 
+    @Test
+    void query07()
+    {
+        assertMatchesReference("07", CompiledTpchQueries.query07());
+    }
+
+    @Test
+    void query08()
+    {
+        assertMatchesReference("08", CompiledTpchQueries.query08());
+    }
+
+    @Test
+    void query09()
+    {
+        assertMatchesReference("09", CompiledTpchQueries.query09());
+    }
+
+    @Test
+    void query04()
+    {
+        assertMatchesReference("04", CompiledTpchQueries.query04());
+    }
+
+    @Test
+    void query18()
+    {
+        assertMatchesReference("18", CompiledTpchQueries.query18());
+    }
+
+    @Test
+    void query13()
+    {
+        assertMatchesReference("13", CompiledTpchQueries.query13());
+    }
+
+    @Test
+    void query16()
+    {
+        assertMatchesReference("16", CompiledTpchQueries.query16());
+    }
+
+    @Test
+    void query02()
+    {
+        assertMatchesReference("02", CompiledTpchQueries.query02());
+    }
+
+    @Test
+    void query15()
+    {
+        assertMatchesReference("15", CompiledTpchQueries.query15());
+    }
+
+    @Test
+    void query17()
+    {
+        assertMatchesReference("17", CompiledTpchQueries.query17());
+    }
+
+    @Test
+    void query11()
+    {
+        assertMatchesReferenceWithTies("11", 1, CompiledTpchQueries.query11());
+    }
+
+    @Test
+    void query20()
+    {
+        assertMatchesReference("20", CompiledTpchQueries.query20());
+    }
+
+    @Test
+    void query21()
+    {
+        assertMatchesReference("21", CompiledTpchQueries.query21());
+    }
+
+    @Test
+    void query22()
+    {
+        assertMatchesReference("22", CompiledTpchQueries.query22());
+    }
+
+    /**
+     * As {@link #assertMatchesReference(String, CompiledTpcdsQueries.Composite)}, but tolerance-tied runs of the
+     * double sort key compare as sets of their first column -- the row order within a near-tie is accumulation-order
+     * dependent across engines (the same oracle the operator harness uses for Q11).
+     */
+    private static void assertMatchesReferenceWithTies(String queryId, int sortKeyColumn, CompiledTpcdsQueries.Composite composite)
+    {
+        var tables = TpchParquetTables.actualIfPresent();
+        assumeTrue(tables.isPresent(), "TPC-H parquet data not present");
+
+        CompiledQuerySupport.LoweredResult run = runComposite(tables.orElseThrow(), composite);
+        CompiledPipeline.Result result = run.result();
+        List<List<String>> expected = readExpected(queryId);
+        assertThat(result.rowCount()).as("q%s row count", queryId).isEqualTo(expected.size());
+
+        int rowIndex = 0;
+        while (rowIndex < expected.size()) {
+            double key = Double.parseDouble(expected.get(rowIndex).get(sortKeyColumn));
+            int runEnd = rowIndex + 1;
+            while (runEnd < expected.size() && nearlyEqual(Double.parseDouble(expected.get(runEnd).get(sortKeyColumn)), key)) {
+                runEnd++;
+            }
+            if (runEnd - rowIndex == 1) {
+                List<String> expectedRow = expected.get(rowIndex);
+                for (int column = 0; column < expectedRow.size(); column++) {
+                    assertCell(queryId, rowIndex, column, expectedRow.get(column), result, new byte[result.columns().length][][]);
+                }
+            }
+            else {
+                Set<String> expectedKeys = new HashSet<>();
+                Set<String> actualKeys = new HashSet<>();
+                for (int row = rowIndex; row < runEnd; row++) {
+                    expectedKeys.add(expected.get(row).get(0));
+                    actualKeys.add(String.valueOf(result.columns()[0][row]));
+                }
+                assertThat(actualKeys).as("q%s tie run at %s", queryId, rowIndex).isEqualTo(expectedKeys);
+            }
+            rowIndex = runEnd;
+        }
+    }
+
+    private static boolean nearlyEqual(double actual, double expected)
+    {
+        if (expected == 0.0) {
+            return Math.abs(actual) < 1e-9;
+        }
+        return Math.abs(actual / expected - 1.0) < RELATIVE_TOLERANCE;
+    }
+
+    private static void assertMatchesReference(String queryId, CompiledTpcdsQueries.Composite composite)
+    {
+        var tables = TpchParquetTables.actualIfPresent();
+        assumeTrue(tables.isPresent(), "TPC-H parquet data not present");
+
+        CompiledQuerySupport.LoweredResult run = runComposite(tables.orElseThrow(), composite);
+        assertMatchesReference(queryId, run, composite.stringColumns());
+    }
+
+    private static CompiledQuerySupport.LoweredResult runComposite(TpchParquetTables tables, CompiledTpcdsQueries.Composite composite)
+    {
+        Allocator allocator = new Allocator();
+        Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
+        return CompiledQuerySupport.runStage(allocator, tables, composite.main().lower(), virtuals);
+    }
+
     private static void assertMatchesReference(String queryId, CompiledTpcdsQueries.Ported ported)
     {
         var tables = TpchParquetTables.actualIfPresent();
         assumeTrue(tables.isPresent(), "TPC-H parquet data not present");
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables.orElseThrow(), ported.query().lower());
+        assertMatchesReference(queryId, run, ported.stringColumns());
+    }
+
+    private static void assertMatchesReference(String queryId, CompiledQuerySupport.LoweredResult run, List<CompiledTpcdsQueries.DictRef> stringColumns)
+    {
         CompiledPipeline.Result result = run.result();
         byte[][][] dictionaries = new byte[result.columns().length][][];
-        for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
+        for (CompiledTpcdsQueries.DictRef ref : stringColumns) {
             dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
         }
 
