@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.jit;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.regex.Pattern;
 
 /**
@@ -52,16 +55,44 @@ public final class StringMatching
         return codePointCount(utf8, 0, utf8.length);
     }
 
-    /** Code points of the UTF-8 slice {@code [from, to)} -- the in-place form for zero-copy view rows. */
+    private static final VarHandle LONG_VIEW = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+    private static final VarHandle INT_VIEW = MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.LITTLE_ENDIAN);
+    private static final long TOP_MASK_64 = 0x8080808080808080L;
+    private static final int TOP_MASK_32 = 0x80808080;
+
+    /**
+     * Code points of the UTF-8 slice {@code [from, to)} -- the in-place form for zero-copy view rows. Counts the
+     * continuation bytes ({@code 0b10xx_xxxx}) eight at a time with a SWAR bit trick rather than a branch per byte:
+     * a long's continuation bytes are exactly the ones where bit 7 is set and bit 6 is clear, so
+     * {@code ((w & 0x8080..) >>> 1) & ~w} lands a one in each matching byte's bit 6, and {@link Long#bitCount}
+     * counts them. Code points = byte length minus continuation bytes. (This is airlift SliceUtf8's algorithm,
+     * which profiling showed ~2x faster than a scalar per-byte loop on long ClickBench URLs; the JIT compiles it
+     * to tight scalar code -- unlike a manual Vector-API count, which carried more overhead than it saved.)
+     */
     public static int codePointCount(byte[] utf8, int from, int to)
     {
-        int count = 0;
-        for (int i = from; i < to; i++) {
-            if ((utf8[i] & 0xC0) != 0x80) {
-                count++;
+        int length = to - from;
+        if (length <= 0) {
+            return 0;
+        }
+        int continuation = 0;
+        int offset = from;
+        int lastLongStart = to - Long.BYTES;
+        for (; offset <= lastLongStart; offset += Long.BYTES) {
+            long word = (long) LONG_VIEW.get(utf8, offset);
+            continuation += Long.bitCount(((word & TOP_MASK_64) >>> 1) & (~word));
+        }
+        if (offset <= to - Integer.BYTES) {
+            int word = (int) INT_VIEW.get(utf8, offset);
+            continuation += Integer.bitCount(((word & TOP_MASK_32) >>> 1) & (~word));
+            offset += Integer.BYTES;
+        }
+        for (; offset < to; offset++) {
+            if ((utf8[offset] & 0xC0) == 0x80) {
+                continuation++;
             }
         }
-        return count;
+        return length - continuation;
     }
 
     /**
