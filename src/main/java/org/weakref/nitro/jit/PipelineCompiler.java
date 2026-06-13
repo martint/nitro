@@ -619,6 +619,22 @@ public final class PipelineCompiler
     }
 
     /** Whether group key {@code kx} is a nullable column (so the grouping must treat null as its own group). */
+    /**
+     * The number of metadata words a plain group-hash slot carries before its keys: a single {@code gMeta} word
+     * holding the per-key null bitmap, or ZERO when no group key is nullable -- then the word is always 0L (a dead
+     * compare every probe + 8 bytes/slot of cache), so the slot drops it and keys start one word earlier. The plain
+     * (non-grouping-sets) path only; grouping sets pack a set id into gMeta and always keep it.
+     */
+    private static int groupMetaWords(Plan.Pipeline pipeline, boolean[][] nullable)
+    {
+        for (int kx = 0; kx < pipeline.groupKeys().size(); kx++) {
+            if (keyNullable(pipeline, nullable, kx)) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
     private static boolean keyNullable(Plan.Pipeline pipeline, boolean[][] nullable, int kx)
     {
         Plan.Expr key = pipeline.groupKeys().get(kx);
@@ -4167,17 +4183,19 @@ public final class PipelineCompiler
         int keyCount = pipeline.groupKeys().size();
         // Interleaved slot records in one array, so a probe touches one or two cache lines instead of one per
         // parallel key array, and an aggregate update lands in the lines the probe just loaded (the dominant cost
-        // at multi-million-group scale). Each slot is (keyCount + 2 + cellCount) longs: word 0 packs the mixed
-        // hash (high int, the probe fingerprint) with gid + 1 (low int; 0 = empty slot), word 1 holds the key
-        // null bits, words 2.. the key values (null canonicalized to 0), and the trailing words the aggregate
-        // state cells. The result emitters extract the cells into gid-ordered arrays at the end.
+        // at multi-million-group scale). Each slot is (keyCount + 1 + metaWords + cellCount) longs: word 0 packs
+        // the mixed hash (high int, the probe fingerprint) with gid + 1 (low int; 0 = empty slot); an optional
+        // gMeta word holds the key null bits ONLY when a key is nullable (dropped otherwise); then the key values
+        // (null canonicalized to 0), then the aggregate state cells. The result emitters extract the cells into
+        // gid-ordered arrays at the end.
+        int htStride = 1 + groupMetaWords(pipeline, nullable) + keyCount + total;
         body.field("long[]", "htT");
         body.field("int", "htCap");
         body.field("int", "htMask");
         body.field("int", "htFill");
         body.field("int", "groupCount");
         out.append("    htCap = 1024;\n");
-        out.append("    htT = new long[htCap * ").append(keyCount + 2 + total).append("];\n");
+        out.append("    htT = new long[htCap * ").append(htStride).append("];\n");
         out.append("    htMask = htCap - 1; htFill = (int) (htCap * 0.75f); groupCount = 0;\n");
         for (int kx = 0; kx < keyCount; kx++) {
             body.field("long[]", "keyByGid" + kx);
@@ -4371,14 +4389,17 @@ public final class PipelineCompiler
         else {
             out.append(indent).append("int gbase = findGroup(").append(arguments).append(");\n");
         }
+        int metaWords = groupMetaWords(pipeline, nullable);
+        int keyOffset = 1 + metaWords;          // slot[0] = hash<<32|id; gMeta (when present) at slot[1]
+        int aggCellBase = keyOffset + keyCount;
         for (int a = 0; a < aggregates.size(); a++) {
-            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", keyCount + 2), "(htT[gbase] & 0xFFFFFFFFL)", viewRowExpression, resolver, nullResolver, stringMaskIds);
+            emitAggregateUpdate(out, indent, pipeline, body, aggregates.get(a), a, slotCells(aggregates, a, "htT", "gbase", aggCellBase), "(htT[gbase] & 0xFFFFFFFFL)", viewRowExpression, resolver, nullResolver, stringMaskIds);
         }
         if (body.methods().indexOf("int findGroup(") >= 0) {
             return;
         }
         StringBuilder method = body.methods();
-        int stride = keyCount + 2 + cellCount(aggregates);
+        int stride = aggCellBase + cellCount(aggregates);
         method.append("  private int findGroup(").append(parameters).append(") {\n");
         String b = "    ";
         StringBuilder nullBits = new StringBuilder("0L");
@@ -4387,22 +4408,28 @@ public final class PipelineCompiler
                 nullBits.append(" | (gkN").append(kx).append(" ? ").append(1L << kx).append("L : 0L)");
             }
         }
-        method.append(b).append("long gMeta = ").append(nullBits).append(";\n");
+        String metaCompare = "";
+        if (metaWords == 1) {
+            method.append(b).append("long gMeta = ").append(nullBits).append(";\n");
+            metaCompare = " && htT[gbase + 1] == gMeta";
+        }
         method.append(b).append("int gHash = mix(").append(hashFold("gk", "", keyCount)).append(");\n");
         method.append(b).append("int gslot = gHash & htMask;\n");
         method.append(b).append("int gbase = gslot * ").append(stride).append(";\n");
         method.append(b).append("long gw0 = htT[gbase];\n");
-        method.append(b).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash && htT[gbase + 1] == gMeta")
-                .append(keyCompare(keyCount))
+        method.append(b).append("while ((int) gw0 != 0 && !((int) (gw0 >>> 32) == gHash").append(metaCompare)
+                .append(keyCompare(keyCount, keyOffset))
                 .append(")) { gslot = (gslot + 1) & htMask; gbase = gslot * ").append(stride).append("; gw0 = htT[gbase]; }\n");
         method.append(b).append("int gid = ((int) gw0) - 1;\n");
         method.append(b).append("if (gid == -1) {\n");
         String c = b + "  ";
         method.append(c).append("gid = groupCount++;\n");
         method.append(c).append("htT[gbase] = ((long) gHash << 32) | (gid + 1);\n");
-        method.append(c).append("htT[gbase + 1] = gMeta;\n");
+        if (metaWords == 1) {
+            method.append(c).append("htT[gbase + 1] = gMeta;\n");
+        }
         for (int kx = 0; kx < keyCount; kx++) {
-            method.append(c).append("htT[gbase + ").append(kx + 2).append("] = gk").append(kx).append(";\n");
+            method.append(c).append("htT[gbase + ").append(kx + keyOffset).append("] = gk").append(kx).append(";\n");
         }
         method.append(c).append("if (gid == keyByGid0.length) {\n");
         method.append(c).append("  int n = keyByGid0.length * 2;\n");
@@ -4420,7 +4447,7 @@ public final class PipelineCompiler
             }
         }
         for (int a = 0; a < aggregates.size(); a++) {
-            aggregator(aggregates.get(a)).emitIdentity(method, c, slotCells(aggregates, a, "htT", "gbase", keyCount + 2));
+            aggregator(aggregates.get(a)).emitIdentity(method, c, slotCells(aggregates, a, "htT", "gbase", aggCellBase));
         }
         method.append(c).append("if (groupCount > htFill) {\n");
         method.append(c).append("  int ncap = htCap * 2;\n");
@@ -4485,7 +4512,8 @@ public final class PipelineCompiler
             return;
         }
         int keyCount = pipeline.groupKeys().size();
-        emitCellExtraction(out, "htT", "htMask", keyCount + 2 + cellCount(aggregates), keyCount + 2, aggregates);
+        int aggCellBase = 1 + groupMetaWords(pipeline, nullable) + keyCount;
+        emitCellExtraction(out, "htT", "htMask", aggCellBase + cellCount(aggregates), aggCellBase, aggregates);
         out.append("    long[][] result = new long[").append(keyCount + aggregateCount).append("][];\n");
         for (int kx = 0; kx < keyCount; kx++) {
             emitKeyResultColumn(out, "    ", kx, kx, kx == 0 ? reconstructDictColumn : -1, "groupCount");
@@ -4602,12 +4630,12 @@ public final class PipelineCompiler
     }
 
     /** Conjunction {@code htKey0[slot] == gk0 && ...} comparing every stored key component to the probe. */
-    private static String keyCompare(int keyCount)
+    private static String keyCompare(int keyCount, int keyOffset)
     {
-        // The null bits are covered by the gMeta word; only the key values remain to compare.
+        // The null bits, when present, are covered by the gMeta word; only the key values remain to compare.
         StringBuilder compare = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
-            compare.append(" && htT[gbase + ").append(kx + 2).append("] == gk").append(kx);
+            compare.append(" && htT[gbase + ").append(kx + keyOffset).append("] == gk").append(kx);
         }
         return compare.toString();
     }
