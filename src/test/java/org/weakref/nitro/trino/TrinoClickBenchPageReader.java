@@ -219,7 +219,7 @@ public final class TrinoClickBenchPageReader
                         .withMaxMergeDistance(MAX_MERGE_DISTANCE)
                         .withMaxBufferSize(MAX_BUFFER_SIZE)
                         .withMaxPageReadSize(MAX_PAGE_READ_SIZE)
-                        .withVectorizedDecodingEnabled(false)
+                        .withVectorizedDecodingEnabled(true)
                         .build();
 
                 FileParquetDataSource dataSource = new FileParquetDataSource(file.toFile(), options);
