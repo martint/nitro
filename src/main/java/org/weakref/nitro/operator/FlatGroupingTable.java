@@ -51,6 +51,13 @@ final class FlatGroupingTable
     private int mask;
     private int maxFill;
 
+    // Array-mode accelerator: a direct-index map from the layout's composite value id to the group ordinal.
+    // Populated lazily on the first assignment of each composite; a hit returns the group with no hash, probe,
+    // or record comparison. The hash table remains the source of truth, so composites that don't fit (a high
+    // -cardinality or nullable key) simply fall through to it. Group ordinals are stable (rehash preserves them),
+    // and composites are stable across batches, so the cache persists for the whole grouping.
+    private int[] compositeCache;
+
     public FlatGroupingTable(FlatKeyLayout layout, int expectedSize)
     {
         this.layout = layout;
@@ -86,6 +93,21 @@ final class FlatGroupingTable
 
     public long assignGroup(Vector[] values, Vector[] nulls, int position, long newGroupId)
     {
+        long composite = layout.compositeValueId(position);
+        if (composite >= 0) {
+            int slot = (int) composite;
+            if (compositeCache != null && slot < compositeCache.length && compositeCache[slot] >= 0) {
+                return compositeCache[slot];
+            }
+            long group = assignGroupHashed(values, nulls, position, newGroupId);
+            cacheComposite(slot, (int) group);
+            return group;
+        }
+        return assignGroupHashed(values, nulls, position, newGroupId);
+    }
+
+    private long assignGroupHashed(Vector[] values, Vector[] nulls, int position, long newGroupId)
+    {
         long hash = layout.hash(values, nulls, position);
         int index = getIndex(values, nulls, position, hash);
         if (index >= 0) {
@@ -97,6 +119,25 @@ final class FlatGroupingTable
             rehash();
         }
         return newGroupId;
+    }
+
+    private void cacheComposite(int composite, int group)
+    {
+        if (compositeCache == null) {
+            int initial = Integer.highestOneBit(Math.max(16, composite)) << 1;
+            compositeCache = new int[initial];
+            java.util.Arrays.fill(compositeCache, -1);
+        }
+        else if (composite >= compositeCache.length) {
+            int oldLength = compositeCache.length;
+            int newLength = oldLength;
+            while (newLength <= composite) {
+                newLength <<= 1;
+            }
+            compositeCache = java.util.Arrays.copyOf(compositeCache, newLength);
+            java.util.Arrays.fill(compositeCache, oldLength, newLength, -1);
+        }
+        compositeCache[composite] = group;
     }
 
     public long assignGroup(Vector[] values, int position, long newGroupId)

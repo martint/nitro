@@ -66,6 +66,30 @@ class FlatKeyLayout
     // Parquet writer marks columns optional even when they are semantically NOT NULL -- pays no per-row null check.
     private boolean[] batchFieldNullFree;
 
+    // Global value-id equality for variable-width dictionary keys (Velox VectorHasher technique). Each field's
+    // interner maps every distinct value to a dense id that is stable across batches AND across per-page
+    // dictionary identities -- unlike the dictionary-identity binding this replaces, whose ids were valid only
+    // within one dictionary instance, so a persistent group table fell back to byte comparison on every later
+    // batch. The record stores the GLOBAL id and equality compares ids; a value that overflows the interner
+    // ceiling (or a non-dictionary input) stores/sees id -1 and falls back to value comparison, which is always
+    // available because the value itself is still stored. batchEntryGlobalId[field][dictId] is this batch's
+    // dictionary entry -> global id map, cached by dictionary identity in batchEntryGlobalIdDict.
+    private static final int VALUE_ID_CEILING = 1 << 20;
+    private ValueIdInterner[] fieldInterners;
+    private int[][] batchEntryGlobalId;
+    private Vector[] batchEntryGlobalIdDict;
+
+    // Composite value-id for array-mode grouping (Velox's normalized-key technique): when every key field is an
+    // interned, null-free, low-cardinality dictionary column, this batch's per-field global ids pack into a
+    // single composite id (id0 + id1*STRIDE + …) that uniquely identifies the key and stays stable across
+    // batches. FlatGroupingTable indexes a direct array by it, skipping the hash + probe + record machinery
+    // entirely; out-of-range composites (a field above STRIDE distinct, too many fields, or a nullable/non-dict
+    // batch) yield -1 and fall back to the hash table. STRIDE bounds the per-field cardinality so the packing is
+    // a bijection; COMPOSITE_MAX bounds the indexable range.
+    private static final int COMPOSITE_STRIDE = 1 << 10;
+    private static final long COMPOSITE_MAX = 1 << 20;
+    private boolean batchCompositeEligible;
+
     FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
         this.fields = fields;
@@ -160,6 +184,9 @@ class FlatKeyLayout
             batchDictionaryIds = new int[handlers.length][];
             fieldIdComparable = new boolean[handlers.length];
             batchFieldNullFree = new boolean[handlers.length];
+            fieldInterners = new ValueIdInterner[handlers.length];
+            batchEntryGlobalId = new int[handlers.length][];
+            batchEntryGlobalIdDict = new Vector[handlers.length];
         }
         anyFieldIdComparable = false;
         for (int index = 0; index < handlers.length; index++) {
@@ -189,19 +216,87 @@ class FlatKeyLayout
                 dictionaryHashedValues[index] = dictionaryValues;
             }
 
-            // Bind the field to the first dictionary identity it sees; id-based equality only applies
-            // for variable-width fields (the byte-compare those would otherwise pay is what we avoid).
+            // Intern this dictionary's entries to GLOBAL value ids (stable across batches and dictionary
+            // identities) so id-based equality works for the whole persistent group table, not just within one
+            // dictionary instance. Id equality only applies to variable-width fields -- the byte-compare those
+            // would otherwise pay is what we avoid.
             if (handlers[index].variableWidth()) {
-                if (boundDictionary[index] == null) {
+                int[] entryGlobalIds = internDictionaryEntries(index, dictionaryValues);
+                if (entryGlobalIds != null) {
                     boundDictionary[index] = dictionaryValues;
-                }
-                if (boundDictionary[index] == dictionaryValues) {
-                    fieldIdComparable[index] = true;
                     batchDictionaryIds[index] = dictionary.ids();
+                    fieldIdComparable[index] = true;
                     anyFieldIdComparable = true;
                 }
             }
         }
+
+        // Decide once per batch whether the key is array-mode eligible: every field interned, null-free, with at
+        // most STRIDE distinct ids (so the packing is a bijection), and few enough fields that the composite
+        // range stays indexable. Checked here so the per-position compositeValueId stays a tight pack loop.
+        batchCompositeEligible = handlers.length > 0;
+        long compositeMultiplier = 1;
+        for (int index = 0; batchCompositeEligible && index < handlers.length; index++) {
+            if (!fieldIdComparable[index] || !batchFieldNullFree[index]
+                    || fieldInterners[index] == null || fieldInterners[index].distinctCount() > COMPOSITE_STRIDE) {
+                batchCompositeEligible = false;
+                break;
+            }
+            compositeMultiplier *= COMPOSITE_STRIDE;
+            if (compositeMultiplier > COMPOSITE_MAX) {
+                batchCompositeEligible = false;
+                break;
+            }
+        }
+    }
+
+    /**
+     * The composite value id for the key at {@code position} (id0 + id1*STRIDE + …) when the batch is array-mode
+     * eligible, else -1. A bijection of the per-field global ids, stable across batches, in {@code [0, STRIDE^k)}
+     * with the range bounded below COMPOSITE_MAX; FlatGroupingTable uses it as a direct array index.
+     */
+    long compositeValueId(int position)
+    {
+        if (!batchCompositeEligible) {
+            return -1;
+        }
+        long composite = 0;
+        long multiplier = 1;
+        for (int index = 0; index < handlers.length; index++) {
+            composite += batchEntryGlobalId[index][batchDictionaryIds[index][position]] * multiplier;
+            multiplier *= COMPOSITE_STRIDE;
+        }
+        return composite;
+    }
+
+    /**
+     * This batch's dictionary entry -> global value id map for a variable-width field, interning any entries not
+     * seen before. Cached by dictionary identity. Returns {@code null} when the dictionary's values are not a
+     * byte-string vector (the field then keeps the value-comparison path). An entry that overflows the interner
+     * ceiling maps to -1, and equality for that value falls back to the byte compare.
+     */
+    private int[] internDictionaryEntries(int fieldIndex, Vector dictionaryValues)
+    {
+        if (batchEntryGlobalIdDict[fieldIndex] == dictionaryValues && batchEntryGlobalId[fieldIndex] != null) {
+            return batchEntryGlobalId[fieldIndex];
+        }
+        if (!(dictionaryValues instanceof BinaryVector dictionary)) {
+            return null;
+        }
+        ValueIdInterner interner = fieldInterners[fieldIndex];
+        if (interner == null) {
+            interner = new ValueIdInterner(VALUE_ID_CEILING);
+            fieldInterners[fieldIndex] = interner;
+        }
+        int entryCount = dictionary.length();
+        int[] globalIds = new int[entryCount];
+        byte[] data = dictionary.data();
+        for (int entry = 0; entry < entryCount; entry++) {
+            globalIds[entry] = interner.intern(data, dictionary.startOffset(entry), dictionary.length(entry));
+        }
+        batchEntryGlobalId[fieldIndex] = globalIds;
+        batchEntryGlobalIdDict[fieldIndex] = dictionaryValues;
+        return globalIds;
     }
 
     /**
@@ -287,7 +382,11 @@ class FlatKeyLayout
                 return false;
             }
             if (idComparable(0, recordIndex)) {
-                return recordDictionaryIds[0][recordIndex] == batchDictionaryIds[0][position];
+                int probeId = batchEntryGlobalId[0][batchDictionaryIds[0][position]];
+                if (probeId >= 0) {
+                    return recordDictionaryIds[0][recordIndex] == probeId;
+                }
+                // probe value overflowed the interner: fall through to the value comparison.
             }
             return singleHandler.identicalFlatToInput(fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position);
         }
@@ -301,10 +400,14 @@ class FlatKeyLayout
                 continue;
             }
             if (idComparable(index, recordIndex)) {
-                if (recordDictionaryIds[index][recordIndex] != batchDictionaryIds[index][position]) {
-                    return false;
+                int probeId = batchEntryGlobalId[index][batchDictionaryIds[index][position]];
+                if (probeId >= 0) {
+                    if (recordDictionaryIds[index][recordIndex] != probeId) {
+                        return false;
+                    }
+                    continue;
                 }
-                continue;
+                // probe value overflowed the interner: fall through to the value comparison.
             }
             if (!handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
@@ -333,7 +436,7 @@ class FlatKeyLayout
             if (recordDictionaryIds[index] == null) {
                 continue;
             }
-            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? batchDictionaryIds[index][position] : -1;
+            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? batchEntryGlobalId[index][batchDictionaryIds[index][position]] : -1;
         }
     }
 
