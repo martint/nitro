@@ -129,6 +129,17 @@ public class Mask
         return positions[index];
     }
 
+    /**
+     * The backing array of selected positions for a sparse mask — its first {@link #selectedCount()} entries
+     * are the active positions in order. Returns {@code null} when {@link #all()} is true (there is no
+     * materialized array; callers should iterate {@code 0..size()} densely). Exposed for tight monomorphic
+     * kernels that must avoid the per-call bound check of {@link #position(int)}; treat the result as read-only.
+     */
+    public int[] selectedPositions()
+    {
+        return allSelected ? null : positions;
+    }
+
     public void selectAll(int size)
     {
         checkArgument(size >= 0, "size is negative");

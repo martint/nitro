@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -49,11 +50,9 @@ public final class AddF64
         }
 
         Allocator.Context allocationContext = context.allocationContext("AddF64");
-        VectorAccess.DoubleValues leftValues = VectorAccess.doubleValues(inputs.get(0).values());
-        VectorAccess.DoubleValues rightValues = VectorAccess.doubleValues(inputs.get(1).values());
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
-        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(inputs.get(0).values().length(), inputs.get(1).values().length()));
+        Vector left = inputs.get(0).values();
+        Vector right = inputs.get(1).values();
+        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(left.length(), right.length()));
 
         Streams result = Streams.empty();
         if (requestNulls) {
@@ -62,10 +61,7 @@ public final class AddF64
                     allocationContext,
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
-            boolean[] nullValues = nulls.values();
-            for (int position : mask) {
-                nullValues[position] = leftNulls.value(position) || rightNulls.value(position);
-            }
+            VectorAccess.combineNullsOr(inputs.get(0).getOrNull(Stream.NULLS), inputs.get(1).getOrNull(Stream.NULLS), mask, nulls);
             result = result.with(Stream.NULLS, nulls);
         }
         if (!requestValues) {
@@ -78,9 +74,66 @@ public final class AddF64
                 F64Vector.class,
                 requiredLength,
                 F64Vector::new);
-        double[] outputValues = values.values();
-        for (int position : mask) {
-            outputValues[position] = leftValues.value(position) + rightValues.value(position);
+        double[] out = values.values();
+
+        // Monomorphic, encoding-specialized kernels: decide operand shapes once, then run a tight typed loop
+        // (the all-selected case auto-vectorizes). Only the rare general case uses the per-element accessor.
+        double[] l = VectorAccess.flatDoubles(left);
+        double[] r = VectorAccess.flatDoubles(right);
+        int[] selected = mask.selectedPositions();
+        if (l != null && r != null) {
+            if (selected == null) {
+                int n = mask.size();
+                for (int i = 0; i < n; i++) {
+                    out[i] = l[i] + r[i];
+                }
+            }
+            else {
+                int n = mask.selectedCount();
+                for (int k = 0; k < n; k++) {
+                    int p = selected[k];
+                    out[p] = l[p] + r[p];
+                }
+            }
+        }
+        else if (l != null && VectorAccess.isConstantDouble(right)) {
+            double c = VectorAccess.constantDouble(right);
+            if (selected == null) {
+                int n = mask.size();
+                for (int i = 0; i < n; i++) {
+                    out[i] = l[i] + c;
+                }
+            }
+            else {
+                int n = mask.selectedCount();
+                for (int k = 0; k < n; k++) {
+                    int p = selected[k];
+                    out[p] = l[p] + c;
+                }
+            }
+        }
+        else if (r != null && VectorAccess.isConstantDouble(left)) {
+            double c = VectorAccess.constantDouble(left);
+            if (selected == null) {
+                int n = mask.size();
+                for (int i = 0; i < n; i++) {
+                    out[i] = c + r[i];
+                }
+            }
+            else {
+                int n = mask.selectedCount();
+                for (int k = 0; k < n; k++) {
+                    int p = selected[k];
+                    out[p] = c + r[p];
+                }
+            }
+        }
+        else {
+            VectorAccess.DoubleValues leftValues = VectorAccess.doubleValues(left);
+            VectorAccess.DoubleValues rightValues = VectorAccess.doubleValues(right);
+            for (int position : mask) {
+                out[position] = leftValues.value(position) + rightValues.value(position);
+            }
         }
         return result.with(Stream.VALUES, values);
     }

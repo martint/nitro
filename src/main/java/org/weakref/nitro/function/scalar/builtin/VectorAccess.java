@@ -217,6 +217,31 @@ public final class VectorAccess
         };
     }
 
+    /** The backing {@code double[]} when {@code vector} is a plain flat {@link F64Vector}, else {@code null}. */
+    public static double[] flatDoubles(Vector vector)
+    {
+        return vector instanceof F64Vector values ? values.values() : null;
+    }
+
+    /**
+     * True when {@code vector} is a single-value broadcast of a double — a literal materializes as an
+     * {@link RleVector} with one run over a length-one {@link F64Vector}. Lets a binary kernel hoist a
+     * constant operand out of the row loop instead of reading it through the megamorphic
+     * {@link #doubleValues} accessor per element.
+     */
+    public static boolean isConstantDouble(Vector vector)
+    {
+        return vector instanceof RleVector rle
+                && rle.counts().length == 1
+                && rle.values() instanceof F64Vector flat
+                && flat.length() == 1;
+    }
+
+    public static double constantDouble(Vector vector)
+    {
+        return ((F64Vector) ((RleVector) vector).values()).values()[0];
+    }
+
     public static BinaryValues binaryValues(Vector vector)
     {
         return switch (vector) {
