@@ -66,6 +66,18 @@ public class BooleanVector
         return true;
     }
 
+    /**
+     * Records that every element is false without scanning. The caller guarantees the backing array is
+     * all-false and will not be mutated afterward — Nitro treats a {@link BooleanVector} as immutable
+     * once it has been published through {@link org.weakref.nitro.operator.Streams}. Lets producers of a
+     * known all-false stream make {@link #isAllFalse()} (and hence
+     * {@link org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}) O(1).
+     */
+    public void markAllFalse()
+    {
+        isAllFalseCache = Boolean.TRUE;
+    }
+
     @Override
     public int length()
     {

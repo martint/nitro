@@ -64,19 +64,35 @@ public class SumF64
     {
         F64Vector stateVector = (F64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
+        Vector inputNullsVector = streams.stream(inputColumn, Stream.NULLS);
         VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
-        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
         double sum = 0;
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                sum += inputNulls.value(position) ? 0 : inputValues.value(position);
+        if (VectorAccess.isAllFalseNulls(inputNullsVector)) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    sum += inputValues.value(position);
+                }
+            }
+            else {
+                for (int position : mask) {
+                    sum += inputValues.value(position);
+                }
             }
         }
         else {
-            for (int position : mask) {
-                sum += inputNulls.value(position) ? 0 : inputValues.value(position);
+            VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullsVector);
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    sum += inputNulls.value(position) ? 0 : inputValues.value(position);
+                }
+            }
+            else {
+                for (int position : mask) {
+                    sum += inputNulls.value(position) ? 0 : inputValues.value(position);
+                }
             }
         }
 
@@ -90,9 +106,26 @@ public class SumF64
         F64Vector stateVector = (F64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         I64Vector groupVector = (I64Vector) groups;
+        Vector inputNullsVector = streams.stream(inputColumn, Stream.NULLS);
         VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
-        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
+        if (VectorAccess.isAllFalseNulls(inputNullsVector)) {
+            if (mask.all()) {
+                for (int position = 0; position <= mask.maxPosition(); position++) {
+                    int group = toIntExact(groupVector.values()[position]);
+                    accumulate(stateVector, stateNulls, group, inputValues, position);
+                }
+            }
+            else {
+                for (int position : mask) {
+                    int group = toIntExact(groupVector.values()[position]);
+                    accumulate(stateVector, stateNulls, group, inputValues, position);
+                }
+            }
+            return;
+        }
+
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullsVector);
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
@@ -111,6 +144,12 @@ public class SumF64
     {
         stateNulls.values()[group] = false;
         state.values()[group] += inputNulls.value(position) ? 0 : inputValues.value(position);
+    }
+
+    private static void accumulate(F64Vector state, BooleanVector stateNulls, int group, VectorAccess.DoubleValues inputValues, int position)
+    {
+        stateNulls.values()[group] = false;
+        state.values()[group] += inputValues.value(position);
     }
 
     @Override

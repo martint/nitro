@@ -498,6 +498,20 @@ public final class PlanEvaluator
         return merged;
     }
 
+    /**
+     * Allocates a terminal all-false {@link BooleanVector} for a synthesized null-free NULLS/ERRORS
+     * stream. The allocator hands back an already-zeroed buffer (fresh arrays are zero-initialized;
+     * pooled buffers are cleared via {@code clearForReuse}), so no fill is needed. The result is
+     * read-only for its consumers, so its all-false state is recorded up front and never invalidated —
+     * making downstream {@link VectorAccess#isAllFalseNulls} checks O(1).
+     */
+    private BooleanVector allocateAllFalse(int length)
+    {
+        BooleanVector target = allocator.allocate(allocationContext, BooleanVector.class, length, BooleanVector::new);
+        target.markAllFalse();
+        return target;
+    }
+
     private BooleanVector fillFalseBoolean(Vector existing, Mask mask, int length)
     {
         BooleanVector target = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, length);
@@ -1028,13 +1042,15 @@ public final class PlanEvaluator
             throw new IllegalArgumentException("VALUES stream not produced for request");
         }
         if (wantsNulls && !completed.has(Stream.NULLS)) {
-            // Synthesise a flat all-false BooleanVector. VectorAccess.isAllFalseNulls still recognises
-            // this shape, so downstream scalar functions keep short-circuiting their null-propagation
-            // loop on null-free inputs.
-            completed = completed.with(Stream.NULLS, fillFalseBoolean(null, mask, length));
+            // The producer had no nulls. Hand back an all-false BooleanVector, but skip the redundant
+            // clear and pre-record the all-false state: a freshly allocated (or pool-reused) buffer is
+            // already zeroed, and this stream is terminal (consumers only read it), so marking it
+            // all-false lets downstream null-free checks (isAllFalseNulls) short-circuit in O(1) rather
+            // than rescanning every batch. Mirrors Velox's absent null buffer (mayHaveNulls).
+            completed = completed.with(Stream.NULLS, allocateAllFalse(length));
         }
         if (wantsErrors && !completed.has(Stream.ERRORS)) {
-            completed = completed.with(Stream.ERRORS, fillFalseBoolean(null, mask, length));
+            completed = completed.with(Stream.ERRORS, allocateAllFalse(length));
         }
         return completed;
     }

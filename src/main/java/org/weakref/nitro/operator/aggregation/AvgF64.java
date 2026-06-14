@@ -64,9 +64,25 @@ public class AvgF64
     public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
+        Vector inputNullsVector = streams.stream(inputColumn, Stream.NULLS);
         VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
-        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
+        if (VectorAccess.isAllFalseNulls(inputNullsVector)) {
+            if (mask.all()) {
+                int max = mask.maxPosition();
+                for (int position = 0; position <= max; position++) {
+                    stateVector.incrementDouble(group, inputValues.value(position));
+                }
+            }
+            else {
+                for (int position : mask) {
+                    stateVector.incrementDouble(group, inputValues.value(position));
+                }
+            }
+            return;
+        }
+
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullsVector);
         if (mask.all()) {
             int max = mask.maxPosition();
             for (int position = 0; position <= max; position++) {
@@ -85,9 +101,26 @@ public class AvgF64
     {
         AvgStateVector stateVector = (AvgStateVector) state.values();
         I64Vector groupVector = (I64Vector) groups;
+        Vector inputNullsVector = streams.stream(inputColumn, Stream.NULLS);
         VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
-        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
 
+        if (VectorAccess.isAllFalseNulls(inputNullsVector)) {
+            if (mask.all()) {
+                for (int position = 0; position <= mask.maxPosition(); position++) {
+                    int group = toIntExact(groupVector.values()[position]);
+                    stateVector.incrementDouble(group, inputValues.value(position));
+                }
+            }
+            else {
+                for (int position : mask) {
+                    int group = toIntExact(groupVector.values()[position]);
+                    stateVector.incrementDouble(group, inputValues.value(position));
+                }
+            }
+            return;
+        }
+
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullsVector);
         if (mask.all()) {
             for (int position = 0; position <= mask.maxPosition(); position++) {
                 int group = toIntExact(groupVector.values()[position]);
