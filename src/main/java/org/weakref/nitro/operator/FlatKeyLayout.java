@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
 import java.util.Arrays;
 import java.util.Set;
@@ -58,6 +59,12 @@ class FlatKeyLayout
     private boolean[] fieldIdComparable;
     private boolean anyFieldIdComparable;
     private int[][] recordDictionaryIds;
+
+    // Per-batch null-free flags: true for a key field whose null stream is all-false this batch, so the per-row
+    // input null read (a megamorphic OperatorVectorSupport.isNull) is skipped. The layout stays nullable (a later
+    // batch may carry nulls), but a batch of declared-nullable-yet-null-free keys -- the common case, since the
+    // Parquet writer marks columns optional even when they are semantically NOT NULL -- pays no per-row null check.
+    private boolean[] batchFieldNullFree;
 
     FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
@@ -152,12 +159,14 @@ class FlatKeyLayout
             boundDictionary = new Vector[handlers.length];
             batchDictionaryIds = new int[handlers.length][];
             fieldIdComparable = new boolean[handlers.length];
+            batchFieldNullFree = new boolean[handlers.length];
         }
         anyFieldIdComparable = false;
         for (int index = 0; index < handlers.length; index++) {
             fieldIdComparable[index] = false;
             batchDictionaryIds[index] = null;
             int channel = inputChannels[index];
+            batchFieldNullFree[index] = VectorAccess.isAllFalseNulls((nulls != null && channel < nulls.length) ? nulls[channel] : null);
             if (channel >= values.length || !(values[channel] instanceof DictionaryVector dictionary)) {
                 dictionaryHashedIds[index] = null;
                 dictionaryEntryHashes[index] = null;
@@ -214,14 +223,14 @@ class FlatKeyLayout
     public long hash(Vector[] values, Vector[] nulls, int position)
     {
         if (singleField) {
-            if (fieldNull(nulls, singleInputChannel, position)) {
+            if (inputFieldNull(0, nulls, position)) {
                 return 31;
             }
             return 31 + fieldHash(0, singleInputChannel, values[singleInputChannel], position);
         }
         long result = 1;
         for (int index = 0; index < handlers.length; index++) {
-            if (fieldNull(nulls, inputChannels[index], position)) {
+            if (inputFieldNull(index, nulls, position)) {
                 result = 31 * result + 1;
             }
             else {
@@ -248,7 +257,7 @@ class FlatKeyLayout
             Arrays.fill(fixedChunk, fixedOffset, fixedOffset + nullByteCount, (byte) 0);
         }
         if (singleField) {
-            if (fieldNull(nulls, singleInputChannel, position)) {
+            if (inputFieldNull(0, nulls, position)) {
                 fixedChunk[fixedOffset] = 1;
             }
             else {
@@ -258,7 +267,7 @@ class FlatKeyLayout
             return;
         }
         for (int index = 0; index < handlers.length; index++) {
-            if (fieldNull(nulls, inputChannels[index], position)) {
+            if (inputFieldNull(index, nulls, position)) {
                 setNullBit(fixedChunk, fixedOffset, index);
             }
             else {
@@ -271,7 +280,7 @@ class FlatKeyLayout
     public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         if (singleField) {
-            if (fieldNull(nulls, singleInputChannel, position)) {
+            if (inputFieldNull(0, nulls, position)) {
                 return isNull(fixedChunk, fixedOffset, 0);
             }
             if (isNull(fixedChunk, fixedOffset, 0)) {
@@ -283,7 +292,7 @@ class FlatKeyLayout
             return singleHandler.identicalFlatToInput(fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position);
         }
         for (int index : comparisonOrder) {
-            boolean inputNull = fieldNull(nulls, inputChannels[index], position);
+            boolean inputNull = inputFieldNull(index, nulls, position);
             boolean recordNull = isNull(fixedChunk, fixedOffset, index);
             if (inputNull != recordNull) {
                 return false;
@@ -365,6 +374,19 @@ class FlatKeyLayout
     private static boolean fieldNull(Vector[] nulls, int inputChannel, int position)
     {
         return nulls != null && nulls.length > inputChannel && OperatorVectorSupport.isNull(nulls[inputChannel], position);
+    }
+
+    /**
+     * The input null flag for a key field, skipping the per-row read when this batch's null stream for the field
+     * is all-false (recorded in {@link #beginBatch}). Falls back to the real read when {@link #beginBatch} was
+     * not called (the flags are absent) or the field may carry nulls this batch.
+     */
+    private boolean inputFieldNull(int fieldIndex, Vector[] nulls, int position)
+    {
+        if (batchFieldNullFree != null && batchFieldNullFree[fieldIndex]) {
+            return false;
+        }
+        return fieldNull(nulls, inputChannels[fieldIndex], position);
     }
 
     private static int[] comparisonOrder(FlatTypeHandler[] handlers)
