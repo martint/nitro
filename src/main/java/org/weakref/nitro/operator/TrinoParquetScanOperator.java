@@ -496,6 +496,16 @@ public final class TrinoParquetScanOperator
 
     private Vector convertMaskedValues(ColumnSpec column, Block block, Mask mask)
     {
+        // Preserve dictionary encoding for binary columns even under a mask: a dictionary-encoded char/string
+        // column (e.g. a low-cardinality GROUP BY key) would otherwise be flattened to a per-row BinaryVector,
+        // forcing the grouping table to hash and byte-compare the value of every probe. The values vector is
+        // identical to the unmasked dictionary path (full-length ids over the cached dictionary); the mask is
+        // applied through the separately-materialized null stream and the downstream selection, exactly as the
+        // unmasked path already produces and every consumer already handles. Numeric columns stay flat so the
+        // monomorphic scalar kernels keep their tight typed-array loops.
+        if (column.kind() == ColumnKind.BINARY && block instanceof DictionaryBlock) {
+            return convertValues(column, block, true);
+        }
         return switch (column.kind()) {
             case I32 -> copyMaskedI32(block, mask);
             case DATE -> copyMaskedI32(block, mask);
