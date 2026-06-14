@@ -329,11 +329,7 @@ public final class PipelineCompiler
                     out.append("            entryMaskDict").append(dictColumn).append(" = cDict;\n");
                     out.append("          }\n");
                     out.append("          boolean[] eMask = entryMask").append(dictColumn).append(";\n");
-                    out.append("          int kept = 0;\n");
-                    out.append("          for (int i = 0; i < ").append(rows).append("; i++) {\n");
-                    out.append("            if (eMask[cIds[i]]) { selection[kept++] = ").append(row).append("; }\n");
-                    out.append("          }\n");
-                    out.append("          selected = kept;\n");
+                    emitFilterCompaction(out, body, true, "branchlessFilterStage" + conjunctIndex, rows, row, "eMask[cIds[i]]");
                     out.append("        }\n");
                     out.append("        else {\n");
                 }
@@ -357,12 +353,7 @@ public final class PipelineCompiler
                                 .append(fusedColumn).append(", cViewOff").append(fusedColumn).append(", rowCount, sNeedle").append(id).append(", selection);\n");
                     }
                     else {
-                        out.append("          int kept = 0;\n");
-                        out.append("          for (int i = 0; i < ").append(rows).append("; i++) {\n");
-                        out.append("            int sRow = ").append(row).append(";\n");
-                        out.append("            if (").append(fusedViewPredicate(conjunct, id, fusedColumn, "sRow")).append(") { selection[kept++] = sRow; }\n");
-                        out.append("          }\n");
-                        out.append("          selected = kept;\n");
+                        emitFilterCompaction(out, body, identity, "branchlessFilterStage" + conjunctIndex, rows, row, fusedViewPredicate(conjunct, id, fusedColumn, row));
                     }
                     out.append("        }\n");
                     out.append("        else {\n");
@@ -379,11 +370,7 @@ public final class PipelineCompiler
                 for (Plan.Condition match : matches) {
                     emitStreamingStringConditionPrelude(out, body, pipeline, encodings, nullable, match, stringMaskIds.get(match), rows);
                 }
-                out.append("        int kept = 0;\n");
-                out.append("        for (int i = 0; i < ").append(rows).append("; i++) {\n");
-                out.append("          if (").append(conditionTrue(conjunct, resolver, nullResolver, stringMaskIds)).append(") { selection[kept++] = ").append(row).append("; }\n");
-                out.append("        }\n");
-                out.append("        selected = kept;\n");
+                emitFilterCompaction(out, body, identity, "branchlessFilterStage" + conjunctIndex, rows, row, conditionTrue(conjunct, resolver, nullResolver, stringMaskIds));
                 if (dictionaryStage) {
                     out.append("        }\n");
                 }
@@ -709,6 +696,38 @@ public final class PipelineCompiler
             case DICTIONARY -> vars.dict() + "[" + vars.ids() + "[" + row + "]]";
             case CONSTANT -> vars.constant();
         };
+    }
+
+    /**
+     * Emit selection-vector compaction for a filter stage. The first (identity) stage scans rows sequentially, so
+     * it adapts between branchy and branchless compaction by the previous batch's survivor fraction: branchless
+     * ({@code selection[kept] = row; kept += pred ? 1 : 0}) drops the per-row control dependency and wins ~2-4x
+     * once selectivity clears a couple of percent, but it pays an unconditional store per row, so a highly
+     * selective stage (the common most-selective-first case, where a branch predicts the skip almost perfectly)
+     * stays branchy. Later (gather) stages are memory-latency-bound -- the branch hides behind the cache miss --
+     * so they keep the plain branchy form. The threshold is 1/50 = 2% (the measured crossover).
+     */
+    private static void emitFilterCompaction(StringBuilder out, ClassBody body, boolean identity, String stageField, String rowsExpr, String rowExpr, String predExpr)
+    {
+        if (identity) {
+            body.field("boolean", stageField);
+            out.append("          if (").append(stageField).append(") {\n");
+            out.append("            int kept = 0;\n");
+            out.append("            for (int i = 0; i < ").append(rowsExpr).append("; i++) { selection[kept] = ").append(rowExpr).append("; kept += (").append(predExpr).append(") ? 1 : 0; }\n");
+            out.append("            selected = kept;\n");
+            out.append("          }\n");
+            out.append("          else {\n");
+            out.append("            int kept = 0;\n");
+            out.append("            for (int i = 0; i < ").append(rowsExpr).append("; i++) { if (").append(predExpr).append(") { selection[kept++] = ").append(rowExpr).append("; } }\n");
+            out.append("            selected = kept;\n");
+            out.append("          }\n");
+            out.append("          ").append(stageField).append(" = (long) selected * 50L >= (long) ").append(rowsExpr).append(";\n");
+        }
+        else {
+            out.append("          int kept = 0;\n");
+            out.append("          for (int i = 0; i < ").append(rowsExpr).append("; i++) { if (").append(predExpr).append(") { selection[kept++] = ").append(rowExpr).append("; } }\n");
+            out.append("          selected = kept;\n");
+        }
     }
 
     /** Load a join column from its input array into the encoding-appropriate generated variable(s), with its null mask when nullable. */
