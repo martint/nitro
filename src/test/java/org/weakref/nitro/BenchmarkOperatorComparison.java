@@ -26,6 +26,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Utf8Traits;
@@ -106,6 +107,8 @@ public class BenchmarkOperatorComparison
     private List<Page> scanThreeKey;
     private List<Page> scanStringLowCard;
     private List<Page> scanStringHighCard;
+    private List<Page> scanStringDictLowCard;
+    private List<Page> scanStringDictHighCard;
 
     private Allocator allocator;
 
@@ -134,6 +137,10 @@ public class BenchmarkOperatorComparison
         // String group key (UTF-8) + long payload — the flat/string grouping path.
         scanStringLowCard = stringKeyPages(SCAN_ROWS, GROUPS_LOW);
         scanStringHighCard = stringKeyPages(SCAN_ROWS, 65_536);
+        // Dictionary-encoded string keys (a single shared dictionary base reused across all batches) — how real
+        // string columns arrive from Parquet; exercises Nitro's id-equality / array-mode grouping fast path.
+        scanStringDictLowCard = dictStringKeyPages(SCAN_ROWS, GROUPS_LOW);
+        scanStringDictHighCard = dictStringKeyPages(SCAN_ROWS, 65_536);
     }
 
     @Setup(Level.Invocation)
@@ -228,6 +235,20 @@ public class BenchmarkOperatorComparison
     {
         consume(new GroupedAggregationOperator(
                 allocator, List.of(0), List.of(new Sum(1)), new TableOperator(2, scanStringHighCard)));
+    }
+
+    @Benchmark
+    public void groupSumStringDictLowCardinality()
+    {
+        consume(new GroupedAggregationOperator(
+                allocator, List.of(0), List.of(new Sum(1)), new TableOperator(2, scanStringDictLowCard)));
+    }
+
+    @Benchmark
+    public void groupSumStringDictHighCardinality()
+    {
+        consume(new GroupedAggregationOperator(
+                allocator, List.of(0), List.of(new Sum(1)), new TableOperator(2, scanStringDictHighCard)));
     }
 
     // ---- Global aggregation: sum(value) ----
@@ -326,6 +347,36 @@ public class BenchmarkOperatorComparison
                 payload[index] = start + index;
             }
             pages.add(Page.values(rows, new Vector[] {keyVector, new I64Vector(payload)}, Mask.all(rows)));
+        }
+        return pages;
+    }
+
+    private List<Page> dictStringKeyPages(int totalRows, int distinctKeys)
+    {
+        byte[][] keyBytes = new byte[distinctKeys][];
+        int byteCapacity = 0;
+        for (int key = 0; key < distinctKeys; key++) {
+            keyBytes[key] = ("key-" + key).getBytes(StandardCharsets.UTF_8);
+            byteCapacity += keyBytes[key].length;
+        }
+        // One dictionary base, shared by reference across every batch, so the grouping table binds the dictionary
+        // identity once and compares by id instead of re-hashing/comparing the underlying bytes per row.
+        BinaryVector base = new BinaryVector(distinctKeys, byteCapacity);
+        base.addTrait(Utf8Traits.UTF8_STRING);
+        base.addTrait(Utf8Traits.ASCII_ONLY);
+        for (int key = 0; key < distinctKeys; key++) {
+            base.setBytes(key, keyBytes[key]);
+        }
+        List<Page> pages = new ArrayList<>();
+        for (int start = 0; start < totalRows; start += batch) {
+            int rows = Math.min(batch, totalRows - start);
+            int[] ids = new int[rows];
+            long[] payload = new long[rows];
+            for (int index = 0; index < rows; index++) {
+                ids[index] = (start + index) % distinctKeys;
+                payload[index] = start + index;
+            }
+            pages.add(Page.values(rows, new Vector[] {new DictionaryVector(ids, base), new I64Vector(payload)}, Mask.all(rows)));
         }
         return pages;
     }
