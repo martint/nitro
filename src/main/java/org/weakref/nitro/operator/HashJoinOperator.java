@@ -378,7 +378,10 @@ public class HashJoinOperator
                 joinValues[keyIndex] = streams.values();
                 joinNulls[keyIndex] = streams.getOrNull(Stream.NULLS);
             }
-            hasNulls = hasNulls || joinNulls[keyIndex] != null;
+            // A present NULLS stream that is provably all-false (e.g. a non-nullable key surfaced through a
+            // prior join's DictionaryVector/ConcatenatedBooleanVector) carries no nulls; treat the key as
+            // null-free so the index build and probe skip per-row null reads.
+            hasNulls = hasNulls || (joinNulls[keyIndex] != null && !VectorAccess.isAllFalseNulls(joinNulls[keyIndex]));
         }
         if (joinIndex == null) {
             joinIndex = createJoinIndex(joinValues);
@@ -402,8 +405,15 @@ public class HashJoinOperator
             Output output = currentOuterBatch.output(outerJoinColumns[keyIndex]);
             long start = System.nanoTime();
             currentOuterJoinValues[keyIndex] = output.borrow(Stream.VALUES);
-            currentOuterJoinNulls[keyIndex] = output.isKnownAllFalse(Stream.NULLS) ? null : output.borrowOrNull(Stream.NULLS);
-            currentOuterJoinHasNulls = currentOuterJoinHasNulls || currentOuterJoinNulls[keyIndex] != null;
+            Vector keyNulls = output.isKnownAllFalse(Stream.NULLS) ? null : output.borrowOrNull(Stream.NULLS);
+            // A present-but-all-false NULLS stream (e.g. a non-nullable key surfaced through a prior join's
+            // DictionaryVector/ConcatenatedBooleanVector) carries no nulls: drop it so the probe takes the
+            // null-free match path instead of reading a per-row null (a binary search for that shape).
+            if (keyNulls != null && VectorAccess.isAllFalseNulls(keyNulls)) {
+                keyNulls = null;
+            }
+            currentOuterJoinNulls[keyIndex] = keyNulls;
+            currentOuterJoinHasNulls = currentOuterJoinHasNulls || keyNulls != null;
         }
     }
 
@@ -1567,6 +1577,23 @@ public class HashJoinOperator
             }
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
+            if (!hasNulls || nulls == null) {
+                // Probe key is null-free: skip the per-row null read entirely.
+                switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> matchLongRowsNullFree(longValues.values(), positions, positionCount, matches, singleMatches);
+                    case org.weakref.nitro.data.I32Vector intValues -> matchIntRowsNullFree(intValues.values(), positions, positionCount, matches, singleMatches);
+                    case DictionaryVector dictionary -> matchDictionaryRowsNullFree(dictionary, positions, positionCount, matches, singleMatches);
+                    case org.weakref.nitro.data.RleVector rle -> matchRleRows(rle, VectorAccess.booleanValues(null), positions, positionCount, matches, singleMatches);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = positions[index];
+                            matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
+                        }
+                    }
+                }
+                return;
+            }
             VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
             switch (values) {
                 case org.weakref.nitro.data.I64Vector longValues -> matchLongRows(longValues.values(), nullValues, positions, positionCount, matches, singleMatches);
@@ -1583,6 +1610,50 @@ public class HashJoinOperator
                         else {
                             matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
                         }
+                    }
+                }
+            }
+        }
+
+        private void matchLongRowsNullFree(long[] values, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
+            }
+        }
+
+        private void matchIntRowsNullFree(int[] values, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
+            }
+        }
+
+        private void matchDictionaryRowsNullFree(DictionaryVector values, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        {
+            int[] ids = values.ids();
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        matches[index] = rowsForKey(dictionaryValues.value(ids[position]), singleMatches[index], chainMatches[index]);
                     }
                 }
             }

@@ -48,6 +48,16 @@ public final class ConcatenatedBooleanVector
         return booleanValue(segments[segmentIndex], position - offsets[segmentIndex]);
     }
 
+    public int segmentCount()
+    {
+        return segments.length;
+    }
+
+    public Vector segment(int index)
+    {
+        return segments[index];
+    }
+
     @Override
     public int length()
     {

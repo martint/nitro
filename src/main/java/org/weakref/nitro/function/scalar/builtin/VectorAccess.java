@@ -120,6 +120,19 @@ public final class VectorAccess
             // and downstream scalar null-propagation loops short-circuit.
             return flat.isAllFalse();
         }
+        if (nulls instanceof DictionaryVector dictionary) {
+            // Any ids over an all-false dictionary select only false, so the stream is all-false.
+            // (Conservative: a false here may still be effectively all-false, but never the reverse.)
+            return isAllFalseNulls(dictionary.values());
+        }
+        if (nulls instanceof ConcatenatedBooleanVector concatenated) {
+            for (int index = 0; index < concatenated.segmentCount(); index++) {
+                if (!isAllFalseNulls(concatenated.segment(index))) {
+                    return false;
+                }
+            }
+            return true;
+        }
         return false;
     }
 
