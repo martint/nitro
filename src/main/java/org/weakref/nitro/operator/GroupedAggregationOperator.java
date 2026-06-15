@@ -189,7 +189,9 @@ public class GroupedAggregationOperator
                 long previousMaxGroup = maxObservedGroup;
                 reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
                 assignInlineGroups(batch, mask, reusableGroups);
-                maxObservedGroup = Math.max(maxObservedGroup, maxGroup(reusableGroups, mask));
+                // The grouping state knows the max assigned group id (group ids are dense 0..count-1),
+                // so use it directly instead of a separate O(rows) scan of the just-assigned group vector.
+                maxObservedGroup = inlineGroupingState.groupCount() - 1;
 
                 int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
                 var streamAccessor = StreamAccessors.forBatch(batch);

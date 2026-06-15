@@ -73,6 +73,12 @@ final class GroupingState
         return initialized;
     }
 
+    /** Number of distinct groups assigned so far; the max assigned group id is {@code groupCount() - 1}. */
+    public long groupCount()
+    {
+        return nextGroupId;
+    }
+
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
     {
         assignGroups(new Vector[] {values}, new Vector[] {nulls}, mask, result);
