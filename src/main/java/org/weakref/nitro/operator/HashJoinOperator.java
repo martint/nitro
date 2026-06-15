@@ -78,6 +78,11 @@ public class HashJoinOperator
     private final int[] preparedOuterPositions = new int[BATCH_SIZE];
     private final LongList[] preparedOuterMatches = new LongList[BATCH_SIZE];
     private final SingleLongList[] preparedSingleMatches = createSingleLongLists(BATCH_SIZE);
+    // Flat single-match output: when the build is unique, the probe writes one build row reference per
+    // outer row here and produceBatch emits from it without a LongList or per-row virtual dispatch.
+    private final long[] preparedSingleRefs = new long[BATCH_SIZE];
+    private boolean singleMatchProbe;
+    private long currentMatchRef;
     private final Streams[] currentOutputs;
     private int[] retainedConstraintCountsByBatch = new int[16];
     private int[][] retainedConstraintPositionsByBatch = new int[16][];
@@ -240,8 +245,14 @@ public class HashJoinOperator
                     continue;
                 }
                 currentOuterPosition = preparedOuterPositions[preparedOuterIndex];
-                currentMatches = preparedOuterMatches[preparedOuterIndex];
-                currentMatchCount = currentMatches.size();
+                if (singleMatchProbe) {
+                    currentMatchRef = preparedSingleRefs[preparedOuterIndex];
+                    currentMatchCount = currentMatchRef == NO_MATCH_ROW_REFERENCE ? 0 : 1;
+                }
+                else {
+                    currentMatches = preparedOuterMatches[preparedOuterIndex];
+                    currentMatchCount = currentMatches.size();
+                }
                 preparedOuterIndex++;
                 currentOuterPositionReady = true;
                 currentMatchIndex = 0;
@@ -262,7 +273,8 @@ public class HashJoinOperator
 
             while (currentMatchIndex < currentMatchCount && outputPosition < BATCH_SIZE) {
                 outputOuterPositions[outputPosition] = currentOuterPosition;
-                outputInnerRows[outputPosition] = currentMatches.getLong(currentMatchIndex++);
+                outputInnerRows[outputPosition] = singleMatchProbe ? currentMatchRef : currentMatches.getLong(currentMatchIndex);
+                currentMatchIndex++;
                 outputPosition++;
             }
 
@@ -291,7 +303,13 @@ public class HashJoinOperator
             preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
         }
 
-        joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
+        singleMatchProbe = joinIndex.supportsSingleMatchRefs();
+        if (singleMatchProbe) {
+            joinIndex.matchSingleRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedSingleRefs);
+        }
+        else {
+            joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
+        }
     }
 
     private String genericProbeKind()
@@ -1477,6 +1495,26 @@ public class HashJoinOperator
                 }
             }
         }
+
+        /**
+         * Whether this index has at most one build row per key (a unique build), so a probe can write a
+         * single build row reference per outer row into a flat {@code long[]} instead of a {@link LongList}.
+         * When true the operator uses {@link #matchSingleRows} and a flat output path. Off by default.
+         */
+        default boolean supportsSingleMatchRefs()
+        {
+            return false;
+        }
+
+        /**
+         * Flat single-match probe: writes the matching build row reference for each outer row into
+         * {@code refs} (or {@code NO_MATCH_ROW_REFERENCE} when the key has no match or is null). Only
+         * called when {@link #supportsSingleMatchRefs()} is true.
+         */
+        default void matchSingleRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class LongJoinIndex
@@ -1657,6 +1695,87 @@ public class HashJoinOperator
                     }
                 }
             }
+        }
+
+        @Override
+        public boolean supportsSingleMatchRefs()
+        {
+            return !hasDuplicates;
+        }
+
+        @Override
+        public void matchSingleRows(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            Vector values = valuesArray[0];
+            Vector nulls = nullsArray == null ? null : nullsArray[0];
+            if (hasNulls && nulls != null) {
+                VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                for (int index = 0; index < positionCount; index++) {
+                    int position = positions[index];
+                    refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(rowValues.value(position));
+                }
+                return;
+            }
+            switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] vv = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        refs[index] = singleRef(vv[positions[index]]);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] vv = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        refs[index] = singleRef(vv[positions[index]]);
+                    }
+                }
+                case DictionaryVector dictionary -> {
+                    int[] ids = dictionary.ids();
+                    switch (dictionary.values()) {
+                        case org.weakref.nitro.data.I64Vector lv -> {
+                            long[] dv = lv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                refs[index] = singleRef(dv[ids[positions[index]]]);
+                            }
+                        }
+                        case org.weakref.nitro.data.I32Vector iv -> {
+                            int[] dv = iv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                refs[index] = singleRef(dv[ids[positions[index]]]);
+                            }
+                        }
+                        default -> {
+                            VectorAccess.LongValues dv = VectorAccess.longValues(dictionary.values());
+                            for (int index = 0; index < positionCount; index++) {
+                                refs[index] = singleRef(dv.value(ids[positions[index]]));
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                    for (int index = 0; index < positionCount; index++) {
+                        refs[index] = singleRef(rowValues.value(positions[index]));
+                    }
+                }
+            }
+        }
+
+        private long singleRef(long key)
+        {
+            if (arrayMode) {
+                if (key < minKey || key > maxKey) {
+                    return NO_MATCH_ROW_REFERENCE;
+                }
+                return directRows[(int) (key - minKey)];
+            }
+            int slot = findSlot(key);
+            int head = slotHead[slot];
+            return head == EMPTY ? NO_MATCH_ROW_REFERENCE : rowReferences[head];
         }
 
         private int findSlot(long key)
@@ -1976,6 +2095,7 @@ public class HashJoinOperator
         private int mask;
         private int maxFill;
         private int size;
+        private boolean pairHasDuplicates;
         private final SingleLongList singleMatch = new SingleLongList();
 
         private LongPairJoinIndex(int expectedSize)
@@ -2105,6 +2225,46 @@ public class HashJoinOperator
             }
         }
 
+        @Override
+        public boolean supportsSingleMatchRefs()
+        {
+            return !pairHasDuplicates;
+        }
+
+        @Override
+        public void matchSingleRows(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        {
+            VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
+            VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
+            long[] table = entries;
+            if (!hasNulls) {
+                for (int index = 0; index < positionCount; index++) {
+                    int position = positions[index];
+                    refs[index] = pairSingleRef(table, firstValues.value(position), secondValues.value(position));
+                }
+                return;
+            }
+            VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nullsArray[0]);
+            VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nullsArray[1]);
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                refs[index] = firstNulls.value(position) || secondNulls.value(position)
+                        ? NO_MATCH_ROW_REFERENCE
+                        : pairSingleRef(table, firstValues.value(position), secondValues.value(position));
+            }
+        }
+
+        private long pairSingleRef(long[] table, long first, long second)
+        {
+            int slot = findSlot(first, second);
+            int base = slot * ENTRY_STRIDE;
+            long singleRow = table[base + SINGLE_ROW_OFFSET];
+            if (singleRow == NO_MATCH_ROW_REFERENCE || table[base + FIRST_KEY_OFFSET] != first || table[base + SECOND_KEY_OFFSET] != second) {
+                return NO_MATCH_ROW_REFERENCE;
+            }
+            return singleRow;
+        }
+
         private int findSlot(long first, long second)
         {
             long[] table = entries;
@@ -2172,6 +2332,7 @@ public class HashJoinOperator
                 rows.add(entries[base + SINGLE_ROW_OFFSET]);
                 rows.add(rowReference);
                 rowsBySlot[slot] = rows;
+                pairHasDuplicates = true;
                 return;
             }
             rowsBySlot[slot].add(rowReference);
