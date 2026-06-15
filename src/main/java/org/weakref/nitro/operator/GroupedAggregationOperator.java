@@ -20,6 +20,8 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.FusedAccumulatorSpec;
+import org.weakref.nitro.operator.aggregation.FusedAggregator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -35,6 +37,10 @@ import static java.lang.Math.toIntExact;
 public class GroupedAggregationOperator
         implements Operator
 {
+    // Above this group count the group table + accumulator state spill out of cache, where the staged
+    // two-pass wins on memory-level parallelism; below it the fused single pass wins. Cardinality-gated.
+    private static final int FUSE_GROUP_LIMIT = 1 << 15;
+
     private final Allocator.Context allocationContext = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
 
@@ -55,6 +61,16 @@ public class GroupedAggregationOperator
     private boolean done;
     private GroupedKeySource groupedKeySource;
     private I64Vector reusableGroups;
+    // Fused single-long-key path: assign the group and accumulate every aggregation in one inlined pass, no
+    // group-id vector and no per-row accumulator dispatch. The per-shape kernel is generated as bytecode.
+    // Eligibility is decided once the grouping mode is known; falls back to the staged path per batch when a
+    // batch isn't the flat, null-free shape the fused loop handles.
+    private boolean fusedEligible;
+    private boolean fusedChecked;
+    private FusedGroupingKernel fusedKernel;
+    private FusedAccumulatorSpec[] fusedSpecs;
+    private long[][] fusedInputs;
+    private Object[] fusedStateVectors;
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
@@ -186,6 +202,24 @@ public class GroupedAggregationOperator
                     continue;
                 }
 
+                if (!inlineGroupingState.isInitialized()) {
+                    initializeInlineGroupingSchema(batch);
+                }
+                if (inlineGroupingState.isInitialized() && !fusedChecked) {
+                    prepareFusedKernel();
+                    fusedChecked = true;
+                }
+
+                // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
+                // wins on memory-level parallelism (each pass streams one random-access array the OOO window
+                // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
+                if (fusedEligible
+                        && inlineGroupingState.groupCount() < FUSE_GROUP_LIMIT
+                        && tryFusedSingleLongAggregation(batch, mask)) {
+                    maxObservedGroup = inlineGroupingState.groupCount() - 1;
+                    continue;
+                }
+
                 long previousMaxGroup = maxObservedGroup;
                 reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
                 assignInlineGroups(batch, mask, reusableGroups);
@@ -202,6 +236,115 @@ public class GroupedAggregationOperator
 
         finishResults(maxObservedGroup);
         return allocator.allocateAllMask(allocationContext, this.maxGroup + 1);
+    }
+
+    /**
+     * Decides once whether the inline grouped aggregation can use the fused single-long-key path: one long
+     * group key, no DISTINCT, single-long grouping mode, and every aggregation a {@link FusedAggregator}.
+     * When eligible, builds (and caches) the bytecode kernel specialized to this accumulator-set shape.
+     */
+    private void prepareFusedKernel()
+    {
+        fusedEligible = groupByColumns != null
+                && groupByColumns.length == 1
+                && distinctAggregationGroups.length == 0
+                && aggregations.length > 0
+                && inlineGroupingState.usesSingleLongGrouping()
+                && allFusible();
+        if (!fusedEligible) {
+            return;
+        }
+        fusedSpecs = new FusedAccumulatorSpec[aggregations.length];
+        for (int index = 0; index < aggregations.length; index++) {
+            fusedSpecs[index] = ((FusedAggregator) aggregations[index]).fusedSpec();
+        }
+        fusedKernel = FusedGroupingAggregationKernelGenerator.create(List.of(fusedSpecs));
+        fusedInputs = new long[aggregations.length][];
+        fusedStateVectors = new Object[aggregations.length];
+    }
+
+    private boolean allFusible()
+    {
+        for (Accumulator aggregation : aggregations) {
+            if (!(aggregation instanceof FusedAggregator)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Fused single-long-key aggregation: one generated pass that probes the group table and accumulates
+     * every aggregation with no group-id vector and no per-row dispatch. Handles the common flat, null-free
+     * batch shape; returns false (caller falls back to the staged path) for any other encoding or when nulls
+     * are present in the key or any read value column.
+     */
+    private boolean tryFusedSingleLongAggregation(Batch batch, Mask mask)
+    {
+        Output keyOutput = batch.output(groupByColumns[0]);
+        Vector keyVector = keyOutput.borrow(Stream.VALUES);
+        if (!(keyVector instanceof I64Vector keyValues) || !VectorAccess.isAllFalseNulls(keyOutput.borrowOrNull(Stream.NULLS))) {
+            return false;
+        }
+        for (int index = 0; index < fusedSpecs.length; index++) {
+            FusedAccumulatorSpec spec = fusedSpecs[index];
+            if (!spec.readsValue()) {
+                fusedInputs[index] = null;
+                continue;
+            }
+            Output valueOutput = batch.output(spec.valueColumn());
+            Vector valueVector = valueOutput.borrow(Stream.VALUES);
+            if (!(valueVector instanceof I64Vector valueValues) || !VectorAccess.isAllFalseNulls(valueOutput.borrowOrNull(Stream.NULLS))) {
+                return false;
+            }
+            fusedInputs[index] = valueValues.values();
+        }
+
+        int count = mask.count();
+        // Pre-reserve so the inlined probe needs no rehash branch and no per-row state growth.
+        inlineGroupingState.reserveSingleLongTable(count);
+        ensureFusedStateCapacity(toIntExact(inlineGroupingState.groupCount() + count));
+        for (int index = 0; index < aggregations.length; index++) {
+            fusedStateVectors[index] = states[index].values();
+        }
+
+        long nextId = fusedKernel.accumulate(
+                mask.selectedPositions(),
+                count,
+                keyValues.values(),
+                inlineGroupingState.longGroupKeys,
+                inlineGroupingState.longGroupIds,
+                inlineGroupingState.longGroupMask,
+                inlineGroupingState.longKeysByGroup,
+                inlineGroupingState.nextGroupId,
+                fusedInputs,
+                fusedStateVectors);
+
+        inlineGroupingState.nextGroupId = nextId;
+        inlineGroupingState.longGroupCount = (int) nextId;
+        return true;
+    }
+
+    private void ensureFusedStateCapacity(int needed)
+    {
+        if (states[0] == null) {
+            int capacity = Allocator.computeCapacity(Math.max(16, needed));
+            for (int index = 0; index < aggregations.length; index++) {
+                states[index] = aggregations[index].allocate(allocator, allocationContext, capacity);
+                aggregations[index].initialize(states[index], 0, capacity);
+            }
+            stateCapacity = capacity;
+            return;
+        }
+        if (stateCapacity >= needed) {
+            return;
+        }
+        int capacity = Allocator.computeCapacity(needed);
+        for (int index = 0; index < aggregations.length; index++) {
+            states[index] = aggregations[index].grow(allocator, allocationContext, states[index], capacity);
+            aggregations[index].initialize(states[index], stateCapacity, capacity - stateCapacity);
+        }
+        stateCapacity = capacity;
     }
 
     private void initializeInlineGroupingSchema(Batch batch)

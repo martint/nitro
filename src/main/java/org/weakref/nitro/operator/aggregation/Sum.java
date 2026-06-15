@@ -29,13 +29,25 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import static java.lang.Math.toIntExact;
 
 public class Sum
-        implements Accumulator
+        implements FusedAggregator
 {
     private final int inputColumn;
 
     public Sum(int inputColumn)
     {
         this.inputColumn = inputColumn;
+    }
+
+    /** The single input column this Sum reads, exposed for the fused grouped-aggregation kernel. */
+    public int inputColumn()
+    {
+        return inputColumn;
+    }
+
+    @Override
+    public FusedAccumulatorSpec fusedSpec()
+    {
+        return new FusedAccumulatorSpec(SumStateVector.class, inputColumn);
     }
 
     @Override

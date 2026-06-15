@@ -28,8 +28,14 @@ import java.util.Arrays;
 import static java.lang.Math.toIntExact;
 
 public class CountAll
-        implements Accumulator
+        implements FusedAggregator
 {
+    @Override
+    public FusedAccumulatorSpec fusedSpec()
+    {
+        return new FusedAccumulatorSpec(CountStateVector.class, -1);
+    }
+
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {

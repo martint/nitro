@@ -37,23 +37,25 @@ final class GroupingState
     // find-or-insert per row. A slot is empty iff its id is -1; ids are dense, assigned in first-seen
     // scan order (the hash only chooses the slot, never the id). longKeysByGroup is the reverse map.
     private static final float LONG_GROUP_LOAD_FACTOR = 0.75f;
-    private long[] longGroupKeys;
-    private int[] longGroupIds;
-    private int longGroupMask;
+    // Package-private so the fused grouped-aggregation kernel (operator package) can inline the probe over
+    // this table directly instead of paying a per-row method call.
+    long[] longGroupKeys;
+    int[] longGroupIds;
+    int longGroupMask;
     private int longGroupMaxFill;
-    private int longGroupCount;
+    int longGroupCount;
     private final ArrayList<ArrayList<OperatorKeySemantics.Key>> keysByGroupColumns = new ArrayList<>();
     private OperatorKeySemantics.Key[] reusableProbeKeys;
     private OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey;
     private FlatGroupingTable flatGroupingTable;
     private FlatTypeHandler[] keyHandlers;
     private Set<BinaryVector.Trait>[] binaryTraits;
-    private long[] longKeysByGroup = new long[0];
+    long[] longKeysByGroup = new long[0];
     private Vector cachedDictionaryValues;
     private long[] dictionaryGroupsById = new long[0];
     private int[] dictionaryGenerations = new int[0];
     private int dictionaryGeneration;
-    private long nextGroupId;
+    long nextGroupId;
     private long nullGroup = -1;
     private boolean useLongGrouping;
     private boolean useMultiLongGrouping;
@@ -77,6 +79,25 @@ final class GroupingState
     public long groupCount()
     {
         return nextGroupId;
+    }
+
+    /** True when grouping on a single long-packable key — the precondition for the fused kernel. */
+    boolean usesSingleLongGrouping()
+    {
+        return useLongGrouping;
+    }
+
+    /**
+     * Pre-grows the single-long table so it can absorb {@code additional} more keys without rehashing, so
+     * the fused kernel's inlined probe needs no mid-loop rehash branch. Requires {@link #usesSingleLongGrouping}.
+     */
+    void reserveSingleLongTable(int additional)
+    {
+        while (longGroupCount + additional >= longGroupMaxFill) {
+            rehashLongGroupTable();
+        }
+        // Pre-size the reverse map too, so the fused probe can write longKeysByGroup[gid] without a check.
+        ensureLongGroupingCapacity(nextGroupId + additional);
     }
 
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
@@ -334,7 +355,7 @@ final class GroupingState
         }
     }
 
-    private static int hashLong(long key)
+    static int hashLong(long key)
     {
         long hash = key ^ (key >>> 33);
         hash *= 0xFF51AFD7ED558CCDL;
