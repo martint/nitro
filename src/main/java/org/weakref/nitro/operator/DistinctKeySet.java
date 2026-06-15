@@ -32,25 +32,51 @@ final class DistinctKeySet
         this.index = index;
     }
 
+    /**
+     * Creates a distinct-key set that drops rows with any NULL key column. This matches the SQL semantics of
+     * {@code count(distinct ...)} and distinct aggregation, where NULL keys are ignored.
+     */
     public static DistinctKeySet create(Vector[] samples)
     {
+        return create(samples, false);
+    }
+
+    /**
+     * Creates a distinct-key set.
+     *
+     * @param retainNulls when {@code true}, rows whose key contains NULLs are retained and de-duplicated with
+     * SQL {@code DISTINCT}/{@code UNION} semantics (two NULLs in the same column are equal; a NULL is distinct
+     * from any concrete value), so a single representative null-keyed row survives. When {@code false}, any row
+     * with a NULL key column is dropped (the {@code count(distinct ...)} semantics).
+     */
+    public static DistinctKeySet create(Vector[] samples, boolean retainNulls)
+    {
+        DistinctIndex index = createIndex(samples);
+        if (retainNulls) {
+            index = new RetainNullsDistinctIndex(index, samples.length);
+        }
+        return new DistinctKeySet(index);
+    }
+
+    private static DistinctIndex createIndex(Vector[] samples)
+    {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
-            return new DistinctKeySet(new LongDistinctIndex(Math.max(16, samples[0].length())));
+            return new LongDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length == 2 && isIntegerVector(samples[0]) && isIntegerVector(samples[1])) {
-            return new DistinctKeySet(new LongPairDistinctIndex(Math.max(16, samples[0].length())));
+            return new LongPairDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length == 3 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2])) {
-            return new DistinctKeySet(new LongTripleDistinctIndex(Math.max(16, samples[0].length())));
+            return new LongTripleDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length == 4 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2]) && isIntegerVector(samples[3])) {
-            return new DistinctKeySet(new LongQuadDistinctIndex(Math.max(16, samples[0].length())));
+            return new LongQuadDistinctIndex(Math.max(16, samples[0].length()));
         }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples);
         if (layout != null) {
-            return new DistinctKeySet(new FlatDistinctIndex(layout, Math.max(16, samples[0].length())));
+            return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()));
         }
-        return new DistinctKeySet(new ObjectDistinctIndex(samples.length));
+        return new ObjectDistinctIndex(samples.length);
     }
 
     public boolean add(Vector[] values, Vector[] nulls, int position)
@@ -721,6 +747,97 @@ final class DistinctKeySet
                 return probeKeys[0];
             }
             return OperatorKeySemantics.probeCompositeKey(Arrays.copyOf(probeKeys, probeKeys.length), compositeProbeKey);
+        }
+    }
+
+    /**
+     * Wraps a fast {@link DistinctIndex} to add SQL {@code DISTINCT}/{@code UNION} null handling. Fully non-null
+     * batches are forwarded unchanged to the delegate (preserving its specialized batch path); a row with any
+     * NULL key column is routed to a separate null-aware set keyed by a {@link OperatorKeySemantics.CompositeKey}
+     * whose null columns are represented by {@code null} entries, so equal-null rows collapse to one survivor
+     * while staying distinct from every concrete-valued row.
+     */
+    private static final class RetainNullsDistinctIndex
+            implements DistinctIndex
+    {
+        private final DistinctIndex delegate;
+        private final int keyCount;
+        private final OperatorKeySemantics.Key[] probeKeys;
+        private final ObjectOpenHashSet<Object> nullContainingKeys = new ObjectOpenHashSet<>();
+
+        private RetainNullsDistinctIndex(DistinctIndex delegate, int keyCount)
+        {
+            this.delegate = delegate;
+            this.keyCount = keyCount;
+            this.probeKeys = new OperatorKeySemantics.Key[keyCount];
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            delegate.reserveAdditional(additionalEntries);
+        }
+
+        @Override
+        public boolean add(Vector[] values, Vector[] nulls, int position)
+        {
+            if (!hasNull(nulls, position)) {
+                return delegate.add(values, nulls, position);
+            }
+            return nullContainingKeys.add(buildNullAwareKey(values, nulls, position));
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            if (!hasNullStream(nulls)) {
+                return delegate.addBatch(values, nulls, mask, distinctPositions);
+            }
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                for (int position = 0; position < size; position++) {
+                    if (add(values, nulls, position)) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (add(values, nulls, position)) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
+        }
+
+        private OperatorKeySemantics.Key buildNullAwareKey(Vector[] values, Vector[] nulls, int position)
+        {
+            OperatorKeySemantics.Key[] keys = new OperatorKeySemantics.Key[keyCount];
+            for (int keyIndex = 0; keyIndex < keyCount; keyIndex++) {
+                if (OperatorVectorSupport.isNull(nulls[keyIndex], position)) {
+                    keys[keyIndex] = null;
+                    continue;
+                }
+                if (probeKeys[keyIndex] == null) {
+                    probeKeys[keyIndex] = OperatorKeySemantics.reusableProbeKey(values[keyIndex]);
+                }
+                OperatorKeySemantics.Key probe = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, probeKeys[keyIndex]);
+                probeKeys[keyIndex] = probe;
+                keys[keyIndex] = OperatorKeySemantics.ownedKey(probe);
+            }
+            return new OperatorKeySemantics.CompositeKey(keys);
+        }
+
+        private static boolean hasNullStream(Vector[] nulls)
+        {
+            for (Vector nullsVector : nulls) {
+                if (nullsVector != null) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 

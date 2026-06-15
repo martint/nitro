@@ -27,6 +27,9 @@ public final class MultiStageOperator
 
     private int stageIndex;
     private Operator current;
+    // A pushed dynamic filter is forwarded to the current stage and to each subsequent stage as it is created,
+    // so a multi-file scan applies the filter on every file.
+    private DynamicFilter dynamicFilter;
 
     @SuppressWarnings("unchecked")
     public <T> MultiStageOperator(int outputCount, List<T> stages, Function<T, Operator> operatorFactory)
@@ -67,6 +70,15 @@ public final class MultiStageOperator
     }
 
     @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        this.dynamicFilter = filter;
+        if (current != null) {
+            current.pushDynamicFilter(filter);
+        }
+    }
+
+    @Override
     public void close()
     {
         if (current != null) {
@@ -82,6 +94,9 @@ public final class MultiStageOperator
                 current.close();
             }
             current = operatorFactory.apply(stages.get(stageIndex++));
+            if (dynamicFilter != null) {
+                current.pushDynamicFilter(dynamicFilter);
+            }
         }
     }
 }

@@ -28,6 +28,7 @@ public class MarkDistinctOperator
     private final Allocator allocator;
     private final Operator source;
     private final int[] distinctColumns;
+    private final boolean retainNulls;
 
     private DistinctKeySet distinctKeySet;
     private int[] distinctPositions = new int[0];
@@ -40,9 +41,22 @@ public class MarkDistinctOperator
 
     public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source)
     {
+        this(allocator, distinctColumns, source, false);
+    }
+
+    /**
+     * Creates a mark-distinct operator over the given key columns.
+     *
+     * @param retainNulls when {@code true}, null-keyed rows are kept and de-duplicated with SQL
+     * {@code DISTINCT}/{@code UNION} semantics (equal nulls collapse, nulls stay distinct from concrete values);
+     * when {@code false}, any row with a NULL key column is dropped, matching {@code count(distinct ...)}.
+     */
+    public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls)
+    {
         this.allocator = allocator;
         this.source = source;
         this.distinctColumns = distinctColumns.clone();
+        this.retainNulls = retainNulls;
     }
 
     @Override
@@ -145,7 +159,7 @@ public class MarkDistinctOperator
             nulls[index] = output.borrowOrNull(Stream.NULLS);
         }
         if (distinctKeySet == null) {
-            distinctKeySet = DistinctKeySet.create(values);
+            distinctKeySet = DistinctKeySet.create(values, retainNulls);
         }
         distinctKeySet.reserveAdditional(sourceMask.selectedCount());
 

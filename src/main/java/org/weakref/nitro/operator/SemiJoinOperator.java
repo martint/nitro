@@ -150,6 +150,17 @@ public class SemiJoinOperator
     }
 
     @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        // The semi-join appends only an optional match column after the outer columns, so every outer column index is
+        // unchanged. Forward a filter on an outer column down to the outer source (e.g. so a downstream join's
+        // dynamic filter reaches the probe-side scan through the semi-join).
+        if (filter.column() < outer.outputCount()) {
+            outer.pushDynamicFilter(filter);
+        }
+    }
+
+    @Override
     public boolean supportsRetainedBatches()
     {
         return outer.supportsRetainedBatches();
@@ -221,10 +232,16 @@ public class SemiJoinOperator
 
         int[] positions = new int[sourceMask.count()];
         int selectedCount = 0;
-        for (int position : sourceMask) {
-            if (membership.contains(values, nulls, position) == includeMatches) {
-                positions[selectedCount++] = position;
+        membership.beginContainsBatch(values, nulls);
+        try {
+            for (int position : sourceMask) {
+                if (membership.contains(values, nulls, position) == includeMatches) {
+                    positions[selectedCount++] = position;
+                }
             }
+        }
+        finally {
+            membership.endContainsBatch();
         }
 
         if (selectedCount == sourceMask.count()) {
@@ -246,8 +263,14 @@ public class SemiJoinOperator
         Output output = batchState.sourceBatch().output(outerJoinColumn);
         Vector values = output.borrow(Stream.VALUES);
         Vector nulls = output.borrowOrNull(Stream.NULLS);
-        for (int position : mask) {
-            matchValues.values()[position] = membership.contains(values, nulls, position);
+        membership.beginContainsBatch(values, nulls);
+        try {
+            for (int position : mask) {
+                matchValues.values()[position] = membership.contains(values, nulls, position);
+            }
+        }
+        finally {
+            membership.endContainsBatch();
         }
         return matchValues;
     }

@@ -94,6 +94,20 @@ public final class IfI64
                     I64Vector.class,
                     requiredLength,
                     I64Vector::new);
+            // The common conditional-aggregation shape if(cond, column, constant) leaves one branch a
+            // non-null constant. Specializing it drops the per-row branch-object selection
+            // (takeTrue ? trueValues : falseValues) that otherwise makes the value reads megamorphic, so
+            // the surviving column access inlines to a flat-array load.
+            Long falseConstant = constantNullValue(falseNulls) == Boolean.FALSE ? constantIntegerValue(falseValues) : null;
+            if (falseConstant != null) {
+                applyValuesConstantFalse(conditionValues, conditionNulls, trueBranchValues, trueNulls, falseConstant, mask, outputValues, outputNulls);
+                return result.with(Stream.VALUES, outputValues);
+            }
+            Long trueConstant = constantNullValue(trueNulls) == Boolean.FALSE ? constantIntegerValue(trueValues) : null;
+            if (trueConstant != null) {
+                applyValuesConstantTrue(conditionValues, conditionNulls, trueConstant, falseBranchValues, falseNulls, mask, outputValues, outputNulls);
+                return result.with(Stream.VALUES, outputValues);
+            }
             applyValues(conditionValues, conditionNulls, trueBranchValues, falseBranchValues, trueNulls, falseNulls, mask, outputValues, outputNulls);
             return result.with(Stream.VALUES, outputValues);
         }
@@ -163,6 +177,56 @@ public final class IfI64
             outputValues.values()[position] = selectedValues.value(position);
             if (outputNulls != null) {
                 outputNulls.values()[position] = false;
+            }
+        }
+    }
+
+    private static void applyValuesConstantFalse(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, VectorAccess.LongValues trueValues, Vector trueNulls, long falseConstant, Mask mask, I64Vector outputValues, BooleanVector outputNulls)
+    {
+        VectorAccess.BooleanValues conditionNullValues = VectorAccess.booleanValues(conditionNulls);
+        VectorAccess.BooleanValues trueNullValues = VectorAccess.booleanValues(trueNulls);
+        long[] values = outputValues.values();
+        boolean[] nulls = outputNulls != null ? outputNulls.values() : null;
+        for (int position : mask) {
+            if (!conditionNullValues.value(position) && conditionValues.value(position)) {
+                if (trueNullValues.value(position)) {
+                    if (nulls != null) {
+                        nulls[position] = true;
+                    }
+                    continue;
+                }
+                values[position] = trueValues.value(position);
+            }
+            else {
+                values[position] = falseConstant;
+            }
+            if (nulls != null) {
+                nulls[position] = false;
+            }
+        }
+    }
+
+    private static void applyValuesConstantTrue(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, long trueConstant, VectorAccess.LongValues falseValues, Vector falseNulls, Mask mask, I64Vector outputValues, BooleanVector outputNulls)
+    {
+        VectorAccess.BooleanValues conditionNullValues = VectorAccess.booleanValues(conditionNulls);
+        VectorAccess.BooleanValues falseNullValues = VectorAccess.booleanValues(falseNulls);
+        long[] values = outputValues.values();
+        boolean[] nulls = outputNulls != null ? outputNulls.values() : null;
+        for (int position : mask) {
+            if (!conditionNullValues.value(position) && conditionValues.value(position)) {
+                values[position] = trueConstant;
+            }
+            else {
+                if (falseNullValues.value(position)) {
+                    if (nulls != null) {
+                        nulls[position] = true;
+                    }
+                    continue;
+                }
+                values[position] = falseValues.value(position);
+            }
+            if (nulls != null) {
+                nulls[position] = false;
             }
         }
     }

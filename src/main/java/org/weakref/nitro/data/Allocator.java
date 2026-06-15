@@ -67,7 +67,7 @@ public class Allocator
 
     public DictionaryVector allocateDictionary(Context context, int[] ids, Vector values)
     {
-        DictionaryVector vector = new DictionaryVector(ids, values);
+        DictionaryVector vector = DictionaryVector.ofTrustedIds(ids, values);
         state(context).trackVector(vector, false);
         return vector;
     }

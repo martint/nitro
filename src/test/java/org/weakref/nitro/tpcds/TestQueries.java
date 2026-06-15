@@ -68,13 +68,13 @@ public class TestQueries
     @Test
     void testQuery02TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("02", support -> support.query02(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+        assertTrinoOperatorMatchesSql("02", support -> support.query02(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeRoundedRatioValue);
     }
 
     @Test
     void testQuery02()
     {
-        assertOperatorMatches("02", tables -> TpcdsParquetSupport.query02(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query02(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+        assertOperatorMatches("02", tables -> TpcdsParquetSupport.query02(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query02(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeRoundedRatioValue);
     }
 
     @Test
@@ -1387,13 +1387,13 @@ public class TestQueries
     @Test
     void testQuery78()
     {
-        assertOperatorMatches("78", tables -> TpcdsParquetSupport.query78(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query78(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+        assertOperatorMatches("78", tables -> TpcdsParquetSupport.query78(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query78(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeRoundedRatioValue);
     }
 
     @Test
     void testQuery78TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("78", support -> support.query78(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+        assertTrinoOperatorMatchesSql("78", support -> support.query78(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeRoundedRatioValue);
     }
 
     @Test
@@ -2086,6 +2086,26 @@ public class TestQueries
 
     private static Object normalizeDateAndDecimalValue(Object value)
     {
+        return normalizeDecimalCentsValue(value);
+    }
+
+    /**
+     * Like {@link #normalizeDecimalCentsValue} but rounds decimals to two fractional digits before unscaling.
+     * TPC-DS ratio queries (q02, q78) compute {@code round(decimal / decimal, 2)}; Trino's decimal division
+     * yields a high-scale type that {@code round(.,2)} does not shrink, so the unscaled value overflows
+     * {@code long}. Rounding to scale 2 matches the harness's scaled-cents ratio (ratio × 100) while leaving the
+     * (already scale-2) money columns unchanged.
+     */
+    private static Object normalizeRoundedRatioValue(Object value)
+    {
+        BigDecimal decimal = switch (value) {
+            case SqlDecimal sqlDecimal -> sqlDecimal.toBigDecimal();
+            case BigDecimal bigDecimal -> bigDecimal;
+            default -> null;
+        };
+        if (decimal != null) {
+            return decimal.setScale(2, java.math.RoundingMode.HALF_UP).unscaledValue().longValueExact();
+        }
         return normalizeDecimalCentsValue(value);
     }
 

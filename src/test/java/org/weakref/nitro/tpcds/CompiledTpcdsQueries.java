@@ -2023,19 +2023,19 @@ public final class CompiledTpcdsQueries
                         new Plan.Or(
                                 new Plan.And(
                                         new Plan.StringMatch(query.position("cd_marital_status"), List.of("M"), false),
-                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Advanced Degree     "), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Advanced Degree"), false),
                                         new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(10_000)),
                                         new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(15_000)),
                                         new Plan.Predicate("=", query.column("hd_dep_count"), new Plan.Lit(3))),
                                 new Plan.And(
                                         new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
-                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College             "), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false),
                                         new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(5_000)),
                                         new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(10_000)),
                                         new Plan.Predicate("=", query.column("hd_dep_count"), new Plan.Lit(1))),
                                 new Plan.And(
                                         new Plan.StringMatch(query.position("cd_marital_status"), List.of("W"), false),
-                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("2 yr Degree         "), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("2 yr Degree"), false),
                                         new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(15_000)),
                                         new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(20_000)),
                                         new Plan.Predicate("=", query.column("hd_dep_count"), new Plan.Lit(1)))),
@@ -4597,7 +4597,7 @@ public final class CompiledTpcdsQueries
         query.where(
                         new Plan.Predicate("=", query.column("d_year"), new Plan.Lit(1998)),
                         new Plan.StringMatch(query.position("cd_gender"), List.of("F"), false),
-                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Unknown             "), false),
+                        new Plan.StringMatch(query.position("cd_education_status"), List.of("Unknown"), false),
                         new Plan.Or(birthMonths),
                         new Plan.StringMatch(query.position("ca_state"), List.of("MS", "IN", "ND", "OK", "NM", "VA"), false))
                 .groupBy("i_item_id", "ca_country", "ca_state", "ca_county")
@@ -6439,8 +6439,10 @@ public final class CompiledTpcdsQueries
         // exact divide_f64 form), emitting (warehouse, item, month, mean, cov). The two months self-join on
         // (warehouse, item); the (unlimited) output is ordered by both months' (month, mean, cov). The mean and cov are
         // DOUBLE, carried across the stage boundary as raw bits and named back via reinterpret_f64 in the final select.
-        QueryLowering january = query39InventoryVariation(1);
-        QueryLowering february = query39InventoryVariation(2);
+        // inv1 (january) keeps cov > 1 in the CTE and cov > 1.5 at the final join (SQL "inv1.cov > 1.5"); since
+        // 1.5 > 1 the effective january threshold is 1.5. inv2 (february) keeps cov > 1.
+        QueryLowering january = query39InventoryVariation(1, 1.5);
+        QueryLowering february = query39InventoryVariation(2, 1.0);
 
         QueryLowering main = QueryLowering.scan("q39_january",
                         new QueryLowering.Column("j_warehouse", ColumnEncoding.FLAT, false),
@@ -6472,7 +6474,7 @@ public final class CompiledTpcdsQueries
                 List.of());
     }
 
-    private static QueryLowering query39InventoryVariation(int month)
+    private static QueryLowering query39InventoryVariation(int month, double covThreshold)
     {
         QueryLowering variation = QueryLowering.scan("inventory",
                         new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
@@ -6498,7 +6500,7 @@ public final class CompiledTpcdsQueries
         variation.having(new Plan.And(List.of(
                         new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(1)),
                         new Plan.Predicate(">", new Plan.Col(5), new Plan.Lit(0)),
-                        new Plan.Predicate(">", new Plan.Call("divide_f64", new Plan.Col(4), new Plan.Col(5)), new Plan.Lit(1)))));
+                        new Plan.Predicate(">", new Plan.Call("divide_f64", new Plan.Col(4), new Plan.Col(5)), new Plan.LitF64(covThreshold)))));
         variation.select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(2),
                 new Plan.Col(5), new Plan.Call("divide_f64", new Plan.Col(4), new Plan.Col(5)));
         return variation;
@@ -7017,17 +7019,17 @@ public final class CompiledTpcdsQueries
                         new Plan.Or(
                                 new Plan.And(
                                         new Plan.StringMatch(query.position("cd_marital_status"), List.of("M"), false),
-                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("4 yr Degree         "), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("4 yr Degree"), false),
                                         new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(10_000)),
                                         new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(15_000))),
                                 new Plan.And(
                                         new Plan.StringMatch(query.position("cd_marital_status"), List.of("D"), false),
-                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("2 yr Degree         "), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("2 yr Degree"), false),
                                         new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(5_000)),
                                         new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(10_000))),
                                 new Plan.And(
                                         new Plan.StringMatch(query.position("cd_marital_status"), List.of("S"), false),
-                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College             "), false),
+                                        new Plan.StringMatch(query.position("cd_education_status"), List.of("College"), false),
                                         new Plan.Predicate(">=", query.column("ss_sales_price"), new Plan.Lit(15_000)),
                                         new Plan.Predicate("<=", query.column("ss_sales_price"), new Plan.Lit(20_000)))),
                         new Plan.Or(

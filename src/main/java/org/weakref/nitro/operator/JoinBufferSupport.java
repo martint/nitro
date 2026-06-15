@@ -823,7 +823,8 @@ final class JoinBufferSupport
 
     private BinaryVector copyBinaryPositions(BinaryVector source, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
     {
-        int byteCapacity = binaryWriteOffset(existing, outputStart);
+        int usedBytes = binaryWriteOffset(existing, outputStart);
+        int byteCapacity = usedBytes;
         int[] sourceOffsets = source.offsets();
         for (int index = 0; index < sourceCount; index++) {
             int sourcePosition = sourcePositions[sourceStart + index];
@@ -835,7 +836,7 @@ final class JoinBufferSupport
             requestedCapacity = Math.max(byteCapacity, estimatedBinaryCapacity(source, size));
         }
 
-        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity);
+        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity, usedBytes);
         if (outputStart == 0) {
             Arrays.fill(output.offsets(), 0);
             output.clearTraits();
@@ -874,12 +875,13 @@ final class JoinBufferSupport
         int startOffset = sourceOffsets[sourcePosition];
         int endOffset = sourceOffsets[sourcePosition + 1];
         int length = endOffset - startOffset;
-        int requiredCapacity = binaryWriteOffset(existing, outputPosition) + length;
+        int usedBytes = binaryWriteOffset(existing, outputPosition);
+        int requiredCapacity = usedBytes + length;
         int requestedCapacity = requiredCapacity;
         if (existing == null && outputPosition == 0 && size > 1) {
             requestedCapacity = Math.max(requiredCapacity, estimatedBinaryCapacity(source, size));
         }
-        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity);
+        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity, usedBytes);
         if (outputPosition == 0) {
             Arrays.fill(output.offsets(), 0);
             output.clearTraits();

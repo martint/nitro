@@ -1847,6 +1847,38 @@ public class TestOperators
     }
 
     @Test
+    void testMarkDistinctOperatorRetainsNullKeysWithSqlDistinctSemantics()
+    {
+        // With retainNulls, a NULL key is a distinguishable value: equal nulls collapse to one survivor and a
+        // null stays distinct from every concrete value, matching SQL DISTINCT/UNION (TPC-DS q75).
+        assertThat(operator(
+                new MarkDistinctOperator(
+                        allocator,
+                        new int[] {0, 1},
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, "alpha"),
+                                        row(1L, "alpha"),
+                                        row(1L, "beta"),
+                                        row(2L, "alpha"),
+                                        row((Object) null, "alpha"),
+                                        row((Object) null, "alpha"),
+                                        row(2L, (Object) null),
+                                        row(2L, (Object) null),
+                                        row((Object) null, (Object) null))),
+                        true)))
+                .matchesExactly(List.of(
+                        row(1L, "alpha"),
+                        row(1L, "beta"),
+                        row(2L, "alpha"),
+                        row((Object) null, "alpha"),
+                        row(2L, (Object) null),
+                        row((Object) null, (Object) null)));
+    }
+
+    @Test
     void testMarkDistinctOperatorPreservesSourceBatchWhenAllRowsAreDistinct()
     {
         DictionaryVector dictionary = DictionaryVector.wrap(

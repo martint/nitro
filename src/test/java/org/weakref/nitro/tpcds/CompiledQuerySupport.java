@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.tpcds;
 
+import io.trino.parquet.reader.flat.SkipFlatColumnReader;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I32Vector;
@@ -35,6 +36,14 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+
+import static io.trino.parquet.ParquetTypeUtils.constructField;
+import static io.trino.parquet.ParquetTypeUtils.getColumnIO;
+import static io.trino.parquet.ParquetTypeUtils.getDescriptors;
+import static io.trino.parquet.ParquetTypeUtils.lookupColumnByName;
+import static io.trino.spi.type.BigintType.BIGINT;
+import static java.lang.Math.toIntExact;
 
 /**
  * Wires the data-centric compiler prototype into a real TPC-DS query over real Parquet, so the compiled
@@ -58,6 +67,156 @@ public final class CompiledQuerySupport
     private static final long FILTER_YEAR = 2001;
 
     private CompiledQuerySupport() {}
+
+    /**
+     * Opt-in scan/decode timing so a measurement harness can separate Parquet read+decode cost from the
+     * downstream compiled-pipeline (join/group/aggregate) compute. {@code scanNanos} accumulates time spent
+     * in eager column drains ({@link #drainColumns}) and in the lazy streaming probe source (via
+     * {@link TimingSource}); {@code compute = total - scanNanos}. Disabled by default (no overhead on the
+     * normal path); a harness calls {@link #enable}/{@link #reset} around a run. Single-threaded use only.
+     */
+    public static final class ScanProfile
+    {
+        private static boolean enabled;
+        private static long scanNanos;
+        // Skip-source diagnostics (column-materialize calls and the rows decoded each way).
+        private static long fullColumns;
+        private static long skipColumns;
+        private static long fullRows;
+        private static long skipRows;
+
+        private ScanProfile() {}
+
+        public static void enable(boolean on)
+        {
+            enabled = on;
+        }
+
+        public static void reset()
+        {
+            scanNanos = 0;
+            fullColumns = 0;
+            skipColumns = 0;
+            fullRows = 0;
+            skipRows = 0;
+        }
+
+        public static long scanNanos()
+        {
+            return scanNanos;
+        }
+
+        public static String skipStats()
+        {
+            return String.format("fullColumns=%d (rows=%,d), skipColumns=%d (rows=%,d)", fullColumns, fullRows, skipColumns, skipRows);
+        }
+
+        static void add(long nanos)
+        {
+            if (enabled) {
+                scanNanos += nanos;
+            }
+        }
+
+        static void recordFull(long rows)
+        {
+            if (enabled) {
+                fullColumns++;
+                fullRows += rows;
+            }
+        }
+
+        static void recordSkip(long rows)
+        {
+            if (enabled) {
+                skipColumns++;
+                skipRows += rows;
+            }
+        }
+    }
+
+    /** Transparent {@link org.weakref.nitro.jit.StreamingPipeline.Source} decorator timing decode work into {@link ScanProfile}. */
+    private record TimingSource(org.weakref.nitro.jit.StreamingPipeline.Source inner)
+            implements org.weakref.nitro.jit.StreamingPipeline.Source
+    {
+        @Override
+        public boolean advance()
+        {
+            long s = System.nanoTime();
+            try {
+                return inner.advance();
+            }
+            finally {
+                ScanProfile.add(System.nanoTime() - s);
+            }
+        }
+
+        @Override
+        public int rows()
+        {
+            return inner.rows();
+        }
+
+        @Override
+        public org.weakref.nitro.jit.Column[] columns()
+        {
+            long s = System.nanoTime();
+            try {
+                return inner.columns();
+            }
+            finally {
+                ScanProfile.add(System.nanoTime() - s);
+            }
+        }
+
+        @Override
+        public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+        {
+            long s = System.nanoTime();
+            try {
+                return inner.materialize(columns, selection, count);
+            }
+            finally {
+                ScanProfile.add(System.nanoTime() - s);
+            }
+        }
+
+        @Override
+        public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+        {
+            long s = System.nanoTime();
+            try {
+                return inner.materialize(columns);
+            }
+            finally {
+                ScanProfile.add(System.nanoTime() - s);
+            }
+        }
+
+        @Override
+        public org.weakref.nitro.jit.Column[] materializeFiltering(int[] columns, int[] selection, int count)
+        {
+            long s = System.nanoTime();
+            try {
+                return inner.materializeFiltering(columns, selection, count);
+            }
+            finally {
+                ScanProfile.add(System.nanoTime() - s);
+            }
+        }
+
+        @Override
+        public org.weakref.nitro.jit.Column.DictionaryColumn materializeDictionaryIds(int column, int[] selection, int count)
+        {
+            long s = System.nanoTime();
+            try {
+                return inner.materializeDictionaryIds(column, selection, count);
+            }
+            finally {
+                ScanProfile.add(System.nanoTime() - s);
+            }
+        }
+    }
 
     /** Loaded, null-free column arrays for both sides of the join. */
     public record Loaded(long[] soldDateSk, long[] itemSk, long[] quantity, long[] dateSk)
@@ -1100,10 +1259,16 @@ public final class CompiledQuerySupport
             resolveInput(allocator, tables, sources.get(b + 1), virtuals, builds, buildRowCounts, b);
             inputsForDictRef[b + 1] = builds[b];
         }
-        org.weakref.nitro.jit.StreamingPipeline.Source source = usePageSource(probe, lowered)
-                ? parquetPageSource(tables, probe.table(), probe.columns())
-                : parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline());
-        CompiledPipeline.Result result = streaming.execute(source, builds, buildRowCounts);
+        boolean useSkip = (buildCount >= 1 || !lowered.pipeline().filters().isEmpty())
+                && skipSourceEligible(tables, probe.table(), probe.columns());
+        org.weakref.nitro.jit.StreamingPipeline.Source source = useSkip
+                ? parquetSkipSource(tables, probe.table(), probe.columns())
+                : usePageSource(probe, lowered)
+                        ? parquetPageSource(tables, probe.table(), probe.columns())
+                        : parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline());
+        // Wrap only when profiling (keeps the instanceof StringInterningSource check below on the raw source).
+        org.weakref.nitro.jit.StreamingPipeline.Source executed = ScanProfile.enabled ? new TimingSource(source) : source;
+        CompiledPipeline.Result result = streaming.execute(executed, builds, buildRowCounts);
         inputsForDictRef[0] = internedProbeDictionaries(source, probe.columns().size());
         return new LoweredResult(result, inputsForDictRef);
     }
@@ -1402,12 +1567,19 @@ public final class CompiledQuerySupport
             buildRowCounts[b] = loaded.rows;
         }
         org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
-        org.weakref.nitro.jit.StreamingPipeline.Source source = usePageSource(probe, lowered)
-                ? parquetPageSource(tables, probe.table(), probe.columns())
-                : lazyProbe
-                        ? parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline())
-                        : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
-        return new StreamedResult(streaming.execute(source, builds, buildRowCounts), builds, source);
+        // The skip-decode source only helps when something narrows the batch before payload columns decode (a join
+        // build or a filter); without that every column is read in full, so leave those probes on the page source.
+        boolean useSkip = (buildCount >= 1 || !lowered.pipeline().filters().isEmpty())
+                && skipSourceEligible(tables, probe.table(), probe.columns());
+        org.weakref.nitro.jit.StreamingPipeline.Source source = useSkip
+                ? parquetSkipSource(tables, probe.table(), probe.columns())
+                : usePageSource(probe, lowered)
+                        ? parquetPageSource(tables, probe.table(), probe.columns())
+                        : lazyProbe
+                                ? parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline())
+                                : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
+        org.weakref.nitro.jit.StreamingPipeline.Source executed = ScanProfile.enabled ? new TimingSource(source) : source;
+        return new StreamedResult(streaming.execute(executed, builds, buildRowCounts), builds, source);
     }
 
     /**
@@ -1783,6 +1955,607 @@ public final class CompiledQuerySupport
         };
     }
 
+    /**
+     * Default selectivity at or below which payload columns are value-level skip-decoded; above it, decode the whole
+     * batch in one bulk (SIMD) pass and gather. The skip path wins only when few enough rows survive that decoding
+     * just them beats a vectorized decode-all (measured crossover ~5-8% on uniform TPC-DS columns; see
+     * {@code ProtoSkipReader}). Overridable with {@code -Dnitro.skipDecode.guard}.
+     */
+    private static final double SKIP_GUARD = Double.parseDouble(System.getProperty("nitro.skipDecode.guard", "0.08"));
+
+    /**
+     * Whether the compiled-engine skip-decode streaming source is enabled (default OFF). It engages on an eligible
+     * probe (plain INT64/INT32/DOUBLE -> long lanes) with a build, skip-decoding payload columns for join survivors.
+     * A per-batch decode cache lets it serve a column the pipeline materializes more than once (a key reused as a
+     * later payload), which it previously could not re-read. Still default OFF: with it on across the suite query93
+     * regresses (a separate correctness gap in this source), and it is perf-neutral on the compiled engine anyway
+     * (the win needs progressive-key codegen). Enable with {@code -Dnitro.skipDecode=true}.
+     */
+    private static final boolean SKIP_DECODE_ENABLED = Boolean.getBoolean("nitro.skipDecode");
+
+    /**
+     * Classify a probe column for skip-decode: {@code 0}=INT64, {@code 1}=INT32 widened to long, {@code 2}=DOUBLE
+     * bits in a long lane, or {@code -1} when it is not a plain fixed-width numeric the skip source can read into a
+     * long lane (strings, decimals, dates, timestamps -- anything with a logical annotation -- fall back).
+     */
+    private static int skipKind(org.apache.parquet.schema.MessageType schema, org.weakref.nitro.jit.QueryLowering.Column spec)
+    {
+        org.apache.parquet.schema.Type type = schema.getType(spec.sourceName());
+        if (!type.isPrimitive()) {
+            return -1;
+        }
+        org.apache.parquet.schema.PrimitiveType primitive = type.asPrimitiveType();
+        org.apache.parquet.schema.LogicalTypeAnnotation annotation = primitive.getLogicalTypeAnnotation();
+        // Plain fixed-width numerics only. A bare INT/INT64/DOUBLE (no annotation) qualifies; so does an explicit
+        // signed-integer annotation (Trino's parquet writer tags INT64 surrogate keys IntLogicalTypeAnnotation(64,true))
+        // -- still a plain long. Decimal/date/time/timestamp/string annotations need rescaling or reinterpretation,
+        // so they fall back to the page source.
+        if (annotation != null && !(annotation instanceof org.apache.parquet.schema.LogicalTypeAnnotation.IntLogicalTypeAnnotation)) {
+            return -1;
+        }
+        org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName name = primitive.getPrimitiveTypeName();
+        org.weakref.nitro.jit.ColumnEncoding encoding = spec.encoding();
+        if (encoding == org.weakref.nitro.jit.ColumnEncoding.FLAT && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64) {
+            return 0;
+        }
+        if (encoding == org.weakref.nitro.jit.ColumnEncoding.FLAT && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32) {
+            return 1;
+        }
+        if (encoding == org.weakref.nitro.jit.ColumnEncoding.F64 && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.DOUBLE) {
+            return 2;
+        }
+        return -1;
+    }
+
+    /** Whether every probe column is skip-eligible, so the owned-reader skip source can serve the whole probe. */
+    private static boolean skipSourceEligible(ParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        if (!SKIP_DECODE_ENABLED) {
+            return false;
+        }
+        List<java.nio.file.Path> files = tables.tableFiles(table);
+        if (files.isEmpty()) {
+            return false;
+        }
+        try {
+            ParquetReaderFile probe = new ParquetReaderFile(files.get(0));
+            try (probe) {
+                org.apache.parquet.schema.MessageType schema = probe.metadata.getFileMetaData().getSchema();
+                for (org.weakref.nitro.jit.QueryLowering.Column spec : specs) {
+                    if (skipKind(schema, spec) < 0) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        catch (java.io.IOException exception) {
+            return false;
+        }
+    }
+
+    /**
+     * A streaming probe source that OWNS its column readers so it can value-level skip-decode payload columns.
+     * <p>
+     * The existing {@link #parquetPageSource} decodes whole parquet pages through Trino's {@code SourcePage} and the
+     * selection only avoids the gather -- the decode (RLE/bit-unpack) is paid for every row regardless. This source
+     * instead drives one {@link SkipFlatColumnReader} per column directly: filter/early-join key columns are decoded
+     * in full ({@code readPrimitive}); once the generated pipeline has narrowed the batch to the join survivors, the
+     * remaining payload columns are read with {@link SkipFlatColumnReader#readSelected} -- which advances the value
+     * decoder over the gaps and decodes only the surviving runs. Below {@link #SKIP_GUARD} selectivity that is a net
+     * win; above it the source decodes the whole batch and gathers (bulk SIMD beats scattered scalar skips).
+     * <p>
+     * Readers are rebuilt per row group (a parquet column chunk does not span row groups). A column that is not
+     * materialized in some batch lags behind; the next materialize fast-forwards it with a cheap decoder skip before
+     * reading, so every column stays aligned without forcing eager decode of unused columns.
+     */
+    private static org.weakref.nitro.jit.StreamingPipeline.Source parquetSkipSource(
+            ParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    {
+        int width = specs.size();
+        List<java.nio.file.Path> files = tables.tableFiles(table);
+        int batchSize = 8192;
+        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        {
+            private final io.trino.memory.context.AggregatedMemoryContext memoryContext = io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext();
+            private final ParquetReaderFile[] openFiles = new ParquetReaderFile[files.size()];
+            private final int[] kinds = new int[width];
+            private final java.util.Map<List<String>, org.apache.parquet.column.ColumnDescriptor>[] descriptorMaps = new java.util.Map[width];
+            private final org.apache.parquet.column.ColumnDescriptor[] descriptors = new org.apache.parquet.column.ColumnDescriptor[width];
+            private final io.trino.parquet.PrimitiveField[] fields = new io.trino.parquet.PrimitiveField[width];
+            // Flattened row groups across all files, in scan order.
+            private final java.util.List<int[]> rowGroups = new java.util.ArrayList<>();   // {fileIndex, blockIndex}
+            private final java.util.List<Long> rowGroupRows = new java.util.ArrayList<>();
+            private int rowGroupIndex = -1;
+            // Per-column reader state for the current row group.
+            private final SkipFlatColumnReader<long[]>[] readers = new SkipFlatColumnReader[width];
+            private final int[] consumed = new int[width];   // rows consumed per column within current row group
+            private int rowsInRowGroup;
+            private int batchStart;     // first row (within row group) of the current batch
+            private int batchRows;      // size of the current batch
+            // Conversion buffers (reused across batches), mirroring parquetPageSource.
+            private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+            private final long[][] valueBuffers = new long[width][];
+            private final boolean[][] nullBuffers = new boolean[width][];
+            private boolean[] noNulls = new boolean[0];
+            private int[] identity;
+            private final io.trino.spi.block.Block[] entryBlocks = new io.trino.spi.block.Block[width];
+            private final long[][] entryLanes = new long[width][];
+            private final boolean[][] entryNullFlags = new boolean[width][];
+            private boolean initialized;
+            // Per-batch decode cache so a column the generated pipeline materializes more than once (a key reused as a
+            // later payload) is read once and re-gathered, not re-read (an owned forward-only reader cannot re-read).
+            // Stamped by batchGeneration; cachedPositions[c] is the batch-relative positions cachedColumn[c] is aligned
+            // to (null = identity over batchRows). Later materializes always request a subset (the pipeline narrows).
+            private int batchGeneration;
+            private final int[] columnGeneration = new int[width];
+            private final org.weakref.nitro.jit.Column[] cachedColumn = new org.weakref.nitro.jit.Column[width];
+            private final int[][] cachedPositions = new int[width][];
+
+            private void initialize()
+            {
+                try {
+                    ParquetReaderFile first = file(0);
+                    org.apache.parquet.schema.MessageType schema = first.metadata.getFileMetaData().getSchema();
+                    for (int c = 0; c < width; c++) {
+                        org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
+                        kinds[c] = skipKind(schema, spec);
+                        org.apache.parquet.schema.MessageType requested = new org.apache.parquet.schema.MessageType(schema.getName(), schema.getType(spec.sourceName()));
+                        descriptorMaps[c] = getDescriptors(schema, requested);
+                        descriptors[c] = descriptorMaps[c].values().iterator().next();
+                        org.apache.parquet.io.MessageColumnIO columnIO = getColumnIO(schema, requested);
+                        io.trino.spi.type.Type trinoType = kinds[c] == 2 ? io.trino.spi.type.DoubleType.DOUBLE : (io.trino.spi.type.Type) BIGINT;
+                        fields[c] = (io.trino.parquet.PrimitiveField) constructField(trinoType, lookupColumnByName(columnIO, spec.sourceName())).orElseThrow();
+                    }
+                    for (int f = 0; f < files.size(); f++) {
+                        ParquetReaderFile reader = file(f);
+                        java.util.List<io.trino.parquet.metadata.BlockMetadata> blocks = reader.metadata.getBlocks();
+                        for (int b = 0; b < blocks.size(); b++) {
+                            rowGroups.add(new int[] {f, b});
+                            rowGroupRows.add(blocks.get(b).rowCount());
+                        }
+                    }
+                    initialized = true;
+                }
+                catch (java.io.IOException exception) {
+                    throw new RuntimeException(exception);
+                }
+            }
+
+            private ParquetReaderFile file(int index)
+                    throws java.io.IOException
+            {
+                ParquetReaderFile reader = openFiles[index];
+                if (reader == null) {
+                    reader = new ParquetReaderFile(files.get(index));
+                    openFiles[index] = reader;
+                }
+                return reader;
+            }
+
+            private void openRowGroup(int index)
+            {
+                try {
+                    int[] location = rowGroups.get(index);
+                    ParquetReaderFile reader = file(location[0]);
+                    io.trino.parquet.metadata.BlockMetadata block = reader.metadata.getBlocks().get(location[1]);
+                    for (int c = 0; c < width; c++) {
+                        io.trino.parquet.metadata.PrunedBlockMetadata pruned =
+                                io.trino.parquet.metadata.PrunedBlockMetadata.createPrunedColumnsMetadata(block, reader.source.getId(), descriptorMaps[c]);
+                        io.trino.parquet.metadata.ColumnChunkMetadata chunkMeta = pruned.getColumnChunkMetaData(descriptors[c]);
+                        com.google.common.collect.ListMultimap<Integer, io.trino.parquet.DiskRange> diskRanges = com.google.common.collect.ArrayListMultimap.create();
+                        diskRanges.put(0, new io.trino.parquet.DiskRange(chunkMeta.getStartingPos(), chunkMeta.getTotalSize()));
+                        java.util.Map<Integer, io.trino.parquet.reader.ChunkedInputStream> chunks = reader.source.planRead(diskRanges, memoryContext);
+                        io.trino.parquet.reader.PageReader pageReader = io.trino.parquet.reader.PageReader.createPageReader(
+                                reader.source.getId(), chunks.get(0), chunkMeta, descriptors[c], null, Optional.empty(), Optional.empty(), 8 * 1024 * 1024);
+                        SkipFlatColumnReader<long[]> columnReader = switch (kinds[c]) {
+                            case 1 -> SkipFlatColumnReader.createForInt32AsLong(fields[c], true, memoryContext.newLocalMemoryContext("skip"));
+                            case 2 -> SkipFlatColumnReader.createForDouble(fields[c], true, memoryContext.newLocalMemoryContext("skip"));
+                            default -> SkipFlatColumnReader.createForLong(fields[c], true, memoryContext.newLocalMemoryContext("skip"));
+                        };
+                        columnReader.setPageReader(pageReader, Optional.empty());
+                        readers[c] = columnReader;
+                        consumed[c] = 0;
+                    }
+                    rowsInRowGroup = toIntExact(rowGroupRows.get(index));
+                    batchStart = 0;
+                }
+                catch (java.io.IOException exception) {
+                    throw new RuntimeException(exception);
+                }
+            }
+
+            @Override
+            public boolean advance()
+            {
+                if (!initialized) {
+                    initialize();
+                }
+                while (true) {
+                    if (rowGroupIndex < 0) {
+                        rowGroupIndex = 0;
+                        if (rowGroupIndex >= rowGroups.size()) {
+                            return false;
+                        }
+                        openRowGroup(rowGroupIndex);   // sets batchStart = 0
+                    }
+                    else {
+                        // Advance past the batch just served (exactly once per advance, regardless of how many
+                        // materialize() calls the generated pipeline made for it).
+                        batchStart += batchRows;
+                        if (batchStart >= rowsInRowGroup) {
+                            rowGroupIndex++;
+                            if (rowGroupIndex >= rowGroups.size()) {
+                                return false;
+                            }
+                            openRowGroup(rowGroupIndex);   // sets batchStart = 0
+                        }
+                    }
+                    batchRows = Math.min(batchSize, rowsInRowGroup - batchStart);
+                    if (batchRows == 0) {
+                        batchStart = rowsInRowGroup;
+                        continue;
+                    }
+                    if (noNulls.length < batchRows) {
+                        noNulls = new boolean[batchRows];
+                    }
+                    batchGeneration++;   // invalidates the per-batch decode cache
+                    return true;
+                }
+            }
+
+            @Override
+            public int rows()
+            {
+                return batchRows;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] columns()
+            {
+                return materialize(allColumns());
+            }
+
+            private int[] allColumns()
+            {
+                int[] all = new int[width];
+                for (int c = 0; c < width; c++) {
+                    all[c] = c;
+                }
+                return all;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+            {
+                for (int c : columns) {
+                    out[c] = materializeColumn(c, identity(batchRows), batchRows);
+                }
+                return out;
+            }
+
+            @Override
+            public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+            {
+                for (int c : columns) {
+                    out[c] = materializeColumn(c, selection, count);
+                }
+                return out;
+            }
+
+            /** Decode column {@code c} for this batch (cache miss) or re-gather it from the per-batch cache (cache hit). */
+            private org.weakref.nitro.jit.Column materializeColumn(int c, int[] selection, int count)
+            {
+                if (columnGeneration[c] == batchGeneration) {
+                    return regather(c, selection, count);
+                }
+                columnGeneration[c] = batchGeneration;
+                org.weakref.nitro.jit.Column column;
+                int[] positions;
+                if (count == batchRows) {
+                    column = decodeFull(c);
+                    positions = null;   // identity over batchRows
+                }
+                else if (count <= batchRows * SKIP_GUARD) {
+                    column = decodeSelected(c, selection, count);
+                    // Copy: the generated pipeline reuses the selection buffer across stages, so it cannot be cached by
+                    // reference (a later stage would mutate it before a repeat materialize re-gathers from it).
+                    positions = java.util.Arrays.copyOf(selection, count);
+                }
+                else {
+                    column = decodeFullGather(c, selection, count);
+                    positions = java.util.Arrays.copyOf(selection, count);
+                }
+                cachedColumn[c] = column;
+                cachedPositions[c] = positions;
+                return column;
+            }
+
+            /**
+             * Serve a repeat materialize of column {@code c} from the per-batch cache: gather the requested (sorted,
+             * subset) {@code selection} from the already-decoded values. {@code cachedPositions[c]} is the positions
+             * the cache is aligned to (null = identity over batchRows); a two-pointer maps each requested position.
+             */
+            private org.weakref.nitro.jit.Column regather(int c, int[] selection, int count)
+            {
+                org.weakref.nitro.jit.Column.FlatColumn cached = (org.weakref.nitro.jit.Column.FlatColumn) cachedColumn[c];
+                long[] cachedValues = cached.values();
+                boolean[] cachedNulls = cached.nulls();
+                int[] positions = cachedPositions[c];
+                long[] values = new long[count];
+                boolean[] nulls = cachedNulls == null ? null : new boolean[count];
+                if (positions == null) {
+                    for (int j = 0; j < count; j++) {
+                        int p = selection[j];
+                        values[j] = cachedValues[p];
+                        if (nulls != null) {
+                            nulls[j] = cachedNulls[p];
+                        }
+                    }
+                }
+                else {
+                    int r = 0;
+                    for (int j = 0; j < count; j++) {
+                        int target = selection[j];
+                        while (positions[r] != target) {
+                            r++;
+                        }
+                        values[j] = cachedValues[r];
+                        if (nulls != null) {
+                            nulls[j] = cachedNulls[r];
+                        }
+                    }
+                }
+                return new org.weakref.nitro.jit.Column.FlatColumn(values, nulls);
+            }
+
+            /** Catch a lagging column up to the current batch start with a cheap decoder skip, then read {@code batchRows}. */
+            private void alignTo(int c)
+            {
+                int gap = batchStart - consumed[c];
+                if (gap < 0) {
+                    // Column already read this batch: an owned reader cannot re-read it (a forward-only decoder
+                    // advanced past). The compiled pipeline materializes each column once per batch, so this means
+                    // a plan shape this source does not support -- fail loudly rather than return stale rows.
+                    throw new IllegalStateException("Column " + c + " materialized twice in one batch; skip source cannot re-read");
+                }
+                if (gap > 0) {
+                    readers[c].prepareNextRead(gap);
+                }
+                readers[c].prepareNextRead(batchRows);
+                consumed[c] = batchStart + batchRows;
+            }
+
+            private org.weakref.nitro.jit.Column decodeFull(int c)
+            {
+                alignTo(c);
+                ScanProfile.recordFull(batchRows);
+                io.trino.spi.block.Block block = readers[c].readPrimitive().getBlock();
+                return convert(c, block, identity(batchRows), batchRows, true);
+            }
+
+            private org.weakref.nitro.jit.Column decodeSelected(int c, int[] selection, int count)
+            {
+                alignTo(c);
+                ScanProfile.recordSkip(count);
+                io.trino.spi.block.Block block = readers[c].readSelected(selection, count).getBlock();
+                // readSelected already gathered to count positions; convert with identity.
+                return convert(c, block, identity(count), count, true);
+            }
+
+            private org.weakref.nitro.jit.Column decodeFullGather(int c, int[] selection, int count)
+            {
+                alignTo(c);
+                ScanProfile.recordFull(batchRows);
+                io.trino.spi.block.Block block = readers[c].readPrimitive().getBlock();
+                return convert(c, block, selection, count, false);
+            }
+
+            private org.weakref.nitro.jit.Column convert(int c, io.trino.spi.block.Block block, int[] selection, int count, boolean full)
+            {
+                boolean nullable = specs.get(c).nullable();
+                boolean blockNulls = block.mayHaveNull();
+                if (full && block instanceof io.trino.spi.block.LongArrayBlock longBlock
+                        && rawValuesOffset(longBlock) == 0 && rawValues(longBlock).length == count) {
+                    if (!nullable && !blockNulls) {
+                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock));
+                    }
+                    if (nullable) {
+                        boolean[] nulls = blockNulls ? rawNulls(longBlock) : null;
+                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock), nulls != null ? nulls : noNulls);
+                    }
+                }
+                long[] values = valueBuffer(c, count);
+                boolean[] nullMask = null;
+                if (nullable) {
+                    nullMask = nullBuffers[c];
+                    if (nullMask == null || nullMask.length < count) {
+                        nullMask = new boolean[Math.max(count, 16)];
+                        nullBuffers[c] = nullMask;
+                    }
+                }
+                switch (block) {
+                    case io.trino.spi.block.LongArrayBlock longBlock -> {
+                        int offset = rawValuesOffset(longBlock);
+                        long[] raw = rawValues(longBlock);
+                        boolean[] nulls = blockNulls ? rawNulls(longBlock) : null;
+                        for (int j = 0; j < count; j++) {
+                            int position = selection[j];
+                            boolean isNull = nulls != null && nulls[offset + position];
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = isNull ? 0 : raw[offset + position];
+                        }
+                    }
+                    case io.trino.spi.block.IntArrayBlock intBlock -> {
+                        int offset = intBlock.getRawValuesOffset();
+                        int[] raw = intBlock.getRawValues();
+                        boolean[] nulls = blockNulls ? rawNulls(intBlock) : null;
+                        for (int j = 0; j < count; j++) {
+                            int position = selection[j];
+                            boolean isNull = nulls != null && nulls[offset + position];
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = isNull ? 0 : raw[offset + position];
+                        }
+                    }
+                    case io.trino.spi.block.DictionaryBlock dictionaryBlock -> {
+                        long[] entries = entryLanes(c, dictionaryBlock.getDictionary());
+                        if (entries == null) {
+                            throw new IllegalArgumentException("Unsupported dictionary entries: " + dictionaryBlock.getDictionary().getClass().getName());
+                        }
+                        boolean[] entryNulls = entryNullFlags[c];
+                        int[] rawIds = dictionaryBlock.getRawIds();
+                        int idsOffset = dictionaryBlock.getRawIdsOffset();
+                        for (int j = 0; j < count; j++) {
+                            int id = rawIds[idsOffset + selection[j]];
+                            boolean isNull = entryNulls != null && entryNulls[id];
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = isNull ? 0 : entries[id];
+                        }
+                    }
+                    case io.trino.spi.block.RunLengthEncodedBlock rleBlock -> {
+                        io.trino.spi.block.Block value = rleBlock.getValue();
+                        boolean isNull = value.isNull(0);
+                        long constant = isNull ? 0
+                                : value instanceof io.trino.spi.block.LongArrayBlock longValue ? rawValues(longValue)[rawValuesOffset(longValue)]
+                                : value instanceof io.trino.spi.block.IntArrayBlock intValue ? intValue.getRawValues()[intValue.getRawValuesOffset()]
+                                : Long.MIN_VALUE;
+                        if (constant == Long.MIN_VALUE && !isNull) {
+                            throw new IllegalArgumentException("Unsupported RLE value block: " + value.getClass().getName());
+                        }
+                        for (int j = 0; j < count; j++) {
+                            if (nullMask != null) {
+                                nullMask[j] = isNull;
+                            }
+                            values[j] = constant;
+                        }
+                    }
+                    default -> throw new IllegalArgumentException("Unsupported page block: " + block.getClass().getName());
+                }
+                return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+            }
+
+            private long[] entryLanes(int c, io.trino.spi.block.Block entriesBlock)
+            {
+                if (entryBlocks[c] == entriesBlock) {
+                    return entryLanes[c];
+                }
+                int entryCount = entriesBlock.getPositionCount();
+                long[] entries;
+                if (entriesBlock instanceof io.trino.spi.block.LongArrayBlock longEntries
+                        && rawValuesOffset(longEntries) == 0 && rawValues(longEntries).length == entryCount) {
+                    entries = rawValues(longEntries);
+                }
+                else if (entriesBlock instanceof io.trino.spi.block.LongArrayBlock longEntries) {
+                    int offset = rawValuesOffset(longEntries);
+                    long[] raw = rawValues(longEntries);
+                    entries = new long[entryCount];
+                    for (int e = 0; e < entryCount; e++) {
+                        entries[e] = raw[offset + e];
+                    }
+                }
+                else if (entriesBlock instanceof io.trino.spi.block.IntArrayBlock intEntries) {
+                    int offset = intEntries.getRawValuesOffset();
+                    int[] raw = intEntries.getRawValues();
+                    entries = new long[entryCount];
+                    for (int e = 0; e < entryCount; e++) {
+                        entries[e] = raw[offset + e];
+                    }
+                }
+                else {
+                    return null;
+                }
+                entryBlocks[c] = entriesBlock;
+                entryLanes[c] = entries;
+                boolean[] nulls = null;
+                if (entriesBlock.mayHaveNull()) {
+                    nulls = new boolean[entryCount];
+                    for (int e = 0; e < entryCount; e++) {
+                        nulls[e] = entriesBlock.isNull(e);
+                    }
+                }
+                entryNullFlags[c] = nulls;
+                return entries;
+            }
+
+            private int[] identity(int n)
+            {
+                if (identity == null || identity.length < n) {
+                    identity = new int[Math.max(n, identity == null ? 16 : identity.length * 2)];
+                    for (int i = 0; i < identity.length; i++) {
+                        identity[i] = i;
+                    }
+                }
+                return identity;
+            }
+
+            private long[] valueBuffer(int c, int count)
+            {
+                long[] values = valueBuffers[c];
+                if (values == null || values.length < count) {
+                    values = new long[Math.max(count, values == null ? 16 : values.length * 2)];
+                    valueBuffers[c] = values;
+                }
+                return values;
+            }
+        };
+    }
+
+    /** A parquet file kept open for the skip source: a data source plus its footer metadata. */
+    private static final class ParquetReaderFile
+            implements AutoCloseable
+    {
+        private final SkipFileDataSource source;
+        private final io.trino.parquet.metadata.ParquetMetadata metadata;
+
+        private ParquetReaderFile(java.nio.file.Path path)
+                throws java.io.IOException
+        {
+            this.source = new SkipFileDataSource(path.toFile(), io.trino.parquet.ParquetReaderOptions.builder().build());
+            this.metadata = io.trino.parquet.reader.MetadataReader.readFooter(source, Optional.empty());
+        }
+
+        @Override
+        public void close()
+                throws java.io.IOException
+        {
+            source.close();
+        }
+    }
+
+    private static final class SkipFileDataSource
+            extends io.trino.parquet.AbstractParquetDataSource
+    {
+        private final java.io.RandomAccessFile input;
+
+        private SkipFileDataSource(java.io.File file, io.trino.parquet.ParquetReaderOptions options)
+                throws java.io.FileNotFoundException
+        {
+            super(new io.trino.parquet.ParquetDataSourceId(file.toString()), file.length(), options);
+            this.input = new java.io.RandomAccessFile(file, "r");
+        }
+
+        @Override
+        protected void readInternal(long position, byte[] buffer, int bufferOffset, int bufferLength)
+                throws java.io.IOException
+        {
+            input.seek(position);
+            input.readFully(buffer, bufferOffset, bufferLength);
+        }
+
+        @Override
+        public void close()
+                throws java.io.IOException
+        {
+            input.close();
+        }
+    }
+
     /** Load a lowered query's inputs from Parquet and run it. */
     public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
@@ -2133,6 +2906,7 @@ public final class CompiledQuerySupport
     /** Drain a scan into one {@link org.weakref.nitro.jit.Column} per spec, preserving nulls; string columns build a dictionary. */
     private static DrainedInput drainColumns(Operator operator, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
     {
+        long scanStart = System.nanoTime();
         int width = specs.size();
         // Each column drains into exactly one value array -- a numeric column uses values[c] (long[]), a string
         // column uses ids[c] (int[]). Allocating (and growing) both per column wasted ~half the drain's allocation:
@@ -2250,6 +3024,7 @@ public final class CompiledQuerySupport
                 columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
             }
         }
+        ScanProfile.add(System.nanoTime() - scanStart);
         return new DrainedInput(withDerivedColumns(columns, specs), size);
     }
 

@@ -17,11 +17,15 @@ import it.unimi.dsi.fastutil.longs.AbstractLongList;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
+import jdk.incubator.vector.ByteVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
@@ -43,6 +47,12 @@ public class HashJoinOperator
     }
 
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
+    // Velox-style dynamic filtering: once the (small) build side is materialized, push its single-column key
+    // membership down the probe chain so a skip-decode scan can eliminate non-matching rows during decode. On by
+    // default (a non-selective filter self-abandons after a warmup in the scan, so the build-side collection is the
+    // only residual cost); disable with -Dnitro.dynamicFilter=false.
+    private static final boolean DYNAMIC_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter", "true"));
+    private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 20);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
@@ -113,6 +123,12 @@ public class HashJoinOperator
     private final boolean outerSupportsReborrow;
     private int preparedInnerRunCount = -1;
     private String profileName;
+    // Dynamic-filter state: distinct single-column build keys collected during index build, and whether collection
+    // is still viable (single long key, inner join, readable vector, under the cap). Pushed to the probe once.
+    private final boolean buildKeysViable;
+    private it.unimi.dsi.fastutil.longs.LongOpenHashSet buildKeyValues;
+    private boolean buildKeysAbandoned;
+    private boolean dynamicFilterPushed;
 
     public static <T> T withMaterializationProfile(MaterializationProfile profile, Supplier<T> supplier)
     {
@@ -171,6 +187,7 @@ public class HashJoinOperator
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
         this.currentOuterJoinNulls = new Vector[outerJoinColumns.length];
         this.currentOutputs = new Streams[totalOutputCount];
+        this.buildKeysViable = DYNAMIC_FILTER_ENABLED && !probeOuterJoin && innerJoinColumns.length == 1;
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
 
@@ -211,6 +228,7 @@ public class HashJoinOperator
     private Mask produceBatch()
     {
         loadInnerIfNecessary();
+        pushDynamicFilterIfReady();
         if ((joinIndex == null || joinIndex.isEmpty()) && !probeOuterJoin) {
             captureOuterSchemaIfAvailable();
             done = true;
@@ -368,6 +386,64 @@ public class HashJoinOperator
         return joinIndex.matches(currentOuterJoinValues, currentOuterJoinNulls, outerPosition);
     }
 
+    @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        // Forward a downstream join's filter on a probe-side output column toward the probe source. This join's
+        // outer columns occupy output indices [0, outerOutputCount), at the same indices in the outer's own output.
+        if (filter.column() < outerOutputCount) {
+            outer.pushDynamicFilter(filter);
+        }
+    }
+
+    /** Once the build side is materialized, push this join's own key membership down to the probe. Runs once. */
+    private void pushDynamicFilterIfReady()
+    {
+        if (dynamicFilterPushed || !buildKeysViable || buildKeysAbandoned) {
+            return;
+        }
+        dynamicFilterPushed = true;
+        if (buildKeyValues != null && !buildKeyValues.isEmpty()) {
+            outer.pushDynamicFilter(DynamicFilter.fromValues(outerJoinColumns[0], buildKeyValues));
+        }
+    }
+
+    private void collectBuildKey(Vector keyValues, Vector keyNulls, int position)
+    {
+        if (buildKeysAbandoned) {
+            return;
+        }
+        Long value = readKeyLong(keyValues, keyNulls, position);
+        if (value == null) {
+            return;   // null key never matches an inner join; safe to omit
+        }
+        if (buildKeyValues == null) {
+            buildKeyValues = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+        }
+        buildKeyValues.add((long) value);
+        if (buildKeyValues.size() > DYNAMIC_FILTER_MAX_VALUES) {
+            buildKeysAbandoned = true;   // build not selective enough to be worth a runtime filter
+            buildKeyValues = null;
+        }
+    }
+
+    /** Read a single-column build key as a long, or null when null / unsupported (which abandons collection). */
+    private Long readKeyLong(Vector keyValues, Vector keyNulls, int position)
+    {
+        if (keyNulls != null && VectorAccess.isNull(keyNulls, position)) {
+            return null;
+        }
+        if (keyValues instanceof I64Vector i64) {
+            return i64.values()[position];
+        }
+        if (keyValues instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector entries) {
+            return entries.values()[dictionary.ids()[position]];
+        }
+        buildKeysAbandoned = true;   // unsupported key encoding: do not push a (possibly wrong) filter
+        buildKeyValues = null;
+        return null;
+    }
+
     private void loadInnerIfNecessary()
     {
         int batchCountBefore = bufferedInner.batches().size();
@@ -405,6 +481,7 @@ public class HashJoinOperator
             joinIndex = createJoinIndex(joinValues);
         }
 
+        boolean collectKeys = buildKeysViable && !buildKeysAbandoned;
         for (int position = startPosition; position < startPosition + length; position++) {
             int sourcePosition = batch.sourcePosition(position);
             if (hasNulls) {
@@ -412,6 +489,10 @@ public class HashJoinOperator
             }
             else {
                 joinIndex.addNoNulls(joinValues, sourcePosition, packRowReference(batchIndex, position));
+            }
+            if (collectKeys) {
+                collectBuildKey(joinValues[0], hasNulls ? joinNulls[0] : null, sourcePosition);
+                collectKeys = !buildKeysAbandoned;
             }
         }
     }
@@ -617,9 +698,15 @@ public class HashJoinOperator
 
     private Vector buildOuterDictionaryStream(Vector source)
     {
-        // wrapComposedDictionary mutates the passed ids array through nested encodings, so pass a per-column copy
-        int[] ids = Arrays.copyOf(outerDictionaryIds(), currentOutputCount);
-        return wrapComposedDictionary(ids, source);
+        if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
+            // wrapComposedDictionary rewrites the ids in place while collapsing nested encodings, so an
+            // encoded source needs a private copy it can mutate.
+            int[] ids = Arrays.copyOf(outerDictionaryIds(), currentOutputCount);
+            return wrapComposedDictionary(ids, source);
+        }
+        // Flat source: wrapComposedDictionary leaves the ids untouched, so every flat outer column can share
+        // the single cached id snapshot instead of allocating a per-column copy.
+        return wrapComposedDictionary(outerDictionaryIds(), source);
     }
 
     private void constrainOuterIfNecessary()
@@ -688,7 +775,12 @@ public class HashJoinOperator
 
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
-        if (currentOutputMask.all() && !hasNoMatchRows()) {
+        if (!hasNoMatchRows()) {
+            // The dictionary-wrap shortcuts produce a full-length, position-indexed vector, so they are
+            // correct whether or not the output mask is sparse (a downstream constraint). They also drop
+            // the per-position byte copy that otherwise dominates high-fan-out joins. Deferred build
+            // batches still fall through (the wrap methods bail on them) so their lazy payloads keep
+            // materializing only the constrained rows.
             prepareInnerOutputRuns();
             Streams wrapped = tryWrapSingleBatchInnerOutput(innerOutputIndex);
             if (wrapped != null) {
@@ -707,17 +799,22 @@ public class HashJoinOperator
                 }
                 return result;
             }
-            Streams wrappedSideStreams = tryWrapMultiRunInnerBooleanSideStreams(innerOutputIndex);
-            Streams result = wrappedSideStreams;
-            boolean copyNulls = wrappedSideStreams == null || !wrappedSideStreams.hasNulls();
-            boolean copyErrors = wrappedSideStreams == null || !wrappedSideStreams.hasErrors();
-            for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
-                int outputStart = outputInnerRunStarts[runIndex];
-                int runLength = outputInnerRunLengths[runIndex];
-                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
-                result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, true, copyNulls, copyErrors);
+            // No zero-copy wrap applies. The remaining per-run bulk copy materializes the full output
+            // range, so only take it when the mask is full; a sparse mask falls through to the
+            // per-position copy below, which honors the constraint (and any deferred-batch laziness).
+            if (currentOutputMask.all()) {
+                Streams wrappedSideStreams = tryWrapMultiRunInnerBooleanSideStreams(innerOutputIndex);
+                Streams result = wrappedSideStreams;
+                boolean copyNulls = wrappedSideStreams == null || !wrappedSideStreams.hasNulls();
+                boolean copyErrors = wrappedSideStreams == null || !wrappedSideStreams.hasErrors();
+                for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                    int outputStart = outputInnerRunStarts[runIndex];
+                    int runLength = outputInnerRunLengths[runIndex];
+                    BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
+                    result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, true, copyNulls, copyErrors);
+                }
+                return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
             }
-            return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
         }
 
         Streams result = null;
@@ -2080,17 +2177,19 @@ public class HashJoinOperator
             implements JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
-        // Entries are stored in a single interleaved long[] — {firstKey, secondKey, singleRow} per
-        // slot — so each probe step touches a contiguous 24-byte range and fits in one cache line.
-        // The previous layout used three separate long[] (firstKeys, secondKeys, singleRows) which
-        // forced three independent cache-line loads per probe step on large tables (Q80's
-        // store_sales ⨝ store_returns table holds ~2.87M entries, well past L3).
-        private static final int ENTRY_STRIDE = 3;
-        private static final int FIRST_KEY_OFFSET = 0;
-        private static final int SECOND_KEY_OFFSET = 1;
-        private static final int SINGLE_ROW_OFFSET = 2;
+        // Swiss/F14-style SIMD-tag-bucket table (cf. Velox HashTable): probing scans a GROUP of slots at a time.
+        // Each slot carries a 1-byte tag (top hash bits, high bit set so 0 means empty) held in a contiguous
+        // byte[] separate from the keys/rows. A probe loads GROUP tags with one vector load and compares them
+        // to the wanted tag in one instruction, so a whole bucket is filtered without touching any key; the full
+        // key is compared only on a tag hit. This replaces the previous per-slot open-addressing linear probe,
+        // where every collision step was another full {first,second,row} cache-miss load.
+        private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
+        private static final int GROUP = SPECIES.length();
 
-        private long[] entries;
+        private byte[] tags;
+        private long[] firstKeys;
+        private long[] secondKeys;
+        private long[] singleRows;
         private LongArrayList[] rowsBySlot;
         private int mask;
         private int maxFill;
@@ -2100,23 +2199,22 @@ public class HashJoinOperator
 
         private LongPairJoinIndex(int expectedSize)
         {
-            int capacity = 16;
+            int capacity = GROUP;
             while (capacity < expectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
-            entries = allocateEntries(capacity);
+            allocate(capacity);
+        }
+
+        private void allocate(int capacity)
+        {
+            tags = new byte[capacity];
+            firstKeys = new long[capacity];
+            secondKeys = new long[capacity];
+            singleRows = new long[capacity];
             rowsBySlot = new LongArrayList[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
-        }
-
-        private static long[] allocateEntries(int capacity)
-        {
-            long[] array = new long[capacity * ENTRY_STRIDE];
-            for (int slot = 0; slot < capacity; slot++) {
-                array[slot * ENTRY_STRIDE + SINGLE_ROW_OFFSET] = NO_MATCH_ROW_REFERENCE;
-            }
-            return array;
         }
 
         @Override
@@ -2157,17 +2255,12 @@ public class HashJoinOperator
         {
             long first = OperatorVectorSupport.longValue(values[0], position);
             long second = OperatorVectorSupport.longValue(values[1], position);
-            int slot = findSlot(first, second);
-            int base = slot * ENTRY_STRIDE;
-            long singleRow = entries[base + SINGLE_ROW_OFFSET];
-            if (singleRow == NO_MATCH_ROW_REFERENCE || entries[base + FIRST_KEY_OFFSET] != first || entries[base + SECOND_KEY_OFFSET] != second) {
+            int slot = probe(first, second, hash64(first, second));
+            if (slot < 0) {
                 return LongLists.emptyList();
             }
             LongArrayList rows = rowsBySlot[slot];
-            if (rows != null) {
-                return rows;
-            }
-            return singleMatch.withValue(singleRow);
+            return rows != null ? rows : singleMatch.withValue(singleRows[slot]);
         }
 
         @Override
@@ -2175,26 +2268,18 @@ public class HashJoinOperator
         {
             VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
             VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
-            long[] table = entries;
             if (!hasNulls) {
                 for (int index = 0; index < positionCount; index++) {
                     int position = positions[index];
                     long first = firstValues.value(position);
                     long second = secondValues.value(position);
-                    int slot = findSlot(first, second);
-                    int base = slot * ENTRY_STRIDE;
-                    long singleRow = table[base + SINGLE_ROW_OFFSET];
-                    if (singleRow == NO_MATCH_ROW_REFERENCE || table[base + FIRST_KEY_OFFSET] != first || table[base + SECOND_KEY_OFFSET] != second) {
+                    int slot = probe(first, second, hash64(first, second));
+                    if (slot < 0) {
                         matches[index] = LongLists.emptyList();
                         continue;
                     }
                     LongArrayList rows = rowsBySlot[slot];
-                    if (rows != null) {
-                        matches[index] = rows;
-                    }
-                    else {
-                        matches[index] = singleMatches[index].withValue(singleRow);
-                    }
+                    matches[index] = rows != null ? rows : singleMatches[index].withValue(singleRows[slot]);
                 }
                 return;
             }
@@ -2208,20 +2293,13 @@ public class HashJoinOperator
                 }
                 long first = firstValues.value(position);
                 long second = secondValues.value(position);
-                int slot = findSlot(first, second);
-                int base = slot * ENTRY_STRIDE;
-                long singleRow = table[base + SINGLE_ROW_OFFSET];
-                if (singleRow == NO_MATCH_ROW_REFERENCE || table[base + FIRST_KEY_OFFSET] != first || table[base + SECOND_KEY_OFFSET] != second) {
+                int slot = probe(first, second, hash64(first, second));
+                if (slot < 0) {
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
                 LongArrayList rows = rowsBySlot[slot];
-                if (rows != null) {
-                    matches[index] = rows;
-                }
-                else {
-                    matches[index] = singleMatches[index].withValue(singleRow);
-                }
+                matches[index] = rows != null ? rows : singleMatches[index].withValue(singleRows[slot]);
             }
         }
 
@@ -2236,11 +2314,10 @@ public class HashJoinOperator
         {
             VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
             VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
-            long[] table = entries;
             if (!hasNulls) {
                 for (int index = 0; index < positionCount; index++) {
                     int position = positions[index];
-                    refs[index] = pairSingleRef(table, firstValues.value(position), secondValues.value(position));
+                    refs[index] = singleRef(firstValues.value(position), secondValues.value(position));
                 }
                 return;
             }
@@ -2250,111 +2327,135 @@ public class HashJoinOperator
                 int position = positions[index];
                 refs[index] = firstNulls.value(position) || secondNulls.value(position)
                         ? NO_MATCH_ROW_REFERENCE
-                        : pairSingleRef(table, firstValues.value(position), secondValues.value(position));
+                        : singleRef(firstValues.value(position), secondValues.value(position));
             }
         }
 
-        private long pairSingleRef(long[] table, long first, long second)
+        private long singleRef(long first, long second)
         {
-            int slot = findSlot(first, second);
-            int base = slot * ENTRY_STRIDE;
-            long singleRow = table[base + SINGLE_ROW_OFFSET];
-            if (singleRow == NO_MATCH_ROW_REFERENCE || table[base + FIRST_KEY_OFFSET] != first || table[base + SECOND_KEY_OFFSET] != second) {
-                return NO_MATCH_ROW_REFERENCE;
-            }
-            return singleRow;
+            int slot = probe(first, second, hash64(first, second));
+            return slot < 0 ? NO_MATCH_ROW_REFERENCE : singleRows[slot];
         }
 
-        private int findSlot(long first, long second)
+        // Returns the slot holding (first, second), or -1 if absent. Scans GROUP tags per step: one vector load
+        // plus one tag compare filters the whole bucket; a key is only read when its tag matches. A bucket with
+        // any empty slot ends the search (open-addressing invariant: a present key precedes any empty in its probe
+        // sequence, and there are no deletions).
+        private int probe(long first, long second, long hash)
         {
-            long[] table = entries;
-            int slot = mix(first, second) & mask;
+            byte[] tagTable = tags;
+            byte tag = (byte) ((hash >>> 56) | 0x80L);
+            int group = ((int) hash) & mask & ~(GROUP - 1);
             while (true) {
-                int base = slot * ENTRY_STRIDE;
-                long singleRow = table[base + SINGLE_ROW_OFFSET];
-                if (singleRow == NO_MATCH_ROW_REFERENCE) {
-                    return slot;
+                ByteVector groupTags = ByteVector.fromArray(SPECIES, tagTable, group);
+                long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
+                while (matchBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(matchBits);
+                    if (firstKeys[slot] == first && secondKeys[slot] == second) {
+                        return slot;
+                    }
+                    matchBits &= matchBits - 1;
                 }
-                if (table[base + FIRST_KEY_OFFSET] == first && table[base + SECOND_KEY_OFFSET] == second) {
-                    return slot;
+                if (groupTags.compare(VectorOperators.EQ, (byte) 0).toLong() != 0) {
+                    return -1;
                 }
-                slot = (slot + 1) & mask;
-            }
-        }
-
-        private void rehash()
-        {
-            long[] previousEntries = entries;
-            LongArrayList[] previousRowsBySlot = rowsBySlot;
-            int previousCapacity = previousRowsBySlot.length;
-            int capacity = previousCapacity * 2;
-
-            entries = allocateEntries(capacity);
-            rowsBySlot = new LongArrayList[capacity];
-            mask = capacity - 1;
-            maxFill = (int) (capacity * LOAD_FACTOR);
-            size = 0;
-
-            for (int oldSlot = 0; oldSlot < previousCapacity; oldSlot++) {
-                int previousBase = oldSlot * ENTRY_STRIDE;
-                long singleRow = previousEntries[previousBase + SINGLE_ROW_OFFSET];
-                if (singleRow == NO_MATCH_ROW_REFERENCE) {
-                    continue;
-                }
-                long first = previousEntries[previousBase + FIRST_KEY_OFFSET];
-                long second = previousEntries[previousBase + SECOND_KEY_OFFSET];
-                int slot = findSlot(first, second);
-                int base = slot * ENTRY_STRIDE;
-                entries[base + FIRST_KEY_OFFSET] = first;
-                entries[base + SECOND_KEY_OFFSET] = second;
-                entries[base + SINGLE_ROW_OFFSET] = singleRow;
-                rowsBySlot[slot] = previousRowsBySlot[oldSlot];
-                size++;
+                group = (group + GROUP) & mask;
             }
         }
 
         private void addRow(long first, long second, long rowReference)
         {
-            int slot = findSlot(first, second);
-            int base = slot * ENTRY_STRIDE;
-            if (entries[base + SINGLE_ROW_OFFSET] == NO_MATCH_ROW_REFERENCE) {
-                entries[base + FIRST_KEY_OFFSET] = first;
-                entries[base + SECOND_KEY_OFFSET] = second;
-                entries[base + SINGLE_ROW_OFFSET] = rowReference;
-                size++;
-                if (size >= maxFill) {
-                    rehash();
+            long hash = hash64(first, second);
+            byte tag = (byte) ((hash >>> 56) | 0x80L);
+            int group = ((int) hash) & mask & ~(GROUP - 1);
+            while (true) {
+                ByteVector groupTags = ByteVector.fromArray(SPECIES, tags, group);
+                long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
+                while (matchBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(matchBits);
+                    if (firstKeys[slot] == first && secondKeys[slot] == second) {
+                        LongArrayList rows = rowsBySlot[slot];
+                        if (rows == null) {
+                            rows = new LongArrayList(2);
+                            rows.add(singleRows[slot]);
+                            rows.add(rowReference);
+                            rowsBySlot[slot] = rows;
+                            pairHasDuplicates = true;
+                        }
+                        else {
+                            rows.add(rowReference);
+                        }
+                        return;
+                    }
+                    matchBits &= matchBits - 1;
                 }
-                return;
+                long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
+                if (emptyBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                    tags[slot] = tag;
+                    firstKeys[slot] = first;
+                    secondKeys[slot] = second;
+                    singleRows[slot] = rowReference;
+                    size++;
+                    if (size >= maxFill) {
+                        rehash();
+                    }
+                    return;
+                }
+                group = (group + GROUP) & mask;
             }
-            if (rowsBySlot[slot] == null) {
-                LongArrayList rows = new LongArrayList(2);
-                rows.add(entries[base + SINGLE_ROW_OFFSET]);
-                rows.add(rowReference);
-                rowsBySlot[slot] = rows;
-                pairHasDuplicates = true;
-                return;
-            }
-            rowsBySlot[slot].add(rowReference);
         }
 
-        private boolean isEmptySlot(int slot)
+        private void rehash()
         {
-            return entries[slot * ENTRY_STRIDE + SINGLE_ROW_OFFSET] == NO_MATCH_ROW_REFERENCE;
+            byte[] oldTags = tags;
+            long[] oldFirst = firstKeys;
+            long[] oldSecond = secondKeys;
+            long[] oldRows = singleRows;
+            LongArrayList[] oldLists = rowsBySlot;
+            allocate(oldTags.length * 2);
+            size = 0;
+            for (int oldSlot = 0; oldSlot < oldTags.length; oldSlot++) {
+                if (oldTags[oldSlot] == 0) {
+                    continue;
+                }
+                long first = oldFirst[oldSlot];
+                long second = oldSecond[oldSlot];
+                long hash = hash64(first, second);
+                int slot = findEmpty(hash);
+                tags[slot] = (byte) ((hash >>> 56) | 0x80L);
+                firstKeys[slot] = first;
+                secondKeys[slot] = second;
+                singleRows[slot] = oldRows[oldSlot];
+                rowsBySlot[slot] = oldLists[oldSlot];
+                size++;
+            }
         }
 
-        private static int mix(long first, long second)
+        // Distinct keys only (rehash): returns the first empty slot in the key's probe sequence.
+        private int findEmpty(long hash)
         {
-            // Fibonacci-prime combine + Murmur3 64-bit finalizer. See GroupingState.LongPairGroupingTable.mix
-            // for rationale; TPC-DS surrogate keys have zero upper 32 bits and collide heavily under the
-            // former `31 * Long.hashCode(a) + Long.hashCode(b)` hash.
+            int group = ((int) hash) & mask & ~(GROUP - 1);
+            while (true) {
+                long emptyBits = ByteVector.fromArray(SPECIES, tags, group).compare(VectorOperators.EQ, (byte) 0).toLong();
+                if (emptyBits != 0) {
+                    return group + Long.numberOfTrailingZeros(emptyBits);
+                }
+                group = (group + GROUP) & mask;
+            }
+        }
+
+        private static long hash64(long first, long second)
+        {
+            // Fibonacci-prime combine + Murmur3 64-bit finalizer; the low bits index the bucket, the top byte is
+            // the tag. TPC-DS surrogate keys have zero upper 32 bits and collide heavily under a naive combine.
             long hash = first * 0x9E3779B97F4A7C15L + second * 0xC4CEB9FE1A85EC53L;
             hash ^= hash >>> 33;
             hash *= 0xFF51AFD7ED558CCDL;
             hash ^= hash >>> 33;
             hash *= 0xC4CEB9FE1A85EC53L;
             hash ^= hash >>> 33;
-            return (int) hash;
+            return hash;
         }
     }
 

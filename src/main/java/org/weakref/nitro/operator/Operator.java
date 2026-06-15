@@ -86,6 +86,16 @@ public interface Operator
     }
 
     /**
+     * Pushes a runtime {@link DynamicFilter} from a downstream join's build side toward this operator's source(s).
+     * <p>
+     * The default forwards nothing. Pass-through operators override this to remap the filter's column into their
+     * source's output space and forward it; a scan applies it during decode (decode the filtered key, test
+     * membership, skip-decode the rest only for survivors) — the Velox-style dynamic-filtering path. A filter is
+     * always a superset over the join key, so applying it never changes query results, only how many rows decode.
+     */
+    default void pushDynamicFilter(DynamicFilter filter) {}
+
+    /**
      * Releases any operator-owned resources.
      */
     void close();

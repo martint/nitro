@@ -51,6 +51,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.io.File;
@@ -108,6 +109,17 @@ public final class TrinoParquetScanOperator
     private int fileIndex;
     private SingleFileScan currentFile;
     private Batch currentBatch;
+    // A pushed runtime filter from a downstream join's build side. When present, each batch decodes the filter key
+    // column, tests membership, and pre-constrains the batch to survivors so the remaining columns decode (masked)
+    // only for rows that can join -- the Velox-style dynamic-filtering path, reusing the existing masked decode.
+    private DynamicFilter dynamicFilter;
+    // Adaptive abandon: a filter that does not prune is pure per-row overhead. After a warmup of decoded key rows,
+    // if too few were removed the filter is dropped (decode reverts to the full fast path), so a non-selective
+    // dimension never taxes the scan.
+    private static final long DF_WARMUP_ROWS = 256 * 1024;
+    private static final double DF_MIN_PRUNE_RATIO = 0.30;   // keep applying only if it removes >= 30% of rows
+    private long dfRowsSeen;
+    private long dfRowsKept;
 
     public TrinoParquetScanOperator(Allocator allocator, Path file, List<String> columns)
     {
@@ -166,6 +178,12 @@ public final class TrinoParquetScanOperator
         if (currentFile != null) {
             currentFile.constrain(mask);
         }
+    }
+
+    @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        this.dynamicFilter = filter;
     }
 
     @Override
@@ -290,6 +308,10 @@ public final class TrinoParquetScanOperator
             BatchState batchState = new BatchState(page, allocator.allocateAllMask(ALLOCATION_CONTEXT, page.getPositionCount()), columns.size());
             currentBatchState = batchState;
 
+            if (dynamicFilter != null) {
+                applyDynamicFilter(batchState, page.getPositionCount());
+            }
+
             Output[] outputs = new Output[columns.size()];
             for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
                 int outputIndex = columnIndex;
@@ -322,6 +344,40 @@ public final class TrinoParquetScanOperator
         {
             if (currentBatchState != null) {
                 currentBatchState.constrain(mask);
+            }
+        }
+
+        // Decode the pushed filter's key column, test membership, and narrow the batch to survivors. The key column
+        // is cached in the batch state (so the downstream probe re-reads it for free); the remaining columns then
+        // decode only for survivor positions via the existing masked-decode path. A null key cannot match an inner
+        // join, so it is excluded.
+        private void applyDynamicFilter(BatchState batchState, int batchRows)
+        {
+            int filterColumn = dynamicFilter.column();
+            if (filterColumn < 0 || filterColumn >= columns.size()) {
+                return;
+            }
+            ColumnBuffer keyBuffer = resolveColumn(filterColumn, batchState);
+            VectorAccess.LongValues keys = VectorAccess.longValues(keyBuffer.values());
+            boolean[] keyNulls = keyBuffer.nulls() == null ? null : keyBuffer.nulls().values();
+            int[] survivors = new int[batchRows];
+            int count = 0;
+            for (int position = 0; position < batchRows; position++) {
+                if (keyNulls != null && keyNulls[position]) {
+                    continue;
+                }
+                if (dynamicFilter.accepts(keys.value(position))) {
+                    survivors[count++] = position;
+                }
+            }
+            if (count < batchRows) {
+                batchState.constrain(allocator.allocateSparseMask(ALLOCATION_CONTEXT, survivors, count, batchRows));
+            }
+            dfRowsSeen += batchRows;
+            dfRowsKept += count;
+            if (dfRowsSeen >= DF_WARMUP_ROWS && dfRowsKept > dfRowsSeen * (1.0 - DF_MIN_PRUNE_RATIO)) {
+                // Not selective enough to pay for: stop applying it (subsequent batches decode at full speed).
+                dynamicFilter = null;
             }
         }
 

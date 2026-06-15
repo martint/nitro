@@ -120,7 +120,18 @@ final class TopNState
             int orderingColumn = orderingColumns[orderingIndex];
             Output output = batch.output(orderingColumn);
             Streams slotOrdering = slotColumns[orderingColumn][slot];
-            int comparison = tryCompareDirectOrderingValue(output, position, slotOrdering);
+            // NULLS LAST regardless of sort direction (matches Trino/SQL default); direction flips only the
+            // comparison of non-null values.
+            boolean currentNull = OperatorVectorSupport.isNull(output.borrowOrNull(Stream.NULLS), position);
+            boolean slotNull = OperatorVectorSupport.isNull(slotOrdering.getOrNull(Stream.NULLS), 0);
+            int comparison;
+            if (currentNull || slotNull) {
+                if (currentNull == slotNull) {
+                    continue;
+                }
+                return currentNull ? -1 : 1;
+            }
+            comparison = tryCompareDirectOrderingValue(output, position, slotOrdering);
             if (comparison == Integer.MIN_VALUE) {
                 comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
                 Streams currentOrdering = comparisonColumns[orderingColumn];
@@ -175,6 +186,15 @@ final class TopNState
             int orderingColumn = orderingColumns[orderingIndex];
             Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
             Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
+            // NULLS LAST regardless of sort direction (matches Trino/SQL); direction flips only non-null values.
+            boolean leftNull = OperatorVectorSupport.isNull(leftOrdering.getOrNull(Stream.NULLS), 0);
+            boolean rightNull = OperatorVectorSupport.isNull(rightOrdering.getOrNull(Stream.NULLS), 0);
+            if (leftNull || rightNull) {
+                if (leftNull == rightNull) {
+                    continue;
+                }
+                return leftNull ? -1 : 1;
+            }
             int comparison = OperatorOrderingSemantics.compare(
                     leftOrdering.values(),
                     leftOrdering.getOrNull(Stream.NULLS),

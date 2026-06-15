@@ -13,6 +13,13 @@
  */
 package org.weakref.nitro.operator;
 
+import jdk.incubator.vector.ByteVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
+
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
@@ -36,8 +43,14 @@ final class ValueIdInterner
 
     private final int maxDistinct;
 
-    // Open-addressing slot table: slots[h] = id + 1, 0 means empty. Power-of-two capacity, mask = capacity - 1.
+    // Swiss/F14-style open-addressing slot table: slots[h] = id + 1 (0 = empty), with a parallel byte tag per
+    // slot (top hash bits | 0x80; 0 = empty). A probe scans GROUP slots with one vector tag-compare, so the
+    // random valueHash[id] read happens only on a tag hit, not on every collision step. Power-of-two capacity
+    // (multiple of GROUP), mask = capacity - 1.
+    private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
+    private static final int GROUP = SPECIES.length();
     private int[] slots;
+    private byte[] slotTags;
     private int mask;
 
     // Per-id stored value: a slice [valueOffset[id], valueOffset[id] + valueLength[id]) into data.
@@ -59,6 +72,7 @@ final class ValueIdInterner
         this.maxDistinct = maxDistinct;
         int capacity = 16;
         this.slots = new int[capacity];
+        this.slotTags = new byte[capacity];
         this.mask = capacity - 1;
         this.data = new byte[Math.max(16, initialDataCapacity)];
         this.valueOffset = new int[16];
@@ -87,16 +101,29 @@ final class ValueIdInterner
             return TOO_MANY;
         }
         long hash = hash(value, offset, length);
-        int slot = (int) (hash) & mask;
+        byte tag = (byte) ((hash >>> 56) | 0x80L);
+        int group = ((int) hash) & mask & ~(GROUP - 1);
         while (true) {
-            int entry = slots[slot];
-            if (entry == 0) {
+            ByteVector groupTags = ByteVector.fromArray(SPECIES, slotTags, group);
+            long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
+            while (matchBits != 0) {
+                int slot = group + Long.numberOfTrailingZeros(matchBits);
+                int id = slots[slot] - 1;
+                if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
+                    return id;
+                }
+                matchBits &= matchBits - 1;
+            }
+            long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
+            if (emptyBits != 0) {
                 if (distinct >= maxDistinct) {
                     overflowed = true;
                     return TOO_MANY;
                 }
+                int slot = group + Long.numberOfTrailingZeros(emptyBits);
                 int id = distinct;
                 store(id, value, offset, length, hash);
+                slotTags[slot] = tag;
                 slots[slot] = id + 1;
                 distinct++;
                 if (distinct * 4 >= slots.length * 3) {
@@ -104,11 +131,7 @@ final class ValueIdInterner
                 }
                 return id;
             }
-            int id = entry - 1;
-            if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
-                return id;
-            }
-            slot = (slot + 1) & mask;
+            group = (group + GROUP) & mask;
         }
     }
 
@@ -165,26 +188,47 @@ final class ValueIdInterner
     {
         int newCapacity = slots.length * 2;
         int[] newSlots = new int[newCapacity];
+        byte[] newTags = new byte[newCapacity];
         int newMask = newCapacity - 1;
         for (int id = 0; id < distinct; id++) {
-            int slot = (int) (valueHash[id]) & newMask;
-            while (newSlots[slot] != 0) {
-                slot = (slot + 1) & newMask;
+            long hash = valueHash[id];
+            int group = ((int) hash) & newMask & ~(GROUP - 1);
+            while (true) {
+                long emptyBits = ByteVector.fromArray(SPECIES, newTags, group).compare(VectorOperators.EQ, (byte) 0).toLong();
+                if (emptyBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                    newTags[slot] = (byte) ((hash >>> 56) | 0x80L);
+                    newSlots[slot] = id + 1;
+                    break;
+                }
+                group = (group + GROUP) & newMask;
             }
-            newSlots[slot] = id + 1;
         }
         slots = newSlots;
+        slotTags = newTags;
         mask = newMask;
     }
 
     private static long hash(byte[] value, int offset, int length)
     {
-        // 64-bit FNV-1a; cheap, decent spread for short keys (the low-cardinality case this targets).
+        // FNV-1a-style multiply-xor, but consuming a machine word at a time instead of a byte at a time:
+        // 8× fewer multiply steps and a shorter dependency chain on the long string values seen here. The
+        // hash values differ from the byte-wise version, but ids are assigned by first-occurrence order (not
+        // by hash), so the mapping is unchanged; the hash only places probe slots and is settled by
+        // regionEquals. Any consistent function within a run is correct.
         long hash = 0xcbf29ce484222325L;
-        for (int index = 0; index < length; index++) {
+        int index = 0;
+        int wordLimit = length - 7;
+        for (; index < wordLimit; index += 8) {
+            hash ^= (long) LONG_HANDLE.get(value, offset + index);
+            hash *= 0x100000001b3L;
+        }
+        for (; index < length; index++) {
             hash ^= value[offset + index] & 0xff;
             hash *= 0x100000001b3L;
         }
         return hash;
     }
+
+    private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 }

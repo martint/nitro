@@ -14,6 +14,7 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -42,30 +43,54 @@ public final class AddI64
     }
 
     @Override
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+    {
+        return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for add");
-        if (!requestedStreams.contains(Stream.VALUES)) {
+        if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
-        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null) {
-            I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
-            return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, AddI64::apply));
+        Streams result = Streams.empty();
+        BooleanVector outputNulls = null;
+        if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {
+            // At least one input could carry a real null; addition propagates it (a + NULL = NULL).
+            outputNulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
+                    ALLOCATION_CONTEXT,
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())));
+            VectorAccess.combineNullsOr(leftNulls, rightNulls, mask, outputNulls);
+            result = result.with(Stream.NULLS, outputNulls);
+        }
+        if (!requestedStreams.contains(Stream.VALUES)) {
+            return result;
         }
 
-        I64Vector result = context.allocator().allocateOrGrow(
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null && leftNulls == null && rightNulls == null) {
+            I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+            return result.with(Stream.VALUES, I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, AddI64::apply));
+        }
+
+        I64Vector resultValues = context.allocator().allocateOrGrow(
                 ALLOCATION_CONTEXT,
                 existing instanceof I64Vector vector ? vector : null,
                 I64Vector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
-        I64BinaryDispatch.applyLong(left, right, mask, result, AddI64::apply);
-        return Streams.ofValues(result);
+        I64BinaryDispatch.applyLong(left, right, mask, resultValues, AddI64::apply);
+        return result.with(Stream.VALUES, resultValues);
     }
 
     private static long apply(long leftValue, long rightValue)

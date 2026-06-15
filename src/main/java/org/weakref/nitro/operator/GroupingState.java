@@ -105,6 +105,27 @@ final class GroupingState
         assignGroups(new Vector[] {values}, new Vector[] {nulls}, mask, result);
     }
 
+    /**
+     * Registers the probe batch's key column before a run of {@link #contains} calls. Required for the flat
+     * grouping path, whose per-batch dictionary hash/bound-dictionary cache is keyed to the batch's vectors;
+     * probing without it would read the previous (membership-build) batch's stale cache. Must be paired with
+     * {@link #endContainsBatch}. A no-op for the long/dictionary/hash-map paths.
+     */
+    public void beginContainsBatch(Vector values, Vector nulls)
+    {
+        initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});
+        if (useFlatGrouping) {
+            flatGroupingTable.beginBatch(new Vector[] {values}, new Vector[] {nulls});
+        }
+    }
+
+    public void endContainsBatch()
+    {
+        if (useFlatGrouping) {
+            flatGroupingTable.endBatch();
+        }
+    }
+
     public boolean contains(Vector values, Vector nulls, int position)
     {
         initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});

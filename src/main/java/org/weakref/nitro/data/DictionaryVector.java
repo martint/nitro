@@ -29,6 +29,16 @@ public final class DictionaryVector
         this(ids, values, true, true);
     }
 
+    /**
+     * Builds a dictionary from ids the caller guarantees are in-bounds (e.g. produced by a Parquet decoder or a
+     * scalar function), keeping a defensive copy of the ids but skipping the O(n) bounds validation that the
+     * public constructor runs — the same hot-path tradeoff {@link #wrap} already makes.
+     */
+    public static DictionaryVector ofTrustedIds(int[] ids, Vector values)
+    {
+        return new DictionaryVector(ids, values, true, false);
+    }
+
     public static DictionaryVector wrap(int[] ids, Vector values)
     {
         if (values instanceof DictionaryVector dictionary) {

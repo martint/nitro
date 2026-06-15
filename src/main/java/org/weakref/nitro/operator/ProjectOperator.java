@@ -115,6 +115,22 @@ public class ProjectOperator
     }
 
     @Override
+    public void pushDynamicFilter(org.weakref.nitro.operator.DynamicFilter filter)
+    {
+        // Forward a dynamic filter only through a pass-through output (a plain Input reference on the VALUES stream),
+        // remapping to the underlying source column. Computed outputs aren't a direct column, so the filter can't be
+        // forwarded through them.
+        int outputIndex = filter.column();
+        if (outputIndex >= outputReferences.size()) {
+            return;
+        }
+        Reference reference = outputReferences.get(outputIndex);
+        if (reference.stream() == Stream.VALUES && reference.producer() instanceof Input input) {
+            source.pushDynamicFilter(filter.withColumn(input.index()));
+        }
+    }
+
+    @Override
     public boolean supportsRetainedBatches()
     {
         // Project outputs are mask-sensitive and can be recomputed after constrain().

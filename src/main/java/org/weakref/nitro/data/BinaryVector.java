@@ -128,14 +128,25 @@ public final class BinaryVector
 
     public static BinaryVector allocateOrGrow(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity)
     {
+        return allocateOrGrow(allocator, allocationContext, existing, positionCount, byteCapacity, -1);
+    }
+
+    /**
+     * As {@link #allocateOrGrow(Allocator, Allocator.Context, BinaryVector, int, int)}, but a non-negative
+     * {@code bytesUsed} tells how many bytes of {@code existing}'s data are live so the grow can copy exactly that
+     * many instead of scanning the offsets backward from the (often far larger) allocated capacity. Incremental
+     * single-position fillers already track this write offset, so passing it avoids an O(capacity) scan per grow.
+     */
+    public static BinaryVector allocateOrGrow(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity, int bytesUsed)
+    {
         if (existing == null) {
             return allocate(allocator, allocationContext, positionCount, Allocator.growthCapacity(byteCapacity));
         }
         if (existing.length() < positionCount || existing.byteCapacity() < byteCapacity) {
             BinaryVector grown = allocate(allocator, allocationContext, positionCount, Allocator.growthCapacity(byteCapacity));
             System.arraycopy(existing.offsets(), 0, grown.offsets(), 0, existing.length() + 1);
-            int bytesUsed = bytesUsed(existing);
-            System.arraycopy(existing.data(), 0, grown.data(), 0, bytesUsed);
+            int liveBytes = bytesUsed >= 0 ? bytesUsed : bytesUsed(existing);
+            System.arraycopy(existing.data(), 0, grown.data(), 0, liveBytes);
             grown.addTraits(existing.traits());
             allocator.discard(allocationContext, existing);
             return grown;

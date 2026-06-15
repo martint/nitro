@@ -111,6 +111,13 @@ public class FilterOperator
     }
 
     @Override
+    public void pushDynamicFilter(org.weakref.nitro.operator.DynamicFilter filter)
+    {
+        // A filter only narrows rows; it leaves columns unchanged, so forward a pushed dynamic filter to the source.
+        source.pushDynamicFilter(filter);
+    }
+
+    @Override
     public boolean supportsRetainedBatches()
     {
         return source.supportsRetainedBatches();
