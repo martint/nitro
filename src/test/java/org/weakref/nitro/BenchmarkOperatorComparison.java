@@ -99,6 +99,8 @@ public class BenchmarkOperatorComparison
     private List<Page> scanLowCard;
     private List<Page> scanHighCard;
     private List<Page> scanValues;
+    private List<Page> scanTwoKey;
+    private List<Page> scanThreeKey;
 
     private Allocator allocator;
 
@@ -119,6 +121,11 @@ public class BenchmarkOperatorComparison
         scanLowCard = twoColumnPages(SCAN_ROWS, row -> row % GROUPS_LOW, row -> row);
         scanHighCard = twoColumnPages(SCAN_ROWS, row -> row % GROUPS_HIGH, row -> row);
         scanValues = oneColumnPages(SCAN_ROWS, row -> row);
+        // Multi-long grouping inputs: key columns + payload. 2-key ~64k groups, 3-key ~64k groups.
+        scanTwoKey = multiColumnPages(SCAN_ROWS, new LongUnaryOperator[] {
+                row -> row % 1024, row -> row % 64, row -> row});
+        scanThreeKey = multiColumnPages(SCAN_ROWS, new LongUnaryOperator[] {
+                row -> row % 256, row -> row % 16, row -> row % 16, row -> row});
     }
 
     @Setup(Level.Invocation)
@@ -182,6 +189,22 @@ public class BenchmarkOperatorComparison
                 allocator, List.of(0), List.of(new Sum(1)), new TableOperator(2, scanHighCard)), 2));
     }
 
+    // ---- Multi-long grouped aggregation: sum(payload) GROUP BY (k0, k1[, k2]) ----
+
+    @Benchmark
+    public void groupSumTwoLongKeys()
+    {
+        consume(sumAll(new GroupedAggregationOperator(
+                allocator, List.of(0, 1), List.of(new Sum(2)), new TableOperator(3, scanTwoKey)), 3));
+    }
+
+    @Benchmark
+    public void groupSumThreeLongKeys()
+    {
+        consume(sumAll(new GroupedAggregationOperator(
+                allocator, List.of(0, 1, 2), List.of(new Sum(3)), new TableOperator(4, scanThreeKey)), 4));
+    }
+
     // ---- Global aggregation: sum(value) ----
 
     @Benchmark
@@ -232,6 +255,26 @@ public class BenchmarkOperatorComparison
                 payload[index] = payloadFn.applyAsLong(row);
             }
             pages.add(Page.values(rows, new Vector[] {new I64Vector(keys), new I64Vector(payload)}, Mask.all(rows)));
+        }
+        return pages;
+    }
+
+    private List<Page> multiColumnPages(int totalRows, LongUnaryOperator[] columnFns)
+    {
+        int columns = columnFns.length;
+        List<Page> pages = new ArrayList<>();
+        for (int start = 0; start < totalRows; start += batch) {
+            int rows = Math.min(batch, totalRows - start);
+            Vector[] vectors = new Vector[columns];
+            for (int column = 0; column < columns; column++) {
+                long[] values = new long[rows];
+                LongUnaryOperator fn = columnFns[column];
+                for (int index = 0; index < rows; index++) {
+                    values[index] = fn.applyAsLong(start + index);
+                }
+                vectors[column] = new I64Vector(values);
+            }
+            pages.add(Page.values(rows, vectors, Mask.all(rows)));
         }
         return pages;
     }
