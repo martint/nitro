@@ -13,8 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import it.unimi.dsi.fastutil.longs.Long2LongMap;
-import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import org.weakref.nitro.data.Allocator;
@@ -35,7 +33,15 @@ import java.util.Set;
 final class GroupingState
 {
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
-    private final Long2LongMap longGroups = new Long2LongOpenHashMap();
+    // Single-long grouping key -> group id, as an open-addressed table probed with one fused
+    // find-or-insert per row. A slot is empty iff its id is -1; ids are dense, assigned in first-seen
+    // scan order (the hash only chooses the slot, never the id). longKeysByGroup is the reverse map.
+    private static final float LONG_GROUP_LOAD_FACTOR = 0.75f;
+    private long[] longGroupKeys;
+    private int[] longGroupIds;
+    private int longGroupMask;
+    private int longGroupMaxFill;
+    private int longGroupCount;
     private final ArrayList<ArrayList<OperatorKeySemantics.Key>> keysByGroupColumns = new ArrayList<>();
     private OperatorKeySemantics.Key[] reusableProbeKeys;
     private OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey;
@@ -74,7 +80,6 @@ final class GroupingState
     GroupingState()
     {
         groups.defaultReturnValue(-1);
-        longGroups.defaultReturnValue(-1);
     }
 
     public boolean isInitialized()
@@ -94,7 +99,7 @@ final class GroupingState
             return false;
         }
         if (useLongGrouping) {
-            return longGroups.containsKey(OperatorVectorSupport.longValue(values, position));
+            return longGroupGet(OperatorVectorSupport.longValue(values, position)) != -1;
         }
         if (useFlatGrouping) {
             return flatGroupingTable.findGroup(new Vector[] {values}, new Vector[] {nulls}, position) != -1;
@@ -182,6 +187,7 @@ final class GroupingState
 
         if (values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
             useLongGrouping = true;
+            initLongGroupTable(Math.max(16, values[0].length()));
             return;
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
@@ -274,22 +280,104 @@ final class GroupingState
         // through monomorphic accessor lambdas instead of OperatorVectorSupport's switch.
         VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
         VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nullVector);
+        long[] out = result.values();
+        // Hoist the table into locals; refresh after a rehash.
+        long[] tableKeys = longGroupKeys;
+        int[] tableIds = longGroupIds;
+        int tableMask = longGroupMask;
         for (int position : mask) {
             if (nullValues.value(position)) {
-                result.values()[position] = nullGroup();
+                out[position] = nullGroup();
                 continue;
             }
 
             long key = keyValues.value(position);
-            long groupId = longGroups.get(key);
-            if (groupId == -1) {
-                groupId = nextGroupId++;
-                longGroups.put(key, groupId);
-                ensureLongGroupingCapacity(groupId);
-                longKeysByGroup[(int) groupId] = key;
+            int slot = hashLong(key) & tableMask;
+            while (true) {
+                int id = tableIds[slot];
+                if (id == -1) {
+                    int groupId = (int) nextGroupId++;
+                    tableKeys[slot] = key;
+                    tableIds[slot] = groupId;
+                    ensureLongGroupingCapacity(groupId);
+                    longKeysByGroup[groupId] = key;
+                    out[position] = groupId;
+                    if (++longGroupCount >= longGroupMaxFill) {
+                        rehashLongGroupTable();
+                        tableKeys = longGroupKeys;
+                        tableIds = longGroupIds;
+                        tableMask = longGroupMask;
+                    }
+                    break;
+                }
+                if (tableKeys[slot] == key) {
+                    out[position] = id;
+                    break;
+                }
+                slot = (slot + 1) & tableMask;
             }
-            result.values()[position] = groupId;
         }
+    }
+
+    private void initLongGroupTable(int expectedSize)
+    {
+        int capacity = 16;
+        while (capacity < expectedSize / LONG_GROUP_LOAD_FACTOR) {
+            capacity <<= 1;
+        }
+        longGroupKeys = new long[capacity];
+        longGroupIds = new int[capacity];
+        Arrays.fill(longGroupIds, -1);
+        longGroupMask = capacity - 1;
+        longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
+        longGroupCount = 0;
+    }
+
+    private void rehashLongGroupTable()
+    {
+        long[] previousKeys = longGroupKeys;
+        int[] previousIds = longGroupIds;
+        int capacity = previousKeys.length * 2;
+        longGroupKeys = new long[capacity];
+        longGroupIds = new int[capacity];
+        Arrays.fill(longGroupIds, -1);
+        longGroupMask = capacity - 1;
+        longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
+        for (int index = 0; index < previousKeys.length; index++) {
+            int id = previousIds[index];
+            if (id == -1) {
+                continue;
+            }
+            long key = previousKeys[index];
+            int slot = hashLong(key) & longGroupMask;
+            while (longGroupIds[slot] != -1) {
+                slot = (slot + 1) & longGroupMask;
+            }
+            longGroupKeys[slot] = key;
+            longGroupIds[slot] = id;
+        }
+    }
+
+    private int longGroupGet(long key)
+    {
+        int slot = hashLong(key) & longGroupMask;
+        while (true) {
+            int id = longGroupIds[slot];
+            if (id == -1 || longGroupKeys[slot] == key) {
+                return id;
+            }
+            slot = (slot + 1) & longGroupMask;
+        }
+    }
+
+    private static int hashLong(long key)
+    {
+        long hash = key ^ (key >>> 33);
+        hash *= 0xFF51AFD7ED558CCDL;
+        hash ^= hash >>> 33;
+        hash *= 0xC4CEB9FE1A85EC53L;
+        hash ^= hash >>> 33;
+        return (int) hash;
     }
 
     private void assignLongPairGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
