@@ -25,8 +25,10 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -46,6 +48,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -101,6 +104,8 @@ public class BenchmarkOperatorComparison
     private List<Page> scanValues;
     private List<Page> scanTwoKey;
     private List<Page> scanThreeKey;
+    private List<Page> scanStringLowCard;
+    private List<Page> scanStringHighCard;
 
     private Allocator allocator;
 
@@ -126,6 +131,9 @@ public class BenchmarkOperatorComparison
                 row -> row % 1024, row -> row % 64, row -> row});
         scanThreeKey = multiColumnPages(SCAN_ROWS, new LongUnaryOperator[] {
                 row -> row % 256, row -> row % 16, row -> row % 16, row -> row});
+        // String group key (UTF-8) + long payload — the flat/string grouping path.
+        scanStringLowCard = stringKeyPages(SCAN_ROWS, GROUPS_LOW);
+        scanStringHighCard = stringKeyPages(SCAN_ROWS, 65_536);
     }
 
     @Setup(Level.Invocation)
@@ -205,6 +213,23 @@ public class BenchmarkOperatorComparison
                 allocator, List.of(0, 1, 2), List.of(new Sum(3)), new TableOperator(4, scanThreeKey)), 4));
     }
 
+    // ---- String-keyed grouped aggregation: sum(payload) GROUP BY string_key ----
+    // Output is #groups rows (small), consumed directly — no terminal sum (can't sum a string key).
+
+    @Benchmark
+    public void groupSumStringLowCardinality()
+    {
+        consume(new GroupedAggregationOperator(
+                allocator, List.of(0), List.of(new Sum(1)), new TableOperator(2, scanStringLowCard)));
+    }
+
+    @Benchmark
+    public void groupSumStringHighCardinality()
+    {
+        consume(new GroupedAggregationOperator(
+                allocator, List.of(0), List.of(new Sum(1)), new TableOperator(2, scanStringHighCard)));
+    }
+
     // ---- Global aggregation: sum(value) ----
 
     @Benchmark
@@ -275,6 +300,32 @@ public class BenchmarkOperatorComparison
                 vectors[column] = new I64Vector(values);
             }
             pages.add(Page.values(rows, vectors, Mask.all(rows)));
+        }
+        return pages;
+    }
+
+    private List<Page> stringKeyPages(int totalRows, int distinctKeys)
+    {
+        byte[][] keys = new byte[distinctKeys][];
+        for (int key = 0; key < distinctKeys; key++) {
+            keys[key] = ("key-" + key).getBytes(StandardCharsets.UTF_8);
+        }
+        List<Page> pages = new ArrayList<>();
+        for (int start = 0; start < totalRows; start += batch) {
+            int rows = Math.min(batch, totalRows - start);
+            int byteCapacity = 0;
+            for (int index = 0; index < rows; index++) {
+                byteCapacity += keys[(start + index) % distinctKeys].length;
+            }
+            BinaryVector keyVector = new BinaryVector(rows, byteCapacity);
+            keyVector.addTrait(Utf8Traits.UTF8_STRING);
+            keyVector.addTrait(Utf8Traits.ASCII_ONLY);
+            long[] payload = new long[rows];
+            for (int index = 0; index < rows; index++) {
+                keyVector.setBytes(index, keys[(start + index) % distinctKeys]);
+                payload[index] = start + index;
+            }
+            pages.add(Page.values(rows, new Vector[] {keyVector, new I64Vector(payload)}, Mask.all(rows)));
         }
         return pages;
     }
