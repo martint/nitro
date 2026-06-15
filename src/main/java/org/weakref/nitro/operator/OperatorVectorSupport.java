@@ -233,12 +233,25 @@ final class OperatorVectorSupport
             index += Long.BYTES;
         }
 
-        long tail = 0;
-        int shift = 0;
-        while (index < end) {
-            tail |= (bytes[index] & 0xFFL) << shift;
-            shift += Byte.SIZE;
-            index++;
+        int remaining = end - index;
+        long tail;
+        if (remaining == 0) {
+            tail = 0;
+        }
+        else if (index + Long.BYTES <= bytes.length) {
+            // One masked word for the sub-word tail when 8 bytes are readable; the mask keeps the leading
+            // `remaining` bytes (LONG_HANDLE is little-endian) so this is bit-identical to the byte loop and
+            // the hash value is unchanged. Falls back to the byte loop only at the very end of the array.
+            tail = (long) LONG_HANDLE.get(bytes, index) & ((1L << (remaining << 3)) - 1);
+        }
+        else {
+            tail = 0;
+            int shift = 0;
+            while (index < end) {
+                tail |= (bytes[index] & 0xFFL) << shift;
+                shift += Byte.SIZE;
+                index++;
+            }
         }
         hash ^= mix64(tail);
         hash = fmix64(hash);
@@ -247,10 +260,34 @@ final class OperatorVectorSupport
 
     static boolean binaryEquals(byte[] left, int leftOffset, byte[] right, int rightOffset, int length)
     {
+        // Long strings: the vectorized intrinsic wins. Short strings -- the common grouping/join key case --
+        // are compared a machine word at a time; a byte-at-a-time loop over 5-8 byte keys dominated the
+        // string-grouping profile.
         if (length >= 16) {
             return Arrays.mismatch(left, leftOffset, leftOffset + length, right, rightOffset, rightOffset + length) == -1;
         }
-        for (int index = 0; index < length; index++) {
+        int index = 0;
+        while (index + Long.BYTES <= length) {
+            if ((long) LONG_HANDLE.get(left, leftOffset + index) != (long) LONG_HANDLE.get(right, rightOffset + index)) {
+                return false;
+            }
+            index += Long.BYTES;
+        }
+        int remaining = length - index;
+        if (remaining == 0) {
+            return true;
+        }
+        // A single masked word settles the sub-word tail when 8 bytes are readable on both sides (true unless
+        // the value sits at the very end of its backing array); otherwise fall back to the byte compare. The
+        // mask keeps the leading `remaining` bytes (LONG_HANDLE is little-endian), so neighbouring bytes in
+        // the over-read never affect the result.
+        if (leftOffset + index + Long.BYTES <= left.length && rightOffset + index + Long.BYTES <= right.length) {
+            long mask = (1L << (remaining << 3)) - 1;
+            long leftWord = (long) LONG_HANDLE.get(left, leftOffset + index) & mask;
+            long rightWord = (long) LONG_HANDLE.get(right, rightOffset + index) & mask;
+            return leftWord == rightWord;
+        }
+        for (; index < length; index++) {
             if (left[leftOffset + index] != right[rightOffset + index]) {
                 return false;
             }
