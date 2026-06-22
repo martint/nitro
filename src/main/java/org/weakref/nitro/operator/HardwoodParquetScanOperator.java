@@ -93,7 +93,8 @@ public final class HardwoodParquetScanOperator
                 return;
             }
 
-            Hardwood hardwood = Hardwood.create();
+            String threadsProperty = System.getProperty("nitro.hardwood.threads");
+            Hardwood hardwood = threadsProperty != null ? Hardwood.create(Integer.parseInt(threadsProperty)) : Hardwood.create();
             MultiFileParquetReader parquet = hardwood.openAll(files);
             this.columns = columns.stream()
                     .map(name -> resolveColumn(parquet.getFileSchema().getField(name), name))

@@ -47,6 +47,13 @@ public final class NitroParquetScanOperator
     // Match TrinoParquetScanOperator's default so the per-batch operator overhead (Output objects, pooled
     // vector alloc/release) is amortized over the same number of batches in an apples-to-apples comparison.
     private static final int MAX_BATCH_ROWS = Integer.getInteger("nitro.parquet.scan.maxBatchRows", 10_000);
+    // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
+    // above the scan pushes a survivor mask via constrain(), decode the remaining columns only for survivor rows
+    // (skip-decode + scatter to position) instead of every row. Mirrors TrinoParquetScanOperator's masked path.
+    private static final boolean LATE_MATERIALIZATION = Boolean.parseBoolean(System.getProperty("nitro.parquet.lateMaterialization", "false"));
+    // Skip-decode a constrained column only when at most this fraction of rows survive; above it the per-survivor-run
+    // skip path (re-walking the RLE id stream) costs more than a single bulk decode, so full-decode instead.
+    private static final int SKIP_DECODE_MAX_SURVIVOR_PERCENT = Integer.getInteger("nitro.parquet.skipMaxSurvivorPercent", 20);
 
     private final Allocator allocator;
     private final List<String> columnNames;
@@ -85,6 +92,24 @@ public final class NitroParquetScanOperator
     private Batch currentBatch;
     private Vector[] currentValues;
     private Vector[] currentNulls;
+
+    // Late-materialization batch state: the active mask (narrowed by constrain) and per-column resolution cache for
+    // the current batch. A column is decoded full when the mask is still all(), or skip-decoded at survivors + scattered
+    // to position once the mask has been narrowed; unresolved columns are advanced past the batch when it closes.
+    private int lazyCount;
+    private Mask lazyMask;
+    private boolean lazyConstrained;
+    private boolean[] lazyResolved;
+    private long[] lazyScratchLong = new long[0];
+    private int[] lazyScratchInt = new int[0];
+    private boolean[] lazyScratchNull = new boolean[0];
+    private int[] lazyIdentity = new int[0];
+    // Per-column decode path, decided once (on the column's first resolution) and fixed for the whole scan: a reader
+    // must use one page path (full vs skip) for its entire life, never mixing them across batches. The decision can't
+    // be recomputed per batch from lazyConstrained, because a short-circuiting predicate may pull a filter column in
+    // some batches (full, before constrain) and leave it unpulled in others (where constrain has since fired).
+    private boolean[] lazyPathDecided;
+    private boolean[] lazySkipColumn;
 
     public NitroParquetScanOperator(Allocator allocator, List<Path> paths, List<String> columns)
     {
@@ -172,7 +197,7 @@ public final class NitroParquetScanOperator
         }
         int count = toIntExact(Math.min(MAX_BATCH_ROWS, totalRows - nextRow));
         nextRow += count;
-        return fullBatch(count);
+        return LATE_MATERIALIZATION ? lazyBatch(count) : fullBatch(count);
     }
 
     /** Decode windows until one yields surviving rows (or input is exhausted). Returns whether rows are available. */
@@ -251,6 +276,243 @@ public final class NitroParquetScanOperator
     }
 
     /**
+     * Late-materialization batch: defer per-column decode. A column pulled while the mask is still {@code all()}
+     * decodes every row; once a filter above the scan narrows the mask via {@link #constrain}, columns pulled
+     * afterwards skip-decode only the survivor rows and scatter them back to position. Any column never pulled is
+     * advanced past the batch when it closes so every reader stays aligned to the batch boundary.
+     */
+    private Batch lazyBatch(int count)
+    {
+        int columnCount = readers.length;
+        lazyCount = count;
+        lazyConstrained = false;
+        lazyMask = allocator.allocateAllMask(ALLOCATION_CONTEXT, count);
+        if (lazyResolved == null || lazyResolved.length < columnCount) {
+            lazyResolved = new boolean[columnCount];
+            lazyPathDecided = new boolean[columnCount];  // per-scan, decided once and never reset
+            lazySkipColumn = new boolean[columnCount];
+        }
+        else {
+            java.util.Arrays.fill(lazyResolved, 0, columnCount, false);
+        }
+        currentValues = new Vector[columnCount];
+        currentNulls = new Vector[columnCount];
+        Output[] outputs = new Output[columnCount];
+        for (int c = 0; c < columnCount; c++) {
+            int columnIndex = c;
+            outputs[c] = new Output(
+                    nullable[c] ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES),
+                    stream -> {
+                        resolveLazyColumn(columnIndex);
+                        return switch (stream) {
+                            case VALUES -> currentValues[columnIndex];
+                            case NULLS -> requireNonNull(currentNulls[columnIndex], "NULLS stream is absent");
+                            default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
+                        };
+                    },
+                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
+                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+        }
+        Batch batch = new Batch(
+                lazyMask,
+                mask -> {
+                    lazyMask = mask;
+                    lazyConstrained = true;
+                },
+                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
+                () -> advanceUnresolvedColumns(),
+                outputs);
+        currentBatch = batch;
+        return batch;
+    }
+
+    /**
+     * The fixed decode path for {@code column}, decided on its first resolution and stable for the whole scan: skip
+     * (survivors only) iff it was first pulled while the batch was constrained, for a non-binary column. Persisting
+     * the decision keeps a reader on one page path even when a short-circuiting predicate leaves a filter column
+     * unpulled in some batches (where it would otherwise be skip-advanced after constrain has fired).
+     */
+    private boolean useSkipDecode(int column)
+    {
+        if (!lazyPathDecided[column]) {
+            lazyPathDecided[column] = true;
+            // Skip-decode only a non-binary column under a SELECTIVE constraint: when most rows survive, the per-run
+            // skip overhead exceeds a bulk full decode (mirrors SkipDecode's "not selective enough to pay for"
+            // guard). Decided once, on first touch, and fixed for the scan so a reader keeps one page path.
+            boolean selective = lazyConstrained && !lazyMask.all()
+                    && (long) lazyMask.selectedCount() * 100 <= (long) lazyCount * SKIP_DECODE_MAX_SURVIVOR_PERCENT;
+            lazySkipColumn[column] = selective && readers[column].kind() != ColumnReader.Kind.BINARY;
+        }
+        return lazySkipColumn[column];
+    }
+
+    /** Resolve (decode) one column for the current late-materialization batch, honoring the active mask. */
+    private void resolveLazyColumn(int column)
+    {
+        if (lazyResolved[column]) {
+            return;
+        }
+        lazyResolved[column] = true;
+        int count = lazyCount;
+        ColumnReader reader = readers[column];
+        boolean isNullable = nullable[column];
+        BooleanVector nullVector = isNullable
+                ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, count, BooleanVector::new)
+                : null;
+        boolean[] nulls = nullVector == null ? null : nullVector.values();
+
+        // Path stability: a column decodes full only when this batch was never constrained (filter columns, read
+        // before constrain; and every column of an unfiltered scan). Once constrain has fired, remaining columns
+        // skip-decode — even if all rows happened to survive — so a reader never mixes the full and skip page paths
+        // across batches (which would corrupt its cursor state). Binary has no skip path here, so it stays full;
+        // a binary column is therefore always read before constrain or never (filter columns are numeric).
+        if (!useSkipDecode(column)) {
+            currentValues[column] = decodeFullColumn(reader, nulls, count);
+            currentNulls[column] = nullVector;
+            return;
+        }
+
+        // Skip-decode only the survivor rows (densely) then scatter to position. Non-survivor positions are left at
+        // their default — the active mask excludes them, so no consumer reads them.
+        int survivorCount;
+        int[] survivors;
+        if (lazyMask.all()) {
+            survivorCount = count;
+            survivors = identitySurvivors(count);
+        }
+        else {
+            survivorCount = lazyMask.selectedCount();
+            survivors = lazyMask.selectedPositions();
+        }
+        if (reader.kind() == ColumnReader.Kind.INT) {
+            ensureLazyScratch(survivorCount, false);
+            reader.readSelectedInts(survivors, survivorCount, count, lazyScratchInt, isNullable ? lazyScratchNull : null);
+            I32Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, count, I32Vector::new);
+            int[] out = vector.values();
+            for (int j = 0; j < survivorCount; j++) {
+                out[survivors[j]] = lazyScratchInt[j];
+            }
+            if (nulls != null) {
+                for (int j = 0; j < survivorCount; j++) {
+                    nulls[survivors[j]] = lazyScratchNull[j];
+                }
+            }
+            currentValues[column] = vector;
+        }
+        else {
+            ensureLazyScratch(survivorCount, true);
+            reader.readSelectedLongs(survivors, survivorCount, count, lazyScratchLong, isNullable ? lazyScratchNull : null);
+            I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, count, I64Vector::new);
+            long[] out = vector.values();
+            for (int j = 0; j < survivorCount; j++) {
+                out[survivors[j]] = lazyScratchLong[j];
+            }
+            if (nulls != null) {
+                for (int j = 0; j < survivorCount; j++) {
+                    nulls[survivors[j]] = lazyScratchNull[j];
+                }
+            }
+            currentValues[column] = vector;
+        }
+        currentNulls[column] = nullVector;
+    }
+
+    private Vector decodeFullColumn(ColumnReader reader, boolean[] nulls, int count)
+    {
+        return switch (reader.kind()) {
+            case INT -> {
+                I32Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, count, I32Vector::new);
+                reader.readInts(vector.values(), nulls, count);
+                yield vector;
+            }
+            case LONG -> {
+                I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, count, I64Vector::new);
+                reader.readLongs(vector.values(), nulls, count);
+                yield vector;
+            }
+            case BINARY -> {
+                org.weakref.nitro.data.BinaryVector vector = reader.readBinary(nulls, count);
+                vector.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+                yield allocator.adopt(ALLOCATION_CONTEXT, vector);
+            }
+        };
+    }
+
+    /** Advance any column reader not pulled this batch past {@code lazyCount} rows so it stays batch-aligned. */
+    private void advanceUnresolvedColumns()
+    {
+        if (lazyResolved == null) {
+            return;
+        }
+        for (int c = 0; c < readers.length; c++) {
+            if (lazyResolved[c]) {
+                continue;
+            }
+            lazyResolved[c] = true;
+            ColumnReader reader = readers[c];
+            // Advance via the same page path the column would have used if pulled, so the reader never mixes the full
+            // and skip paths across batches: binary and unconstrained-batch columns full-decode and discard; columns
+            // of a constrained batch skip past with an empty survivor set.
+            boolean longKind = reader.kind() == ColumnReader.Kind.LONG;
+            // Advance via the column's fixed page path, DECIDING it here if this is its first touch (same rule as
+            // resolveLazyColumn). A reader must use one page path for its whole life; deciding on first advance — even
+            // when that is a constrained batch — keeps a later resolve on the same (skip) path instead of mixing.
+            boolean skip = useSkipDecode(c);
+            if (!skip) {
+                if (reader.kind() == ColumnReader.Kind.BINARY) {
+                    reader.readBinary(nullable[c] ? new boolean[lazyCount] : null, lazyCount);
+                }
+                else {
+                    ensureLazyScratch(lazyCount, longKind);
+                    if (longKind) {
+                        reader.readLongs(lazyScratchLong, null, lazyCount);
+                    }
+                    else {
+                        reader.readInts(lazyScratchInt, null, lazyCount);
+                    }
+                }
+            }
+            else if (longKind) {
+                ensureLazyScratch(0, true);
+                reader.readSelectedLongs(EMPTY, 0, lazyCount, lazyScratchLong, null);
+            }
+            else {
+                ensureLazyScratch(0, false);
+                reader.readSelectedInts(EMPTY, 0, lazyCount, lazyScratchInt, null);
+            }
+        }
+    }
+
+    /** A reusable identity array {@code [0, 1, ..., count)} used as the survivor set when a constrained batch kept all rows. */
+    private int[] identitySurvivors(int count)
+    {
+        if (lazyIdentity.length < count) {
+            int[] identity = new int[count];
+            for (int i = 0; i < count; i++) {
+                identity[i] = i;
+            }
+            lazyIdentity = identity;
+        }
+        return lazyIdentity;
+    }
+
+    private void ensureLazyScratch(int survivorCount, boolean longKind)
+    {
+        if (longKind) {
+            if (lazyScratchLong.length < survivorCount) {
+                lazyScratchLong = new long[survivorCount];
+            }
+        }
+        else if (lazyScratchInt.length < survivorCount) {
+            lazyScratchInt = new int[survivorCount];
+        }
+        if (lazyScratchNull.length < survivorCount) {
+            lazyScratchNull = new boolean[survivorCount];
+        }
+    }
+
+    /**
      * Decode one filter window with progressive narrowing, leaving its surviving rows densely packed in the
      * {@code window*} scratch for {@link #emitSlice} to hand out in output-sized batches. The filter columns are
      * applied in selectivity order (fewest distinct build values first): the most selective one is full-decoded,
@@ -316,10 +578,9 @@ public final class NitroParquetScanOperator
             advanceColumn(order[i], count);
         }
 
-        // Decode the payload (non-filter) columns at the final survivors, reading DIRECTLY into the dense window
-        // buffer (no separate gather copy — the survivor set is already the final one). Always via the skip path:
-        // the bulk-vs-skip decision must NOT vary per window, because mixing readSelected (skip) and readInts/
-        // readLongs (full) on the same reader leaves incompatible page-cursor state and corrupts a later window.
+        // Decode the payload (non-filter) columns at the final survivors. In skip mode, read DIRECTLY into the dense
+        // window buffer (the survivor set is already final); in bulk mode (weak DF), full-decode the window then gather.
+        // The skip-vs-bulk choice is fixed for the scan (dfMode), so a reader never mixes the two page paths.
         for (int c = 0; c < columnCount; c++) {
             if (filtersByColumn[c] != null) {
                 continue;
@@ -580,7 +841,14 @@ public final class NitroParquetScanOperator
     }
 
     @Override
-    public void constrain(Mask mask) {}
+    public void constrain(Mask mask)
+    {
+        // Late materialization: narrow the active mask so columns not yet pulled decode only for survivor rows.
+        if (lazyMask != null) {
+            lazyMask = mask;
+            lazyConstrained = true;
+        }
+    }
 
     @Override
     public boolean supportsRetainedBatches()

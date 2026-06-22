@@ -5796,7 +5796,7 @@ public final class TrinoTpcdsParquetSupport
                         namedFactoryStep("q45.filter.project.sales", filterAndProjectFactory(
                                 45_5,
                                 Optional.of(query45ZipOrItemPredicate(zipType)),
-                                List.of(field(7, addressTypes.get(1)), field(11, itemTypes.get(1)), scaledCents(field(3, factTypes.get(3)), factTypes.get(3))),
+                                List.of(field(8, addressTypes.get(2)), field(7, addressTypes.get(1)), scaledCents(field(3, factTypes.get(3)), factTypes.get(3))),
                                 query45OutputTypes(tables))),
                         namedFactoryStep("q45.group.final", hashAggregationFactory(
                                 45_6,
@@ -5814,9 +5814,11 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query45OutputTypes(TpcdsParquetTables tables)
     {
-        Type cityType = tableColumnTypes(tables, "customer_address", List.of("ca_city")).getFirst();
-        Type itemIdType = tableColumnTypes(tables, "item", List.of("i_item_id")).getFirst();
-        return List.of(cityType, itemIdType, BIGINT);
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_city", "ca_zip"));
+        Type cityType = addressTypes.get(0);
+        Type zipType = addressTypes.get(1);
+        // Canonical q45 groups by and outputs (ca_zip, ca_city), not (ca_city, i_item_id).
+        return List.of(zipType, cityType, BIGINT);
     }
 
     private PipelinePlan query62Plan(TpcdsParquetTables tables)

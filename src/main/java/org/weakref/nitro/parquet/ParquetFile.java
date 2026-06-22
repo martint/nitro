@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.nio.ByteOrder.BIG_ENDIAN;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
 
 /**
@@ -51,6 +52,9 @@ public final class ParquetFile
     static final ValueLayout.OfInt LE_INT = ValueLayout.JAVA_INT_UNALIGNED.withOrder(LITTLE_ENDIAN);
     static final ValueLayout.OfLong LE_LONG = ValueLayout.JAVA_LONG_UNALIGNED.withOrder(LITTLE_ENDIAN);
     static final ValueLayout.OfDouble LE_DOUBLE = ValueLayout.JAVA_DOUBLE_UNALIGNED.withOrder(LITTLE_ENDIAN);
+    // Big-endian unaligned long: short decimals (FIXED_LEN_BYTE_ARRAY) are stored big-endian, so a value's bytes
+    // are the most significant bytes of a word load and an arithmetic shift recovers the sign-extended unscaled long.
+    static final ValueLayout.OfLong BE_LONG = ValueLayout.JAVA_LONG_UNALIGNED.withOrder(BIG_ENDIAN);
 
     private static final int MAGIC = 0x31524150; // "PAR1" little-endian
 

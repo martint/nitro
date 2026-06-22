@@ -79,6 +79,16 @@ final class TpcdsParquetSupport
     // Route eligible (all BIGINT/short-decimal) fact and dimension scans through SkipDecodeScanOperator so pushed
     // dynamic filters skip-decode payload columns for survivors. On by default; disable with -Dnitro.skipScan=false.
     private static final boolean SKIP_DECODE_SCAN = Boolean.parseBoolean(System.getProperty("nitro.skipScan", "true"));
+    // Route every scan through the Nitro-native Parquet decoder (full decode, no DF/skip) instead of the
+    // Trino-vendored reader. For evaluating org.weakref.nitro.parquet end-to-end.
+    private static final boolean USE_NITRO_READER = Boolean.parseBoolean(System.getProperty("nitro.parquet.useNitroReader", "false"));
+    // When true, the Nitro reader also takes DF-eligible integer fact scans (its own DF+skip-decode), fully
+    // replacing SkipDecodeScanOperator. CORRECT but currently 2-4x slower on selective DFs (lacks the
+    // per-dict-entry filter cache + run-coalesced skip), so OFF by default: the hybrid keeps the tuned operator.
+    private static final boolean NITRO_SKIP = Boolean.parseBoolean(System.getProperty("nitro.parquet.nitroSkip", "false"));
+    // Audit hook: counts table-scan helper calls (one per table reference) while a query operator tree is built,
+    // so a harness can compare per-query scan counts against the canonical Trino EXPLAIN plan.
+    public static final java.util.concurrent.atomic.AtomicInteger SCAN_COUNT = new java.util.concurrent.atomic.AtomicInteger();
     private static final ThreadLocal<OperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
 
     private TpcdsParquetSupport() {}
@@ -570,9 +580,19 @@ final class TpcdsParquetSupport
                         tables,
                         "customer",
                         anyOf(2, 1, 2, 6, 8, 9, 12),
-                        new String[] {"c_customer_sk", "c_current_addr_sk", "c_birth_month", "c_birth_year"},
-                        0, 1, 3),
+                        new String[] {"c_customer_sk", "c_current_addr_sk", "c_birth_month", "c_birth_year", "c_current_cdemo_sk"},
+                        0, 1, 3, 4),
                 0);
+        // Canonical q18 joins customer_demographics a second time (cd2) on c_current_cdemo_sk with no filter — a
+        // referential-integrity no-op that Trino's plan keeps as a separate scan. Replicate it, then project back to
+        // the pre-join layout so downstream column indices are unchanged.
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                17,
+                scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk"),
+                0);
+        sales = projectInputs(allocator, primitiveRegistry, sales, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
@@ -695,13 +715,13 @@ final class TpcdsParquetSupport
                 allocator,
                 new EvaluationPlan(List.of(
                         new Assignment(scale, new Literal(100L), AllMask.ALL),
-                        new Assignment(scaledQuantity, new Call("multiply_i64", List.of(
+                        new Assignment(scaledQuantity, new Call("multiply", List.of(
                                 new Reference(new Input(4), Stream.VALUES),
                                 new Reference(scale, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(scaledBirthYear, new Call("multiply_i64", List.of(
+                        new Assignment(scaledBirthYear, new Call("multiply", List.of(
                                 new Reference(new Input(16), Stream.VALUES),
                                 new Reference(scale, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(scaledDependentCount, new Call("multiply_i64", List.of(
+                        new Assignment(scaledDependentCount, new Call("multiply", List.of(
                                 new Reference(new Input(13), Stream.VALUES),
                                 new Reference(scale, Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -4180,12 +4200,18 @@ final class TpcdsParquetSupport
 
     private static Operator factScan(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
-        // Velox-style dynamic-filtering path: a fact scan that applies build-side key filters pushed down by the
-        // hash joins, skip-decoding payload columns for survivors. On by default (BIGINT/short-decimal columns only);
-        // disable with -Dnitro.skipScan=false.
+        SCAN_COUNT.incrementAndGet();
+        // nitroSkip: let the Nitro reader take DF-eligible scans too (its own DF+skip-decode). Off by default.
+        if (USE_NITRO_READER && NITRO_SKIP) {
+            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
+        }
+        // Default hybrid: the tuned skip-decode operator keeps DF-eligible (BIGINT/short-decimal) fact scans.
         if (SKIP_DECODE_SCAN
                 && org.weakref.nitro.operator.SkipDecodeScanOperator.isEligible(tables.tableFiles(tableName), List.of(columns))) {
             return new org.weakref.nitro.operator.SkipDecodeScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
+        }
+        if (USE_NITRO_READER) {
+            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
         }
         return multiFileScan(
                 tables.tableFiles(tableName),
@@ -4195,6 +4221,10 @@ final class TpcdsParquetSupport
 
     private static Operator customerScan(Allocator allocator, TpcdsParquetTables tables, String... columns)
     {
+        SCAN_COUNT.incrementAndGet();
+        if (USE_NITRO_READER) {
+            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles("customer"), List.of(columns));
+        }
         return multiFileScan(
                 tables.tableFiles("customer"),
                 columns.length,
@@ -4203,11 +4233,16 @@ final class TpcdsParquetSupport
 
     private static Operator scannedTable(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
-        // Velox-style dynamic-filtering path for all-integer dimension/fact scans (see factScan); falls back to the
-        // ordinary scan for any table whose requested columns aren't all flat INT64/INT32.
+        SCAN_COUNT.incrementAndGet();
+        if (USE_NITRO_READER && NITRO_SKIP) {
+            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
+        }
         if (SKIP_DECODE_SCAN
                 && org.weakref.nitro.operator.SkipDecodeScanOperator.isEligible(tables.tableFiles(tableName), List.of(columns))) {
             return new org.weakref.nitro.operator.SkipDecodeScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
+        }
+        if (USE_NITRO_READER) {
+            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
         }
         return multiFileScan(
                 tables.tableFiles(tableName),
@@ -4217,6 +4252,10 @@ final class TpcdsParquetSupport
 
     private static Operator itemScan(Allocator allocator, TpcdsParquetTables tables, String... columns)
     {
+        SCAN_COUNT.incrementAndGet();
+        if (USE_NITRO_READER) {
+            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles("item"), List.of(columns));
+        }
         return multiFileScan(
                 tables.tableFiles("item"),
                 columns.length,

@@ -292,7 +292,16 @@ class FlatKeyLayout
         int[] globalIds = new int[entryCount];
         byte[] data = dictionary.data();
         for (int entry = 0; entry < entryCount; entry++) {
-            globalIds[entry] = interner.intern(data, dictionary.startOffset(entry), dictionary.length(entry));
+            int so = dictionary.startOffset(entry);
+            int len = dictionary.length(entry);
+            // A dictionary may carry more value slots than its ids reference (over-allocated/phantom entries whose
+            // offsets are unset); those are never indexed by a live id, so map them to the byte-compare fallback (-1)
+            // rather than interning out-of-range bytes.
+            if (len < 0 || so < 0 || so + len > data.length) {
+                globalIds[entry] = -1;
+                continue;
+            }
+            globalIds[entry] = interner.intern(data, so, len);
         }
         batchEntryGlobalId[fieldIndex] = globalIds;
         batchEntryGlobalIdDict[fieldIndex] = dictionaryValues;

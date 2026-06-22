@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.weakref.nitro.parquet.ParquetFile.BE_LONG;
 import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
 import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
 
@@ -59,6 +60,11 @@ public final class ColumnReader
 
     private record Chunk(MemorySegment segment, ColumnMetaData metadata) {}
 
+    // Dictionary materialization is a pure gather (out[i] = dictionary[ids[i]]); a Vector-API gather (hardware
+    // vpgather) measurably beats the scalar loop on the dict-heavy scans (q82 -3%, q24/q50 -1.6%, byte-identical).
+    private static final jdk.incubator.vector.VectorSpecies<Long> LONG_SPECIES = jdk.incubator.vector.LongVector.SPECIES_PREFERRED;
+    private static final jdk.incubator.vector.VectorSpecies<Integer> INT_SPECIES = jdk.incubator.vector.IntVector.SPECIES_PREFERRED;
+
     private final Kind kind;
     private final boolean optional;
     private final Type physicalType;
@@ -76,6 +82,16 @@ public final class ColumnReader
     private boolean pageDefStreaming;
     private int defPageCursor;
     private int[] runDef = new int[0];
+    // Streaming skip for nullable PLAIN (and FLBA-decimal) pages: defRle co-advances and plainValueCursor tracks the
+    // running non-null count, which is the index into the densely-stored plain value body (nulls store no value).
+    private boolean pagePlainStreaming;
+    private int plainValueCursor;
+    // Whole-page bulk decode + gather beats per-survivor-run skip-decode only when a page is BOTH dense (lots survive,
+    // so bulk decodes little extra) AND fragmented into short runs (skip would pay its per-run RLE-skip cost many
+    // times). A dense-but-contiguous page (one long run, e.g. a date-clustered range) stays on the cheap skip path.
+    private static final int SKIP_PAGE_DENSE_PERCENT = Integer.getInteger("nitro.parquet.skipPageDensePercent", 50);
+    private static final int SKIP_PAGE_MIN_AVG_RUN = Integer.getInteger("nitro.parquet.skipPageMinAvgRun", 100);
+    private boolean pageForceWholeDecode;
 
     // reusable buffers (grow to high-water mark). The decompression target is an off-heap segment from a
     // confined arena so the snappy FFM downcall is native->native (no heap marshalling); the SIMD unpacker
@@ -476,16 +492,37 @@ public final class ColumnReader
                     }
                     defPageCursor = runStartPage + runLen;
                 }
-                else if (pageDict) {
+                else if (pagePlainStreaming) {
+                    int gap = runStartPage - defPageCursor;
+                    if (gap > 0) {
+                        plainValueCursor += defRle.skipCountingOnes(gap);
+                    }
+                    int nonNullInRun = defRle.readRunCountingOnes(runDef, runLen);
+                    if (nonNullInRun == runLen) {
+                        readPlainLongsAt(out, produced, plainValueCursor, runLen);
+                        plainValueCursor += runLen;
+                        if (nullsOut != null) {
+                            Arrays.fill(nullsOut, produced, produced + runLen, false);
+                        }
+                    }
+                    else if (nonNullInRun == 0) {
+                        Arrays.fill(out, produced, produced + runLen, 0L);
+                        if (nullsOut != null) {
+                            Arrays.fill(nullsOut, produced, produced + runLen, true);
+                        }
+                    }
+                    else {
+                        materializeStreamingPlainRunLong(out, produced, runLen, nullsOut);
+                    }
+                    defPageCursor = runStartPage + runLen;
+                }
+                else if (pageDict && !pageFullyDecoded) {
                     int gap = runStartPage - pageValueCursor;
                     if (gap > 0) {
                         rle.skip(gap);
                     }
                     rle.read(idBuffer, 0, runLen);
-                    long[] dict = dictionaryLongs;
-                    for (int k = 0; k < runLen; k++) {
-                        out[produced + k] = dict[idBuffer[k]];
-                    }
+                    gatherLongs(dictionaryLongs, idBuffer, 0, out, produced, runLen);
                     if (nullsOut != null) {
                         Arrays.fill(nullsOut, produced, produced + runLen, false);
                     }
@@ -502,6 +539,14 @@ public final class ColumnReader
                 int tail = chunkEndPage - defPageCursor;
                 if (tail > 0) {
                     rle.skip(defRle.skipCountingOnes(tail));
+                    defPageCursor = chunkEndPage;
+                }
+            }
+            else if (pagePlainStreaming) {
+                int chunkEndPage = pageCursor + pageRows;
+                int tail = chunkEndPage - defPageCursor;
+                if (tail > 0) {
+                    plainValueCursor += defRle.skipCountingOnes(tail);
                     defPageCursor = chunkEndPage;
                 }
             }
@@ -536,6 +581,45 @@ public final class ColumnReader
                 }
             }
         }
+    }
+
+    /** Read {@code n} consecutive plain LONG (or FLBA-decimal) values starting at non-null value index {@code valueIndex}. */
+    private void readPlainLongsAt(long[] out, int produced, int valueIndex, int n)
+    {
+        if (flbaDecimal) {
+            long off = pagePlainOffset + (long) valueIndex * typeLength;
+            for (int k = 0; k < n; k++) {
+                out[produced + k] = bigEndianSignedLong(pagePlainBody, off, typeLength);
+                off += typeLength;
+            }
+        }
+        else {
+            MemorySegment.copy(pagePlainBody, LE_LONG, pagePlainOffset + (long) valueIndex * 8, out, produced, n);
+        }
+    }
+
+    /** Materialize a streaming-plain LONG run that contains nulls: only non-null positions consume a plain value. */
+    private void materializeStreamingPlainRunLong(long[] out, int produced, int runLen, boolean[] nullsOut)
+    {
+        int valueIndex = plainValueCursor;
+        for (int k = 0; k < runLen; k++) {
+            if (runDef[k] == 0) {
+                out[produced + k] = 0;
+                if (nullsOut != null) {
+                    nullsOut[produced + k] = true;
+                }
+            }
+            else {
+                out[produced + k] = flbaDecimal
+                        ? bigEndianSignedLong(pagePlainBody, pagePlainOffset + (long) valueIndex * typeLength, typeLength)
+                        : pagePlainBody.get(LE_LONG, pagePlainOffset + (long) valueIndex * 8);
+                valueIndex++;
+                if (nullsOut != null) {
+                    nullsOut[produced + k] = false;
+                }
+            }
+        }
+        plainValueCursor = valueIndex;
     }
 
     /** Cold long materialization paths (whole-page-decoded, FLBA-decimal plain, plain) — kept out of the hot loop. */
@@ -616,16 +700,37 @@ public final class ColumnReader
                     }
                     defPageCursor = runStartPage + runLen;
                 }
-                else if (pageDict) {
+                else if (pagePlainStreaming) {
+                    int gap = runStartPage - defPageCursor;
+                    if (gap > 0) {
+                        plainValueCursor += defRle.skipCountingOnes(gap);
+                    }
+                    int nonNullInRun = defRle.readRunCountingOnes(runDef, runLen);
+                    if (nonNullInRun == runLen) {
+                        MemorySegment.copy(pagePlainBody, LE_INT, pagePlainOffset + (long) plainValueCursor * 4, out, produced, runLen);
+                        plainValueCursor += runLen;
+                        if (nullsOut != null) {
+                            Arrays.fill(nullsOut, produced, produced + runLen, false);
+                        }
+                    }
+                    else if (nonNullInRun == 0) {
+                        Arrays.fill(out, produced, produced + runLen, 0);
+                        if (nullsOut != null) {
+                            Arrays.fill(nullsOut, produced, produced + runLen, true);
+                        }
+                    }
+                    else {
+                        materializeStreamingPlainRunInt(out, produced, runLen, nullsOut);
+                    }
+                    defPageCursor = runStartPage + runLen;
+                }
+                else if (pageDict && !pageFullyDecoded) {
                     int gap = runStartPage - pageValueCursor;
                     if (gap > 0) {
                         rle.skip(gap);
                     }
                     rle.read(idBuffer, 0, runLen);
-                    int[] dict = dictionaryInts;
-                    for (int k = 0; k < runLen; k++) {
-                        out[produced + k] = dict[idBuffer[k]];
-                    }
+                    gatherInts(dictionaryInts, idBuffer, 0, out, produced, runLen);
                     if (nullsOut != null) {
                         Arrays.fill(nullsOut, produced, produced + runLen, false);
                     }
@@ -645,6 +750,14 @@ public final class ColumnReader
                     defPageCursor = chunkEndPage;
                 }
             }
+            else if (pagePlainStreaming) {
+                int chunkEndPage = pageCursor + pageRows;
+                int tail = chunkEndPage - defPageCursor;
+                if (tail > 0) {
+                    plainValueCursor += defRle.skipCountingOnes(tail);
+                    defPageCursor = chunkEndPage;
+                }
+            }
             else if (!pageFullyDecoded && pageDict) {
                 int end = pageCursor + pageRows;
                 if (end > pageValueCursor) {
@@ -655,6 +768,28 @@ public final class ColumnReader
             pageCursor += pageRows;
             batchCursor = pageEnd;
         }
+    }
+
+    /** Materialize a streaming-plain INT run that contains nulls: only non-null positions consume a plain value. */
+    private void materializeStreamingPlainRunInt(int[] out, int produced, int runLen, boolean[] nullsOut)
+    {
+        int valueIndex = plainValueCursor;
+        for (int k = 0; k < runLen; k++) {
+            if (runDef[k] == 0) {
+                out[produced + k] = 0;
+                if (nullsOut != null) {
+                    nullsOut[produced + k] = true;
+                }
+            }
+            else {
+                out[produced + k] = pagePlainBody.get(LE_INT, pagePlainOffset + (long) valueIndex * 4);
+                valueIndex++;
+                if (nullsOut != null) {
+                    nullsOut[produced + k] = false;
+                }
+            }
+        }
+        plainValueCursor = valueIndex;
     }
 
     /** INT counterpart of {@link #materializeStreamingRunLong}. */
@@ -707,11 +842,27 @@ public final class ColumnReader
             throw new IllegalStateException("Ran out of Parquet values (skip)");
         }
         int rowsThisBatch = Math.min(pendingNumValues, batchRows - batchCursor);
-        boolean hasSurvivor = sel < count && survivors[sel] < batchCursor + rowsThisBatch;
+        int pageEnd = batchCursor + rowsThisBatch;
+        boolean hasSurvivor = sel < count && survivors[sel] < pageEnd;
         if (!hasSurvivor && pendingNumValues <= batchRows - batchCursor) {
             pagePosition = pendingNextPosition; // skip the whole page: advance past it, never decompress
             return pendingNumValues;
         }
+        // Count survivors AND survivor runs in this page. Bulk-decode only a dense, fragmented page (many short runs):
+        // there the per-run skip cost dominates. A dense contiguous page (few long runs, e.g. a clustered date range)
+        // keeps the skip path. Decided per page (immune to date-clustered DFs where whole windows are in/out of range).
+        int survivorsInPage = 0;
+        int runCount = 0;
+        int prev = -2;
+        for (int s = sel; s < count && survivors[s] < pageEnd; s++) {
+            if (survivors[s] != prev + 1) {
+                runCount++;
+            }
+            prev = survivors[s];
+            survivorsInPage++;
+        }
+        pageForceWholeDecode = (long) survivorsInPage * 100 >= (long) rowsThisBatch * SKIP_PAGE_DENSE_PERCENT
+                && (long) survivorsInPage < (long) runCount * SKIP_PAGE_MIN_AVG_RUN;
         CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
         loadDataPageForSkip(decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec), pendingHeader);
         pagePosition = pendingNextPosition;
@@ -769,10 +920,10 @@ public final class ColumnReader
         long offset = 0;
         int nonNullCount = valueCount;
         pageDict = encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY;
-        // A nullable dict page takes the streaming skip path: defRle is left positioned at the definition-level
-        // stream and co-advances with the id reader (no per-level array, no prefix). Other nullable pages decode
-        // their levels into defBuffer for the whole-page gather.
-        boolean streamingDef = false;
+        // A nullable non-binary page takes a streaming skip path: defRle is left positioned at the definition-level
+        // stream and co-advances run-by-run, so survivor values are read straight from the dictionary-id stream
+        // (dict) or the dense plain value body (plain) without a per-level prefix or a whole-page decode.
+        boolean streaming = false;
         long defStreamOffset = 0;
         if (optional) {
             int defLength = body.get(LE_INT, 0);
@@ -781,13 +932,14 @@ public final class ColumnReader
             // Null-free pages (one RLE run of 1s) are the common case; detect them in O(1) and skip the per-level
             // decode. Only pages that actually contain nulls pay more.
             if (!rle.consumeIfAllOnes(valueCount)) {
-                if (pageDict && kind != Kind.BINARY) {
-                    // Stream the levels run-by-run; nonNullCount stays unknown (the page is routed to the streaming
-                    // skip path regardless, which handles null-free runs as its O(1) fast case).
+                if (kind != Kind.BINARY && !pageForceWholeDecode) {
+                    // Stream the levels run-by-run; nonNullCount stays unknown (the page is routed to a streaming skip
+                    // path regardless, which handles null-free runs as its O(1) fast case).
                     defStreamOffset = offset;
-                    streamingDef = true;
+                    streaming = true;
                 }
                 else {
+                    // Whole-page decode (binary, or a dense page forced to bulk) needs the per-level array + non-null count.
                     rle.read(defBuffer, 0, valueCount);
                     nonNullCount = 0;
                     for (int i = 0; i < valueCount; i++) {
@@ -797,20 +949,30 @@ public final class ColumnReader
             }
             offset += defLength;
         }
-        boolean nullFree = !streamingDef && nonNullCount == valueCount;
+        boolean nullFree = !streaming && nonNullCount == valueCount;
         pageDefStreaming = false;
-        if (streamingDef) {
-            // Nullable dict page (Trino-style streaming): position the id reader at the id stream and the def reader at
-            // the def stream; readSelected co-advances them per survivor run without a pageIdIndex prefix.
-            int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
-            offset += 1;
-            rle.init(body, offset, bitWidth);
+        pagePlainStreaming = false;
+        if (streaming) {
             defRle.init(body, defStreamOffset, 1);
             defPageCursor = 0;
-            pageDefStreaming = true;
             pageFullyDecoded = false;
+            if (pageDict) {
+                // Nullable dict page (Trino-style streaming): position the id reader at the id stream; readSelected
+                // co-advances it with defRle per survivor run without a pageIdIndex prefix.
+                int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
+                offset += 1;
+                rle.init(body, offset, bitWidth);
+                pageDefStreaming = true;
+            }
+            else {
+                // Nullable plain page: survivors index the dense plain value body by their running non-null count.
+                pagePlainBody = body;
+                pagePlainOffset = offset;
+                plainValueCursor = 0;
+                pagePlainStreaming = true;
+            }
         }
-        else if (nullFree && kind != Kind.BINARY) {
+        else if (!pageForceWholeDecode && nullFree && kind != Kind.BINARY) {
             // Null-free non-binary: the page position maps 1:1 to the value stream, so survivors read lazily.
             if (pageDict) {
                 int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
@@ -981,13 +1143,45 @@ public final class ColumnReader
         }
     }
 
+    /** Vectorized dictionary gather: {@code out[outOffset+i] = dict[ids[idOffset+i]]} for {@code i} in [0, n). */
+    private static void gatherLongs(long[] dict, int[] ids, int idOffset, long[] out, int outOffset, int n)
+    {
+        int i = 0;
+        int bound = LONG_SPECIES.loopBound(n);
+        for (; i < bound; i += LONG_SPECIES.length()) {
+            jdk.incubator.vector.LongVector.fromArray(LONG_SPECIES, dict, 0, ids, idOffset + i).intoArray(out, outOffset + i);
+        }
+        for (; i < n; i++) {
+            out[outOffset + i] = dict[ids[idOffset + i]];
+        }
+    }
+
+    /** Vectorized dictionary gather: {@code out[outOffset+i] = dict[ids[idOffset+i]]} for {@code i} in [0, n). */
+    private static void gatherInts(int[] dict, int[] ids, int idOffset, int[] out, int outOffset, int n)
+    {
+        int i = 0;
+        int bound = INT_SPECIES.loopBound(n);
+        for (; i < bound; i += INT_SPECIES.length()) {
+            jdk.incubator.vector.IntVector.fromArray(INT_SPECIES, dict, 0, ids, idOffset + i).intoArray(out, outOffset + i);
+        }
+        for (; i < n; i++) {
+            out[outOffset + i] = dict[ids[idOffset + i]];
+        }
+    }
+
     private static long bigEndianSignedLong(MemorySegment segment, long offset, int length)
     {
+        int shift = 64 - (length << 3);
+        if (offset + 8 <= segment.byteSize()) {
+            // One big-endian word load: the value's `length` bytes are the most significant bytes of the word, so an
+            // arithmetic right shift sign-extends them and discards the trailing bytes of the following value.
+            return segment.get(BE_LONG, offset) >> shift;
+        }
+        // Tail within 8 bytes of the segment end: read a byte at a time so the load stays in bounds.
         long value = 0;
         for (int i = 0; i < length; i++) {
             value = (value << 8) | (segment.get(ValueLayout.JAVA_BYTE, offset + i) & 0xFF);
         }
-        int shift = 64 - length * 8;
         return value << shift >> shift; // sign-extend from length*8 bits
     }
 
@@ -1083,11 +1277,7 @@ public final class ColumnReader
         if (kind == Kind.INT) {
             int[] dictionary = dictionaryInts;
             if (nullFree) {
-                int[] ids = idBuffer;
-                int[] out = pageInts;
-                for (int i = 0; i < nonNullCount; i++) {
-                    out[i] = dictionary[ids[i]];
-                }
+                gatherInts(dictionary, idBuffer, 0, pageInts, 0, nonNullCount);
                 if (optional) {
                     Arrays.fill(pageNulls, 0, pageValueCount, false);
                 }
@@ -1109,11 +1299,7 @@ public final class ColumnReader
         else {
             long[] dictionary = dictionaryLongs;
             if (nullFree) {
-                int[] ids = idBuffer;
-                long[] out = pageLongs;
-                for (int i = 0; i < nonNullCount; i++) {
-                    out[i] = dictionary[ids[i]];
-                }
+                gatherLongs(dictionary, idBuffer, 0, pageLongs, 0, nonNullCount);
                 if (optional) {
                     Arrays.fill(pageNulls, 0, pageValueCount, false);
                 }
