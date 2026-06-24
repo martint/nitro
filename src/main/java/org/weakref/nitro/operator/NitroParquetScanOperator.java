@@ -928,6 +928,35 @@ public final class NitroParquetScanOperator
         if (currentBatch != null) {
             currentBatch.close();
             currentBatch = null;
+            releaseColumnVectors();
+        }
+    }
+
+    /**
+     * Return the closed batch's per-column vectors to the allocator pool. A consumer that takes ownership of a
+     * column transfers it out of this context first, so releasing the vector here is then a no-op; columns the
+     * consumer only read in place (for example a {@code TopN} that copies individual rows and keeps no column
+     * reference) would otherwise stay pinned for the life of the scan, growing without bound on a wide
+     * {@code select *}. Releasing on close caps the scan's live decode buffers at a single batch and lets the
+     * pool reuse them for the next one.
+     */
+    private void releaseColumnVectors()
+    {
+        if (currentValues != null) {
+            for (int c = 0; c < currentValues.length; c++) {
+                if (currentValues[c] != null) {
+                    allocator.release(ALLOCATION_CONTEXT, currentValues[c]);
+                    currentValues[c] = null;
+                }
+            }
+        }
+        if (currentNulls != null) {
+            for (int c = 0; c < currentNulls.length; c++) {
+                if (currentNulls[c] != null) {
+                    allocator.release(ALLOCATION_CONTEXT, currentNulls[c]);
+                    currentNulls[c] = null;
+                }
+            }
         }
     }
 }
