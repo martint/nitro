@@ -209,19 +209,21 @@ class FlatKeyLayout
             }
             Vector dictionaryValues = dictionary.values();
             dictionaryHashedIds[index] = dictionary.ids();
-            // The dictionary base is shared across grouping-set expansions and probe batches, so its
-            // per-entry hashes are computed once per distinct dictionary identity and reused. Index by
-            // the dictionary id at hash() time instead of re-hashing the (variable-width) value.
-            if (dictionaryHashedValues[index] != dictionaryValues || dictionaryEntryHashes[index] == null) {
-                int distinctCount = dictionaryValues.length();
-                FlatTypeHandler handler = handlers[index];
-                long[] entryHashes = new long[distinctCount];
-                for (int id = 0; id < distinctCount; id++) {
-                    entryHashes[id] = handler.hashInput(dictionaryValues, id);
-                }
-                dictionaryEntryHashes[index] = entryHashes;
-                dictionaryHashedValues[index] = dictionaryValues;
+            // Compute the per-entry hash for every distinct dictionary value once and index it by dictionary id at
+            // hash() time, instead of re-hashing the (variable-width) value per row. This is recomputed every batch:
+            // the value vector cannot be cached by identity across batches because the allocator pools vector
+            // instances, so the same instance can carry different content in a later batch (e.g. a hash-join probe
+            // passthrough wrapped in a dictionary) -- a stale cache would hash equal keys differently and split groups.
+            if (dictionaryEntryHashes[index] == null || dictionaryEntryHashes[index].length < dictionaryValues.length()) {
+                dictionaryEntryHashes[index] = new long[dictionaryValues.length()];
             }
+            int distinctCount = dictionaryValues.length();
+            FlatTypeHandler handler = handlers[index];
+            long[] entryHashes = dictionaryEntryHashes[index];
+            for (int id = 0; id < distinctCount; id++) {
+                entryHashes[id] = handler.hashInput(dictionaryValues, id);
+            }
+            dictionaryHashedValues[index] = dictionaryValues;
 
             // Intern this dictionary's entries to GLOBAL value ids (stable across batches and dictionary
             // identities) so id-based equality works for the whole persistent group table, not just within one
