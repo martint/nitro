@@ -253,8 +253,7 @@ public final class NitroParquetScanOperator
                     yield vector;
                 }
                 case BINARY -> {
-                    org.weakref.nitro.data.BinaryVector vector = reader.readBinary(nulls, count);
-                    vector.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+                    org.weakref.nitro.data.Vector vector = reader.readBinary(nulls, count);
                     yield allocator.adopt(ALLOCATION_CONTEXT, vector);
                 }
             };
@@ -473,8 +472,7 @@ public final class NitroParquetScanOperator
                 yield vector;
             }
             case BINARY -> {
-                org.weakref.nitro.data.BinaryVector vector = reader.readBinary(nulls, count);
-                vector.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+                org.weakref.nitro.data.Vector vector = reader.readBinary(nulls, count);
                 yield allocator.adopt(ALLOCATION_CONTEXT, vector);
             }
         };

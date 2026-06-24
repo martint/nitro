@@ -104,6 +104,15 @@ public final class ColumnReader
     // reusable accumulators for assembling a batch's BinaryVector across pages
     private int[] binaryOutOffsets = new int[0];
     private byte[] binaryOutData = new byte[0];
+    private int[] binaryBatchIds = new int[0];
+    // Deferred binary-dictionary decode: a dict-encoded BINARY page records its row-aligned dictionary ids here
+    // (sentinel 0 at null positions; nulls live in pageNulls) instead of eagerly expanding entries into pageBytes,
+    // so a single-dictionary batch is emitted as a DictionaryVector and the per-row byte materialization is skipped.
+    private int[] pageDictIds = new int[0];
+    private boolean pageBinaryDeferred;
+    // The chunk dictionary materialized as a BinaryVector, cached by generation so a DictionaryVector can wrap a
+    // stable instance across batches and a flat fallback can expand ids of an earlier generation after a chunk change.
+    private final java.util.HashMap<Integer, org.weakref.nitro.data.BinaryVector> dictionaryVectorCache = new java.util.HashMap<>();
 
     // current chunk dictionary
     private int[] dictionaryInts;
@@ -415,38 +424,127 @@ public final class ColumnReader
         return acceptById;
     }
 
-    /** Build a BinaryVector of {@code count} positions; nulls (if any) into {@code nullsOut} (may be null). */
-    public org.weakref.nitro.data.BinaryVector readBinary(boolean[] nullsOut, int count)
+    /**
+     * Read {@code count} binary positions. For a non-null column whose batch is fully dictionary-encoded under a
+     * single dictionary, returns a {@link org.weakref.nitro.data.DictionaryVector} (ids + the parquet dictionary) so
+     * downstream filters/grouping evaluate per dictionary entry instead of per row — the encoding Trino's reader
+     * preserves. Otherwise (nullable, a plain page, or a batch crossing dictionaries) returns a flat
+     * {@link org.weakref.nitro.data.BinaryVector}; nulls (if any) go into {@code nullsOut}.
+     */
+    public org.weakref.nitro.data.Vector readBinary(boolean[] nullsOut, int count)
     {
         if (binaryOutOffsets.length < count + 1) {
             binaryOutOffsets = new int[count + 1];
         }
+        if (binaryBatchIds.length < count) {
+            binaryBatchIds = new int[count];
+        }
+        boolean dictionaryEligible = !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary");
+        int batchGeneration = -1;
         int produced = 0;
         int dataLength = 0;
+        boolean flat = false;
         binaryOutOffsets[0] = 0;
         while (produced < count) {
             if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
                 throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
             }
             int n = Math.min(pageValueCount - pageCursor, count - produced);
-            int runStart = pageByteOffsets[pageCursor];
-            int runBytes = pageByteOffsets[pageCursor + n] - runStart;
-            if (binaryOutData.length < dataLength + runBytes) {
-                binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + runBytes));
+            boolean pageIsDictionary = pageBinaryDeferred;
+            if (!flat && dictionaryEligible && pageIsDictionary && (batchGeneration == -1 || dictionaryGeneration == batchGeneration)) {
+                // Dictionary path: the page recorded row-aligned ids; carry them without materializing bytes.
+                batchGeneration = dictionaryGeneration;
+                System.arraycopy(pageDictIds, pageCursor, binaryBatchIds, produced, n);
             }
-            System.arraycopy(pageBytes, runStart, binaryOutData, dataLength, runBytes);
-            int shift = dataLength - runStart;
-            for (int j = 1; j <= n; j++) {
-                binaryOutOffsets[produced + j] = pageByteOffsets[pageCursor + j] + shift;
+            else {
+                if (!flat) {
+                    // A plain page or a dictionary change ends the dictionary batch: materialize the ids gathered so
+                    // far [0, produced) into flat bytes, then continue flat for the rest of the batch.
+                    flat = true;
+                    dataLength = spillDictionaryIdsToFlat(batchGeneration, produced, nullsOut);
+                }
+                dataLength = appendBinaryRunToFlat(pageIsDictionary, pageCursor, n, produced, dataLength, nullsOut);
             }
             if (nullsOut != null) {
                 System.arraycopy(pageNulls, pageCursor, nullsOut, produced, n);
             }
-            dataLength += runBytes;
             pageCursor += n;
             produced += n;
         }
-        return new org.weakref.nitro.data.BinaryVector(count, Arrays.copyOf(binaryOutOffsets, count + 1), Arrays.copyOf(binaryOutData, dataLength));
+        if (!flat) {
+            return new org.weakref.nitro.data.DictionaryVector(Arrays.copyOf(binaryBatchIds, count), dictionaryVectorCache.get(batchGeneration));
+        }
+        org.weakref.nitro.data.BinaryVector result = new org.weakref.nitro.data.BinaryVector(count, Arrays.copyOf(binaryOutOffsets, count + 1), Arrays.copyOf(binaryOutData, dataLength));
+        result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+        return result;
+    }
+
+    /**
+     * Expand the already-gathered dictionary ids {@code binaryBatchIds[0, produced)} into flat bytes at the head of
+     * {@code binaryOutData}/{@code binaryOutOffsets}, using the dictionary of {@code generation}. Null positions (per
+     * {@code nullsOut}, when present) emit a zero-length entry, matching the eager flat layout. Returns the byte length.
+     */
+    private int spillDictionaryIdsToFlat(int generation, int produced, boolean[] nullsOut)
+    {
+        binaryOutOffsets[0] = 0;
+        if (produced == 0) {
+            return 0;
+        }
+        org.weakref.nitro.data.BinaryVector dictionary = dictionaryVectorCache.get(generation);
+        int[] dictionaryOffsets = dictionary.offsets();
+        byte[] dictionaryData = dictionary.data();
+        int dataLength = 0;
+        for (int i = 0; i < produced; i++) {
+            if (nullsOut == null || !nullsOut[i]) {
+                int id = binaryBatchIds[i];
+                int start = dictionaryOffsets[id];
+                int length = dictionaryOffsets[id + 1] - start;
+                if (binaryOutData.length < dataLength + length) {
+                    binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                }
+                System.arraycopy(dictionaryData, start, binaryOutData, dataLength, length);
+                dataLength += length;
+            }
+            binaryOutOffsets[i + 1] = dataLength;
+        }
+        return dataLength;
+    }
+
+    /**
+     * Append {@code n} flat positions starting at {@code pageCursor} to {@code binaryOutData}/{@code binaryOutOffsets}
+     * at output offset {@code produced}. A deferred dictionary page expands ids through the live chunk dictionary; a
+     * plain page copies its already-materialized {@code pageBytes}. Returns the updated byte length.
+     */
+    private int appendBinaryRunToFlat(boolean pageIsDictionary, int pageCursor, int n, int produced, int dataLength, boolean[] nullsOut)
+    {
+        if (pageIsDictionary) {
+            for (int j = 0; j < n; j++) {
+                int position = pageCursor + j;
+                if (nullsOut == null ? !(optional && pageNulls[position]) : !nullsOut[produced + j]) {
+                    int id = pageDictIds[position];
+                    int start = dictionaryByteOffsets[id];
+                    int length = dictionaryByteOffsets[id + 1] - start;
+                    if (binaryOutData.length < dataLength + length) {
+                        binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                    }
+                    System.arraycopy(dictionaryBytes, start, binaryOutData, dataLength, length);
+                    dataLength += length;
+                }
+                binaryOutOffsets[produced + j + 1] = dataLength;
+            }
+            return dataLength;
+        }
+        int runStart = pageByteOffsets[pageCursor];
+        int runBytes = pageByteOffsets[pageCursor + n] - runStart;
+        if (binaryOutData.length < dataLength + runBytes) {
+            binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + runBytes));
+        }
+        System.arraycopy(pageBytes, runStart, binaryOutData, dataLength, runBytes);
+        int shift = dataLength - runStart;
+        for (int j = 1; j <= n; j++) {
+            binaryOutOffsets[produced + j] = pageByteOffsets[pageCursor + j] + shift;
+        }
+        return dataLength + runBytes;
     }
 
     /** Skip-decode: fill {@code count} survivor positions (batch-relative, sorted, within the next {@code batchRows}) into {@code out}. */
@@ -1101,9 +1199,14 @@ public final class ColumnReader
         return decompressSegment.asSlice(0, uncompressedSize + SLACK);
     }
 
+    // Bumped on every dictionary page; a binary batch can only be emitted as a DictionaryVector if every page it
+    // spans shares one dictionary (i.e. the generation does not change while reading it).
+    private int dictionaryGeneration;
+
     private void decodeDictionary(MemorySegment body, int numValues)
     {
         dictionarySize = numValues;
+        dictionaryGeneration++;
         if (kind == Kind.INT) {
             if (dictionaryInts == null || dictionaryInts.length < numValues) {
                 dictionaryInts = new int[numValues];
@@ -1149,6 +1252,20 @@ public final class ColumnReader
                 cursor += length;
             }
             dictionaryByteOffsets[numValues] = out;
+            // Snapshot the dictionary as a BinaryVector keyed by this generation. dictionaryBytes/Offsets are reused
+            // across chunks, so the snapshot must copy; it is then shared by every DictionaryVector emitted for this
+            // chunk (a stable identity downstream dict-aware operators can key on).
+            org.weakref.nitro.data.BinaryVector dictionaryVector = new org.weakref.nitro.data.BinaryVector(
+                    numValues,
+                    Arrays.copyOf(dictionaryByteOffsets, numValues + 1),
+                    Arrays.copyOf(dictionaryBytes, out));
+            dictionaryVector.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+            dictionaryVectorCache.put(dictionaryGeneration, dictionaryVector);
+            // Keep only the few most recent generations. A batch spans at most one chunk boundary (row groups are far
+            // larger than a batch), so emission needs the current dictionary and a flat fallback needs at most the one
+            // the batch started under. Without this the cache would retain every chunk's dictionary for the life of the
+            // scan -- unbounded for a many-column scan over many row groups.
+            dictionaryVectorCache.keySet().removeIf(generation -> generation < dictionaryGeneration - 3);
         }
     }
 
@@ -1259,7 +1376,7 @@ public final class ColumnReader
                 }
             }
             else if (kind == Kind.BINARY) {
-                gatherDictionaryBinary(nonNullCount);
+                scatterDictionaryBinaryIds(nonNullCount);
             }
             else {
                 gatherDictionary(nonNullCount);
@@ -1268,6 +1385,7 @@ public final class ColumnReader
         else if (encoding == Encoding.PLAIN) {
             if (kind == Kind.BINARY) {
                 decodePlainBinary(body, offset, nonNullCount);
+                pageBinaryDeferred = false;
             }
             else {
                 decodePlain(body, offset, nonNullCount);
@@ -1404,6 +1522,40 @@ public final class ColumnReader
                 }
             }
         }
+    }
+
+    /**
+     * Deferred binary-dictionary decode for the full read path: record each position's dictionary id row-aligned in
+     * {@code pageDictIds} (sentinel 0 at null positions; nulls in {@code pageNulls}) and mark the page deferred,
+     * skipping the eager byte expansion {@link #gatherDictionaryBinary} performs. {@link #readBinary} either wraps
+     * these ids as a {@link org.weakref.nitro.data.DictionaryVector} or expands them on a flat fallback.
+     */
+    private void scatterDictionaryBinaryIds(int nonNullCount)
+    {
+        if (pageDictIds.length < pageValueCount) {
+            pageDictIds = new int[pageValueCount];
+        }
+        if (!optional || nonNullCount == pageValueCount) {
+            // Null-free page: idBuffer is already row-aligned (idBuffer[i] is the id at position i).
+            System.arraycopy(idBuffer, 0, pageDictIds, 0, pageValueCount);
+            if (optional) {
+                Arrays.fill(pageNulls, 0, pageValueCount, false);
+            }
+        }
+        else {
+            int idCursor = 0;
+            for (int i = 0; i < pageValueCount; i++) {
+                if (defBuffer[i] != 0) {
+                    pageDictIds[i] = idBuffer[idCursor++];
+                    pageNulls[i] = false;
+                }
+                else {
+                    pageDictIds[i] = 0;
+                    pageNulls[i] = true;
+                }
+            }
+        }
+        pageBinaryDeferred = true;
     }
 
     private void gatherDictionaryBinary(int nonNullCount)
