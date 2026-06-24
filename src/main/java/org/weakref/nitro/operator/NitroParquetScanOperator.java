@@ -238,6 +238,16 @@ public final class NitroParquetScanOperator
                     yield vector;
                 }
                 case LONG -> {
+                    if (reader.isDouble()) {
+                        org.weakref.nitro.data.F64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
+                        double[] values = vector.values();
+                        long[] bits = new long[count];
+                        reader.readLongs(bits, nulls, count);
+                        for (int i = 0; i < count; i++) {
+                            values[i] = Double.longBitsToDouble(bits[i]);
+                        }
+                        yield vector;
+                    }
                     I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, count, I64Vector::new);
                     reader.readLongs(vector.values(), nulls, count);
                     yield vector;
@@ -403,6 +413,21 @@ public final class NitroParquetScanOperator
         else {
             ensureLazyScratch(survivorCount, true);
             reader.readSelectedLongs(survivors, survivorCount, count, lazyScratchLong, isNullable ? lazyScratchNull : null);
+            if (reader.isDouble()) {
+                org.weakref.nitro.data.F64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
+                double[] out = vector.values();
+                for (int j = 0; j < survivorCount; j++) {
+                    out[survivors[j]] = Double.longBitsToDouble(lazyScratchLong[j]);
+                }
+                if (nulls != null) {
+                    for (int j = 0; j < survivorCount; j++) {
+                        nulls[survivors[j]] = lazyScratchNull[j];
+                    }
+                }
+                currentValues[column] = vector;
+                currentNulls[column] = nullVector;
+                return;
+            }
             I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, count, I64Vector::new);
             long[] out = vector.values();
             for (int j = 0; j < survivorCount; j++) {
@@ -418,6 +443,17 @@ public final class NitroParquetScanOperator
         currentNulls[column] = nullVector;
     }
 
+    /** Reinterpret {@code count} raw long bits (read through the long path for a DOUBLE column) into a double vector. */
+    private org.weakref.nitro.data.F64Vector longBitsToDoubles(long[] bits, int offset, int count)
+    {
+        org.weakref.nitro.data.F64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
+        double[] values = vector.values();
+        for (int i = 0; i < count; i++) {
+            values[i] = Double.longBitsToDouble(bits[offset + i]);
+        }
+        return vector;
+    }
+
     private Vector decodeFullColumn(ColumnReader reader, boolean[] nulls, int count)
     {
         return switch (reader.kind()) {
@@ -427,6 +463,11 @@ public final class NitroParquetScanOperator
                 yield vector;
             }
             case LONG -> {
+                if (reader.isDouble()) {
+                    long[] bits = new long[count];
+                    reader.readLongs(bits, nulls, count);
+                    yield longBitsToDoubles(bits, 0, count);
+                }
                 I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, count, I64Vector::new);
                 reader.readLongs(vector.values(), nulls, count);
                 yield vector;
@@ -635,6 +676,9 @@ public final class NitroParquetScanOperator
                 I32Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, sliceCount, I32Vector::new);
                 System.arraycopy(windowInt[c], start, vector.values(), 0, sliceCount);
                 valueVector = vector;
+            }
+            else if (readers[c].isDouble()) {
+                valueVector = longBitsToDoubles(windowLong[c], start, sliceCount);
             }
             else {
                 I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, sliceCount, I64Vector::new);

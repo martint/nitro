@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.MultiStageOperator;
+import org.weakref.nitro.operator.NitroParquetScanOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
@@ -720,19 +721,26 @@ public final class ClickBenchHitsSupport
 
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
     {
-        Function<Path, Operator> operatorFactory = switch (configuredReader()) {
-            case APACHE -> path -> new ParquetScanOperator(allocator, path, List.of(columns));
-            case TRINO -> path -> new TrinoParquetScanOperator(allocator, path, List.of(columns));
-        };
         try {
+            // The Nitro reader is multi-file aware, so it takes the whole directory's files directly rather than via
+            // MultiStageOperator. This is the native Nitro scan layer (matching the TPC-DS path), not Trino's reader.
+            if (configuredReader() == ReaderKind.NITRO) {
+                List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
+                return new NitroParquetScanOperator(allocator, paths, List.of(columns));
+            }
+            Function<Path, Operator> operatorFactory = switch (configuredReader()) {
+                case APACHE -> path -> new ParquetScanOperator(allocator, path, List.of(columns));
+                case TRINO -> path -> new TrinoParquetScanOperator(allocator, path, List.of(columns));
+                case NITRO -> throw new AssertionError("handled above");
+            };
             if (Files.isDirectory(file)) {
                 return new MultiStageOperator(columns.length, parquetFiles(file), operatorFactory);
             }
+            return operatorFactory.apply(file);
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
         }
-        return operatorFactory.apply(file);
     }
 
     private static ReaderKind configuredReader()
@@ -740,6 +748,7 @@ public final class ClickBenchHitsSupport
         return switch (System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY, "trino").strip().toLowerCase()) {
             case "apache" -> ReaderKind.APACHE;
             case "trino" -> ReaderKind.TRINO;
+            case "nitro" -> ReaderKind.NITRO;
             default -> throw new IllegalArgumentException("Unsupported ClickBench Parquet reader: " + System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY));
         };
     }
@@ -1355,5 +1364,6 @@ public final class ClickBenchHitsSupport
     {
         APACHE,
         TRINO,
+        NITRO,
     }
 }

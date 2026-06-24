@@ -167,6 +167,9 @@ public final class ColumnReader
         this.kind = switch (physicalType) {
             case INT32 -> Kind.INT;
             case INT64 -> Kind.LONG;
+            // DOUBLE is 8 little-endian bytes, bit-identical to INT64 in PLAIN/dictionary encoding; decode it through
+            // the long path (raw bits) and let the scan reinterpret to a double vector (see isDouble()).
+            case DOUBLE -> Kind.LONG;
             // Short decimal (precision <= 18) stored as fixed bytes decodes to an unscaled long.
             case FIXED_LEN_BYTE_ARRAY -> decimal ? Kind.LONG : Kind.BINARY;
             case BYTE_ARRAY -> Kind.BINARY;
@@ -185,6 +188,12 @@ public final class ColumnReader
     public Kind kind()
     {
         return kind;
+    }
+
+    /** A DOUBLE column is decoded through the long path as raw bits; the scan reinterprets them to doubles. */
+    public boolean isDouble()
+    {
+        return physicalType == Type.DOUBLE;
     }
 
     @Override
