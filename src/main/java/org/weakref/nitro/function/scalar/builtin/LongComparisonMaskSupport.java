@@ -49,24 +49,30 @@ final class LongComparisonMaskSupport
      * null. {@code values} on each side carries the encoding; nulls/errors are separate streams handled by the caller,
      * so a null dictionary entry's (garbage) result is simply never read.
      */
-    private static DictionaryComparison tryDictionaryComparison(Vector left, Vector right, ComparisonKernel kernel)
+    private static DictionaryComparison tryDictionaryComparison(Vector left, Vector right, ComparisonKernel kernel, int positionCount)
     {
         if (left instanceof DictionaryVector dictionary && singleRunLong(right) != null) {
             long literal = singleRunLong(right);
-            return perEntry(dictionary, literal, kernel, true);
+            return perEntry(dictionary, literal, kernel, true, positionCount);
         }
         if (right instanceof DictionaryVector dictionary && singleRunLong(left) != null) {
             long literal = singleRunLong(left);
-            return perEntry(dictionary, literal, kernel, false);
+            return perEntry(dictionary, literal, kernel, false, positionCount);
         }
         return null;
     }
 
-    private static DictionaryComparison perEntry(DictionaryVector dictionary, long literal, ComparisonKernel kernel, boolean dictionaryOnLeft)
+    private static DictionaryComparison perEntry(DictionaryVector dictionary, long literal, ComparisonKernel kernel, boolean dictionaryOnLeft, int positionCount)
     {
         Vector entries = dictionary.values();
         if (!(entries instanceof I64Vector || entries instanceof I32Vector)) {
             return null;   // nested encodings are rare here; fall back to the per-row path
+        }
+        // Per-entry pays off only when there are fewer distinct entries than rows. A hash-join output wraps the whole
+        // build column in a DictionaryVector whose values() holds one entry per build row -- far more than a batch
+        // references -- so computing the comparison over every entry each batch is more work than the per-row path.
+        if (entries.length() > positionCount) {
+            return null;
         }
         VectorAccess.LongValues entryValues = VectorAccess.longValues(entries);
         int entryCount = entries.length();
@@ -208,7 +214,7 @@ final class LongComparisonMaskSupport
         VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
         VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
-        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel);
+        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
             return dictionaryMaskOutcome(comparison, mask, context, allocationContext, leftNulls, rightNulls, leftErrors, rightErrors);
         }
@@ -260,7 +266,7 @@ final class LongComparisonMaskSupport
         VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
         int[] truePositions = new int[mask.count()];
-        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel);
+        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
             int count = collectDictionary(comparison, true, mask, leftNulls, rightNulls, leftErrors, rightErrors, truePositions);
             return context.allocator().allocateSparseMask(allocationContext, truePositions, count, mask.size());
@@ -289,7 +295,7 @@ final class LongComparisonMaskSupport
         VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
         int[] falsePositions = new int[mask.count()];
-        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel);
+        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
             int count = collectDictionary(comparison, false, mask, leftNulls, rightNulls, leftErrors, rightErrors, falsePositions);
             return context.allocator().allocateSparseMask(allocationContext, falsePositions, count, mask.size());
@@ -317,7 +323,7 @@ final class LongComparisonMaskSupport
         VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
         VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
-        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel);
+        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
             boolean[] result = comparison.result();
             int[] ids = comparison.ids();
@@ -348,7 +354,7 @@ final class LongComparisonMaskSupport
         VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
         VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
 
-        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel);
+        DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
             boolean[] result = comparison.result();
             int[] ids = comparison.ids();
