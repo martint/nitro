@@ -74,7 +74,14 @@ class FlatKeyLayout
     // ceiling (or a non-dictionary input) stores/sees id -1 and falls back to value comparison, which is always
     // available because the value itself is still stored. batchEntryGlobalId[field][dictId] is this batch's
     // dictionary entry -> global id map, cached by dictionary identity in batchEntryGlobalIdDict.
-    private static final int VALUE_ID_CEILING = 1 << 20;
+    // Interning a string/binary key column to a dense id only pays when the column is low-cardinality enough that
+    // ids are reused: the dense-id grouping then beats per-row byte comparison. A high-cardinality key (distinct
+    // count approaching the row/group count, e.g. customer name/address) gets no reuse, so interning is pure
+    // overhead vs the value-comparison fallback. Overflow such columns early: above this ceiling the field drops to
+    // value comparison. 65536 keeps low/mid-card keys (categories, dimension names, and keys whose interned ids
+    // still enable the compact/array-mode group path) interned, while overflowing genuinely wide keys. Measured:
+    // TPC-H q10 7031->3448ms (2.0x), no regression on q18/q03/q67/q65/q37; a lower ceiling (1<<14) regressed q18/q03.
+    private static final int VALUE_ID_CEILING = Integer.getInteger("nitro.group.valueIdCeiling", 1 << 16);
     private ValueIdInterner[] fieldInterners;
     private int[][] batchEntryGlobalId;
     private Vector[] batchEntryGlobalIdDict;
