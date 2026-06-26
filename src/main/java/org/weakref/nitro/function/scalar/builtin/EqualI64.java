@@ -119,13 +119,13 @@ public final class EqualI64
     @Override
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, EqualI64::compareEqual, Mask.ComparisonOperator.EQUAL);
     }
 
     @Override
     public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, EqualI64::compareEqual, Mask.ComparisonOperator.EQUAL);
     }
 
     private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)

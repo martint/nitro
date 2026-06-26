@@ -312,10 +312,14 @@ final class LongComparisonMaskSupport
         return context.allocator().allocateSparseMask(allocationContext, falsePositions, falseIndex[0], mask.size());
     }
 
-    public static boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel)
+    public static boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
     {
         if (!supportsLongComparison(inputs)) {
             return false;
+        }
+
+        if (tryConstantComparisonInPlace(inputs, mask, operator, true)) {
+            return true;
         }
 
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
@@ -343,10 +347,14 @@ final class LongComparisonMaskSupport
         return true;
     }
 
-    public static boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel)
+    public static boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
     {
         if (!supportsLongComparison(inputs)) {
             return false;
+        }
+
+        if (tryConstantComparisonInPlace(inputs, mask, operator, false)) {
+            return true;
         }
 
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
@@ -372,6 +380,103 @@ final class LongComparisonMaskSupport
             return !kernel.test(leftValues.value(position), rightValues.value(position));
         });
         return true;
+    }
+
+    /**
+     * Fast path for the {@code column OPERATOR constant} filter shape: one operand is a flat integer column and the
+     * other a single-run (constant) literal, with both inputs null-free and error-free. The retain runs as a
+     * monomorphic array scan ({@link Mask#retainConstantComparison}) rather than the per-position value/null/error
+     * accessor lambdas of the general path. Returns {@code true} when it handled the mask, {@code false} to fall back.
+     *
+     * <p>{@code baseOperator} is the operator the kernel implements with the column on the left; the effective
+     * operator is derived by swapping operands when the constant is on the left and negating for a false mask.
+     */
+    private static boolean tryConstantComparisonInPlace(List<Streams> inputs, Mask mask, Mask.ComparisonOperator baseOperator, boolean wantTrue)
+    {
+        if (baseOperator == null) {
+            return false;
+        }
+
+        // Match the column-vs-constant shape with cheap checks (instanceof + single-run literal) before paying for the
+        // null/error-free scan, so a column-vs-column comparison falls back without scanning the null streams.
+        Vector left = inputs.get(0).values();
+        Vector right = inputs.get(1).values();
+
+        Vector column;
+        long literal;
+        Mask.ComparisonOperator operator;
+        Long rightConstant = singleRunLong(right);
+        if (rightConstant != null && isFlatInteger(left)) {
+            column = left;
+            literal = rightConstant;
+            operator = baseOperator;
+        }
+        else {
+            Long leftConstant = singleRunLong(left);
+            if (leftConstant == null || !isFlatInteger(right)) {
+                return false;
+            }
+            column = right;
+            literal = leftConstant;
+            operator = swapOperands(baseOperator);
+        }
+
+        if (!isNullAndErrorFree(inputs.get(0)) || !isNullAndErrorFree(inputs.get(1))) {
+            return false;
+        }
+
+        applyConstantComparison(mask, column, literal, effectiveOperator(operator, wantTrue));
+        return true;
+    }
+
+    private static boolean isNullAndErrorFree(Streams input)
+    {
+        return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS))
+                && VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+    }
+
+    private static boolean isFlatInteger(Vector vector)
+    {
+        return vector instanceof I32Vector || vector instanceof I64Vector;
+    }
+
+    private static void applyConstantComparison(Mask mask, Vector column, long literal, Mask.ComparisonOperator operator)
+    {
+        if (column instanceof I32Vector values) {
+            mask.retainConstantComparison(values.values(), literal, operator);
+        }
+        else {
+            mask.retainConstantComparison(((I64Vector) column).values(), literal, operator);
+        }
+    }
+
+    private static Mask.ComparisonOperator effectiveOperator(Mask.ComparisonOperator operator, boolean wantTrue)
+    {
+        return wantTrue ? operator : negate(operator);
+    }
+
+    private static Mask.ComparisonOperator negate(Mask.ComparisonOperator operator)
+    {
+        return switch (operator) {
+            case EQUAL -> Mask.ComparisonOperator.NOT_EQUAL;
+            case NOT_EQUAL -> Mask.ComparisonOperator.EQUAL;
+            case LESS_THAN -> Mask.ComparisonOperator.GREATER_THAN_OR_EQUAL;
+            case LESS_THAN_OR_EQUAL -> Mask.ComparisonOperator.GREATER_THAN;
+            case GREATER_THAN -> Mask.ComparisonOperator.LESS_THAN_OR_EQUAL;
+            case GREATER_THAN_OR_EQUAL -> Mask.ComparisonOperator.LESS_THAN;
+        };
+    }
+
+    private static Mask.ComparisonOperator swapOperands(Mask.ComparisonOperator operator)
+    {
+        return switch (operator) {
+            case EQUAL -> Mask.ComparisonOperator.EQUAL;
+            case NOT_EQUAL -> Mask.ComparisonOperator.NOT_EQUAL;
+            case LESS_THAN -> Mask.ComparisonOperator.GREATER_THAN;
+            case LESS_THAN_OR_EQUAL -> Mask.ComparisonOperator.GREATER_THAN_OR_EQUAL;
+            case GREATER_THAN -> Mask.ComparisonOperator.LESS_THAN;
+            case GREATER_THAN_OR_EQUAL -> Mask.ComparisonOperator.LESS_THAN_OR_EQUAL;
+        };
     }
 
     private static boolean supportsLongComparison(List<Streams> inputs)

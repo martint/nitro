@@ -125,13 +125,13 @@ public final class LessThanI64
     @Override
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
     }
 
     @Override
     public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
     }
 
     private static boolean apply(long leftValue, long rightValue)

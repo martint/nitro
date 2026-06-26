@@ -302,6 +302,145 @@ public class Mask
         setSelection(size, outputIndex, false);
     }
 
+    /** Comparison applied by {@link #retainConstantComparison}, in the form {@code column OPERATOR literal}. */
+    public enum ComparisonOperator
+    {
+        EQUAL, NOT_EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL
+    }
+
+    /**
+     * Retains the positions whose {@code values[position]} compares {@code true} against {@code literal} under
+     * {@code operator}. The inner loop is a monomorphic scan over the raw column array with a hoisted constant — no
+     * per-position {@link IntPredicate} or value-accessor virtual call — so a column-vs-constant filter (the common
+     * {@code AdvEngineID <> 0} shape) is evaluated at array speed instead of paying a megamorphic dispatch on every
+     * one of millions of rows. The caller is responsible for restricting this to null-free, error-free inputs (a
+     * null or error must be excluded from both the true and the false mask, which this scan does not check).
+     */
+    public void retainConstantComparison(long[] values, long literal, ComparisonOperator operator)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        switch (operator) {
+            case EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] == literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case NOT_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] != literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] < literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] <= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] > literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] >= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
+    /** Integer-column overload of {@link #retainConstantComparison(long[], long, ComparisonOperator)}. */
+    public void retainConstantComparison(int[] values, long literal, ComparisonOperator operator)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        switch (operator) {
+            case EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] == literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case NOT_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] != literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] < literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] <= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] > literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] >= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
     public boolean anyTrue(int start, int end)
     {
         if (none() || end < start || end < 0 || start >= size) {
