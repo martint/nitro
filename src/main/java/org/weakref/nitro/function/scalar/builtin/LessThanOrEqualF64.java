@@ -39,6 +39,14 @@ public final class LessThanOrEqualF64
     }
 
     @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        // The comparison reads null/error streams directly (absent == all-false), so it does not need the
+        // evaluator to materialize an all-false companion stream per operand per batch (e.g. for a constant).
+        return false;
+    }
+
+    @Override
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return DoubleComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, LessThanOrEqualF64::lessThanOrEqual, Mask.ComparisonOperator.LESS_THAN_OR_EQUAL);

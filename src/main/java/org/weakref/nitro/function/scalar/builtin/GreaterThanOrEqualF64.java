@@ -39,6 +39,14 @@ public final class GreaterThanOrEqualF64
     }
 
     @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        // The comparison reads null/error streams directly (absent == all-false), so it does not need the
+        // evaluator to materialize an all-false companion stream per operand per batch (e.g. for a constant).
+        return false;
+    }
+
+    @Override
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return DoubleComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, GreaterThanOrEqualF64::greaterThanOrEqual, Mask.ComparisonOperator.GREATER_THAN_OR_EQUAL);

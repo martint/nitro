@@ -117,6 +117,14 @@ public final class EqualI64
     }
 
     @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        // The comparison reads null/error streams directly (absent == all-false), so it does not need the
+        // evaluator to materialize an all-false companion stream per operand per batch (e.g. for a constant).
+        return false;
+    }
+
+    @Override
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, EqualI64::compareEqual, Mask.ComparisonOperator.EQUAL);
