@@ -441,6 +441,94 @@ public class Mask
         setSelection(size, count, count == size);
     }
 
+    /** Double-column overload of {@link #retainConstantComparison(long[], long, ComparisonOperator)}. */
+    public void retainConstantComparison(double[] values, double literal, ComparisonOperator operator)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        switch (operator) {
+            case EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] == literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case NOT_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] != literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] < literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] <= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] > literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (values[position] >= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
+    /**
+     * Retains the positions whose dictionary id selects a {@code true} entry in {@code keep} — the predicate-over-
+     * dictionary narrow: the per-entry comparison result is computed once over the distinct values, and each row is
+     * a single {@code keep[ids[position]]} array lookup rather than a per-row value compare. A monomorphic loop, so
+     * a low-cardinality dictionary column filtered against a constant pays one compare per distinct value plus one
+     * lookup per row.
+     */
+    public void retainDictionaryComparison(int[] ids, boolean[] keep)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        for (int index = 0; index < iterations; index++) {
+            int position = dense ? index : buffer[index];
+            if (keep[ids[position]]) {
+                buffer[count++] = position;
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
     public boolean anyTrue(int start, int end)
     {
         if (none() || end < start || end < 0 || start >= size) {

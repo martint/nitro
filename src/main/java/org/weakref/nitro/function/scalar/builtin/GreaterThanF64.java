@@ -18,6 +18,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -30,8 +31,25 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "gt_f64")
 public final class GreaterThanF64
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
+    private static boolean greaterThan(double left, double right)
+    {
+        return left > right;
+    }
+
+    @Override
+    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return DoubleComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, GreaterThanF64::greaterThan, Mask.ComparisonOperator.GREATER_THAN);
+    }
+
+    @Override
+    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return DoubleComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, GreaterThanF64::greaterThan, Mask.ComparisonOperator.GREATER_THAN);
+    }
+
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GreaterThanF64");
 
     @Override
