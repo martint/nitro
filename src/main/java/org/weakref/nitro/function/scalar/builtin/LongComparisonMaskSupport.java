@@ -421,12 +421,31 @@ final class LongComparisonMaskSupport
             operator = swapOperands(baseOperator);
         }
 
-        if (!isNullAndErrorFree(inputs.get(0)) || !isNullAndErrorFree(inputs.get(1))) {
+        boolean columnOnLeft = column == left;
+        Streams columnInput = columnOnLeft ? inputs.get(0) : inputs.get(1);
+        Streams literalInput = columnOnLeft ? inputs.get(1) : inputs.get(0);
+
+        // The literal operand (a constant) must be null/error-free, and the column must be error-free. A nullable
+        // column is still handled monomorphically: null positions are excluded inside the scan via its null array.
+        if (!isNullAndErrorFree(literalInput) || !isErrorFree(columnInput)) {
             return false;
         }
+        boolean[] nulls = null;
+        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        if (!VectorAccess.isAllFalseNulls(columnNulls)) {
+            nulls = VectorAccess.flatBooleans(columnNulls);
+            if (nulls == null) {
+                return false;   // non-flat null encoding: fall back to the general per-position path
+            }
+        }
 
-        applyConstantComparison(mask, column, literal, effectiveOperator(operator, wantTrue));
+        applyConstantComparison(mask, column, literal, effectiveOperator(operator, wantTrue), nulls);
         return true;
+    }
+
+    private static boolean isErrorFree(Streams input)
+    {
+        return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
     }
 
     private static boolean isNullAndErrorFree(Streams input)
@@ -440,13 +459,13 @@ final class LongComparisonMaskSupport
         return vector instanceof I32Vector || vector instanceof I64Vector;
     }
 
-    private static void applyConstantComparison(Mask mask, Vector column, long literal, Mask.ComparisonOperator operator)
+    private static void applyConstantComparison(Mask mask, Vector column, long literal, Mask.ComparisonOperator operator, boolean[] nulls)
     {
         if (column instanceof I32Vector values) {
-            mask.retainConstantComparison(values.values(), literal, operator);
+            mask.retainConstantComparison(values.values(), literal, operator, nulls);
         }
         else {
-            mask.retainConstantComparison(((I64Vector) column).values(), literal, operator);
+            mask.retainConstantComparison(((I64Vector) column).values(), literal, operator, nulls);
         }
     }
 

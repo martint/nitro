@@ -236,6 +236,12 @@ public final class VectorAccess
         return vector instanceof F64Vector values ? values.values() : null;
     }
 
+    /** The raw backing array of a flat boolean vector (e.g. a null/error stream), or null for any other encoding. */
+    public static boolean[] flatBooleans(Vector vector)
+    {
+        return vector instanceof BooleanVector values ? values.values() : null;
+    }
+
     /**
      * True when {@code vector} is a single-value broadcast of a double — a literal materializes as an
      * {@link RleVector} with one run over a length-one {@link F64Vector}. Lets a binary kernel hoist a

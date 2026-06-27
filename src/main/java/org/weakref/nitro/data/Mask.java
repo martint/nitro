@@ -378,6 +378,79 @@ public class Mask
         setSelection(size, count, count == size);
     }
 
+    /**
+     * Null-aware variant of {@link #retainConstantComparison(long[], long, ComparisonOperator)}: a position whose
+     * {@code nulls[position]} is set evaluates to NULL and is excluded (a NULL is neither true nor false). The null
+     * check stays inside the monomorphic scan, so a nullable column-vs-constant filter avoids the per-position
+     * {@link IntPredicate}/null-accessor dispatch of the general path. {@code nulls == null} delegates to the
+     * null-free scan; {@code literal} (the constant operand) is assumed non-null by the caller.
+     */
+    public void retainConstantComparison(long[] values, long literal, ComparisonOperator operator, boolean[] nulls)
+    {
+        if (nulls == null) {
+            retainConstantComparison(values, literal, operator);
+            return;
+        }
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        switch (operator) {
+            case EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] == literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case NOT_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] != literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] < literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] <= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] > literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] >= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
     /** Integer-column overload of {@link #retainConstantComparison(long[], long, ComparisonOperator)}. */
     public void retainConstantComparison(int[] values, long literal, ComparisonOperator operator)
     {
@@ -433,6 +506,73 @@ public class Mask
                 for (int index = 0; index < iterations; index++) {
                     int position = dense ? index : buffer[index];
                     if (values[position] >= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
+    /** Null-aware integer-column overload of {@link #retainConstantComparison(long[], long, ComparisonOperator, boolean[])}. */
+    public void retainConstantComparison(int[] values, long literal, ComparisonOperator operator, boolean[] nulls)
+    {
+        if (nulls == null) {
+            retainConstantComparison(values, literal, operator);
+            return;
+        }
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        switch (operator) {
+            case EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] == literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case NOT_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] != literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] < literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case LESS_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] <= literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] > literal) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            case GREATER_THAN_OR_EQUAL -> {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (!nulls[position] && values[position] >= literal) {
                         buffer[count++] = position;
                     }
                 }
