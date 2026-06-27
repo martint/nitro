@@ -649,7 +649,7 @@ public final class TrinoClickBenchSupport
                                 1,
                                 List.of(VARCHAR),
                                 Optional.of(notEqual(0, VARCHAR, Slices.utf8Slice(""))),
-                                List.of(regexpReplace(field(0, VARCHAR), "^https?://(?:www\\.)?([^/]+)/.*$", "\\1"), length(field(0, VARCHAR)), field(0, VARCHAR)),
+                                List.of(regexpReplace(field(0, VARCHAR), "^https?://(?:www\\.)?([^/]+)/.*$", "$1"), length(field(0, VARCHAR)), field(0, VARCHAR)),
                                 projectedTypes),
                         hashAggregationFactory(
                                 2,
