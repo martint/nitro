@@ -3384,10 +3384,12 @@ public final class CompiledQuerySupport
     private static java.util.function.UnaryOperator<byte[]> regexpTransform(org.weakref.nitro.jit.QueryLowering.Column spec)
     {
         if (spec.regexpPattern() != null) {
-            io.trino.re2j.Pattern pattern = io.trino.re2j.Pattern.compile(spec.regexpPattern());
+            io.airlift.joni.Regex pattern = org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.compile(
+                    io.airlift.slice.Slices.utf8Slice(spec.regexpPattern()));
             io.airlift.slice.Slice replacement = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
                     io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
-            return value -> pattern.matcher(io.airlift.slice.Slices.wrappedBuffer(value)).replaceAll(replacement).getBytes();
+            return value -> org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.replace(
+                    io.airlift.slice.Slices.wrappedBuffer(value), pattern, replacement).getBytes();
         }
         if (spec.substringLength() >= 0) {
             return value -> utf8Substring(value, spec.substringStart(), spec.substringLength());

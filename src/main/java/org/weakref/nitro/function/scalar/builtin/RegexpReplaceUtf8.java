@@ -13,10 +13,10 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import io.airlift.joni.Regex;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
-import io.trino.re2j.Pattern;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -106,7 +106,7 @@ public final class RegexpReplaceUtf8
         VectorAccess.BooleanValues patternNullValues = VectorAccess.booleanValues(patternNulls);
         VectorAccess.BooleanValues replacementNullValues = VectorAccess.booleanValues(replacementNulls);
         byte[][] rewritten = new byte[mask.selectedCount()][];
-        Map<Slice, Pattern> patterns = new HashMap<>();
+        Map<Slice, Regex> patterns = new HashMap<>();
         int totalBytes = 0;
         boolean asciiOnly = true;
         int index = 0;
@@ -119,8 +119,8 @@ public final class RegexpReplaceUtf8
             Slice input = utf8Slice(values, position);
             Slice patternValue = utf8Slice(patternValues, position);
             Slice replacementValue = translateReplacement(utf8Slice(replacementValues, position));
-            Pattern pattern = patterns.computeIfAbsent(patternValue, value -> Pattern.compile(value.toStringUtf8()));
-            byte[] bytes = pattern.matcher(input).replaceAll(replacementValue).getBytes();
+            Regex pattern = patterns.computeIfAbsent(patternValue, JoniRegexpSupport::compile);
+            byte[] bytes = JoniRegexpSupport.replace(input, pattern, replacementValue).getBytes();
             rewritten[index++] = bytes;
             totalBytes += bytes.length;
             asciiOnly &= isAscii(bytes);
