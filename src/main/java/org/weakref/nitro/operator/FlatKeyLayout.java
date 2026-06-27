@@ -208,22 +208,36 @@ class FlatKeyLayout
                 continue;
             }
             Vector dictionaryValues = dictionary.values();
-            dictionaryHashedIds[index] = dictionary.ids();
-            // Compute the per-entry hash for every distinct dictionary value once and index it by dictionary id at
-            // hash() time, instead of re-hashing the (variable-width) value per row. This is recomputed every batch:
-            // the value vector cannot be cached by identity across batches because the allocator pools vector
-            // instances, so the same instance can carry different content in a later batch (e.g. a hash-join probe
-            // passthrough wrapped in a dictionary) -- a stale cache would hash equal keys differently and split groups.
-            if (dictionaryEntryHashes[index] == null || dictionaryEntryHashes[index].length < dictionaryValues.length()) {
-                dictionaryEntryHashes[index] = new long[dictionaryValues.length()];
-            }
             int distinctCount = dictionaryValues.length();
-            FlatTypeHandler handler = handlers[index];
-            long[] entryHashes = dictionaryEntryHashes[index];
-            for (int id = 0; id < distinctCount; id++) {
-                entryHashes[id] = handler.hashInput(dictionaryValues, id);
+            // Pre-hashing every distinct dictionary entry pays off only when the dictionary is smaller than the batch
+            // it describes (low-card key, values repeat across rows): each entry is hashed once and reused by id. A
+            // join-output key instead wraps the whole build column in a dictionary -- far more entries than a probe
+            // batch references -- so pre-hashing all of them every batch is mostly wasted. When the dictionary has
+            // more entries than the batch has positions, skip the pre-hash and let fieldHash() hash the referenced
+            // entries per row (the same path a non-dictionary field uses). This also sidesteps the per-batch stale
+            // cache problem below, since the per-row path always reads the current batch's bytes.
+            if (distinctCount > dictionary.ids().length) {
+                dictionaryHashedIds[index] = null;
+                dictionaryEntryHashes[index] = null;
+                dictionaryHashedValues[index] = null;
             }
-            dictionaryHashedValues[index] = dictionaryValues;
+            else {
+                dictionaryHashedIds[index] = dictionary.ids();
+                // Compute the per-entry hash for every distinct dictionary value once and index it by dictionary id at
+                // hash() time, instead of re-hashing the (variable-width) value per row. This is recomputed every batch:
+                // the value vector cannot be cached by identity across batches because the allocator pools vector
+                // instances, so the same instance can carry different content in a later batch (e.g. a hash-join probe
+                // passthrough wrapped in a dictionary) -- a stale cache would hash equal keys differently and split groups.
+                if (dictionaryEntryHashes[index] == null || dictionaryEntryHashes[index].length < distinctCount) {
+                    dictionaryEntryHashes[index] = new long[distinctCount];
+                }
+                FlatTypeHandler handler = handlers[index];
+                long[] entryHashes = dictionaryEntryHashes[index];
+                for (int id = 0; id < distinctCount; id++) {
+                    entryHashes[id] = handler.hashInput(dictionaryValues, id);
+                }
+                dictionaryHashedValues[index] = dictionaryValues;
+            }
 
             // Intern this dictionary's entries to GLOBAL value ids (stable across batches and dictionary
             // identities) so id-based equality works for the whole persistent group table, not just within one
