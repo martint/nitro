@@ -1244,6 +1244,10 @@ public final class PlanEvaluator
             case AllMask _ -> mask;
             case ReferenceMask(Reference reference) -> {
                 if (!tryEvaluatePrimitiveTrueMaskInPlace(reference, mask)) {
+                    MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
+                    if (!(resolved instanceof ReferenceMask(Reference resolvedReference) && resolvedReference.equals(reference))) {
+                        yield evaluateTrueMaskInPlace(resolved, mask);
+                    }
                     Mask result = evaluateTrueReferenceMask(reference, mask);
                     if (result != mask) {
                         mask.copyFrom(result);
