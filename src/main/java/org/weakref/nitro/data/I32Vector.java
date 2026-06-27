@@ -144,7 +144,7 @@ public class I32Vector
     @Override
     public int poolMaxRetained()
     {
-        return 2;
+        return 16;
     }
 
     @Override

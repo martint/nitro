@@ -190,7 +190,7 @@ public class BooleanVector
     @Override
     public int poolMaxRetained()
     {
-        return 2;
+        return 16;
     }
 
     @Override

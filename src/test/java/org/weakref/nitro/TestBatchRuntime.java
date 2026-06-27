@@ -425,17 +425,23 @@ public class TestBatchRuntime
         Allocator allocator = new Allocator();
         Allocator.Context context = new Allocator.Context("CappedVectorPool");
 
-        I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
-        I64Vector second = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
-        I64Vector third = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        int maxRetained = new I64Vector(8).poolMaxRetained();
+
+        List<I64Vector> pooled = new ArrayList<>();
+        for (int index = 0; index <= maxRetained; index++) {
+            pooled.add(allocator.allocate(context, I64Vector.class, 8, I64Vector::new));
+        }
 
         allocator.release(context);
 
-        I64Vector reusedOne = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
-        I64Vector reusedTwo = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
-        I64Vector fresh = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        List<I64Vector> reallocated = new ArrayList<>();
+        for (int index = 0; index <= maxRetained; index++) {
+            reallocated.add(allocator.allocate(context, I64Vector.class, 8, I64Vector::new));
+        }
 
-        assertThat(reusedCount(List.of(first, second, third), List.of(reusedOne, reusedTwo, fresh))).isEqualTo(2);
+        // The pool retains at most poolMaxRetained() idle vectors per family, so the oldest of the
+        // maxRetained + 1 released vectors is discarded and exactly maxRetained are reused.
+        assertThat(reusedCount(pooled, reallocated)).isEqualTo(maxRetained);
     }
 
     @Test
@@ -445,16 +451,25 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("CappedBinaryVectorPool");
 
         BinaryVector first = BinaryVector.allocate(allocator, context, 8, 16);
-        BinaryVector second = BinaryVector.allocate(allocator, context, 8, 32);
-        BinaryVector third = BinaryVector.allocate(allocator, context, 8, 64);
+        int maxRetained = first.poolMaxRetained();
+
+        List<BinaryVector> pooled = new ArrayList<>();
+        pooled.add(first);
+        for (int index = 1; index <= maxRetained; index++) {
+            pooled.add(BinaryVector.allocate(allocator, context, 8, 16));
+        }
 
         allocator.release(context);
 
-        BinaryVector reusedOne = BinaryVector.allocate(allocator, context, 8, 8);
-        BinaryVector reusedTwo = BinaryVector.allocate(allocator, context, 8, 24);
-        BinaryVector fresh = BinaryVector.allocate(allocator, context, 8, 48);
+        List<BinaryVector> reallocated = new ArrayList<>();
+        for (int index = 0; index <= maxRetained; index++) {
+            reallocated.add(BinaryVector.allocate(allocator, context, 8, 16));
+        }
 
-        assertThat(reusedCount(List.of(first, second, third), List.of(reusedOne, reusedTwo, fresh))).isEqualTo(2);
+        // All vectors share the one position-count pool family, which is capped at poolMaxRetained()
+        // idle instances regardless of byte capacity, so exactly maxRetained of the maxRetained + 1
+        // released vectors are reused.
+        assertThat(reusedCount(pooled, reallocated)).isEqualTo(maxRetained);
     }
 
     @Test

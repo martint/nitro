@@ -144,7 +144,7 @@ public class F64Vector
     @Override
     public int poolMaxRetained()
     {
-        return 2;
+        return 16;
     }
 
     @Override
