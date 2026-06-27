@@ -90,6 +90,9 @@ public final class NitroParquetScanOperator
 
     private long nextRow;
     private Batch currentBatch;
+    // Reused high-water scratch for decoding double columns (raw long bits -> reinterpreted into the value array),
+    // so the eager full-batch path doesn't allocate a fresh long[] per batch per double column.
+    private long[] doubleDecodeScratch;
     private Vector[] currentValues;
     private Vector[] currentNulls;
 
@@ -241,7 +244,13 @@ public final class NitroParquetScanOperator
                     if (reader.isDouble()) {
                         org.weakref.nitro.data.F64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
                         double[] values = vector.values();
-                        long[] bits = new long[count];
+                        // Decode raw bits into a reused scratch (the double bit pattern IS the long), then reinterpret
+                        // into the value array. A fresh long[count] per batch per double column was ~1.4 GB/op of
+                        // garbage on a wide double scan (TPC-H q06); the high-water scratch keeps it off the heap.
+                        if (doubleDecodeScratch == null || doubleDecodeScratch.length < count) {
+                            doubleDecodeScratch = new long[count];
+                        }
+                        long[] bits = doubleDecodeScratch;
                         reader.readLongs(bits, nulls, count);
                         for (int i = 0; i < count; i++) {
                             values[i] = Double.longBitsToDouble(bits[i]);
