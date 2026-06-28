@@ -331,6 +331,9 @@ final class LongComparisonMaskSupport
         if (comparison != null) {
             boolean[] result = comparison.result();
             int[] ids = comparison.ids();
+            if (tryApplyDictionaryMonomorphic(inputs, mask, result, ids, true)) {
+                return true;
+            }
             mask.retainIf(position -> !isError(leftErrors, position) && !isError(rightErrors, position)
                     && !isNull(leftNulls, position) && !isNull(rightNulls, position) && result[ids[position]]);
             return true;
@@ -366,6 +369,9 @@ final class LongComparisonMaskSupport
         if (comparison != null) {
             boolean[] result = comparison.result();
             int[] ids = comparison.ids();
+            if (tryApplyDictionaryMonomorphic(inputs, mask, result, ids, false)) {
+                return true;
+            }
             mask.retainIf(position -> !isError(leftErrors, position) && !isError(rightErrors, position)
                     && !isNull(leftNulls, position) && !isNull(rightNulls, position) && !result[ids[position]]);
             return true;
@@ -446,6 +452,36 @@ final class LongComparisonMaskSupport
     private static boolean isErrorFree(Streams input)
     {
         return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+    }
+
+    /**
+     * Apply a precomputed per-entry dictionary comparison as a monomorphic scan ({@link Mask#retainDictionaryComparison})
+     * rather than a per-position {@link java.util.function.IntPredicate}. Handles a nullable (but error-free) dictionary
+     * column by excluding null positions in the scan; the literal operand must be null/error-free. {@code wanted}
+     * selects the true ({@code true}) or false ({@code false}) mask. Returns {@code false} to fall back when an input
+     * carries errors or a non-flat null stream.
+     */
+    private static boolean tryApplyDictionaryMonomorphic(List<Streams> inputs, Mask mask, boolean[] keep, int[] ids, boolean wanted)
+    {
+        if (!isErrorFree(inputs.get(0)) || !isErrorFree(inputs.get(1))) {
+            return false;
+        }
+        boolean dictionaryOnLeft = inputs.get(0).values() instanceof DictionaryVector;
+        Streams columnInput = dictionaryOnLeft ? inputs.get(0) : inputs.get(1);
+        Streams literalInput = dictionaryOnLeft ? inputs.get(1) : inputs.get(0);
+        if (!isNullAndErrorFree(literalInput)) {
+            return false;
+        }
+        boolean[] nulls = null;
+        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        if (!VectorAccess.isAllFalseNulls(columnNulls)) {
+            nulls = VectorAccess.flatBooleans(columnNulls);
+            if (nulls == null) {
+                return false;
+            }
+        }
+        mask.retainDictionaryComparison(ids, keep, nulls, wanted);
+        return true;
     }
 
     private static boolean isNullAndErrorFree(Streams input)

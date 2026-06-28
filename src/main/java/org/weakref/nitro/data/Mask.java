@@ -669,6 +669,41 @@ public class Mask
         setSelection(size, count, count == size);
     }
 
+    /**
+     * Null-aware predicate-over-dictionary narrow: retains positions whose per-entry result {@code keep[ids[position]]}
+     * equals {@code wanted} and that are not null ({@code nulls[position]} unset). {@code wanted} selects the true mask
+     * ({@code true}) or the false mask ({@code false}); a NULL is excluded from both. {@code nulls == null} means the
+     * column has no nulls. A monomorphic scan — the per-position null/dictionary lookup stays out of an
+     * {@link IntPredicate} lambda.
+     */
+    public void retainDictionaryComparison(int[] ids, boolean[] keep, boolean[] nulls, boolean wanted)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        if (nulls == null) {
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                if (keep[ids[position]] == wanted) {
+                    buffer[count++] = position;
+                }
+            }
+        }
+        else {
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                if (!nulls[position] && keep[ids[position]] == wanted) {
+                    buffer[count++] = position;
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
     public boolean anyTrue(int start, int end)
     {
         if (none() || end < start || end < 0 || start >= size) {
