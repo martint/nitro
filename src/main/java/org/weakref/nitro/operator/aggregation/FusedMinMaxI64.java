@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -144,6 +145,13 @@ final class FusedMinMaxI64
         @Override
         public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
         {
+            Vector inputVector = streams.values(inputColumn);
+            Vector inputNullVector = streams.stream(inputColumn, Stream.NULLS);
+            if (VectorAccess.isAllFalseNulls(inputNullVector)
+                    && accumulateGlobalNullFree(state, group, mask, inputVector)) {
+                return;
+            }
+
             Streams peer = handle.peerState();
             Streams minState = kind == Kind.MIN ? state : peer;
             Streams maxState = kind == Kind.MAX ? state : peer;
@@ -153,8 +161,8 @@ final class FusedMinMaxI64
             I64Vector maxValues = (I64Vector) maxState.values();
             BooleanVector maxNulls = (BooleanVector) maxState.get(Stream.NULLS);
 
-            VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
-            VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
+            VectorAccess.LongValues inputValues = VectorAccess.longValues(inputVector);
+            VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullVector);
 
             for (int position : mask) {
                 if (inputNulls.value(position)) {
@@ -176,6 +184,87 @@ final class FusedMinMaxI64
                     }
                 }
             }
+        }
+
+        /**
+         * Monomorphic fast path for a single (global) group over a null-free flat input: hoists the group's
+         * running min/max into locals and scans the input array directly, with no per-position null lambda,
+         * no boxed mask iterator, and no re-read of the state arrays. Returns false (falling back to the
+         * general path) for input kinds it does not specialize. The caller guarantees the input is null-free.
+         */
+        private boolean accumulateGlobalNullFree(Streams state, int group, Mask mask, Vector inputVector)
+        {
+            if (mask.count() == 0) {
+                return true;
+            }
+
+            Streams peer = handle.peerState();
+            Streams minState = kind == Kind.MIN ? state : peer;
+            Streams maxState = kind == Kind.MAX ? state : peer;
+            long[] minValues = ((I64Vector) minState.values()).values();
+            boolean[] minNulls = ((BooleanVector) minState.get(Stream.NULLS)).values();
+            long[] maxValues = ((I64Vector) maxState.values()).values();
+            boolean[] maxNulls = ((BooleanVector) maxState.get(Stream.NULLS)).values();
+
+            long min;
+            long max;
+            if (minNulls[group]) {
+                min = Long.MAX_VALUE;
+                max = Long.MIN_VALUE;
+            }
+            else {
+                min = minValues[group];
+                max = maxValues[group];
+            }
+
+            switch (inputVector) {
+                case I64Vector vector -> {
+                    long[] input = vector.values();
+                    if (mask.all()) {
+                        int end = mask.maxPosition();
+                        for (int position = 0; position <= end; position++) {
+                            long value = input[position];
+                            min = Math.min(min, value);
+                            max = Math.max(max, value);
+                        }
+                    }
+                    else {
+                        for (int position : mask.selectedPositions()) {
+                            long value = input[position];
+                            min = Math.min(min, value);
+                            max = Math.max(max, value);
+                        }
+                    }
+                }
+                case I32Vector vector -> {
+                    int[] input = vector.values();
+                    if (mask.all()) {
+                        int end = mask.maxPosition();
+                        for (int position = 0; position <= end; position++) {
+                            long value = input[position];
+                            min = Math.min(min, value);
+                            max = Math.max(max, value);
+                        }
+                    }
+                    else {
+                        for (int position : mask.selectedPositions()) {
+                            long value = input[position];
+                            min = Math.min(min, value);
+                            max = Math.max(max, value);
+                        }
+                    }
+                }
+                default -> {
+                    return false;
+                }
+            }
+
+            // count() > 0 and the input is null-free, so at least one value was folded in.
+            minValues[group] = min;
+            maxValues[group] = max;
+            minNulls[group] = false;
+            maxNulls[group] = false;
+            return true;
         }
 
         @Override
