@@ -247,6 +247,7 @@ final class GroupingState
     private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         flatGroupingTable.beginBatch(values, nulls);
+        flatGroupingTable.prepareBatchHashes(values, nulls, mask);
         try {
             if (values.length == 1) {
                 Vector nullVector = nulls[0];

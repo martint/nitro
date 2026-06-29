@@ -278,6 +278,15 @@ class FlatKeyLayout
      * eligible, else -1. A bijection of the per-field global ids, stable across batches, in {@code [0, STRIDE^k)}
      * with the range bounded below COMPOSITE_MAX; FlatGroupingTable uses it as a direct array index.
      */
+    /**
+     * Whether this batch resolves group keys by composite (array-mode) id without hashing. The decoupled
+     * hash-then-probe driver skips its precompute pass when this holds.
+     */
+    boolean batchArrayModeEligible()
+    {
+        return batchCompositeEligible;
+    }
+
     long compositeValueId(int position)
     {
         if (!batchCompositeEligible) {

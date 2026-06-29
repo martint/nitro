@@ -58,6 +58,13 @@ final class FlatGroupingTable
     // and composites are stable across batches, so the cache persists for the whole grouping.
     private int[] compositeCache;
 
+    // Reusable per-batch hash buffer for the decoupled hash-then-probe driver (see prepareBatchHashes). Sized to
+    // the largest batch seen and held across batches so the path allocates nothing in steady state. When
+    // batchHashesValid is set, assignGroupHashed reads the precomputed hash for the position instead of hashing
+    // inline, so the probe pass issues independent, back-to-back record loads whose cache misses overlap.
+    private long[] batchHashes;
+    private boolean batchHashesValid;
+
     public FlatGroupingTable(FlatKeyLayout layout, int expectedSize)
     {
         this.layout = layout;
@@ -84,11 +91,36 @@ final class FlatGroupingTable
     public void beginBatch(Vector[] values, Vector[] nulls)
     {
         layout.beginBatch(values, nulls);
+        batchHashesValid = false;
     }
 
     public void endBatch()
     {
         layout.endBatch();
+        batchHashesValid = false;
+    }
+
+    /**
+     * Phase one of the decoupled driver: precompute this batch's key hashes for the masked positions into a
+     * reusable buffer, so the subsequent per-position {@link #assignGroup} calls probe with an already-resolved
+     * hash. Separating the hash pass from the probe pass lets the independent probe loads overlap their cache
+     * misses (memory-level parallelism), the structure Trino's {@code FlatGroupByHash} uses. No-op when the batch
+     * is array-mode eligible, since that path resolves groups by composite id without hashing at all.
+     */
+    public void prepareBatchHashes(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        if (layout.batchArrayModeEligible() || mask.none()) {
+            batchHashesValid = false;
+            return;
+        }
+        int size = mask.maxPosition() + 1;
+        if (batchHashes == null || batchHashes.length < size) {
+            batchHashes = new long[size];
+        }
+        for (int position : mask) {
+            batchHashes[position] = layout.hash(values, nulls, position);
+        }
+        batchHashesValid = true;
     }
 
     public long assignGroup(Vector[] values, Vector[] nulls, int position, long newGroupId)
@@ -108,7 +140,7 @@ final class FlatGroupingTable
 
     private long assignGroupHashed(Vector[] values, Vector[] nulls, int position, long newGroupId)
     {
-        long hash = layout.hash(values, nulls, position);
+        long hash = batchHashesValid ? batchHashes[position] : layout.hash(values, nulls, position);
         int index = getIndex(values, nulls, position, hash);
         if (index >= 0) {
             return groupIdsByHash[index];
