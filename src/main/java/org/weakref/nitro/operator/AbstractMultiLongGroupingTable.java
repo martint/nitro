@@ -53,11 +53,21 @@ abstract class AbstractMultiLongGroupingTable
     final int stride;
     long[] entries;
     byte[] nullMasks;
+    // Swiss-table control byte per slot: 0 marks an empty slot, otherwise a 7-bit hash fragment with the high bit set
+    // (always non-zero). The probe scans this dense array (one byte per slot, ~64 per cache line) and only reads the
+    // fat key record on a fragment match, so a high-cardinality probe stays cache-resident where the records do not.
+    byte[] control;
     int mask;
     int maxFill;
     int size;
     long[][] keysByGroup;
     byte[] nullMasksByGroup;
+
+    /** The control fragment for {@code hash}: high byte with the top bit set so it is never the empty marker (0). */
+    static byte controlFragment(int hash)
+    {
+        return (byte) ((hash >>> 24) | 0x80);
+    }
 
     AbstractMultiLongGroupingTable(int arity, int expectedSize)
     {
@@ -69,6 +79,7 @@ abstract class AbstractMultiLongGroupingTable
         }
         entries = allocateEntries(capacity);
         nullMasks = new byte[capacity];
+        control = new byte[capacity];
         mask = capacity - 1;
         maxFill = (int) (capacity * LOAD_FACTOR);
 
@@ -127,29 +138,31 @@ abstract class AbstractMultiLongGroupingTable
     {
         long[] previousEntries = entries;
         byte[] previousNullMasks = nullMasks;
-        int previousCapacity = previousNullMasks.length;
-        int groupIdOffset = arity;
+        byte[] previousControl = control;
+        int previousCapacity = previousControl.length;
 
         entries = allocateEntries(capacity);
         nullMasks = new byte[capacity];
+        control = new byte[capacity];
         mask = capacity - 1;
         maxFill = (int) (capacity * LOAD_FACTOR);
         size = 0;
 
         for (int oldSlot = 0; oldSlot < previousCapacity; oldSlot++) {
-            int previousBase = oldSlot * stride;
-            long groupId = previousEntries[previousBase + groupIdOffset];
-            if (groupId == EMPTY_GROUP_ID) {
+            if (previousControl[oldSlot] == 0) {
                 continue;
             }
+            int previousBase = oldSlot * stride;
             byte nullMask = previousNullMasks[oldSlot];
-            int slot = hashEntry(previousEntries, previousBase, nullMask) & mask;
-            while (entries[slot * stride + groupIdOffset] != EMPTY_GROUP_ID) {
+            int hash = hashEntry(previousEntries, previousBase, nullMask);
+            int slot = hash & mask;
+            while (control[slot] != 0) {
                 slot = (slot + 1) & mask;
             }
             int base = slot * stride;
             System.arraycopy(previousEntries, previousBase, entries, base, stride);
             nullMasks[slot] = nullMask;
+            control[slot] = controlFragment(hash);
             size++;
         }
     }

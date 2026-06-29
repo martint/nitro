@@ -53,7 +53,6 @@ final class MultiLongGroupingTableGenerator
     private static final ClassDesc CD_LONG_VALUES_ARRAY = CD_LONG_VALUES.arrayType();
     private static final ClassDesc CD_BOOLEAN_VALUES_ARRAY = CD_BOOLEAN_VALUES.arrayType();
 
-    private static final long EMPTY_GROUP_ID = -1L;
     private static final int MURMUR_SHIFT = 33;
     private static final long MURMUR_C1 = 0xFF51AFD7ED558CCDL;
     private static final long MURMUR_C2 = 0xC4CEB9FE1A85EC53L;
@@ -131,41 +130,87 @@ final class MultiLongGroupingTableGenerator
         int newGroupIdSlot = 2 + 2 * arity;
         int slotVar = 4 + 2 * arity;
         int baseVar = 5 + 2 * arity;
-        int gidVar = 6 + 2 * arity;
+        int fragVar = 6 + 2 * arity;
+        int controlVar = 7 + 2 * arity;
         int groupIdOffset = arity;
 
-        // slot = hash(keys, nullMask) & mask
+        // hash = hash(keys, nullMask)
         emitHash(code, arity, key -> code.lload(1 + 2 * key), () -> code.iload(nullMaskSlot));
+        // frag = controlFragment(hash) = (byte) ((hash >>> 24) | 0x80) ; consumes one copy of hash
+        code.dup();
+        code.loadConstant(24);
+        code.iushr();
+        code.loadConstant(0x80);
+        code.ior();
+        code.i2b();
+        code.istore(fragVar);
+        // slot = hash & mask
         code.aload(0);
         code.getfield(CD_BASE, "mask", CD_int);
         code.iand();
         code.istore(slotVar);
 
         Label probeTop = code.newLabel();
-        Label notEmpty = code.newLabel();
+        Label empty = code.newLabel();
         Label advance = code.newLabel();
         code.labelBinding(probeTop);
 
+        // control byte: 0 => empty slot, else compare the hash fragment before touching the fat record
+        code.aload(0);
+        code.getfield(CD_BASE, "control", CD_BYTE_ARRAY);
+        code.iload(slotVar);
+        code.baload();
+        code.istore(controlVar);
+        code.iload(controlVar);
+        code.ifeq(empty);
+        code.iload(controlVar);
+        code.iload(fragVar);
+        code.if_icmpne(advance);
+
+        // ---- fragment match: compare keys then nullMask ----
         // base = slot * stride
         code.iload(slotVar);
         code.loadConstant(arity + 1);
         code.imul();
         code.istore(baseVar);
-
-        // gid = entries[base + arity]
+        for (int key = 0; key < arity; key++) {
+            code.aload(0);
+            code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
+            code.iload(baseVar);
+            code.loadConstant(key);
+            code.iadd();
+            code.laload();
+            code.lload(1 + 2 * key);
+            code.lxor();
+            if (key > 0) {
+                code.lor();
+            }
+        }
+        code.loadConstant(0L);
+        code.lcmp();
+        code.ifne(advance);
+        code.aload(0);
+        code.getfield(CD_BASE, "nullMasks", CD_BYTE_ARRAY);
+        code.iload(slotVar);
+        code.baload();
+        code.iload(nullMaskSlot);
+        code.if_icmpne(advance);
+        // match: return entries[base + arity]
         code.aload(0);
         code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
         code.iload(baseVar);
         code.loadConstant(groupIdOffset);
         code.iadd();
         code.laload();
-        code.dup2();
-        code.lstore(gidVar);
-        code.loadConstant(EMPTY_GROUP_ID);
-        code.lcmp();
-        code.ifne(notEmpty);
+        code.lreturn();
 
         // ---- empty slot: insert new group ----
+        code.labelBinding(empty);
+        // base = slot * stride
+        code.iload(slotVar);
+        code.loadConstant(arity + 1);
+        code.imul();
+        code.istore(baseVar);
         for (int key = 0; key < arity; key++) {
             code.aload(0);
             code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
@@ -186,6 +231,12 @@ final class MultiLongGroupingTableGenerator
         code.getfield(CD_BASE, "nullMasks", CD_BYTE_ARRAY);
         code.iload(slotVar);
         code.iload(nullMaskSlot);
+        code.bastore();
+        // control[slot] = frag  (mark the slot occupied with its hash fragment)
+        code.aload(0);
+        code.getfield(CD_BASE, "control", CD_BYTE_ARRAY);
+        code.iload(slotVar);
+        code.iload(fragVar);
         code.bastore();
         // ensureReverseCapacity((int) newGroupId)
         code.aload(0);
@@ -227,33 +278,6 @@ final class MultiLongGroupingTableGenerator
         code.invokevirtual(CD_BASE, "rehash", MethodTypeDesc.of(CD_void));
         code.labelBinding(skipRehash);
         code.lload(newGroupIdSlot);
-        code.lreturn();
-
-        // ---- occupied slot: compare keys ----
-        code.labelBinding(notEmpty);
-        for (int key = 0; key < arity; key++) {
-            code.aload(0);
-            code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
-            code.iload(baseVar);
-            code.loadConstant(key);
-            code.iadd();
-            code.laload();
-            code.lload(1 + 2 * key);
-            code.lxor();
-            if (key > 0) {
-                code.lor();
-            }
-        }
-        code.loadConstant(0L);
-        code.lcmp();
-        code.ifne(advance);
-        code.aload(0);
-        code.getfield(CD_BASE, "nullMasks", CD_BYTE_ARRAY);
-        code.iload(slotVar);
-        code.baload();
-        code.iload(nullMaskSlot);
-        code.if_icmpne(advance);
-        code.lload(gidVar);
         code.lreturn();
 
         // ---- advance to next slot ----
