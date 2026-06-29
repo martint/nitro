@@ -24,7 +24,12 @@ import static java.lang.Math.toIntExact;
 
 final class BufferedJoinInput
 {
-    private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 500_000);
+    // Coalesce a multi-batch build into one addressable batch up to this many rows. A single build batch lets the
+    // inner join output reference build columns as a zero-copy DictionaryVector (one run, ids = matched build
+    // positions) instead of copying the (variable-width) bytes once per matched output row -- the dominant cost in
+    // high-fan-out joins over dimension tables. Bounded so a fact-table-sized build is never copied wholesale; the
+    // one-time coalesce copy pays for itself whenever the join output references the build more than once.
+    private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 2_000_000);
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;

@@ -965,7 +965,14 @@ public class HashJoinOperator
 
         BuildDictionary dictionary = buildDictionaryFor(innerBatchIndex, innerOutputIndex, binarySource, innerBatch.length());
         if (dictionary == NOT_DICTIONARY) {
-            return null;
+            // High-cardinality build column: a dedup dictionary does not pay, but flattening would copy the
+            // (variable-width) bytes once per matched output row. Wrap the raw build column directly instead --
+            // ids are the matched build positions, values are the build column itself -- so each matched row is
+            // referenced by id with no byte copy, at any cardinality (mirrors Trino's DictionaryBlock over a
+            // build page). Safe for the same single-batch shape the dedup path requires; downstream grouping
+            // still settles equality by value, so this only changes representation.
+            int[] rawIds = Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount);
+            return DictionaryVector.wrap(rawIds, binarySource);
         }
         int[] sourceIdByPosition = dictionary.idByPosition();
         int[] valueIds = new int[currentOutputCount];
