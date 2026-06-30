@@ -50,7 +50,7 @@ public final class NitroParquetScanOperator
     // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
     // above the scan pushes a survivor mask via constrain(), decode the remaining columns only for survivor rows
     // (skip-decode + scatter to position) instead of every row. Mirrors TrinoParquetScanOperator's masked path.
-    private static final boolean LATE_MATERIALIZATION = Boolean.parseBoolean(System.getProperty("nitro.parquet.lateMaterialization", "false"));
+    private static final boolean LATE_MATERIALIZATION = Boolean.parseBoolean(System.getProperty("nitro.parquet.lateMaterialization", "true"));
     // Skip-decode a constrained column only when at most this fraction of rows survive; above it the per-survivor-run
     // skip path (re-walking the RLE id stream) costs more than a single bulk decode, so full-decode instead.
     private static final int SKIP_DECODE_MAX_SURVIVOR_PERCENT = Integer.getInteger("nitro.parquet.skipMaxSurvivorPercent", 20);
@@ -368,7 +368,11 @@ public final class NitroParquetScanOperator
             // guard). Decided once, on first touch, and fixed for the scan so a reader keeps one page path.
             boolean selective = lazyConstrained && !lazyMask.all()
                     && (long) lazyMask.selectedCount() * 100 <= (long) lazyCount * SKIP_DECODE_MAX_SURVIVOR_PERCENT;
-            lazySkipColumn[column] = selective && readers[column].kind() != ColumnReader.Kind.BINARY;
+            // Skip-decode only wide BINARY columns here. Their cost is decompression, so dropping non-survivor pages
+            // is a large win (ClickBench q39). A narrow INT/LONG column instead decodes cheaply in bulk; skip-decode
+            // would only add per-run bookkeeping plus a full-length scatter (scattered survivors skip no pages), which
+            // lost on ClickBench q31/q32. The DF-window path keeps its dense int/long skip for pushed dynamic filters.
+            lazySkipColumn[column] = selective && readers[column].kind() == ColumnReader.Kind.BINARY;
         }
         return lazySkipColumn[column];
     }
@@ -410,6 +414,14 @@ public final class NitroParquetScanOperator
         else {
             survivorCount = lazyMask.selectedCount();
             survivors = lazyMask.selectedPositions();
+        }
+        if (reader.kind() == ColumnReader.Kind.BINARY) {
+            // readSelectedBinary returns a position-indexed vector (survivors at their positions, others zero-length)
+            // and fills position-indexed nulls, so no scatter is needed.
+            Vector vector = reader.readSelectedBinary(survivors, survivorCount, count, nulls);
+            currentValues[column] = allocator.adopt(ALLOCATION_CONTEXT, vector);
+            currentNulls[column] = nullVector;
+            return;
         }
         if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(survivorCount, false);
@@ -528,6 +540,9 @@ public final class NitroParquetScanOperator
                         reader.readInts(lazyScratchInt, null, lazyCount);
                     }
                 }
+            }
+            else if (reader.kind() == ColumnReader.Kind.BINARY) {
+                reader.readSelectedBinary(EMPTY, 0, lazyCount, null);
             }
             else if (longKind) {
                 ensureLazyScratch(0, true);

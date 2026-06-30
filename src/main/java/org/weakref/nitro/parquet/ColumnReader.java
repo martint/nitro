@@ -938,6 +938,70 @@ public final class ColumnReader
     }
 
     /**
+     * Skip-decode for BINARY columns. Mirrors {@link #readSelectedLongs}: pages with no survivor in their row range
+     * are skipped WITHOUT decompressing (via {@link #acquirePageForSkip}); pages with survivors are whole-decoded
+     * (binary always takes the whole-page path) and only the survivor positions are gathered. Produces a
+     * POSITION-INDEXED {@link org.weakref.nitro.data.BinaryVector} of {@code batchRows} entries — survivor positions
+     * hold their bytes, every other position is a zero-length entry — so a constrained operator reads survivors at
+     * their original positions. {@code nullsOut} (length {@code batchRows}, optional) receives per-position nulls.
+     * The reader advances by exactly {@code batchRows}, so a binary column can use this for its whole life without
+     * mixing the full and skip page paths.
+     */
+    public org.weakref.nitro.data.Vector readSelectedBinary(int[] survivors, int count, int batchRows, boolean[] nullsOut)
+    {
+        if (binaryOutOffsets.length < batchRows + 1) {
+            binaryOutOffsets = new int[batchRows + 1];
+        }
+        int sel = 0;
+        int batchCursor = 0;
+        int dataLength = 0;
+        binaryOutOffsets[0] = 0;
+        while (batchCursor < batchRows) {
+            if (pageCursor >= pageValueCount) {
+                int skipped = acquirePageForSkip(survivors, sel, count, batchCursor, batchRows);
+                if (skipped >= 0) {
+                    for (int p = 0; p < skipped; p++) {
+                        binaryOutOffsets[batchCursor + p + 1] = dataLength;
+                        if (nullsOut != null) {
+                            nullsOut[batchCursor + p] = false;
+                        }
+                    }
+                    batchCursor += skipped;
+                    continue;
+                }
+            }
+            int pageRows = Math.min(pageValueCount - pageCursor, batchRows - batchCursor);
+            int pageEnd = batchCursor + pageRows;
+            for (int b = batchCursor; b < pageEnd; b++) {
+                if (sel < count && survivors[sel] == b) {
+                    int pagePos = pageCursor + (b - batchCursor);
+                    int start = pageByteOffsets[pagePos];
+                    int length = pageByteOffsets[pagePos + 1] - start;
+                    if (binaryOutData.length < dataLength + length) {
+                        binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                    }
+                    System.arraycopy(pageBytes, start, binaryOutData, dataLength, length);
+                    dataLength += length;
+                    if (nullsOut != null) {
+                        nullsOut[b] = optional && pageNulls[pagePos];
+                    }
+                    sel++;
+                }
+                else if (nullsOut != null) {
+                    nullsOut[b] = false;
+                }
+                binaryOutOffsets[b + 1] = dataLength;
+            }
+            pageCursor += pageRows;
+            batchCursor = pageEnd;
+        }
+        org.weakref.nitro.data.BinaryVector result = new org.weakref.nitro.data.BinaryVector(
+                batchRows, Arrays.copyOf(binaryOutOffsets, batchRows + 1), Arrays.copyOf(binaryOutData, dataLength));
+        result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+        return result;
+    }
+
+    /**
      * Acquire the next data page for skip-decode. Peeks the page header (no decompress) and, if it lies fully
      * within the current batch with NO survivor in its row range, skips it WITHOUT decompressing (the dominant
      * win for selective DFs over clustered data) — returning the number of rows skipped. Otherwise it
