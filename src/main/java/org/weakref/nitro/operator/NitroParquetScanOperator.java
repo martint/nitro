@@ -87,6 +87,14 @@ public final class NitroParquetScanOperator
     private final boolean[][] windowNull;
     private int windowSurvivorCount;
     private int windowSurvivorCursor;
+    // Payload decode path for the DF window, decided once from the first window's survival rate and frozen for the
+    // whole scan: a column reader must use one page path (skip vs full) for its entire life, never mixing them across
+    // windows (the skip path re-walks the RLE id stream and leaves the page decoder in a state incompatible with a
+    // full decode). Skip-decode when few rows survive (it drops non-surviving pages); bulk-decode + gather when most
+    // survive (a weak/unclustered filter, where per-run skip bookkeeping exceeds one sequential decode). This lets the
+    // single reader serve both selective and weak dynamic filters with no mode flag.
+    private boolean dfPayloadDecided;
+    private boolean dfPayloadBulk;
 
     private long nextRow;
     private Batch currentBatch;
@@ -626,15 +634,33 @@ public final class NitroParquetScanOperator
             advanceColumn(order[i], count);
         }
 
-        // Decode the payload (non-filter) columns at the final survivors. In skip mode, read DIRECTLY into the dense
-        // window buffer (the survivor set is already final); in bulk mode (weak DF), full-decode the window then gather.
-        // The skip-vs-bulk choice is fixed for the scan (dfMode), so a reader never mixes the two page paths.
+        // Decode the payload (non-filter) columns at the final survivors. Choose the page path ONCE, from the first
+        // window's survival rate, and freeze it for the scan: skip-decode straight into the dense window buffer when
+        // few rows survive (drops whole non-surviving pages), or bulk-decode the window once and gather to survivors
+        // when most survive (a weak/unclustered filter). A reader must never mix the two page paths across windows,
+        // so the decision is frozen rather than recomputed per window.
+        if (!dfPayloadDecided) {
+            dfPayloadBulk = survivorCount > (int) ((long) count * SKIP_DECODE_MAX_SURVIVOR_PERCENT / 100);
+            dfPayloadDecided = true;
+        }
         for (int c = 0; c < columnCount; c++) {
             if (filtersByColumn[c] != null) {
                 continue;
             }
             boolean[] nulls = nullable[c] ? ensureWindowNull(c, survivorCount) : null;
-            if (readers[c].kind() == ColumnReader.Kind.INT) {
+            if (dfPayloadBulk) {
+                boolean[] columnNulls = nullable[c] ? colNull[c] : null;
+                readColumnInto(c, null, count, count);
+                if (readers[c].kind() == ColumnReader.Kind.INT) {
+                    windowInt[c] = ensureInt(windowInt[c], survivorCount);
+                    gatherInt(colInt[c], columnNulls, null, survivors, survivorCount, windowInt[c], nulls);
+                }
+                else {
+                    windowLong[c] = ensureLong(windowLong[c], survivorCount);
+                    gatherLong(colLong[c], columnNulls, null, survivors, survivorCount, windowLong[c], nulls);
+                }
+            }
+            else if (readers[c].kind() == ColumnReader.Kind.INT) {
                 windowInt[c] = ensureInt(windowInt[c], survivorCount);
                 readers[c].readSelectedInts(survivors, survivorCount, count, windowInt[c], nulls);
             }
