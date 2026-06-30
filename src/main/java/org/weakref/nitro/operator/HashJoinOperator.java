@@ -2470,7 +2470,13 @@ public class HashJoinOperator
             implements JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
+        // Swiss/F14-style SIMD-tag-bucket table (cf. LongPairJoinIndex): a probe scans a GROUP of 1-byte tags with
+        // one vector load and touches the three fat key arrays only on a tag hit, so a collision step is a dense
+        // byte read rather than a {first,second,third,row} cache-miss load.
+        private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
+        private static final int GROUP = SPECIES.length();
 
+        private byte[] tags;
         private long[] firstKeys;
         private long[] secondKeys;
         private long[] thirdKeys;
@@ -2483,14 +2489,20 @@ public class HashJoinOperator
 
         private LongTripleJoinIndex(int expectedSize)
         {
-            int capacity = 16;
+            int capacity = GROUP;
             while (capacity < expectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
+            allocate(capacity);
+        }
+
+        private void allocate(int capacity)
+        {
+            tags = new byte[capacity];
             firstKeys = new long[capacity];
             secondKeys = new long[capacity];
             thirdKeys = new long[capacity];
-            singleRows = emptyRows(capacity);
+            singleRows = new long[capacity];
             rowsBySlot = new LongArrayList[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
@@ -2536,8 +2548,8 @@ public class HashJoinOperator
             long first = OperatorVectorSupport.longValue(values[0], position);
             long second = OperatorVectorSupport.longValue(values[1], position);
             long third = OperatorVectorSupport.longValue(values[2], position);
-            int slot = findSlot(first, second, third);
-            if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second || thirdKeys[slot] != third) {
+            int slot = probe(first, second, third, hash64(first, second, third));
+            if (slot < 0) {
                 return LongLists.emptyList();
             }
             LongArrayList rows = rowsBySlot[slot];
@@ -2559,8 +2571,8 @@ public class HashJoinOperator
                     long first = firstValues.value(position);
                     long second = secondValues.value(position);
                     long third = thirdValues.value(position);
-                    int slot = findSlot(first, second, third);
-                    if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second || thirdKeys[slot] != third) {
+                    int slot = probe(first, second, third, hash64(first, second, third));
+                    if (slot < 0) {
                         matches[index] = LongLists.emptyList();
                         continue;
                     }
@@ -2586,8 +2598,8 @@ public class HashJoinOperator
                 long first = firstValues.value(position);
                 long second = secondValues.value(position);
                 long third = thirdValues.value(position);
-                int slot = findSlot(first, second, third);
-                if (isEmptySlot(slot) || firstKeys[slot] != first || secondKeys[slot] != second || thirdKeys[slot] != third) {
+                int slot = probe(first, second, third, hash64(first, second, third));
+                if (slot < 0) {
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
@@ -2601,77 +2613,116 @@ public class HashJoinOperator
             }
         }
 
-        private int findSlot(long first, long second, long third)
+        // Returns the slot holding (first, second, third), or -1 if absent. Scans GROUP tags per step: one vector
+        // load plus one tag compare filters the whole bucket; a key is only read on a tag match. A bucket with any
+        // empty slot ends the search (open-addressing invariant; no deletions).
+        private int probe(long first, long second, long third, long hash)
         {
-            int slot = mix(first, second, third) & mask;
-            while (!isEmptySlot(slot) && (firstKeys[slot] != first || secondKeys[slot] != second || thirdKeys[slot] != third)) {
-                slot = (slot + 1) & mask;
+            byte[] tagTable = tags;
+            byte tag = (byte) ((hash >>> 56) | 0x80L);
+            int group = ((int) hash) & mask & ~(GROUP - 1);
+            while (true) {
+                ByteVector groupTags = ByteVector.fromArray(SPECIES, tagTable, group);
+                long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
+                while (matchBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(matchBits);
+                    if (firstKeys[slot] == first && secondKeys[slot] == second && thirdKeys[slot] == third) {
+                        return slot;
+                    }
+                    matchBits &= matchBits - 1;
+                }
+                if (groupTags.compare(VectorOperators.EQ, (byte) 0).toLong() != 0) {
+                    return -1;
+                }
+                group = (group + GROUP) & mask;
             }
-            return slot;
         }
 
         private void rehash()
         {
-            long[] previousFirstKeys = firstKeys;
-            long[] previousSecondKeys = secondKeys;
-            long[] previousThirdKeys = thirdKeys;
-            long[] previousSingleRows = singleRows;
-            LongArrayList[] previousRowsBySlot = rowsBySlot;
-            int capacity = previousRowsBySlot.length * 2;
-
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
-            thirdKeys = new long[capacity];
-            singleRows = emptyRows(capacity);
-            rowsBySlot = new LongArrayList[capacity];
-            mask = capacity - 1;
-            maxFill = (int) (capacity * LOAD_FACTOR);
+            byte[] oldTags = tags;
+            long[] oldFirst = firstKeys;
+            long[] oldSecond = secondKeys;
+            long[] oldThird = thirdKeys;
+            long[] oldRows = singleRows;
+            LongArrayList[] oldLists = rowsBySlot;
+            allocate(oldTags.length * 2);
             size = 0;
-
-            for (int index = 0; index < previousFirstKeys.length; index++) {
-                if (previousSingleRows[index] == NO_MATCH_ROW_REFERENCE) {
+            for (int oldSlot = 0; oldSlot < oldTags.length; oldSlot++) {
+                if (oldTags[oldSlot] == 0) {
                     continue;
                 }
-                int slot = findSlot(previousFirstKeys[index], previousSecondKeys[index], previousThirdKeys[index]);
-                firstKeys[slot] = previousFirstKeys[index];
-                secondKeys[slot] = previousSecondKeys[index];
-                thirdKeys[slot] = previousThirdKeys[index];
-                singleRows[slot] = previousSingleRows[index];
-                rowsBySlot[slot] = previousRowsBySlot[index];
+                long first = oldFirst[oldSlot];
+                long second = oldSecond[oldSlot];
+                long third = oldThird[oldSlot];
+                long hash = hash64(first, second, third);
+                int slot = findEmpty(hash);
+                tags[slot] = (byte) ((hash >>> 56) | 0x80L);
+                firstKeys[slot] = first;
+                secondKeys[slot] = second;
+                thirdKeys[slot] = third;
+                singleRows[slot] = oldRows[oldSlot];
+                rowsBySlot[slot] = oldLists[oldSlot];
                 size++;
+            }
+        }
+
+        // Distinct keys only (rehash): the first empty slot in the key's probe sequence.
+        private int findEmpty(long hash)
+        {
+            int group = ((int) hash) & mask & ~(GROUP - 1);
+            while (true) {
+                long emptyBits = ByteVector.fromArray(SPECIES, tags, group).compare(VectorOperators.EQ, (byte) 0).toLong();
+                if (emptyBits != 0) {
+                    return group + Long.numberOfTrailingZeros(emptyBits);
+                }
+                group = (group + GROUP) & mask;
             }
         }
 
         private void addRow(long first, long second, long third, long rowReference)
         {
-            int slot = findSlot(first, second, third);
-            if (isEmptySlot(slot)) {
-                firstKeys[slot] = first;
-                secondKeys[slot] = second;
-                thirdKeys[slot] = third;
-                singleRows[slot] = rowReference;
-                size++;
-                if (size >= maxFill) {
-                    rehash();
+            long hash = hash64(first, second, third);
+            byte tag = (byte) ((hash >>> 56) | 0x80L);
+            int group = ((int) hash) & mask & ~(GROUP - 1);
+            while (true) {
+                ByteVector groupTags = ByteVector.fromArray(SPECIES, tags, group);
+                long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
+                while (matchBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(matchBits);
+                    if (firstKeys[slot] == first && secondKeys[slot] == second && thirdKeys[slot] == third) {
+                        if (rowsBySlot[slot] == null) {
+                            LongArrayList rows = new LongArrayList(2);
+                            rows.add(singleRows[slot]);
+                            rows.add(rowReference);
+                            rowsBySlot[slot] = rows;
+                        }
+                        else {
+                            rowsBySlot[slot].add(rowReference);
+                        }
+                        return;
+                    }
+                    matchBits &= matchBits - 1;
                 }
-                return;
+                long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
+                if (emptyBits != 0) {
+                    int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                    tags[slot] = tag;
+                    firstKeys[slot] = first;
+                    secondKeys[slot] = second;
+                    thirdKeys[slot] = third;
+                    singleRows[slot] = rowReference;
+                    size++;
+                    if (size >= maxFill) {
+                        rehash();
+                    }
+                    return;
+                }
+                group = (group + GROUP) & mask;
             }
-            if (rowsBySlot[slot] == null) {
-                LongArrayList rows = new LongArrayList(2);
-                rows.add(singleRows[slot]);
-                rows.add(rowReference);
-                rowsBySlot[slot] = rows;
-                return;
-            }
-            rowsBySlot[slot].add(rowReference);
         }
 
-        private boolean isEmptySlot(int slot)
-        {
-            return singleRows[slot] == NO_MATCH_ROW_REFERENCE;
-        }
-
-        private static int mix(long first, long second, long third)
+        private static long hash64(long first, long second, long third)
         {
             long hash = first * 0x9E3779B97F4A7C15L + second * 0xC4CEB9FE1A85EC53L + third * 0x94D049BB133111EBL;
             hash ^= hash >>> 33;
@@ -2679,7 +2730,7 @@ public class HashJoinOperator
             hash ^= hash >>> 33;
             hash *= 0xC4CEB9FE1A85EC53L;
             hash ^= hash >>> 33;
-            return (int) hash;
+            return hash;
         }
     }
 
