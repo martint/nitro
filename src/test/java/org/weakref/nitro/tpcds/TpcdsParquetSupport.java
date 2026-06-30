@@ -25,7 +25,6 @@ import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
-import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
@@ -40,7 +39,6 @@ import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
-import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
@@ -63,29 +61,17 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 final class TpcdsParquetSupport
 {
     private static final String NULLS_LAST_SENTINEL_STRING = "\uFFFF";
-    // Route eligible (all BIGINT/short-decimal) fact and dimension scans through SkipDecodeScanOperator so pushed
-    // dynamic filters skip-decode payload columns for survivors. On by default; disable with -Dnitro.skipScan=false.
-    private static final boolean SKIP_DECODE_SCAN = Boolean.parseBoolean(System.getProperty("nitro.skipScan", "true"));
-    // Route every scan through the Nitro-native Parquet decoder (full decode, no DF/skip) instead of the
-    // Trino-vendored reader. For evaluating org.weakref.nitro.parquet end-to-end.
-    private static final boolean USE_NITRO_READER = Boolean.parseBoolean(System.getProperty("nitro.parquet.useNitroReader", "false"));
-    // When true, the Nitro reader also takes DF-eligible integer fact scans (its own DF+skip-decode), fully
-    // replacing SkipDecodeScanOperator. CORRECT but currently 2-4x slower on selective DFs (lacks the
-    // per-dict-entry filter cache + run-coalesced skip), so OFF by default: the hybrid keeps the tuned operator.
-    private static final boolean NITRO_SKIP = Boolean.parseBoolean(System.getProperty("nitro.parquet.nitroSkip", "false"));
     // Audit hook: counts table-scan helper calls (one per table reference) while a query operator tree is built,
     // so a harness can compare per-query scan counts against the canonical Trino EXPLAIN plan.
     public static final java.util.concurrent.atomic.AtomicInteger SCAN_COUNT = new java.util.concurrent.atomic.AtomicInteger();
@@ -4201,70 +4187,22 @@ final class TpcdsParquetSupport
     private static Operator factScan(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
         SCAN_COUNT.incrementAndGet();
-        // nitroSkip: let the Nitro reader take DF-eligible scans too (its own DF+skip-decode). Off by default.
-        if (USE_NITRO_READER && NITRO_SKIP) {
-            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
-        }
-        // Default hybrid: the tuned skip-decode operator keeps DF-eligible (BIGINT/short-decimal) fact scans.
-        if (SKIP_DECODE_SCAN
-                && org.weakref.nitro.operator.SkipDecodeScanOperator.isEligible(tables.tableFiles(tableName), List.of(columns))) {
-            return new org.weakref.nitro.operator.SkipDecodeScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
-        }
-        if (USE_NITRO_READER) {
-            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
-        }
-        return multiFileScan(
-                tables.tableFiles(tableName),
-                columns.length,
-                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+        return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
     }
 
     private static Operator customerScan(Allocator allocator, TpcdsParquetTables tables, String... columns)
     {
-        SCAN_COUNT.incrementAndGet();
-        if (USE_NITRO_READER) {
-            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles("customer"), List.of(columns));
-        }
-        return multiFileScan(
-                tables.tableFiles("customer"),
-                columns.length,
-                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+        return factScan(allocator, tables, "customer", columns);
     }
 
     private static Operator scannedTable(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
-        SCAN_COUNT.incrementAndGet();
-        if (USE_NITRO_READER && NITRO_SKIP) {
-            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
-        }
-        if (SKIP_DECODE_SCAN
-                && org.weakref.nitro.operator.SkipDecodeScanOperator.isEligible(tables.tableFiles(tableName), List.of(columns))) {
-            return new org.weakref.nitro.operator.SkipDecodeScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
-        }
-        if (USE_NITRO_READER) {
-            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
-        }
-        return multiFileScan(
-                tables.tableFiles(tableName),
-                columns.length,
-                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+        return factScan(allocator, tables, tableName, columns);
     }
 
     private static Operator itemScan(Allocator allocator, TpcdsParquetTables tables, String... columns)
     {
-        SCAN_COUNT.incrementAndGet();
-        if (USE_NITRO_READER) {
-            return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles("item"), List.of(columns));
-        }
-        return multiFileScan(
-                tables.tableFiles("item"),
-                columns.length,
-                path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
-    }
-
-    private static Operator multiFileScan(List<Path> files, int outputCount, Function<Path, Operator> operatorFactory)
-    {
-        return new MultiStageOperator(outputCount, files, operatorFactory);
+        return factScan(allocator, tables, "item", columns);
     }
 
     private static Operator filter(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, FilterSpec filterSpec)

@@ -18,7 +18,6 @@ import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
-import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.NitroParquetScanOperator;
 import org.weakref.nitro.operator.Operator;
@@ -26,7 +25,6 @@ import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.TopNOperator;
-import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
@@ -47,11 +45,9 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Function;
 
 /**
  * The TPC-H queries as Nitro operator trees, mirroring Trino's optimized logical plans
@@ -1380,17 +1376,9 @@ final class TpchParquetSupport
 
     // ---- scan / filter plumbing ----
 
-    // Use Nitro's own from-scratch reader (org.weakref.nitro.parquet) instead of the Trino-vendored one, so the
-    // TPC-H harness measures a real Nitro stack (reader + operators). Same flag as the TPC-DS path.
-    private static final boolean USE_NITRO_READER = Boolean.parseBoolean(System.getProperty("nitro.parquet.useNitroReader", "false"));
-
     private static Operator scannedTable(Allocator allocator, TpchParquetTables tables, String tableName, String... columns)
     {
-        List<Path> files = tables.tableFiles(tableName);
-        if (USE_NITRO_READER) {
-            return new NitroParquetScanOperator(allocator, files, List.of(columns));
-        }
-        return new MultiStageOperator(columns.length, files, (Function<Path, Operator>) path -> new TrinoParquetScanOperator(allocator, path, List.of(columns)));
+        return new NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
     }
 
     private static Operator filter(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, FilterSpec filterSpec)

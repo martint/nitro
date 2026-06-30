@@ -30,14 +30,11 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
-import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NitroParquetScanOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
-import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -71,7 +68,6 @@ import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Function;
 
 import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
@@ -82,7 +78,6 @@ import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 public final class ClickBenchHitsSupport
 {
     static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
-    static final String CLICKBENCH_PARQUET_READER_PROPERTY = "nitro.clickbench.parquet.reader";
     static final long QUERY20_USER_ID = 435_090_932_899_640_449L;
     static final long QUERY41_REFERER_HASH = 3_594_120_000_172_545_465L;
     static final long QUERY42_URL_HASH = 2_868_770_270_353_813_622L;
@@ -722,35 +717,13 @@ public final class ClickBenchHitsSupport
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
     {
         try {
-            // The Nitro reader is multi-file aware, so it takes the whole directory's files directly rather than via
-            // MultiStageOperator. This is the native Nitro scan layer (matching the TPC-DS path), not Trino's reader.
-            if (configuredReader() == ReaderKind.NITRO) {
-                List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
-                return new NitroParquetScanOperator(allocator, paths, List.of(columns));
-            }
-            Function<Path, Operator> operatorFactory = switch (configuredReader()) {
-                case APACHE -> path -> new ParquetScanOperator(allocator, path, List.of(columns));
-                case TRINO -> path -> new TrinoParquetScanOperator(allocator, path, List.of(columns));
-                case NITRO -> throw new AssertionError("handled above");
-            };
-            if (Files.isDirectory(file)) {
-                return new MultiStageOperator(columns.length, parquetFiles(file), operatorFactory);
-            }
-            return operatorFactory.apply(file);
+            // The Nitro reader is multi-file aware, so it takes the whole directory's files directly.
+            List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
+            return new NitroParquetScanOperator(allocator, paths, List.of(columns));
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
         }
-    }
-
-    private static ReaderKind configuredReader()
-    {
-        return switch (System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY, "trino").strip().toLowerCase()) {
-            case "apache" -> ReaderKind.APACHE;
-            case "trino" -> ReaderKind.TRINO;
-            case "nitro" -> ReaderKind.NITRO;
-            default -> throw new IllegalArgumentException("Unsupported ClickBench Parquet reader: " + System.getProperty(CLICKBENCH_PARQUET_READER_PROPERTY));
-        };
     }
 
     private static boolean isUsableActualHitsDirectory(Path path)
@@ -1358,12 +1331,5 @@ public final class ClickBenchHitsSupport
 
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
     {
-    }
-
-    private enum ReaderKind
-    {
-        APACHE,
-        TRINO,
-        NITRO,
     }
 }
