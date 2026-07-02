@@ -228,6 +228,9 @@ public final class PlanEvaluator
         }
         if (mask.all()) {
             Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
+            if (peeledResult == null) {
+                peeledResult = tryEvaluatePropagatingNullsPeeledCall(function, inputs, requestedStreams);
+            }
             if (peeledResult != null) {
                 return completeRequestedStreams(requestedStreams, peeledResult, mask);
             }
@@ -259,6 +262,89 @@ public final class PlanEvaluator
     private static List<Streams> inputsForPeeling(DictionaryPeeling peeling)
     {
         return peeling.inputs();
+    }
+
+    /**
+     * Peels a dictionary-encoded call whose NULLS stream carries a different dictionary than its VALUES stream.
+     * <p>
+     * The strict peel ({@link #tryEvaluateDictionaryPeeledCall}) requires every stream of every input to share one
+     * id array, so it bails when a low-cardinality string column reaches a projection with a VALUES dictionary
+     * (composed over the string base by upstream joins) but a NULLS dictionary carrying its own ids over a boolean
+     * base. For a {@linkplain PrimitiveFunction#propagatesNulls() strictly null-propagating} function the transform
+     * depends only on the input values, so it can run over the distinct base values while the original NULLS stream
+     * passes straight through — turning a per-row string transform over the whole batch into one over a handful of
+     * distinct values.
+     */
+    private Streams tryEvaluatePropagatingNullsPeeledCall(PrimitiveFunction function, List<Streams> inputs, Set<Stream> requestedStreams)
+    {
+        if (!function.propagatesNulls()) {
+            return null;
+        }
+
+        int[] sharedIds = null;
+        int rowCount = -1;
+        for (Streams inputStreams : inputs) {
+            if (inputStreams.getOrNull(Stream.VALUES) instanceof DictionaryVector dictionary) {
+                if (sharedIds == null) {
+                    sharedIds = dictionary.ids();
+                    rowCount = dictionary.length();
+                }
+                else if (dictionary.length() != rowCount || !Arrays.equals(sharedIds, dictionary.ids())) {
+                    return null;
+                }
+            }
+        }
+        if (sharedIds == null) {
+            return null;
+        }
+
+        int baseLength = 0;
+        for (int id : sharedIds) {
+            baseLength = Math.max(baseLength, id + 1);
+        }
+
+        List<Streams> baseInputs = new ArrayList<>(inputs.size());
+        Vector passthroughNulls = null;
+        for (Streams inputStreams : inputs) {
+            Vector peeledValues = peelDictionaryCompatibleVector(inputStreams.getOrNull(Stream.VALUES), sharedIds, rowCount, baseLength);
+            if (peeledValues == null) {
+                return null;
+            }
+            baseInputs.add(Streams.ofValues(peeledValues));
+
+            Vector nulls = inputStreams.getOrNull(Stream.NULLS);
+            if (nulls != null && !VectorAccess.isAllFalseNulls(nulls)) {
+                if (passthroughNulls != null) {
+                    // More than one input contributes nulls; combining them at full length is out of scope here.
+                    return null;
+                }
+                if (nulls.length() != rowCount) {
+                    return null;
+                }
+                passthroughNulls = nulls;
+            }
+        }
+
+        Mask baseMask = allocator.allocateAllMask(allocationContext, baseLength);
+        Streams baseResult;
+        try {
+            baseResult = function.apply(baseInputs, baseMask, VALUES_ONLY, null, executionContext);
+        }
+        finally {
+            allocator.release(allocationContext, baseMask);
+        }
+
+        Vector baseValues = baseResult.getOrNull(Stream.VALUES);
+        if (baseValues == null) {
+            return null;
+        }
+
+        Streams.Builder result = Streams.builder();
+        result.put(Stream.VALUES, executionContext.allocator().allocateDictionary(allocationContext, sharedIds, baseValues));
+        if (passthroughNulls != null && requestedStreams.contains(Stream.NULLS)) {
+            result.put(Stream.NULLS, passthroughNulls);
+        }
+        return result.build();
     }
 
     private DictionaryPeeling tryBuildDictionaryPeeling(List<Streams> inputs)

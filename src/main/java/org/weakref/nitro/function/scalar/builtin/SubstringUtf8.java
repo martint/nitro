@@ -42,6 +42,12 @@ public final class SubstringUtf8
     }
 
     @Override
+    public boolean propagatesNulls()
+    {
+        return true;
+    }
+
+    @Override
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
         return PrimitiveFunction.valuesAndNullsWhenRequested(requestedOutputStreams);

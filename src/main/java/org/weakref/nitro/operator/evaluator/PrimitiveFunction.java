@@ -59,6 +59,18 @@ public interface PrimitiveFunction
         return true;
     }
 
+    /**
+     * Returns {@code true} when this function propagates nulls strictly: the output is null at exactly the
+     * positions where any input value is null, and the output value at a non-null position depends only on the
+     * input values (never on which positions are null). This lets the evaluator peel a dictionary-encoded input
+     * even when the input's NULLS stream carries a different dictionary than its VALUES stream — the transform
+     * runs over the distinct base values while the original NULLS stream passes straight through.
+     */
+    default boolean propagatesNulls()
+    {
+        return false;
+    }
+
     default Set<Allocator.Context> allocationContexts()
     {
         return Set.of();
