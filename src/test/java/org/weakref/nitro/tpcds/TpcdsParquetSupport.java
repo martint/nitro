@@ -4327,8 +4327,6 @@ final class TpcdsParquetSupport
         Variable bucket61To90 = new Variable(24);
         Variable bucket91To120 = new Variable(25);
         Variable bucketOver120 = new Variable(26);
-        Variable alwaysTrue = new Variable(27);
-        Variable firstName = new Variable(28);
         Variable prefixStart = new Variable(29);
         Variable prefixLength = new Variable(30);
         Variable firstNamePrefix = new Variable(31);
@@ -4380,15 +4378,10 @@ final class TpcdsParquetSupport
                 new Assignment(greaterThanOneHundredTwenty, new Call("lt", List.of(
                         new Reference(oneHundredTwenty, Stream.VALUES),
                         new Reference(days, Stream.VALUES))), AllMask.ALL),
-                new Assignment(alwaysTrue, new Literal(true), AllMask.ALL),
-                new Assignment(firstName, new Call("if_utf8", List.of(
-                        new Reference(alwaysTrue, Stream.VALUES),
-                        new Reference(new Input(firstNameIndex), Stream.VALUES),
-                        new Reference(new Input(firstNameIndex), Stream.VALUES))), AllMask.ALL),
                 new Assignment(prefixStart, new Literal(1L), AllMask.ALL),
                 new Assignment(prefixLength, new Literal(20L), AllMask.ALL),
                 new Assignment(firstNamePrefix, new Call("substring_utf8", List.of(
-                        new Reference(firstName, Stream.VALUES),
+                        new Reference(new Input(firstNameIndex), Stream.VALUES),
                         new Reference(prefixStart, Stream.VALUES),
                         new Reference(prefixLength, Stream.VALUES))), AllMask.ALL),
                 new Assignment(bucket30, new Call("if_i64", List.of(
