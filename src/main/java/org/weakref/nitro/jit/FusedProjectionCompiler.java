@@ -40,9 +40,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * interpreter pays walking a subtree and invoking one atomic batch primitive per node.
  * <p>
  * Values are computed with three-valued (value, is-null) pairs so nullable inputs are handled without a separate
- * boolean-vector pipeline. Scope: integer inputs (read as {@code long}, I32 widened once), the arithmetic / comparison
- * / boolean / {@code if_i64} operator set, and {@code long}-typed (I64) outputs. Any output outside that set is left to
- * the interpreter, so this is a speedup-only substitution behind the same ABI.
+ * boolean-vector pipeline. Scope: integer inputs (read as {@code long}, I32 widened once) and double inputs (read as
+ * {@code double}); the {@code long}/{@code double} arithmetic, comparison, boolean and {@code if_i64}/{@code if_f64}
+ * operator set; and {@code long}-typed (I64) or {@code double}-typed (F64) outputs. Any output outside that set is left
+ * to the interpreter, so this is a speedup-only substitution behind the same ABI.
  */
 public final class FusedProjectionCompiler
 {
@@ -54,10 +55,10 @@ public final class FusedProjectionCompiler
 
     private FusedProjectionCompiler() {}
 
-    private enum ValueType { LONG, BOOL }
+    private enum ValueType { LONG, DOUBLE, BOOL }
 
     private sealed interface Operand
-            permits ColumnOperand, StepOperand, LongConstant, BoolConstant {}
+            permits ColumnOperand, StepOperand, LongConstant, DoubleConstant, BoolConstant {}
 
     private record ColumnOperand(int slot, ValueType type) implements Operand {}
 
@@ -65,22 +66,24 @@ public final class FusedProjectionCompiler
 
     private record LongConstant(long value) implements Operand {}
 
+    private record DoubleConstant(double value) implements Operand {}
+
     private record BoolConstant(boolean value) implements Operand {}
 
     /** One shared assignment in the fused program: {@code step<id> = op(operands)}. */
     private record Step(int id, String op, List<Operand> operands, ValueType type) {}
 
-    /** The compiled shape: the ordered source columns to feed as inputs, the shared steps, and one root per output. */
-    private record Slice(List<Integer> columns, List<Step> steps, List<Operand> roots) {}
+    /** The compiled shape: the ordered source columns (with their Java type) to feed, the shared steps, the roots. */
+    private record Slice(List<Integer> columns, List<ValueType> columnTypes, List<Step> steps, List<Operand> roots) {}
 
     /** A fused multi-output kernel, the ordered source columns it expects, and the outputs it produces (in order). */
     public record CompiledMultiProjection(FusedMultiProjection kernel, List<Integer> columns, List<Reference> outputs) {}
 
     /**
      * Compile every fusible output among {@code candidateOutputs} into one shared-loop kernel. Returns empty if none
-     * qualifies. An output qualifies when its whole SSA slice is in the supported set, its result is I64-typed, and it
-     * is worth fusing (contains a comparison or {@code if_i64} -- the megamorphic boolean-pipeline shape; trivial
-     * single-op arithmetic is left to the interpreter, where fusion would only add call overhead).
+     * qualifies. An output qualifies when its whole SSA slice is in the supported set, its result is I64- or F64-typed,
+     * and it is worth fusing (its slice has at least two operations -- a single-op projection is left to the
+     * interpreter, where fusion would only add call overhead without saving an intermediate).
      */
     public static Optional<CompiledMultiProjection> tryCompile(EvaluationPlan plan, List<Reference> candidateOutputs)
     {
@@ -96,8 +99,9 @@ public final class FusedProjectionCompiler
             }
             try {
                 SliceBuilder trial = new SliceBuilder(assignments);
-                Operand root = trial.operand(candidate);
-                if (operandType(root) == ValueType.LONG && worthFusing(trial.steps())) {
+                Operand root = trial.operand(candidate, null);
+                ValueType rootType = operandType(root);
+                if ((rootType == ValueType.LONG || rootType == ValueType.DOUBLE) && worthFusing(trial.steps())) {
                     fusible.add(candidate);
                 }
             }
@@ -112,9 +116,9 @@ public final class FusedProjectionCompiler
         SliceBuilder combined = new SliceBuilder(assignments);
         List<Operand> roots = new ArrayList<>();
         for (Reference output : fusible) {
-            roots.add(combined.operand(output));
+            roots.add(combined.operand(output, null));
         }
-        Slice slice = new Slice(combined.columns(), combined.steps(), roots);
+        Slice slice = new Slice(combined.columns(), combined.columnTypes(), combined.steps(), roots);
 
         FusedMultiProjection kernel = CACHE.computeIfAbsent(render(slice, "K"), ignored -> {
             String simpleName = "FusedProj_" + COUNTER.incrementAndGet();
@@ -132,15 +136,10 @@ public final class FusedProjectionCompiler
 
     private static boolean worthFusing(List<Step> steps)
     {
-        for (Step step : steps) {
-            if (switch (step.op()) {
-                case "lt", "gt", "lte", "gte", "eq", "if_i64" -> true;
-                default -> false;
-            }) {
-                return true;
-            }
-        }
-        return false;
+        // A slice with a single operation writes one output from one primitive; the interpreter already does that with
+        // no intermediate vector, so fusing only adds javac + call overhead. Two or more operations means the
+        // interpreter materializes at least one intermediate vector that fusion keeps in a register.
+        return steps.size() >= 2;
     }
 
     private static final class Unsupported
@@ -158,6 +157,7 @@ public final class FusedProjectionCompiler
         private final Map<Integer, Assignment> assignments;
         private final List<Integer> columns = new ArrayList<>();
         private final Map<Integer, Integer> columnSlots = new LinkedHashMap<>();
+        private final Map<Integer, ValueType> columnTypeBySlot = new LinkedHashMap<>();
         private final Map<Integer, Operand> variableSteps = new LinkedHashMap<>();
         private final List<Step> steps = new ArrayList<>();
         private final AtomicInteger nextStep = new AtomicInteger();
@@ -172,31 +172,55 @@ public final class FusedProjectionCompiler
             return columns;
         }
 
+        List<ValueType> columnTypes()
+        {
+            List<ValueType> types = new ArrayList<>(columns.size());
+            for (int slot = 0; slot < columns.size(); slot++) {
+                types.add(columnTypeBySlot.get(slot));
+            }
+            return types;
+        }
+
         List<Step> steps()
         {
             return steps;
         }
 
-        Operand operand(Reference reference)
+        /**
+         * Resolves a reference into an operand. {@code expected} is the type the consuming operator requires (null for a
+         * root, whose type is whatever its operator produces). An input column is typed by its consumer; if two
+         * consumers disagree on a column's type the slice is not fusible.
+         */
+        Operand operand(Reference reference, ValueType expected)
         {
             if (reference.stream() != Stream.VALUES) {
                 throw new Unsupported();
             }
             Producer producer = reference.producer();
             if (producer instanceof Input input) {
+                if (expected == null || expected == ValueType.BOOL) {
+                    // A raw column can only feed a numeric operator; a bool-typed column input is out of scope.
+                    throw new Unsupported();
+                }
                 int slot = columnSlots.computeIfAbsent(input.index(), index -> {
                     columns.add(index);
                     return columns.size() - 1;
                 });
-                return new ColumnOperand(slot, ValueType.LONG);
+                ValueType existing = columnTypeBySlot.putIfAbsent(slot, expected);
+                if (existing != null && existing != expected) {
+                    throw new Unsupported();
+                }
+                return new ColumnOperand(slot, expected);
             }
             if (producer instanceof Variable variable) {
                 Operand existing = variableSteps.get(variable.id());
-                if (existing != null) {
-                    return existing;
+                Operand built = existing != null ? existing : buildVariable(variable);
+                if (existing == null) {
+                    variableSteps.put(variable.id(), built);
                 }
-                Operand built = buildVariable(variable);
-                variableSteps.put(variable.id(), built);
+                if (expected != null && operandType(built) != expected) {
+                    throw new Unsupported();
+                }
                 return built;
             }
             throw new Unsupported();
@@ -215,11 +239,14 @@ public final class FusedProjectionCompiler
             if (operation instanceof Call call) {
                 String op = call.name();
                 ValueType type = resultType(op);
-                List<Operand> operands = new ArrayList<>();
-                for (Reference argument : call.arguments()) {
-                    operands.add(operand(argument));
+                List<ValueType> argTypes = argumentTypes(op);
+                if (call.arguments().size() != argTypes.size()) {
+                    throw new Unsupported();
                 }
-                checkArity(op, operands);
+                List<Operand> operands = new ArrayList<>();
+                for (int index = 0; index < call.arguments().size(); index++) {
+                    operands.add(operand(call.arguments().get(index), argTypes.get(index)));
+                }
                 int id = nextStep.getAndIncrement();
                 steps.add(new Step(id, op, operands, type));
                 return new StepOperand(id, type);
@@ -235,6 +262,12 @@ public final class FusedProjectionCompiler
             if (value instanceof Integer intValue) {
                 return new LongConstant(intValue.longValue());
             }
+            if (value instanceof Double doubleValue) {
+                if (!Double.isFinite(doubleValue)) {
+                    throw new Unsupported();
+                }
+                return new DoubleConstant(doubleValue);
+            }
             if (value instanceof Boolean boolValue) {
                 return new BoolConstant(boolValue);
             }
@@ -246,38 +279,27 @@ public final class FusedProjectionCompiler
     {
         return switch (op) {
             case "add", "subtract", "multiply", "if_i64" -> ValueType.LONG;
-            case "lt", "gt", "lte", "gte", "eq", "and", "or", "not" -> ValueType.BOOL;
+            case "add_f64", "subtract_f64", "multiply_f64", "if_f64" -> ValueType.DOUBLE;
+            case "lt", "gt", "lte", "gte", "eq",
+                 "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64",
+                 "and", "or", "not" -> ValueType.BOOL;
             default -> throw new Unsupported();
         };
     }
 
-    private static void checkArity(String op, List<Operand> operands)
+    /** The operand types each operator requires, in order (also fixes its arity). */
+    private static List<ValueType> argumentTypes(String op)
     {
-        int arity = switch (op) {
-            case "not" -> 1;
-            case "add", "subtract", "multiply", "lt", "gt", "lte", "gte", "eq", "and", "or" -> 2;
-            case "if_i64" -> 3;
+        return switch (op) {
+            case "add", "subtract", "multiply", "lt", "gt", "lte", "gte", "eq" -> List.of(ValueType.LONG, ValueType.LONG);
+            case "add_f64", "subtract_f64", "multiply_f64", "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64" ->
+                    List.of(ValueType.DOUBLE, ValueType.DOUBLE);
+            case "and", "or" -> List.of(ValueType.BOOL, ValueType.BOOL);
+            case "not" -> List.of(ValueType.BOOL);
+            case "if_i64" -> List.of(ValueType.BOOL, ValueType.LONG, ValueType.LONG);
+            case "if_f64" -> List.of(ValueType.BOOL, ValueType.DOUBLE, ValueType.DOUBLE);
             default -> throw new Unsupported();
         };
-        if (operands.size() != arity) {
-            throw new Unsupported();
-        }
-        switch (op) {
-            case "add", "subtract", "multiply", "lt", "gt", "lte", "gte", "eq" -> requireTypes(operands, ValueType.LONG, ValueType.LONG);
-            case "and", "or" -> requireTypes(operands, ValueType.BOOL, ValueType.BOOL);
-            case "not" -> requireTypes(operands, ValueType.BOOL);
-            case "if_i64" -> requireTypes(operands, ValueType.BOOL, ValueType.LONG, ValueType.LONG);
-            default -> throw new Unsupported();
-        }
-    }
-
-    private static void requireTypes(List<Operand> operands, ValueType... expected)
-    {
-        for (int index = 0; index < expected.length; index++) {
-            if (operandType(operands.get(index)) != expected[index]) {
-                throw new Unsupported();
-            }
-        }
     }
 
     private static ValueType operandType(Operand operand)
@@ -286,6 +308,7 @@ public final class FusedProjectionCompiler
             case ColumnOperand column -> column.type();
             case StepOperand step -> step.type();
             case LongConstant ignored -> ValueType.LONG;
+            case DoubleConstant ignored -> ValueType.DOUBLE;
             case BoolConstant ignored -> ValueType.BOOL;
         };
     }
@@ -293,21 +316,22 @@ public final class FusedProjectionCompiler
     /**
      * Whether an operand's value is provably non-null regardless of runtime data. Constants are non-null; a column may
      * carry nulls (unknown at compile time); a step is non-null when its null-producing inputs are non-null -- notably
-     * {@code if_i64} is non-null iff both branches are (the condition's nullity only steers which branch is chosen, and
-     * a null condition falls to the else branch). Matches the interpreter, which emits no NULLS stream for a null-free
+     * {@code if_*} is non-null iff both branches are (the condition's nullity only steers which branch is chosen, and a
+     * null condition falls to the else branch). Matches the interpreter, which emits no NULLS stream for a null-free
      * result so the consumer keeps its null-free fast path.
      */
     private static boolean alwaysNonNull(Operand operand, List<Step> steps)
     {
         return switch (operand) {
             case LongConstant ignored -> true;
+            case DoubleConstant ignored -> true;
             case BoolConstant ignored -> true;
             case ColumnOperand ignored -> false;
             case StepOperand stepOperand -> {
                 Step step = steps.get(stepOperand.stepId());
                 List<Operand> args = step.operands();
                 yield switch (step.op()) {
-                    case "if_i64" -> alwaysNonNull(args.get(1), steps) && alwaysNonNull(args.get(2), steps);
+                    case "if_i64", "if_f64" -> alwaysNonNull(args.get(1), steps) && alwaysNonNull(args.get(2), steps);
                     default -> {
                         for (Operand argument : args) {
                             if (!alwaysNonNull(argument, steps)) {
@@ -327,12 +351,15 @@ public final class FusedProjectionCompiler
     {
         int outputCount = slice.roots().size();
         boolean[] nullable = new boolean[outputCount];
+        ValueType[] outputType = new ValueType[outputCount];
         for (int output = 0; output < outputCount; output++) {
             nullable[output] = !alwaysNonNull(slice.roots().get(output), slice.steps());
+            outputType[output] = operandType(slice.roots().get(output));
         }
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("import org.weakref.nitro.data.BooleanVector;\n");
+        out.append("import org.weakref.nitro.data.F64Vector;\n");
         out.append("import org.weakref.nitro.data.I32Vector;\n");
         out.append("import org.weakref.nitro.data.I64Vector;\n");
         out.append("import org.weakref.nitro.data.Vector;\n");
@@ -346,26 +373,15 @@ public final class FusedProjectionCompiler
         out.append("  @Override public Streams[] apply(java.util.List<Streams> inputs, org.weakref.nitro.data.Mask mask, "
                 + "java.util.Set<Stream> requestedStreams, PrimitiveExecutionContext context) {\n");
 
-        // Hoist each source column to a monomorphic long[] view once (I64 direct, I32 widened once) plus a nulls[].
-        // If any input is an unsupported flat layout, bail to null so the caller runs the interpreter for this batch.
+        // Hoist each source column to a monomorphic long[]/double[] view once plus a nulls[]. If any input is an
+        // unsupported flat layout, bail to null so the caller runs the interpreter for this batch.
         for (int slot = 0; slot < slice.columns().size(); slot++) {
-            out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
-            out.append("    long[] col").append(slot).append(";\n");
-            out.append("    if (vals").append(slot).append(" instanceof I64Vector iv").append(slot)
-                    .append(") { col").append(slot).append(" = iv").append(slot).append(".values(); }\n");
-            out.append("    else if (vals").append(slot).append(" instanceof I32Vector wv").append(slot)
-                    .append(") { int[] s = wv").append(slot).append(".values(); col").append(slot)
-                    .append(" = new long[s.length]; for (int j = 0; j < s.length; j++) { col").append(slot)
-                    .append("[j] = s[j]; } }\n");
-            // Join outputs arrive dictionary-wrapped; gather the base values through the ids into a flat long[] once so
-            // the per-row loop stays monomorphic (and auto-vectorizable) instead of the interpreter's per-position peel.
-            out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
-                    .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
-                    .append(" col").append(slot).append(" = new long[ids.length];")
-                    .append(" if (base instanceof I64Vector bi) { long[] bv = bi.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
-                    .append(" else if (base instanceof I32Vector bw) { int[] bv = bw.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
-                    .append(" else { return null; } }\n");
-            out.append("    else { return null; }\n");
+            if (slice.columnTypes().get(slot) == ValueType.DOUBLE) {
+                appendDoubleColumn(out, slot);
+            }
+            else {
+                appendLongColumn(out, slot);
+            }
             // NULLS may arrive flat (BooleanVector) or, on a column carried through joins, dictionary-wrapped over a
             // boolean base with its own ids (independent of the VALUES dictionary). Gather the dict case through its ids
             // into a per-row boolean[] so the loop stays monomorphic; bail on any other layout.
@@ -385,9 +401,16 @@ public final class FusedProjectionCompiler
         out.append("    int required = mask.maxPosition() + 1;\n");
         out.append("    boolean wantNulls = requestedStreams.contains(N);\n");
         for (int output = 0; output < outputCount; output++) {
-            out.append("    I64Vector out").append(output).append(" = context.allocator().allocate("
-                    + "context.allocationContext(\"FusedProjection\"), I64Vector.class, required, I64Vector::new);\n");
-            out.append("    long[] o").append(output).append(" = out").append(output).append(".values();\n");
+            if (outputType[output] == ValueType.DOUBLE) {
+                out.append("    F64Vector out").append(output).append(" = context.allocator().allocate("
+                        + "context.allocationContext(\"FusedProjection\"), F64Vector.class, required, F64Vector::new);\n");
+                out.append("    double[] o").append(output).append(" = out").append(output).append(".values();\n");
+            }
+            else {
+                out.append("    I64Vector out").append(output).append(" = context.allocator().allocate("
+                        + "context.allocationContext(\"FusedProjection\"), I64Vector.class, required, I64Vector::new);\n");
+                out.append("    long[] o").append(output).append(" = out").append(output).append(".values();\n");
+            }
             if (nullable[output]) {
                 out.append("    BooleanVector outNulls").append(output).append(" = wantNulls ? context.allocator().allocate("
                         + "context.allocationContext(\"FusedProjection\"), BooleanVector.class, required, BooleanVector::new) : null;\n");
@@ -421,15 +444,54 @@ public final class FusedProjectionCompiler
         return out.toString();
     }
 
+    private static void appendLongColumn(StringBuilder out, int slot)
+    {
+        out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
+        out.append("    long[] col").append(slot).append(";\n");
+        out.append("    if (vals").append(slot).append(" instanceof I64Vector iv").append(slot)
+                .append(") { col").append(slot).append(" = iv").append(slot).append(".values(); }\n");
+        out.append("    else if (vals").append(slot).append(" instanceof I32Vector wv").append(slot)
+                .append(") { int[] s = wv").append(slot).append(".values(); col").append(slot)
+                .append(" = new long[s.length]; for (int j = 0; j < s.length; j++) { col").append(slot)
+                .append("[j] = s[j]; } }\n");
+        // Join outputs arrive dictionary-wrapped; gather the base values through the ids into a flat long[] once so the
+        // per-row loop stays monomorphic (and auto-vectorizable) instead of the interpreter's per-position peel.
+        out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
+                .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
+                .append(" col").append(slot).append(" = new long[ids.length];")
+                .append(" if (base instanceof I64Vector bi) { long[] bv = bi.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(" else if (base instanceof I32Vector bw) { int[] bv = bw.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(" else { return null; } }\n");
+        out.append("    else { return null; }\n");
+    }
+
+    private static void appendDoubleColumn(StringBuilder out, int slot)
+    {
+        out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
+        out.append("    double[] col").append(slot).append(";\n");
+        out.append("    if (vals").append(slot).append(" instanceof F64Vector fv").append(slot)
+                .append(") { col").append(slot).append(" = fv").append(slot).append(".values(); }\n");
+        out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
+                .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
+                .append(" if (base instanceof F64Vector bf) { double[] bv = bf.values(); col").append(slot)
+                .append(" = new double[ids.length]; for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(" else { return null; } }\n");
+        out.append("    else { return null; }\n");
+    }
+
     /** The per-position body: one local (value, is-null) pair per shared step, then each output's writes. */
     private static String loopBody(Slice slice, boolean[] nullable)
     {
         StringBuilder body = new StringBuilder();
         for (Step step : slice.steps()) {
-            String javaType = step.type() == ValueType.LONG ? "long" : "boolean";
+            String javaType = switch (step.type()) {
+                case LONG -> "long";
+                case DOUBLE -> "double";
+                case BOOL -> "boolean";
+            };
             body.append("        ").append(javaType).append(" sv").append(step.id()).append(" = ").append(valueExpr(step)).append(";\n");
             // A step's is-null local is only needed when some output (or a downstream step) reads it; the null-free
-            // outputs still need the internal nulls of their inputs (e.g. a null condition steering an if_i64), so the
+            // outputs still need the internal nulls of their inputs (e.g. a null condition steering an if), so the
             // is-null locals are always emitted -- the JIT drops the dead ones.
             body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step)).append(";\n");
         }
@@ -447,19 +509,19 @@ public final class FusedProjectionCompiler
     {
         List<Operand> args = step.operands();
         return switch (step.op()) {
-            case "add" -> "(" + value(args.get(0)) + " + " + value(args.get(1)) + ")";
-            case "subtract" -> "(" + value(args.get(0)) + " - " + value(args.get(1)) + ")";
-            case "multiply" -> "(" + value(args.get(0)) + " * " + value(args.get(1)) + ")";
-            case "lt" -> "(" + value(args.get(0)) + " < " + value(args.get(1)) + ")";
-            case "gt" -> "(" + value(args.get(0)) + " > " + value(args.get(1)) + ")";
-            case "lte" -> "(" + value(args.get(0)) + " <= " + value(args.get(1)) + ")";
-            case "gte" -> "(" + value(args.get(0)) + " >= " + value(args.get(1)) + ")";
-            case "eq" -> "(" + value(args.get(0)) + " == " + value(args.get(1)) + ")";
+            case "add", "add_f64" -> "(" + value(args.get(0)) + " + " + value(args.get(1)) + ")";
+            case "subtract", "subtract_f64" -> "(" + value(args.get(0)) + " - " + value(args.get(1)) + ")";
+            case "multiply", "multiply_f64" -> "(" + value(args.get(0)) + " * " + value(args.get(1)) + ")";
+            case "lt", "lt_f64" -> "(" + value(args.get(0)) + " < " + value(args.get(1)) + ")";
+            case "gt", "gt_f64" -> "(" + value(args.get(0)) + " > " + value(args.get(1)) + ")";
+            case "lte", "lte_f64" -> "(" + value(args.get(0)) + " <= " + value(args.get(1)) + ")";
+            case "gte", "gte_f64" -> "(" + value(args.get(0)) + " >= " + value(args.get(1)) + ")";
+            case "eq", "eq_f64" -> "(" + value(args.get(0)) + " == " + value(args.get(1)) + ")";
             case "and" -> "(" + value(args.get(0)) + " && " + value(args.get(1)) + ")";
             case "or" -> "(" + value(args.get(0)) + " || " + value(args.get(1)) + ")";
             case "not" -> "(!" + value(args.get(0)) + ")";
-            // if_i64: SQL CASE -- the true branch is taken only when the condition is non-null AND true.
-            case "if_i64" -> "((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") ? " + value(args.get(1)) + " : " + value(args.get(2)) + ")";
+            // if_*: SQL CASE -- the true branch is taken only when the condition is non-null AND true.
+            case "if_i64", "if_f64" -> "((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") ? " + value(args.get(1)) + " : " + value(args.get(2)) + ")";
             default -> throw new Unsupported();
         };
     }
@@ -468,7 +530,8 @@ public final class FusedProjectionCompiler
     {
         List<Operand> args = step.operands();
         return switch (step.op()) {
-            case "add", "subtract", "multiply", "lt", "gt", "lte", "gte", "eq" ->
+            case "add", "subtract", "multiply", "add_f64", "subtract_f64", "multiply_f64",
+                 "lt", "gt", "lte", "gte", "eq", "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64" ->
                     "(" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + ")";
             // Three-valued AND: false if either operand is (non-null) false; else null if any operand is null.
             case "and" -> "(!((!" + isNull(args.get(0)) + " && !" + value(args.get(0)) + ") || (!" + isNull(args.get(1)) + " && !" + value(args.get(1)) + "))"
@@ -477,7 +540,7 @@ public final class FusedProjectionCompiler
             case "or" -> "(!((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") || (!" + isNull(args.get(1)) + " && " + value(args.get(1)) + "))"
                     + " && (" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + "))";
             case "not" -> isNull(args.get(0));
-            case "if_i64" -> "((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") ? " + isNull(args.get(1)) + " : " + isNull(args.get(2)) + ")";
+            case "if_i64", "if_f64" -> "((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") ? " + isNull(args.get(1)) + " : " + isNull(args.get(2)) + ")";
             default -> throw new Unsupported();
         };
     }
@@ -488,6 +551,7 @@ public final class FusedProjectionCompiler
             case ColumnOperand column -> "col" + column.slot() + "[i]";
             case StepOperand step -> "sv" + step.stepId();
             case LongConstant constant -> constant.value() + "L";
+            case DoubleConstant constant -> Double.toString(constant.value()) + "d";
             case BoolConstant constant -> Boolean.toString(constant.value());
         };
     }
@@ -498,6 +562,7 @@ public final class FusedProjectionCompiler
             case ColumnOperand column -> "(nul" + column.slot() + " != null && nul" + column.slot() + "[i])";
             case StepOperand step -> "sn" + step.stepId();
             case LongConstant ignored -> "false";
+            case DoubleConstant ignored -> "false";
             case BoolConstant ignored -> "false";
         };
     }

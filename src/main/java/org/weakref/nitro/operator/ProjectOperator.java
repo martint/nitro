@@ -40,9 +40,10 @@ public class ProjectOperator
         implements Operator
 {
     private static final boolean FORWARD_SINGLE_POSITION_ONLY = Boolean.getBoolean("nitro.project.forwardSinglePositionOnly");
-    // Opt-in for now: the per-output subtree compiler is byte-identical and fires, but per-output fusion re-reads
-    // shared inputs and recomputes shared subexpressions (e.g. q62's `days`) once per output, offsetting the fusion
-    // win until multi-output (whole-projection) fusion shares them. Enabled explicitly for A/B and development.
+    // Fuse the qualifying outputs of a projection into one monomorphic shared loop (see FusedProjectionCompiler).
+    // Opt-in via -Dnitro.project.compileExpressions=true; the interpreter is the default path. The substitution is
+    // byte-identical and only fires for an output whose slice has at least two operations (a multi-op
+    // arithmetic/comparison/CASE chain the interpreter would materialize intermediates for).
     private static final boolean COMPILE_EXPRESSIONS = Boolean.getBoolean("nitro.project.compileExpressions");
 
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
