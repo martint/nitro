@@ -366,10 +366,20 @@ public final class FusedProjectionCompiler
                     .append(" else if (base instanceof I32Vector bw) { int[] bv = bw.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
                     .append(" else { return null; } }\n");
             out.append("    else { return null; }\n");
+            // NULLS may arrive flat (BooleanVector) or, on a column carried through joins, dictionary-wrapped over a
+            // boolean base with its own ids (independent of the VALUES dictionary). Gather the dict case through its ids
+            // into a per-row boolean[] so the loop stays monomorphic; bail on any other layout.
             out.append("    Vector nv").append(slot).append(" = inputs.get(").append(slot).append(").getOrNull(N);\n");
-            out.append("    boolean[] nul").append(slot).append(" = nv").append(slot)
-                    .append(" instanceof BooleanVector bv").append(slot).append(" ? bv").append(slot).append(".values() : null;\n");
-            out.append("    if (nv").append(slot).append(" != null && nul").append(slot).append(" == null) { return null; }\n");
+            out.append("    boolean[] nul").append(slot).append(";\n");
+            out.append("    if (nv").append(slot).append(" == null) { nul").append(slot).append(" = null; }\n");
+            out.append("    else if (nv").append(slot).append(" instanceof BooleanVector bv").append(slot)
+                    .append(") { nul").append(slot).append(" = bv").append(slot).append(".values(); }\n");
+            out.append("    else if (nv").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector ndv").append(slot)
+                    .append(" && ndv").append(slot).append(".values() instanceof BooleanVector nbase").append(slot)
+                    .append(") { int[] nids = ndv").append(slot).append(".ids(); boolean[] nb = nbase").append(slot).append(".values();")
+                    .append(" nul").append(slot).append(" = new boolean[nids.length]; for (int j = 0; j < nids.length; j++) { nul").append(slot)
+                    .append("[j] = nb[nids[j]]; } }\n");
+            out.append("    else { return null; }\n");
         }
 
         out.append("    int required = mask.maxPosition() + 1;\n");
