@@ -226,7 +226,9 @@ public final class PlanEvaluator
             Reference argument = call.arguments().get(index);
             inputs.add(evaluateArgument(argument, mask, function.requiredInputStreams(index, requestedStreams), false));
         }
-        if (mask.all()) {
+        // Both peels require a dictionary-encoded input to do anything, so skip the machinery entirely on the common
+        // flat-input case with one cheap instanceof scan (rather than building and discarding a peeling per call).
+        if (mask.all() && hasDictionaryValues(inputs)) {
             Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
             if (peeledResult == null) {
                 peeledResult = tryEvaluatePropagatingNullsPeeledCall(function, inputs, requestedStreams);
@@ -237,6 +239,16 @@ public final class PlanEvaluator
         }
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
         return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private static boolean hasDictionaryValues(List<Streams> inputs)
+    {
+        for (Streams input : inputs) {
+            if (input.getOrNull(Stream.VALUES) instanceof DictionaryVector) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Streams tryEvaluateDictionaryPeeledCall(PrimitiveFunction function, List<Streams> inputs, Set<Stream> requestedStreams)
