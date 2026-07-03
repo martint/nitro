@@ -52,6 +52,13 @@ public final class SubtractF64
         Allocator.Context allocationContext = context.allocationContext("SubtractF64");
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+
+        if (requestValues) {
+            F64Vector fast = NullFreeScalarKernels.arithmeticDouble(NullFreeScalarKernels.SUBTRACT, left, right, inputs.get(0).getOrNull(Stream.NULLS), inputs.get(1).getOrNull(Stream.NULLS), mask, output != null ? output.getOrNull(Stream.VALUES) : null, context.allocator(), allocationContext);
+            if (fast != null) {
+                return Streams.ofValues(fast);
+            }
+        }
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(left.length(), right.length()));
 
         Streams result = Streams.empty();

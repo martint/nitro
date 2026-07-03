@@ -70,6 +70,13 @@ public final class EqualI64
         Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
+        if (requestedStreams.contains(Stream.VALUES)) {
+            BooleanVector fast = NullFreeScalarKernels.compareLong(NullFreeScalarKernels.EQUAL, left, right, leftNulls, rightNulls, mask, existing, context.allocator(), allocationContext);
+            if (fast != null) {
+                return Streams.ofValues(fast);
+            }
+        }
+
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(

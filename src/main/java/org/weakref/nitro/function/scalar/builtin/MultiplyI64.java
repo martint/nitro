@@ -63,6 +63,13 @@ public final class MultiplyI64
         Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
+        if (requestedStreams.contains(Stream.VALUES)) {
+            I64Vector fast = NullFreeScalarKernels.arithmeticLong(NullFreeScalarKernels.MULTIPLY, left, right, leftNulls, rightNulls, mask, existingValues, context.allocator(), allocationContext);
+            if (fast != null) {
+                return Streams.ofValues(fast);
+            }
+        }
+
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {

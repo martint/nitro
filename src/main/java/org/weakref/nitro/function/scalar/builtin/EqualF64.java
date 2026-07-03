@@ -80,6 +80,13 @@ public final class EqualF64
             return Streams.empty();
         }
 
+        if (requestedStreams.contains(Stream.VALUES)) {
+            BooleanVector fast = NullFreeScalarKernels.compareDouble(NullFreeScalarKernels.EQUAL, inputs.get(0).values(), inputs.get(1).values(), inputs.get(0).getOrNull(Stream.NULLS), inputs.get(1).getOrNull(Stream.NULLS), mask, output != null ? output.getOrNull(Stream.VALUES) : null, context.allocator(), ALLOCATION_CONTEXT);
+            if (fast != null) {
+                return Streams.ofValues(fast);
+            }
+        }
+
         VectorAccess.DoubleValues leftValues = VectorAccess.doubleValues(inputs.get(0).values());
         VectorAccess.DoubleValues rightValues = VectorAccess.doubleValues(inputs.get(1).values());
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));

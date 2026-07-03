@@ -62,6 +62,13 @@ public final class AddI64
         Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
+        if (requestedStreams.contains(Stream.VALUES)) {
+            I64Vector fast = NullFreeScalarKernels.arithmeticLong(NullFreeScalarKernels.ADD, left, right, leftNulls, rightNulls, mask, existing, context.allocator(), ALLOCATION_CONTEXT);
+            if (fast != null) {
+                return Streams.ofValues(fast);
+            }
+        }
+
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS) && !(VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls))) {

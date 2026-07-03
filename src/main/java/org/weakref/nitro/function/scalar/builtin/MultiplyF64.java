@@ -52,6 +52,13 @@ public final class MultiplyF64
         Allocator.Context allocationContext = context.allocationContext("MultiplyF64");
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+
+        if (requestValues) {
+            F64Vector fast = NullFreeScalarKernels.arithmeticDouble(NullFreeScalarKernels.MULTIPLY, left, right, inputs.get(0).getOrNull(Stream.NULLS), inputs.get(1).getOrNull(Stream.NULLS), mask, output != null ? output.getOrNull(Stream.VALUES) : null, context.allocator(), allocationContext);
+            if (fast != null) {
+                return Streams.ofValues(fast);
+            }
+        }
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(left.length(), right.length()));
 
         Streams result = Streams.empty();
