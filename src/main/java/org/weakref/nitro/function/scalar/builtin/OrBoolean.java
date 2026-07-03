@@ -64,6 +64,18 @@ public final class OrBoolean
         VectorAccess.BooleanValues rightValues = VectorAccess.booleanValues(right);
 
         int length = BooleanBinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length()));
+
+        // Monomorphic null-free fast path: both operands flat and non-null, so a tight `|` loop over boolean[] that
+        // C2 auto-vectorizes replaces four per-position accessor dispatches, and the whole NULLS pass is skipped
+        // (an absent NULLS stream reads as all-false downstream).
+        if (requestedStreams.contains(Stream.VALUES) && mask.all() && existingValues == null
+                && left instanceof BooleanVector leftFlat && right instanceof BooleanVector rightFlat
+                && VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls)) {
+            BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, length, BooleanVector::new);
+            orFlat(leftFlat.values(), rightFlat.values(), values.values(), length);
+            return Streams.ofValues(values);
+        }
+
         Streams result = Streams.empty();
         BooleanVector outputNulls = null;
         if (requestedStreams.contains(Stream.NULLS)) {
@@ -92,6 +104,13 @@ public final class OrBoolean
                 length);
         applyValues(leftValues, leftNulls, rightValues, rightNulls, mask, outputValues);
         return result.with(Stream.VALUES, outputValues);
+    }
+
+    private static void orFlat(boolean[] left, boolean[] right, boolean[] output, int length)
+    {
+        for (int index = 0; index < length; index++) {
+            output[index] = left[index] | right[index];
+        }
     }
 
     private static void applyValues(VectorAccess.BooleanValues leftValues, Vector leftNulls, VectorAccess.BooleanValues rightValues, Vector rightNulls, Mask mask, BooleanVector output)
