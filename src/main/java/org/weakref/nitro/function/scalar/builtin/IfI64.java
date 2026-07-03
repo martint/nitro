@@ -72,7 +72,7 @@ public final class IfI64
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.VALUES)) {
-            Streams constantBranchOutput = tryApplyConstantBranchValues(conditionValues, conditionNulls, trueValues, falseValues, trueNulls, falseNulls, mask, requiredLength, requestedStreams, context);
+            Streams constantBranchOutput = tryApplyConstantBranchValues(condition, conditionValues, conditionNulls, trueValues, falseValues, trueNulls, falseNulls, mask, requiredLength, requestedStreams, context);
             if (constantBranchOutput != null) {
                 return constantBranchOutput;
             }
@@ -116,7 +116,7 @@ public final class IfI64
         return result;
     }
 
-    private static Streams tryApplyConstantBranchValues(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, int requiredLength, Set<Stream> requestedStreams, PrimitiveExecutionContext context)
+    private static Streams tryApplyConstantBranchValues(Vector condition, VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, int requiredLength, Set<Stream> requestedStreams, PrimitiveExecutionContext context)
     {
         if (constantNullValue(trueNulls) != Boolean.FALSE || constantNullValue(falseNulls) != Boolean.FALSE) {
             return null;
@@ -141,7 +141,14 @@ public final class IfI64
         }
 
         int[] ids = new int[requiredLength];
-        if (mask.all()) {
+        if (mask.all() && condition instanceof BooleanVector conditionFlat && VectorAccess.isAllFalseNulls(conditionNulls)) {
+            // Monomorphic null-free fast path: read the flat boolean condition directly, no per-position accessor.
+            boolean[] flags = conditionFlat.values();
+            for (int position = 0; position < mask.size(); position++) {
+                ids[position] = flags[position] ? 1 : 0;
+            }
+        }
+        else if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
                 ids[position] = conditionValue(conditionValues, conditionNulls, position) ? 1 : 0;
             }
@@ -278,6 +285,12 @@ public final class IfI64
     {
         if (nulls == null) {
             return false;
+        }
+
+        // A single-run RLE (the shape a literal branch's null stream takes, with length() == the batch size) is
+        // constant by construction, so resolve it in O(1) instead of scanning every position.
+        if (nulls instanceof RleVector rle && rle.counts().length == 1) {
+            return VectorAccess.booleanValues(rle.values()).value(0);
         }
 
         VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
