@@ -289,13 +289,15 @@ public final class ColumnReader
                         }
                     }
                     else {
+                        // Branchless compaction: always stage the value/position, advance the survivor cursor only
+                        // when accepted. The per-row `if (accept[id])` is a data-dependent branch the hardware cannot
+                        // predict (survivors are scattered), so removing it collapses the mispredict stall on the
+                        // 230M-row lead scan. The overwritten trailing slot is harmless (sc never exceeds count).
                         for (int i = 0; i < pageRows; i++) {
                             int id = idBuffer[pageCursor + i];
-                            if (accept[id]) {
-                                valuesOut[sc] = dict[id];
-                                survivorsOut[sc] = windowPos + i;
-                                sc++;
-                            }
+                            valuesOut[sc] = dict[id];
+                            survivorsOut[sc] = windowPos + i;
+                            sc += accept[id] ? 1 : 0;
                         }
                     }
                 }
@@ -357,13 +359,12 @@ public final class ColumnReader
                         }
                     }
                     else {
+                        // Branchless compaction (see filterDictLongs): drop the unpredictable per-row accept branch.
                         for (int i = 0; i < pageRows; i++) {
                             int id = idBuffer[pageCursor + i];
-                            if (accept[id]) {
-                                valuesOut[sc] = dict[id];
-                                survivorsOut[sc] = windowPos + i;
-                                sc++;
-                            }
+                            valuesOut[sc] = dict[id];
+                            survivorsOut[sc] = windowPos + i;
+                            sc += accept[id] ? 1 : 0;
                         }
                     }
                 }
