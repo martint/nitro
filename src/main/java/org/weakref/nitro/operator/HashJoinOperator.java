@@ -2194,9 +2194,11 @@ public class HashJoinOperator
         private static final int GROUP = SPECIES.length();
 
         private byte[] tags;
-        private long[] firstKeys;
-        private long[] secondKeys;
-        private long[] singleRows;
+        // Co-located entry table: for slot s, entries[3*s] = firstKey, entries[3*s+1] = secondKey, entries[3*s+2] =
+        // rowReference. A matching probe's key verify and row read then hit one contiguous 24-byte region (~one cache
+        // line) instead of three separate long[] (firstKeys/secondKeys/singleRows), which cost three random line
+        // fetches per matched probe. Tags stay in their own byte[] (scanned a GROUP at a time, cache-friendly).
+        private long[] entries;
         private LongArrayList[] rowsBySlot;
         private int mask;
         private int maxFill;
@@ -2216,9 +2218,7 @@ public class HashJoinOperator
         private void allocate(int capacity)
         {
             tags = new byte[capacity];
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
-            singleRows = new long[capacity];
+            entries = new long[capacity * 3];
             rowsBySlot = new LongArrayList[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
@@ -2267,7 +2267,7 @@ public class HashJoinOperator
                 return LongLists.emptyList();
             }
             LongArrayList rows = rowsBySlot[slot];
-            return rows != null ? rows : singleMatch.withValue(singleRows[slot]);
+            return rows != null ? rows : singleMatch.withValue(entries[slot * 3 + 2]);
         }
 
         @Override
@@ -2286,7 +2286,7 @@ public class HashJoinOperator
                         continue;
                     }
                     LongArrayList rows = rowsBySlot[slot];
-                    matches[index] = rows != null ? rows : singleMatches[index].withValue(singleRows[slot]);
+                    matches[index] = rows != null ? rows : singleMatches[index].withValue(entries[slot * 3 + 2]);
                 }
                 return;
             }
@@ -2306,7 +2306,7 @@ public class HashJoinOperator
                     continue;
                 }
                 LongArrayList rows = rowsBySlot[slot];
-                matches[index] = rows != null ? rows : singleMatches[index].withValue(singleRows[slot]);
+                matches[index] = rows != null ? rows : singleMatches[index].withValue(entries[slot * 3 + 2]);
             }
         }
 
@@ -2341,7 +2341,7 @@ public class HashJoinOperator
         private long singleRef(long first, long second)
         {
             int slot = probe(first, second, hash64(first, second));
-            return slot < 0 ? NO_MATCH_ROW_REFERENCE : singleRows[slot];
+            return slot < 0 ? NO_MATCH_ROW_REFERENCE : entries[slot * 3 + 2];
         }
 
         // Returns the slot holding (first, second), or -1 if absent. Scans GROUP tags per step: one vector load
@@ -2358,7 +2358,8 @@ public class HashJoinOperator
                 long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
                 while (matchBits != 0) {
                     int slot = group + Long.numberOfTrailingZeros(matchBits);
-                    if (firstKeys[slot] == first && secondKeys[slot] == second) {
+                    int base = slot * 3;
+                    if (entries[base] == first && entries[base + 1] == second) {
                         return slot;
                     }
                     matchBits &= matchBits - 1;
@@ -2380,11 +2381,12 @@ public class HashJoinOperator
                 long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
                 while (matchBits != 0) {
                     int slot = group + Long.numberOfTrailingZeros(matchBits);
-                    if (firstKeys[slot] == first && secondKeys[slot] == second) {
+                    int base = slot * 3;
+                    if (entries[base] == first && entries[base + 1] == second) {
                         LongArrayList rows = rowsBySlot[slot];
                         if (rows == null) {
                             rows = new LongArrayList(2);
-                            rows.add(singleRows[slot]);
+                            rows.add(entries[base + 2]);
                             rows.add(rowReference);
                             rowsBySlot[slot] = rows;
                             pairHasDuplicates = true;
@@ -2399,10 +2401,11 @@ public class HashJoinOperator
                 long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
                 if (emptyBits != 0) {
                     int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                    int base = slot * 3;
                     tags[slot] = tag;
-                    firstKeys[slot] = first;
-                    secondKeys[slot] = second;
-                    singleRows[slot] = rowReference;
+                    entries[base] = first;
+                    entries[base + 1] = second;
+                    entries[base + 2] = rowReference;
                     size++;
                     if (size >= maxFill) {
                         rehash();
@@ -2416,9 +2419,7 @@ public class HashJoinOperator
         private void rehash()
         {
             byte[] oldTags = tags;
-            long[] oldFirst = firstKeys;
-            long[] oldSecond = secondKeys;
-            long[] oldRows = singleRows;
+            long[] oldEntries = entries;
             LongArrayList[] oldLists = rowsBySlot;
             allocate(oldTags.length * 2);
             size = 0;
@@ -2426,14 +2427,16 @@ public class HashJoinOperator
                 if (oldTags[oldSlot] == 0) {
                     continue;
                 }
-                long first = oldFirst[oldSlot];
-                long second = oldSecond[oldSlot];
+                int oldBase = oldSlot * 3;
+                long first = oldEntries[oldBase];
+                long second = oldEntries[oldBase + 1];
                 long hash = hash64(first, second);
                 int slot = findEmpty(hash);
+                int base = slot * 3;
                 tags[slot] = (byte) ((hash >>> 56) | 0x80L);
-                firstKeys[slot] = first;
-                secondKeys[slot] = second;
-                singleRows[slot] = oldRows[oldSlot];
+                entries[base] = first;
+                entries[base + 1] = second;
+                entries[base + 2] = oldEntries[oldBase + 2];
                 rowsBySlot[slot] = oldLists[oldSlot];
                 size++;
             }
@@ -2471,16 +2474,17 @@ public class HashJoinOperator
     {
         private static final float LOAD_FACTOR = 0.75f;
         // Swiss/F14-style SIMD-tag-bucket table (cf. LongPairJoinIndex): a probe scans a GROUP of 1-byte tags with
-        // one vector load and touches the three fat key arrays only on a tag hit, so a collision step is a dense
-        // byte read rather than a {first,second,third,row} cache-miss load.
+        // one vector load and touches the fat entry array only on a tag hit, so a collision step is a dense byte
+        // read rather than a {first,second,third,row} cache-miss load.
         private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
         private static final int GROUP = SPECIES.length();
 
         private byte[] tags;
-        private long[] firstKeys;
-        private long[] secondKeys;
-        private long[] thirdKeys;
-        private long[] singleRows;
+        // Co-located entry table: for slot s, entries[4*s] = firstKey, entries[4*s+1] = secondKey, entries[4*s+2] =
+        // thirdKey, entries[4*s+3] = rowReference. A matching probe's key verify and row read then hit one contiguous
+        // 32-byte region instead of four separate long[] (firstKeys/secondKeys/thirdKeys/singleRows), which cost four
+        // random line fetches per matched probe. Tags stay in their own byte[] (scanned a GROUP at a time).
+        private long[] entries;
         private LongArrayList[] rowsBySlot;
         private int mask;
         private int maxFill;
@@ -2499,10 +2503,7 @@ public class HashJoinOperator
         private void allocate(int capacity)
         {
             tags = new byte[capacity];
-            firstKeys = new long[capacity];
-            secondKeys = new long[capacity];
-            thirdKeys = new long[capacity];
-            singleRows = new long[capacity];
+            entries = new long[capacity * 4];
             rowsBySlot = new LongArrayList[capacity];
             mask = capacity - 1;
             maxFill = (int) (capacity * LOAD_FACTOR);
@@ -2556,7 +2557,7 @@ public class HashJoinOperator
             if (rows != null) {
                 return rows;
             }
-            return singleMatch.withValue(singleRows[slot]);
+            return singleMatch.withValue(entries[slot * 4 + 3]);
         }
 
         @Override
@@ -2581,7 +2582,7 @@ public class HashJoinOperator
                         matches[index] = rows;
                     }
                     else {
-                        matches[index] = singleMatches[index].withValue(singleRows[slot]);
+                        matches[index] = singleMatches[index].withValue(entries[slot * 4 + 3]);
                     }
                 }
                 return;
@@ -2608,7 +2609,7 @@ public class HashJoinOperator
                     matches[index] = rows;
                 }
                 else {
-                    matches[index] = singleMatches[index].withValue(singleRows[slot]);
+                    matches[index] = singleMatches[index].withValue(entries[slot * 4 + 3]);
                 }
             }
         }
@@ -2626,7 +2627,8 @@ public class HashJoinOperator
                 long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
                 while (matchBits != 0) {
                     int slot = group + Long.numberOfTrailingZeros(matchBits);
-                    if (firstKeys[slot] == first && secondKeys[slot] == second && thirdKeys[slot] == third) {
+                    int base = slot * 4;
+                    if (entries[base] == first && entries[base + 1] == second && entries[base + 2] == third) {
                         return slot;
                     }
                     matchBits &= matchBits - 1;
@@ -2641,10 +2643,7 @@ public class HashJoinOperator
         private void rehash()
         {
             byte[] oldTags = tags;
-            long[] oldFirst = firstKeys;
-            long[] oldSecond = secondKeys;
-            long[] oldThird = thirdKeys;
-            long[] oldRows = singleRows;
+            long[] oldEntries = entries;
             LongArrayList[] oldLists = rowsBySlot;
             allocate(oldTags.length * 2);
             size = 0;
@@ -2652,16 +2651,18 @@ public class HashJoinOperator
                 if (oldTags[oldSlot] == 0) {
                     continue;
                 }
-                long first = oldFirst[oldSlot];
-                long second = oldSecond[oldSlot];
-                long third = oldThird[oldSlot];
+                int oldBase = oldSlot * 4;
+                long first = oldEntries[oldBase];
+                long second = oldEntries[oldBase + 1];
+                long third = oldEntries[oldBase + 2];
                 long hash = hash64(first, second, third);
                 int slot = findEmpty(hash);
+                int base = slot * 4;
                 tags[slot] = (byte) ((hash >>> 56) | 0x80L);
-                firstKeys[slot] = first;
-                secondKeys[slot] = second;
-                thirdKeys[slot] = third;
-                singleRows[slot] = oldRows[oldSlot];
+                entries[base] = first;
+                entries[base + 1] = second;
+                entries[base + 2] = third;
+                entries[base + 3] = oldEntries[oldBase + 3];
                 rowsBySlot[slot] = oldLists[oldSlot];
                 size++;
             }
@@ -2690,10 +2691,11 @@ public class HashJoinOperator
                 long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
                 while (matchBits != 0) {
                     int slot = group + Long.numberOfTrailingZeros(matchBits);
-                    if (firstKeys[slot] == first && secondKeys[slot] == second && thirdKeys[slot] == third) {
+                    int base = slot * 4;
+                    if (entries[base] == first && entries[base + 1] == second && entries[base + 2] == third) {
                         if (rowsBySlot[slot] == null) {
                             LongArrayList rows = new LongArrayList(2);
-                            rows.add(singleRows[slot]);
+                            rows.add(entries[base + 3]);
                             rows.add(rowReference);
                             rowsBySlot[slot] = rows;
                         }
@@ -2707,11 +2709,12 @@ public class HashJoinOperator
                 long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
                 if (emptyBits != 0) {
                     int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                    int base = slot * 4;
                     tags[slot] = tag;
-                    firstKeys[slot] = first;
-                    secondKeys[slot] = second;
-                    thirdKeys[slot] = third;
-                    singleRows[slot] = rowReference;
+                    entries[base] = first;
+                    entries[base + 1] = second;
+                    entries[base + 2] = third;
+                    entries[base + 3] = rowReference;
                     size++;
                     if (size >= maxFill) {
                         rehash();
