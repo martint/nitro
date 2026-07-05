@@ -18,8 +18,12 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 import java.util.Set;
+
+import static java.nio.ByteOrder.LITTLE_ENDIAN;
 
 class FlatKeyLayout
 {
@@ -102,6 +106,21 @@ class FlatKeyLayout
     // handlers[index] (a megamorphic FlatTypeHandler[] whose 4 anonymous element types defeat inlining and mispredict
     // per field per row).
     private final FlatTypeHandler.Kind[] fieldKinds;
+
+    // Layer-2 monomorphization: resolve each field's Vector shape ONCE per batch in beginBatch into a typed accessor,
+    // so the per-position hot methods read the value with no Vector-type dispatch (the second megamorphic layer,
+    // inside the handlers' longValue/binary access). LONG fields use a VectorAccess.LongValues accessor (resolves
+    // flat/dict/rle); BINARY fields resolve to a base BinaryVector (final -> monomorphic) plus a dictionary id map
+    // (null when flat). batchAccessorsReady is set only after beginBatch resolves them and cleared in endBatch: some
+    // callers (DistinctKeySet / MarkDistinctOperator) drive FlatGroupingTable WITHOUT a beginBatch, so the hot methods
+    // fall back to the layer-1 handler-kind switch when the accessors are not current.
+    private static final VarHandle GROUP_LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
+    private static final VarHandle GROUP_INT_HANDLE = MethodHandles.byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
+    private boolean batchAccessorsReady;
+    private VectorAccess.LongValues[] fieldLong;
+    private BinaryVector[] fieldBinaryBase;
+    private int[][] fieldBinaryIds;
+    private VectorAccess.BooleanValues[] fieldNullAccess;
 
     FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
@@ -204,6 +223,10 @@ class FlatKeyLayout
             fieldInterners = new ValueIdInterner[handlers.length];
             batchEntryGlobalId = new int[handlers.length][];
             batchEntryGlobalIdDict = new Vector[handlers.length];
+            fieldLong = new VectorAccess.LongValues[handlers.length];
+            fieldBinaryBase = new BinaryVector[handlers.length];
+            fieldBinaryIds = new int[handlers.length][];
+            fieldNullAccess = new VectorAccess.BooleanValues[handlers.length];
         }
         anyFieldIdComparable = false;
         for (int index = 0; index < handlers.length; index++) {
@@ -211,6 +234,21 @@ class FlatKeyLayout
             batchDictionaryIds[index] = null;
             int channel = inputChannels[index];
             batchFieldNullFree[index] = VectorAccess.isAllFalseNulls((nulls != null && channel < nulls.length) ? nulls[channel] : null);
+            // Resolve this field's typed value/null accessors once for the batch (layer-2 monomorphization).
+            Vector fieldValue = channel < values.length ? values[channel] : null;
+            fieldLong[index] = fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldValue != null ? VectorAccess.longValues(fieldValue) : null;
+            fieldBinaryBase[index] = null;
+            fieldBinaryIds[index] = null;
+            if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY) {
+                if (fieldValue instanceof BinaryVector base) {
+                    fieldBinaryBase[index] = base;
+                }
+                else if (fieldValue instanceof DictionaryVector dict && dict.values() instanceof BinaryVector base) {
+                    fieldBinaryBase[index] = base;
+                    fieldBinaryIds[index] = dict.ids();
+                }
+            }
+            fieldNullAccess[index] = (nulls != null && channel < nulls.length && nulls[channel] != null) ? VectorAccess.booleanValues(nulls[channel]) : null;
             if (channel >= values.length || !(values[channel] instanceof DictionaryVector dictionary)) {
                 dictionaryHashedIds[index] = null;
                 dictionaryEntryHashes[index] = null;
@@ -281,6 +319,7 @@ class FlatKeyLayout
                 break;
             }
         }
+        batchAccessorsReady = true;
     }
 
     /**
@@ -356,6 +395,7 @@ class FlatKeyLayout
      */
     public void endBatch()
     {
+        batchAccessorsReady = false;
         if (dictionaryHashedIds == null) {
             return;
         }
@@ -394,7 +434,85 @@ class FlatKeyLayout
                 return dictionaryEntryHashes[fieldIndex][ids[position]];
             }
         }
-        return hashByKind(fieldKinds[fieldIndex], value, position);
+        if (!batchAccessorsReady) {
+            return hashByKind(fieldKinds[fieldIndex], value, position);
+        }
+        return switch (fieldKinds[fieldIndex]) {
+            case LONG -> Long.hashCode(fieldLong[fieldIndex].value(position));
+            case BINARY -> binaryFieldHash(fieldIndex, value, position);
+            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.hashInput(value, position);
+            case DOUBLE -> FlatTypeHandlers.DOUBLE.hashInput(value, position);
+        };
+    }
+
+    private long binaryFieldHash(int fieldIndex, Vector value, int position)
+    {
+        BinaryVector base = fieldBinaryBase[fieldIndex];
+        if (base == null) {
+            return FlatTypeHandlers.BINARY.hashInput(value, position);
+        }
+        int[] ids = fieldBinaryIds[fieldIndex];
+        int entry = ids == null ? position : ids[position];
+        return OperatorVectorSupport.binaryHash(base.data(), base.startOffset(entry), base.length(entry));
+    }
+
+    private void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    {
+        if (!batchAccessorsReady) {
+            writeFlatByKind(fieldKinds[fieldIndex], value, position, fixedChunk, fixedOffset, arena);
+            return;
+        }
+        switch (fieldKinds[fieldIndex]) {
+            case LONG -> GROUP_LONG_HANDLE.set(fixedChunk, fixedOffset, fieldLong[fieldIndex].value(position));
+            case BINARY -> writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena);
+            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+        }
+    }
+
+    private void writeBinaryField(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    {
+        BinaryVector base = fieldBinaryBase[fieldIndex];
+        if (base == null) {
+            FlatTypeHandlers.BINARY.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            return;
+        }
+        int[] ids = fieldBinaryIds[fieldIndex];
+        int entry = ids == null ? position : ids[position];
+        long pointer = arena.append(base.data(), base.startOffset(entry), base.length(entry));
+        GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, FlatGroupingTable.FlatVariableWidthArena.chunkIndex(pointer));
+        GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, FlatGroupingTable.FlatVariableWidthArena.chunkOffset(pointer));
+        GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, base.length(entry));
+    }
+
+    private boolean identicalField(int fieldIndex, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position)
+    {
+        if (!batchAccessorsReady) {
+            return identicalByKind(fieldKinds[fieldIndex], fixedChunk, fixedOffset, arena, value, position);
+        }
+        return switch (fieldKinds[fieldIndex]) {
+            case LONG -> (long) GROUP_LONG_HANDLE.get(fixedChunk, fixedOffset) == fieldLong[fieldIndex].value(position);
+            case BINARY -> identicalBinaryField(fieldIndex, fixedChunk, fixedOffset, arena, value, position);
+            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+            case DOUBLE -> FlatTypeHandlers.DOUBLE.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+        };
+    }
+
+    private boolean identicalBinaryField(int fieldIndex, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position)
+    {
+        BinaryVector base = fieldBinaryBase[fieldIndex];
+        if (base == null) {
+            return FlatTypeHandlers.BINARY.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+        }
+        int length = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES * 2);
+        int[] ids = fieldBinaryIds[fieldIndex];
+        int entry = ids == null ? position : ids[position];
+        if (base.length(entry) != length) {
+            return false;
+        }
+        byte[] chunk = arena.chunk((int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset));
+        int offset = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES);
+        return OperatorVectorSupport.binaryEquals(base.data(), base.startOffset(entry), chunk, offset, length);
     }
 
     private static long hashByKind(FlatTypeHandler.Kind kind, Vector value, int position)
@@ -447,7 +565,7 @@ class FlatKeyLayout
                 setNullBit(fixedChunk, fixedOffset, index);
             }
             else {
-                writeFlatByKind(fieldKinds[index], values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
+                writeFieldFlat(index, values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
             }
         }
         storeRecordDictionaryIds(recordIndex, position);
@@ -490,7 +608,7 @@ class FlatKeyLayout
                 }
                 // probe value overflowed the interner: fall through to the value comparison.
             }
-            if (!identicalByKind(fieldKinds[index], fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
+            if (!identicalField(index, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
             }
         }
@@ -569,6 +687,10 @@ class FlatKeyLayout
     {
         if (batchFieldNullFree != null && batchFieldNullFree[fieldIndex]) {
             return false;
+        }
+        if (batchAccessorsReady) {
+            VectorAccess.BooleanValues accessor = fieldNullAccess[fieldIndex];
+            return accessor != null && accessor.value(position);
         }
         return fieldNull(nulls, inputChannels[fieldIndex], position);
     }
