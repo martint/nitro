@@ -121,6 +121,10 @@ public final class NitroParquetScanOperator
     // some batches (full, before constrain) and leave it unpulled in others (where constrain has since fired).
     private boolean[] lazyPathDecided;
     private boolean[] lazySkipColumn;
+    // Rows each un-pulled column's reader is behind the current batch start. A deferred column is not advanced per
+    // batch; its skipped rows accumulate here and drain in one call the next time it is pulled, so whole data pages
+    // (far larger than a batch) are byte-skipped instead of walked a batch at a time. Persists across batches.
+    private long[] lazyPendingAdvance;
 
     public NitroParquetScanOperator(Allocator allocator, List<Path> paths, List<String> columns)
     {
@@ -317,6 +321,7 @@ public final class NitroParquetScanOperator
             lazyResolved = new boolean[columnCount];
             lazyPathDecided = new boolean[columnCount];  // per-scan, decided once and never reset
             lazySkipColumn = new boolean[columnCount];
+            lazyPendingAdvance = new long[columnCount];  // per-scan, accumulates deferred rows, never reset per batch
         }
         else {
             java.util.Arrays.fill(lazyResolved, 0, columnCount, false);
@@ -386,6 +391,16 @@ public final class NitroParquetScanOperator
         lazyResolved[column] = true;
         int count = lazyCount;
         ColumnReader reader = readers[column];
+        // Decide the reader's page path (fixed for life) before any read, then drain the rows this column has been
+        // deferred over since it was last positioned. The drain uses the same page path as the decode below, so the
+        // reader never mixes paths: a full-decode column fast-forwards via skip() (byte-skipping whole pages), a
+        // skip-decode column drains through the readSelected page-skip with an empty survivor set.
+        boolean skip = useSkipDecode(column);
+        long pending = lazyPendingAdvance[column];
+        if (pending > 0) {
+            drainPendingAdvance(reader, skip, pending);
+            lazyPendingAdvance[column] = 0;
+        }
         boolean isNullable = nullable[column];
         BooleanVector nullVector = isNullable
                 ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, count, BooleanVector::new)
@@ -397,7 +412,7 @@ public final class NitroParquetScanOperator
         // skip-decode — even if all rows happened to survive — so a reader never mixes the full and skip page paths
         // across batches (which would corrupt its cursor state). Binary has no skip path here, so it stays full;
         // a binary column is therefore always read before constrain or never (filter columns are numeric).
-        if (!useSkipDecode(column)) {
+        if (!skip) {
             currentValues[column] = decodeFullColumn(reader, nulls, count);
             currentNulls[column] = nullVector;
             return;
@@ -507,7 +522,11 @@ public final class NitroParquetScanOperator
         };
     }
 
-    /** Advance any column reader not pulled this batch past {@code lazyCount} rows so it stays batch-aligned. */
+    /**
+     * Record that any column not pulled this batch is now {@code lazyCount} rows further behind. No reader work: the
+     * deferred rows accumulate and are byte-skipped in one call the next time the column is pulled (see
+     * {@link #drainPendingAdvance}). Coalescing the skip is what lets whole data pages be dropped without decoding.
+     */
     private void advanceUnresolvedColumns()
     {
         if (lazyResolved == null) {
@@ -518,40 +537,37 @@ public final class NitroParquetScanOperator
                 continue;
             }
             lazyResolved[c] = true;
-            ColumnReader reader = readers[c];
-            // Advance via the same page path the column would have used if pulled, so the reader never mixes the full
-            // and skip paths across batches: binary and unconstrained-batch columns full-decode and discard; columns
-            // of a constrained batch skip past with an empty survivor set.
-            boolean longKind = reader.kind() == ColumnReader.Kind.LONG;
-            // Advance via the column's fixed page path, DECIDING it here if this is its first touch (same rule as
-            // resolveLazyColumn). A reader must use one page path for its whole life; deciding on first advance — even
-            // when that is a constrained batch — keeps a later resolve on the same (skip) path instead of mixing.
-            boolean skip = useSkipDecode(c);
-            if (!skip) {
-                if (reader.kind() == ColumnReader.Kind.BINARY) {
-                    reader.readBinary(nullable[c] ? new boolean[lazyCount] : null, lazyCount);
-                }
-                else {
-                    ensureLazyScratch(lazyCount, longKind);
-                    if (longKind) {
-                        reader.readLongs(lazyScratchLong, null, lazyCount);
-                    }
-                    else {
-                        reader.readInts(lazyScratchInt, null, lazyCount);
-                    }
-                }
-            }
-            else if (reader.kind() == ColumnReader.Kind.BINARY) {
-                reader.readSelectedBinary(EMPTY, 0, lazyCount, null);
+            lazyPendingAdvance[c] += lazyCount;
+        }
+    }
+
+    /**
+     * Fast-forward {@code reader} past {@code pending} deferred rows to the current batch start, staying on the
+     * column's fixed page path: a full-decode column via {@link ColumnReader#skip} (byte-skips whole pages), a
+     * skip-decode column via the readSelected page-skip with an empty survivor set. Both drop whole data pages that
+     * fall entirely within the skip without decoding them.
+     */
+    private void drainPendingAdvance(ColumnReader reader, boolean skip, long pending)
+    {
+        if (!skip) {
+            reader.skip(pending);
+            return;
+        }
+        boolean longKind = reader.kind() == ColumnReader.Kind.LONG;
+        while (pending > 0) {
+            int rows = (int) Math.min(pending, 1 << 30);
+            if (reader.kind() == ColumnReader.Kind.BINARY) {
+                reader.readSelectedBinary(EMPTY, 0, rows, null);
             }
             else if (longKind) {
                 ensureLazyScratch(0, true);
-                reader.readSelectedLongs(EMPTY, 0, lazyCount, lazyScratchLong, null);
+                reader.readSelectedLongs(EMPTY, 0, rows, lazyScratchLong, null);
             }
             else {
                 ensureLazyScratch(0, false);
-                reader.readSelectedInts(EMPTY, 0, lazyCount, lazyScratchInt, null);
+                reader.readSelectedInts(EMPTY, 0, rows, lazyScratchInt, null);
             }
+            pending -= rows;
         }
     }
 

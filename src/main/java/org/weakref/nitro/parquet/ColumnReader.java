@@ -253,6 +253,42 @@ public final class ColumnReader
     }
 
     /**
+     * Fast-forward the full-decode reader by {@code n} rows, byte-skipping any whole data page that lies entirely
+     * within the skip (no decompress, no decode) and decoding only the final partial page. Dictionary pages are still
+     * decoded so a later value decode sees the current dictionary. Leaves the reader in the same full-decode state a
+     * run of {@link #readInts}/{@link #readLongs} would, so it composes with a subsequent full decode. This is the
+     * mechanism that lets a deferred (un-pulled) column advance across whole 450k-row pages without decoding them,
+     * once its skipped rows have been coalesced into one call rather than walked a batch at a time.
+     */
+    public void skip(long n)
+    {
+        // Consume the remainder of the currently-decoded page (already decoded; only the cursor moves).
+        if (pageCursor < pageValueCount) {
+            int take = (int) Math.min(pageValueCount - pageCursor, n);
+            pageCursor += take;
+            n -= take;
+        }
+        // Byte-skip whole data pages; decode only the final partial page.
+        while (n > 0) {
+            if (!peekNextDataPage()) {
+                throw new IllegalStateException("Ran out of Parquet values (skip): still needed " + n);
+            }
+            if (pendingNumValues <= n) {
+                pagePosition = pendingNextPosition; // skip the whole page: advance past it, never decompress
+                n -= pendingNumValues;
+            }
+            else {
+                CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
+                MemorySegment body = decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec);
+                decodeDataPageV1(body, pendingHeader);
+                pagePosition = pendingNextPosition;
+                pageCursor = (int) n;
+                n = 0;
+            }
+        }
+    }
+
+    /**
      * Predicate-over-dictionary lead filter (LONG): read {@code count} rows; for each passing {@code predicate}
      * (a null fails), append its window position to {@code survivorsOut} and its value to {@code valuesOut}
      * (densely, survivor-aligned). Dict pages test a per-chunk {@code acceptById[]} over the ids WITHOUT
