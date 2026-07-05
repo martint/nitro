@@ -788,16 +788,22 @@ public class HashJoinOperator
             }
             Vector dictionaryValues = tryWrapNonRetainedDictionaryValues(innerOutputIndex);
             if (dictionaryValues != null) {
-                Streams result = Streams.ofValues(allocator.adopt(allocationContext, dictionaryValues));
-                // VALUES are carried as a unified dictionary (no byte copy); the cheap boolean side
-                // streams still flatten through the standard per-run copy path.
-                for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
-                    int outputStart = outputInnerRunStarts[runIndex];
-                    int runLength = outputInnerRunLengths[runIndex];
-                    BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
-                    result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, false, true, true);
+                // VALUES are carried as a unified dictionary (no byte copy). The boolean side streams
+                // are wrapped the same way -- a dictionary over the matched logical positions -- rather
+                // than flattened per output row, mirroring the retained and multi-run wrap paths and
+                // matching a build row's whole record (values + nulls + errors) by index. This is a
+                // single-run path (tryWrapNonRetainedDictionaryValues requires preparedInnerRunCount ==
+                // 1), so the whole output draws from one non-retained build batch.
+                Streams.Builder result = Streams.builder();
+                result.put(Stream.VALUES, allocator.adopt(allocationContext, dictionaryValues));
+                Streams column = bufferedInner.batches().get(outputInnerRunBatchIndexes[0]).columns()[innerOutputIndex];
+                if (column != null && column.hasNulls()) {
+                    result.put(Stream.NULLS, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), column.get(Stream.NULLS))));
                 }
-                return result;
+                if (column != null && column.hasErrors()) {
+                    result.put(Stream.ERRORS, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), column.get(Stream.ERRORS))));
+                }
+                return result.build();
             }
             // No zero-copy wrap applies. The remaining per-run bulk copy materializes the full output
             // range, so only take it when the mask is full; a sparse mask falls through to the
