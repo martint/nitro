@@ -97,11 +97,21 @@ class FlatKeyLayout
     private static final long COMPOSITE_MAX = 1 << 20;
     private boolean batchCompositeEligible;
 
+    // Per-field concrete handler kind, resolved once at construction. The per-position hot methods switch on this
+    // (a tableswitch) and call the concrete handler singleton (monomorphic, inlined) instead of dispatching through
+    // handlers[index] (a megamorphic FlatTypeHandler[] whose 4 anonymous element types defeat inlining and mispredict
+    // per field per row).
+    private final FlatTypeHandler.Kind[] fieldKinds;
+
     FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
     {
         this.fields = fields;
         this.inputChannels = inputChannels;
         this.handlers = handlers;
+        this.fieldKinds = new FlatTypeHandler.Kind[handlers.length];
+        for (int index = 0; index < handlers.length; index++) {
+            this.fieldKinds[index] = handlers[index].kind();
+        }
         this.fixedOffsets = fixedOffsets;
         this.comparisonOrder = comparisonOrder;
         this.nullByteCount = nullByteCount;
@@ -231,10 +241,10 @@ class FlatKeyLayout
                 if (dictionaryEntryHashes[index] == null || dictionaryEntryHashes[index].length < distinctCount) {
                     dictionaryEntryHashes[index] = new long[distinctCount];
                 }
-                FlatTypeHandler handler = handlers[index];
+                FlatTypeHandler.Kind kind = fieldKinds[index];
                 long[] entryHashes = dictionaryEntryHashes[index];
                 for (int id = 0; id < distinctCount; id++) {
-                    entryHashes[id] = handler.hashInput(dictionaryValues, id);
+                    entryHashes[id] = hashByKind(kind, dictionaryValues, id);
                 }
                 dictionaryHashedValues[index] = dictionaryValues;
             }
@@ -384,7 +394,37 @@ class FlatKeyLayout
                 return dictionaryEntryHashes[fieldIndex][ids[position]];
             }
         }
-        return handlers[fieldIndex].hashInput(value, position);
+        return hashByKind(fieldKinds[fieldIndex], value, position);
+    }
+
+    private static long hashByKind(FlatTypeHandler.Kind kind, Vector value, int position)
+    {
+        return switch (kind) {
+            case LONG -> FlatTypeHandlers.LONG.hashInput(value, position);
+            case BINARY -> FlatTypeHandlers.BINARY.hashInput(value, position);
+            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.hashInput(value, position);
+            case DOUBLE -> FlatTypeHandlers.DOUBLE.hashInput(value, position);
+        };
+    }
+
+    private static void writeFlatByKind(FlatTypeHandler.Kind kind, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    {
+        switch (kind) {
+            case LONG -> FlatTypeHandlers.LONG.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            case BINARY -> FlatTypeHandlers.BINARY.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+        }
+    }
+
+    private static boolean identicalByKind(FlatTypeHandler.Kind kind, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position)
+    {
+        return switch (kind) {
+            case LONG -> FlatTypeHandlers.LONG.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+            case BINARY -> FlatTypeHandlers.BINARY.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+            case DOUBLE -> FlatTypeHandlers.DOUBLE.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+        };
     }
 
     public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
@@ -407,7 +447,7 @@ class FlatKeyLayout
                 setNullBit(fixedChunk, fixedOffset, index);
             }
             else {
-                handlers[index].writeFlat(values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
+                writeFlatByKind(fieldKinds[index], values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
             }
         }
         storeRecordDictionaryIds(recordIndex, position);
@@ -450,7 +490,7 @@ class FlatKeyLayout
                 }
                 // probe value overflowed the interner: fall through to the value comparison.
             }
-            if (!handlers[index].identicalFlatToInput(fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
+            if (!identicalByKind(fieldKinds[index], fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, values[inputChannels[index]], position)) {
                 return false;
             }
         }

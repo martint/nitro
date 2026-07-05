@@ -37,7 +37,7 @@ final class FlatTypeHandlers
     private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
     private static final VarHandle INT_HANDLE = MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.LITTLE_ENDIAN);
 
-    private static final FlatTypeHandler LONG = new FlatTypeHandler()
+    static final FlatTypeHandler LONG = new FlatTypeHandler()
     {
         @Override
         public Kind kind()
@@ -136,7 +136,7 @@ final class FlatTypeHandlers
         }
     };
 
-    private static final FlatTypeHandler BOOLEAN = new FlatTypeHandler()
+    static final FlatTypeHandler BOOLEAN = new FlatTypeHandler()
     {
         @Override
         public Kind kind()
@@ -235,7 +235,7 @@ final class FlatTypeHandlers
         }
     };
 
-    private static final FlatTypeHandler DOUBLE = new FlatTypeHandler()
+    static final FlatTypeHandler DOUBLE = new FlatTypeHandler()
     {
         @Override
         public Kind kind()
@@ -335,7 +335,7 @@ final class FlatTypeHandlers
         }
     };
 
-    private static final FlatTypeHandler BINARY = new FlatTypeHandler()
+    static final FlatTypeHandler BINARY = new FlatTypeHandler()
     {
         @Override
         public Kind kind()
