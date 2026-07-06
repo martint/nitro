@@ -798,10 +798,10 @@ public class HashJoinOperator
                 result.put(Stream.VALUES, allocator.adopt(allocationContext, dictionaryValues));
                 Streams column = bufferedInner.batches().get(outputInnerRunBatchIndexes[0]).columns()[innerOutputIndex];
                 if (column != null && column.hasNulls()) {
-                    result.put(Stream.NULLS, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), column.get(Stream.NULLS))));
+                    result.put(Stream.NULLS, wrapInnerSideStream(column.get(Stream.NULLS)));
                 }
                 if (column != null && column.hasErrors()) {
-                    result.put(Stream.ERRORS, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), column.get(Stream.ERRORS))));
+                    result.put(Stream.ERRORS, wrapInnerSideStream(column.get(Stream.ERRORS)));
                 }
                 return result.build();
             }
@@ -1120,6 +1120,40 @@ public class HashJoinOperator
             break;
         }
         return DictionaryVector.wrap(dictionaryIds, baseValues);
+    }
+
+    /**
+     * Materializes a non-retained build column's boolean side stream (nulls or errors) for the output.
+     * When the source is entirely false it is emitted as a 1-run all-false RLE of the output length --
+     * O(1), no per-position id array -- keeping the stream present (its presence is a fixed schema
+     * contract, so it cannot simply be dropped) while avoiding the dictionary wrap. Downstream null
+     * propagation recognizes the all-false RLE shape (see {@link
+     * org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}). Otherwise the stream is
+     * wrapped as a dictionary over the matched logical positions, like the values alongside it.
+     */
+    private Vector wrapInnerSideStream(Vector source)
+    {
+        if (isKnownAllFalseSource(source)) {
+            BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+            return allocator.allocateRle(allocationContext, new int[] {currentOutputCount}, sentinel);
+        }
+        return allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), source));
+    }
+
+    /**
+     * Whether a build column's boolean side stream is entirely false. Peels dictionary/RLE encodings to
+     * the underlying boolean run values and relies on {@link BooleanVector#isAllFalse()}, which caches
+     * its result -- and the buffered build column is one reused instance across every output batch, so
+     * the scan happens at most once per column.
+     */
+    private static boolean isKnownAllFalseSource(Vector stream)
+    {
+        return switch (stream) {
+            case BooleanVector booleans -> booleans.isAllFalse();
+            case DictionaryVector dictionary -> isKnownAllFalseSource(dictionary.values());
+            case org.weakref.nitro.data.RleVector rle -> isKnownAllFalseSource(rle.values());
+            default -> false;
+        };
     }
 
     private static Streams sideStreamValues(Output output)
