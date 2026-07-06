@@ -154,6 +154,26 @@ final class ValueIdInterner
         return Arrays.copyOfRange(data, valueOffset[id], valueOffset[id] + valueLength[id]);
     }
 
+    /**
+     * The distinct interned values as a {@link BinaryVector} indexed by id (0..distinctCount-1), so a grouped
+     * key column that stored these ids can be emitted as a {@link org.weakref.nitro.data.DictionaryVector} over
+     * this base instead of a flat per-group copy -- letting a downstream re-group/join over the key see a
+     * compact dictionary rather than one entry per row.
+     */
+    org.weakref.nitro.data.BinaryVector toBinaryVector(org.weakref.nitro.data.Allocator allocator, org.weakref.nitro.data.Allocator.Context allocationContext)
+    {
+        long totalBytes = 0;
+        for (int id = 0; id < distinct; id++) {
+            totalBytes += valueLength[id];
+        }
+        org.weakref.nitro.data.BinaryVector vector = org.weakref.nitro.data.BinaryVector.allocate(allocator, allocationContext, distinct, (int) totalBytes);
+        Arrays.fill(vector.offsets(), 0);
+        for (int id = 0; id < distinct; id++) {
+            vector.setBytes(id, data, valueOffset[id], valueLength[id]);
+        }
+        return vector;
+    }
+
     private void store(int id, byte[] value, int offset, int length, long hash)
     {
         if (id >= valueOffset.length) {

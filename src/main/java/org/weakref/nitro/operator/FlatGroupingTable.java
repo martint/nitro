@@ -196,8 +196,12 @@ final class FlatGroupingTable
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
+        Vector values = layout.tryGroupedValuesAsDictionary(this, groupedColumnIndex, size, mask, allocator, allocationContext);
+        if (values == null) {
+            values = field.handler().materializeValues(this, field, size, mask, -1, output == null ? null : output.values(), allocator, allocationContext);
+        }
         return Streams.ofValuesAndNulls(
-                field.handler().materializeValues(this, field, size, mask, -1, output == null ? null : output.values(), allocator, allocationContext),
+                values,
                 materializeNulls(groupedColumnIndex, size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 

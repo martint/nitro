@@ -436,6 +436,49 @@ class FlatKeyLayout
     }
 
     /**
+     * Emits a grouped BINARY key column as a {@link DictionaryVector} over the field's interned distinct values
+     * (base indexed by global id) using each group's stored id, when every group carried a valid interned id and
+     * the values repeat enough that the dictionary is smaller than a flat per-group copy. A downstream re-group or
+     * join over the key then sees a compact dictionary rather than one entry per row. Returns {@code null} to fall
+     * back to the flat {@code materializeValues} path. Nulls ride the separate NULLS stream, so a null or absent
+     * group can point at any base entry.
+     */
+    Vector tryGroupedValuesAsDictionary(FlatGroupingTable table, int fieldIndex, int size, org.weakref.nitro.data.Mask mask, org.weakref.nitro.data.Allocator allocator, org.weakref.nitro.data.Allocator.Context allocationContext)
+    {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY) {
+            return null;
+        }
+        ValueIdInterner interner = fieldInterners == null ? null : fieldInterners[fieldIndex];
+        int[] recordIds = recordDictionaryIds == null ? null : recordDictionaryIds[fieldIndex];
+        if (interner == null || recordIds == null) {
+            return null;
+        }
+        int distinct = interner.distinctCount();
+        // Only when the distinct values are at most half the groups: the dictionary base is then smaller than
+        // the flat per-group copy would be, so emitting it never costs more than materializing flat even when
+        // nothing downstream re-groups the key, while a downstream re-group/join sees a compact dictionary.
+        if (distinct == 0 || distinct * 2 > size) {
+            return null;
+        }
+        int[] dictionaryIds = new int[size];
+        for (int index : mask) {
+            int recordIndex = table.recordIndex(index);
+            if (recordIndex < 0 || recordIndex >= recordIds.length) {
+                return null;
+            }
+            int globalId = recordIds[recordIndex];
+            if (globalId < 0 || globalId >= distinct) {
+                return null;
+            }
+            dictionaryIds[index] = globalId;
+        }
+        BinaryVector base = interner.toBinaryVector(allocator, allocationContext);
+        base.clearTraits();
+        base.addTraits(field(fieldIndex).binaryTraits());
+        return DictionaryVector.wrap(dictionaryIds, base);
+    }
+
+    /**
      * Hook called by {@link FlatGroupingTable} after a batch completes. Mirror of
      * {@link #beginBatch}; subclasses release cached references here.
      */
