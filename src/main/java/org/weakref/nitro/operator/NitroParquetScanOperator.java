@@ -55,6 +55,14 @@ public final class NitroParquetScanOperator
     // skip path (re-walking the RLE id stream) costs more than a single bulk decode, so full-decode instead.
     private static final int SKIP_DECODE_MAX_SURVIVOR_PERCENT = Integer.getInteger("nitro.parquet.skipMaxSurvivorPercent", 20);
 
+    // The DF-window payload path freezes one page path (skip vs bulk) for the whole scan from the FIRST window's
+    // survival rate, but that single 1M-row window is positionally biased: a filter whose survivors happen to cluster
+    // early reads dense there yet sparse overall. Because mis-freezing to bulk when the scan is actually sparse costs
+    // ~20x (a full window decode per survivor batch) while the reverse is bounded, only commit to bulk when the first
+    // window is convincingly dense — a genuinely non-selective filter reads dense everywhere, so even a biased sample
+    // clears this higher bar. A merely-front-loaded window (q39: 21.9% first vs 1.5% overall) stays on skip.
+    private static final int DF_PAYLOAD_BULK_MIN_SURVIVOR_PERCENT = Integer.getInteger("nitro.parquet.dfPayloadBulkPercent", 50);
+
     private final Allocator allocator;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -671,7 +679,7 @@ public final class NitroParquetScanOperator
         // when most survive (a weak/unclustered filter). A reader must never mix the two page paths across windows,
         // so the decision is frozen rather than recomputed per window.
         if (!dfPayloadDecided) {
-            dfPayloadBulk = survivorCount > (int) ((long) count * SKIP_DECODE_MAX_SURVIVOR_PERCENT / 100);
+            dfPayloadBulk = survivorCount > (int) ((long) count * DF_PAYLOAD_BULK_MIN_SURVIVOR_PERCENT / 100);
             dfPayloadDecided = true;
         }
         for (int c = 0; c < columnCount; c++) {
