@@ -89,6 +89,15 @@ class FlatKeyLayout
     private ValueIdInterner[] fieldInterners;
     private int[][] batchEntryGlobalId;
     private Vector[] batchEntryGlobalIdDict;
+    // Sentinel in batchEntryGlobalId for a dictionary entry not yet interned. A join wraps a grouping-key
+    // column over the whole build column, so its dictionary carries far more entries than any batch
+    // references. Interning every entry eagerly on the first batch that presents a new dictionary identity
+    // is mostly wasted (only the referenced entries ever reach a record). Instead, for a base larger than
+    // the array-mode stride (so never array-mode eligible), fill the map with this sentinel and intern each
+    // entry lazily on first reference, caching the result -- each distinct entry is interned once across the
+    // query, over the same base-identity cache the eager path already used, so ids are unchanged.
+    private static final int GLOBAL_ID_NOT_INTERNED = Integer.MIN_VALUE;
+    private boolean[] fieldLazyIntern;
 
     // Composite value-id for array-mode grouping (Velox's normalized-key technique): when every key field is an
     // interned, null-free, low-cardinality dictionary column, this batch's per-field global ids pack into a
@@ -223,6 +232,7 @@ class FlatKeyLayout
             fieldInterners = new ValueIdInterner[handlers.length];
             batchEntryGlobalId = new int[handlers.length][];
             batchEntryGlobalIdDict = new Vector[handlers.length];
+            fieldLazyIntern = new boolean[handlers.length];
             fieldLong = new VectorAccess.LongValues[handlers.length];
             fieldBinaryBase = new BinaryVector[handlers.length];
             fieldBinaryIds = new int[handlers.length][];
@@ -308,7 +318,7 @@ class FlatKeyLayout
         batchCompositeEligible = handlers.length > 0;
         long compositeMultiplier = 1;
         for (int index = 0; batchCompositeEligible && index < handlers.length; index++) {
-            if (!fieldIdComparable[index] || !batchFieldNullFree[index]
+            if (!fieldIdComparable[index] || !batchFieldNullFree[index] || fieldLazyIntern[index]
                     || fieldInterners[index] == null || fieldInterners[index].distinctCount() > COMPOSITE_STRIDE) {
                 batchCompositeEligible = false;
                 break;
@@ -344,7 +354,7 @@ class FlatKeyLayout
         long composite = 0;
         long multiplier = 1;
         for (int index = 0; index < handlers.length; index++) {
-            composite += batchEntryGlobalId[index][batchDictionaryIds[index][position]] * multiplier;
+            composite += globalIdFor(index, batchDictionaryIds[index][position]) * multiplier;
             multiplier *= COMPOSITE_STRIDE;
         }
         return composite;
@@ -371,6 +381,17 @@ class FlatKeyLayout
         }
         int entryCount = dictionary.length();
         int[] globalIds = new int[entryCount];
+        // A base larger than the array-mode stride can never be array-mode eligible, and a join wraps the
+        // whole build column so most entries are never referenced: intern lazily on first reference instead
+        // of eagerly here. Small bases stay eager so their distinctCount is known for the array-mode decision.
+        if (entryCount > COMPOSITE_STRIDE) {
+            Arrays.fill(globalIds, GLOBAL_ID_NOT_INTERNED);
+            fieldLazyIntern[fieldIndex] = true;
+            batchEntryGlobalId[fieldIndex] = globalIds;
+            batchEntryGlobalIdDict[fieldIndex] = dictionaryValues;
+            return globalIds;
+        }
+        fieldLazyIntern[fieldIndex] = false;
         byte[] data = dictionary.data();
         for (int entry = 0; entry < entryCount; entry++) {
             int so = dictionary.startOffset(entry);
@@ -387,6 +408,31 @@ class FlatKeyLayout
         batchEntryGlobalId[fieldIndex] = globalIds;
         batchEntryGlobalIdDict[fieldIndex] = dictionaryValues;
         return globalIds;
+    }
+
+    /**
+     * The global value id for dictionary entry {@code dictId} of {@code fieldIndex}, interning it on first
+     * reference for a lazily-populated (large) base. Eager fields short-circuit on the first read.
+     */
+    private int globalIdFor(int fieldIndex, int dictId)
+    {
+        int[] ids = batchEntryGlobalId[fieldIndex];
+        int cached = ids[dictId];
+        if (cached != GLOBAL_ID_NOT_INTERNED) {
+            return cached;
+        }
+        BinaryVector dictionary = (BinaryVector) boundDictionary[fieldIndex];
+        int so = dictionary.startOffset(dictId);
+        int len = dictionary.length(dictId);
+        int globalId;
+        if (len < 0 || so < 0 || so + len > dictionary.data().length) {
+            globalId = -1;
+        }
+        else {
+            globalId = fieldInterners[fieldIndex].intern(dictionary.data(), so, len);
+        }
+        ids[dictId] = globalId;
+        return globalId;
     }
 
     /**
@@ -581,7 +627,7 @@ class FlatKeyLayout
                 return false;
             }
             if (idComparable(0, recordIndex)) {
-                int probeId = batchEntryGlobalId[0][batchDictionaryIds[0][position]];
+                int probeId = globalIdFor(0, batchDictionaryIds[0][position]);
                 if (probeId >= 0) {
                     return recordDictionaryIds[0][recordIndex] == probeId;
                 }
@@ -599,7 +645,7 @@ class FlatKeyLayout
                 continue;
             }
             if (idComparable(index, recordIndex)) {
-                int probeId = batchEntryGlobalId[index][batchDictionaryIds[index][position]];
+                int probeId = globalIdFor(index, batchDictionaryIds[index][position]);
                 if (probeId >= 0) {
                     if (recordDictionaryIds[index][recordIndex] != probeId) {
                         return false;
@@ -635,7 +681,7 @@ class FlatKeyLayout
             if (recordDictionaryIds[index] == null) {
                 continue;
             }
-            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? batchEntryGlobalId[index][batchDictionaryIds[index][position]] : -1;
+            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? globalIdFor(index, batchDictionaryIds[index][position]) : -1;
         }
     }
 
