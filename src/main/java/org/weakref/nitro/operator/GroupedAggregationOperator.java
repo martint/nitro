@@ -41,6 +41,11 @@ public class GroupedAggregationOperator
     // two-pass wins on memory-level parallelism; below it the fused single pass wins. Cardinality-gated.
     private static final int FUSE_GROUP_LIMIT = 1 << 15;
 
+    // Forward a downstream join's dynamic filter on a grouped-key column to the source (so a fact scan below
+    // the grouping can drop non-joining rows before they are grouped). On by default; opt out for A/B.
+    private static final boolean DYNAMIC_FILTER_THROUGH_AGGREGATION =
+            Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.throughAggregation", "true"));
+
     private final Allocator.Context allocationContext = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
 
@@ -133,6 +138,25 @@ public class GroupedAggregationOperator
     public boolean hasNext()
     {
         return !done;
+    }
+
+    @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        // A downstream join keyed on a group-by column (e.g. TPC-DS q24 joins store/item after grouping by
+        // ss_store_sk/ss_item_sk) pushes a filter on that grouped-key OUTPUT column. Grouping preserves the key
+        // value, so the same membership applies to the corresponding group-by INPUT column: retarget the filter
+        // to that input column and forward it to the source. Because the join builds its (small) dimension and
+        // pushes this filter before it first probes this operator, the fact scan below the grouping receives it
+        // before the grouping drains its input -- dropping non-joining rows before they are ever grouped. A
+        // filter on an aggregate output has no key column to push and is ignored.
+        if (!DYNAMIC_FILTER_THROUGH_AGGREGATION || groupByColumns == null) {
+            return;
+        }
+        int column = filter.column();
+        if (column < groupedColumns.length) {
+            source.pushDynamicFilter(filter.withColumn(groupByColumns[groupedKeyIndexes[column]]));
+        }
     }
 
     private Mask computeResults()

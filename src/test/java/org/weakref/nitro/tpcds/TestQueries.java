@@ -961,6 +961,49 @@ public class TestQueries
     }
 
     @Test
+    void profileQuery24OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        for (int warm = 0; warm < 3; warm++) {
+            try (Operator query = TpcdsParquetSupport.query24(new Allocator(), primitiveRegistry, tables)) {
+                consumeOperator(query);
+            }
+        }
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query24(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery24JoinMaterialization()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        for (int warm = 0; warm < 3; warm++) {
+            try (Operator query = TpcdsParquetSupport.query24(new Allocator(), primitiveRegistry, tables)) {
+                consumeOperator(query);
+            }
+        }
+        JoinMaterializationProfile profile = new JoinMaterializationProfile();
+        try (Operator query = TpcdsParquetSupport.query24(new Allocator(), primitiveRegistry, tables)) {
+            HashJoinOperator.withMaterializationProfile(profile, () -> {
+                consumeOperator(query);
+                return null;
+            });
+        }
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
     void profileQuery57TrinoOperatorCpu()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);

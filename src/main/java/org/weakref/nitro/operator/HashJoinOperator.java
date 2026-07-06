@@ -2245,6 +2245,9 @@ public class HashJoinOperator
         private int size;
         private boolean pairHasDuplicates;
         private final SingleLongList singleMatch = new SingleLongList();
+        // Reusable per-batch key gather buffers for the native (Rust) prefetching probe (see NativeProbe).
+        private long[] nativeFirst;
+        private long[] nativeSecond;
 
         private LongPairJoinIndex(int expectedSize)
         {
@@ -2362,6 +2365,19 @@ public class HashJoinOperator
             VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
             VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
             if (!hasNulls) {
+                if (NativeProbe.ENABLED) {
+                    if (nativeFirst == null || nativeFirst.length < positionCount) {
+                        nativeFirst = new long[positionCount];
+                        nativeSecond = new long[positionCount];
+                    }
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        nativeFirst[index] = firstValues.value(position);
+                        nativeSecond[index] = secondValues.value(position);
+                    }
+                    NativeProbe.probePairs(tags, entries, nativeFirst, nativeSecond, positionCount, refs, NativeProbe.DISTANCE);
+                    return;
+                }
                 for (int index = 0; index < positionCount; index++) {
                     int position = positions[index];
                     refs[index] = singleRef(firstValues.value(position), secondValues.value(position));
@@ -2529,7 +2545,12 @@ public class HashJoinOperator
         private int mask;
         private int maxFill;
         private int size;
+        private boolean tripleHasDuplicates;
         private final SingleLongList singleMatch = new SingleLongList();
+        // Reusable per-batch key gather buffers for the native (Rust) prefetching probe (see NativeProbe).
+        private long[] nativeFirst;
+        private long[] nativeSecond;
+        private long[] nativeThird;
 
         private LongTripleJoinIndex(int expectedSize)
         {
@@ -2654,6 +2675,57 @@ public class HashJoinOperator
             }
         }
 
+        @Override
+        public boolean supportsSingleMatchRefs()
+        {
+            return !tripleHasDuplicates;
+        }
+
+        @Override
+        public void matchSingleRows(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        {
+            VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
+            VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
+            VectorAccess.LongValues thirdValues = VectorAccess.longValues(valuesArray[2]);
+            if (!hasNulls) {
+                if (NativeProbe.ENABLED) {
+                    if (nativeFirst == null || nativeFirst.length < positionCount) {
+                        nativeFirst = new long[positionCount];
+                        nativeSecond = new long[positionCount];
+                        nativeThird = new long[positionCount];
+                    }
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        nativeFirst[index] = firstValues.value(position);
+                        nativeSecond[index] = secondValues.value(position);
+                        nativeThird[index] = thirdValues.value(position);
+                    }
+                    NativeProbe.probeTriples(tags, entries, nativeFirst, nativeSecond, nativeThird, positionCount, refs, NativeProbe.DISTANCE);
+                    return;
+                }
+                for (int index = 0; index < positionCount; index++) {
+                    int position = positions[index];
+                    refs[index] = singleRef(firstValues.value(position), secondValues.value(position), thirdValues.value(position));
+                }
+                return;
+            }
+            VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nullsArray[0]);
+            VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nullsArray[1]);
+            VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nullsArray[2]);
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                refs[index] = firstNulls.value(position) || secondNulls.value(position) || thirdNulls.value(position)
+                        ? NO_MATCH_ROW_REFERENCE
+                        : singleRef(firstValues.value(position), secondValues.value(position), thirdValues.value(position));
+            }
+        }
+
+        private long singleRef(long first, long second, long third)
+        {
+            int slot = probe(first, second, third, hash64(first, second, third));
+            return slot < 0 ? NO_MATCH_ROW_REFERENCE : entries[slot * 4 + 3];
+        }
+
         // Returns the slot holding (first, second, third), or -1 if absent. Scans GROUP tags per step: one vector
         // load plus one tag compare filters the whole bucket; a key is only read on a tag match. A bucket with any
         // empty slot ends the search (open-addressing invariant; no deletions).
@@ -2733,6 +2805,7 @@ public class HashJoinOperator
                     int slot = group + Long.numberOfTrailingZeros(matchBits);
                     int base = slot * 4;
                     if (entries[base] == first && entries[base + 1] == second && entries[base + 2] == third) {
+                        tripleHasDuplicates = true;
                         if (rowsBySlot[slot] == null) {
                             LongArrayList rows = new LongArrayList(2);
                             rows.add(entries[base + 3]);

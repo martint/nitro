@@ -5226,25 +5226,25 @@ final class TpcdsParquetSupport
 
     private static Operator query24CustomerStoreItemSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid");
-        sales = new HashJoinOperator(
+        Operator sales = profiled("q24.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid"));
+        sales = profiled("q24.join.store_returns", new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {0, 1},
-                scannedTable(allocator, tables, "store_returns", "sr_ticket_number", "sr_item_sk"),
-                new int[] {0, 1});
-        sales = new HashJoinOperator(
+                profiled("q24.scan.store_returns", scannedTable(allocator, tables, "store_returns", "sr_ticket_number", "sr_item_sk")),
+                new int[] {0, 1}));
+        sales = profiled("q24.join.customer", new HashJoinOperator(
                 allocator,
                 sales,
                 2,
-                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"),
-                0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 8, 9, 10, 3, 1, 4);
-        return new GroupedAggregationOperator(
+                profiled("q24.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_birth_country")),
+                0));
+        sales = profiled("q24.project", projectInputs(allocator, primitiveRegistry, sales, 8, 9, 10, 3, 1, 4));
+        return profiled("q24.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4),
                 List.of(new Sum(5)),
-                sales);
+                sales));
     }
 
     private static Operator query24AddressLookup(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
