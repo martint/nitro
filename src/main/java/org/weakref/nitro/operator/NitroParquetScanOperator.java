@@ -89,6 +89,9 @@ public final class NitroParquetScanOperator
     // output batch. The window's surviving rows are buffered densely and then sliced into MAX_BATCH_ROWS output
     // batches. The window must comfortably exceed a Parquet page (~100K+ rows) for page-skip to be effective.
     private static final int FILTER_WINDOW = Integer.getInteger("nitro.parquet.scan.filterWindow", 1 << 20);
+    // Order dynamic-filter columns by estimated pass fraction (filter values / column cardinality) rather than raw
+    // filter value count, so the genuinely selective filter leads the scan on the fused run-aware path. Opt-out.
+    private static final boolean SELECTIVITY_FILTER_ORDER = Boolean.parseBoolean(System.getProperty("nitro.parquet.selectivityFilterOrder", "true"));
     // Densely-packed surviving values for the current window, per column (grown to high-water mark); sliced out.
     private final long[][] windowLong;
     private final int[][] windowInt;
@@ -834,26 +837,54 @@ public final class NitroParquetScanOperator
                 }
             }
             int[] columns = new int[n];
+            double[] selectivity = new double[n];
             int index = 0;
             for (int c = 0; c < filtersByColumn.length; c++) {
                 if (filtersByColumn[c] != null) {
-                    columns[index++] = c;
+                    columns[index] = c;
+                    selectivity[index] = SELECTIVITY_FILTER_ORDER ? estimateSelectivity(c) : filtersByColumn[c].size();
+                    index++;
                 }
             }
-            // Insertion sort by distinct-build-value count ascending (most selective first).
+            // Insertion sort by estimated pass fraction ascending (most selective first). The lead column runs on the
+            // fused, run-aware predicate-over-dictionary path; every later column is read at the lead's survivors, so a
+            // poorly-pruning lead is very expensive. Distinct-build-value count alone is a bad proxy: a small-domain
+            // column (e.g. a 10-value warehouse key whose filter admits all 10) has a tiny size yet prunes nothing.
+            // Dividing the filter's value count by the column's dictionary cardinality recovers the true pass fraction.
             for (int i = 1; i < columns.length; i++) {
-                int key = columns[i];
-                int keySize = filtersByColumn[key].size();
+                int keyColumn = columns[i];
+                double keySelectivity = selectivity[i];
                 int j = i - 1;
-                while (j >= 0 && filtersByColumn[columns[j]].size() > keySize) {
+                while (j >= 0 && selectivity[j] > keySelectivity) {
                     columns[j + 1] = columns[j];
+                    selectivity[j + 1] = selectivity[j];
                     j--;
                 }
-                columns[j + 1] = key;
+                columns[j + 1] = keyColumn;
+                selectivity[j + 1] = keySelectivity;
             }
             filterOrder = columns;
         }
         return filterOrder;
+    }
+
+    /**
+     * Estimated fraction of rows a column's dynamic filter admits: {@code filterValues / columnCardinality}, using the
+     * column's dictionary size as the cardinality. Falls back to a raw-size proxy when the column is not
+     * dictionary-encoded (cardinality unknown). Smaller is more selective; the most selective column leads the scan.
+     */
+    private double estimateSelectivity(int column)
+    {
+        double filterValues = filtersByColumn[column].size();
+        int cardinality = readers[column].peekDictionarySize();
+        if (cardinality > 0) {
+            return Math.min(1.0, filterValues / cardinality);
+        }
+        // No dictionary (plain-encoded, typically a high-cardinality column): cardinality unknown, so the pass fraction
+        // can't be estimated. Treat as non-selective (1.0) rather than guessing selective -- a wrong "selective" guess
+        // makes this the lead and reads every later column at the full row count. A genuinely selective plain column
+        // still gets applied, just not as the lead.
+        return 1.0;
     }
 
     private static long[] ensureLong(long[] array, int size)

@@ -1358,6 +1358,33 @@ public final class ColumnReader
         return true;
     }
 
+    /**
+     * The distinct-value count of the first chunk's dictionary — a proxy for the column's cardinality (domain size),
+     * used to estimate a dynamic filter's selectivity as {@code filterValues / cardinality}. Reads only the first
+     * page header (no decompression or decode). Returns {@code -1} when the column is not dictionary-encoded, so the
+     * caller can fall back to the raw filter size.
+     */
+    public int peekDictionarySize()
+    {
+        if (chunks.isEmpty()) {
+            return -1;
+        }
+        Chunk chunk = chunks.getFirst();
+        ColumnMetaData metadata = chunk.metadata();
+        long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+        long limit = start + metadata.total_compressed_size;
+        try (ParquetFile.SegmentInputStream in = new ParquetFile.SegmentInputStream(chunk.segment(), start, limit - start)) {
+            PageHeader header = Util.readPageHeader(in);
+            if (header.type == PageType.DICTIONARY_PAGE) {
+                return header.dictionary_page_header.num_values;
+            }
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException("Unable to read Parquet dictionary page header", e);
+        }
+        return -1;
+    }
+
     private boolean decodeNextDataPage()
     {
         while (true) {
