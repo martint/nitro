@@ -58,6 +58,11 @@ public final class ColumnReader
     // loads 32 bytes at a group's start, the scalar tail loads 8.
     private static final int SLACK = 32;
 
+    // A/B toggle for the dict-filter compaction: branched (skip the value gather+store for rejected rows) vs
+    // branchless (always stage, advance only on accept). Branched wins when the filter is selective (the branch is
+    // well-predicted, and the 90%+ rejected rows skip a dict gather + two stores); branchless wins near 50% survival.
+    private static final boolean BRANCHLESS_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.branchlessDictFilter", "false"));
+
     private record Chunk(MemorySegment segment, ColumnMetaData metadata) {}
 
     // Dictionary materialization is a pure gather (out[i] = dictionary[ids[i]]); a Vector-API gather (hardware
@@ -329,11 +334,23 @@ public final class ColumnReader
                         // when accepted. The per-row `if (accept[id])` is a data-dependent branch the hardware cannot
                         // predict (survivors are scattered), so removing it collapses the mispredict stall on the
                         // 230M-row lead scan. The overwritten trailing slot is harmless (sc never exceeds count).
-                        for (int i = 0; i < pageRows; i++) {
-                            int id = idBuffer[pageCursor + i];
-                            valuesOut[sc] = dict[id];
-                            survivorsOut[sc] = windowPos + i;
-                            sc += accept[id] ? 1 : 0;
+                        if (BRANCHLESS_DICT_FILTER) {
+                            for (int i = 0; i < pageRows; i++) {
+                                int id = idBuffer[pageCursor + i];
+                                valuesOut[sc] = dict[id];
+                                survivorsOut[sc] = windowPos + i;
+                                sc += accept[id] ? 1 : 0;
+                            }
+                        }
+                        else {
+                            for (int i = 0; i < pageRows; i++) {
+                                int id = idBuffer[pageCursor + i];
+                                if (accept[id]) {
+                                    valuesOut[sc] = dict[id];
+                                    survivorsOut[sc] = windowPos + i;
+                                    sc++;
+                                }
+                            }
                         }
                     }
                 }
@@ -396,11 +413,23 @@ public final class ColumnReader
                     }
                     else {
                         // Branchless compaction (see filterDictLongs): drop the unpredictable per-row accept branch.
-                        for (int i = 0; i < pageRows; i++) {
-                            int id = idBuffer[pageCursor + i];
-                            valuesOut[sc] = dict[id];
-                            survivorsOut[sc] = windowPos + i;
-                            sc += accept[id] ? 1 : 0;
+                        if (BRANCHLESS_DICT_FILTER) {
+                            for (int i = 0; i < pageRows; i++) {
+                                int id = idBuffer[pageCursor + i];
+                                valuesOut[sc] = dict[id];
+                                survivorsOut[sc] = windowPos + i;
+                                sc += accept[id] ? 1 : 0;
+                            }
+                        }
+                        else {
+                            for (int i = 0; i < pageRows; i++) {
+                                int id = idBuffer[pageCursor + i];
+                                if (accept[id]) {
+                                    valuesOut[sc] = dict[id];
+                                    survivorsOut[sc] = windowPos + i;
+                                    sc++;
+                                }
+                            }
                         }
                     }
                 }
