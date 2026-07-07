@@ -55,6 +55,9 @@ public class HashJoinOperator
     // A multi-key join emits one dynamic filter per key column (each a necessary join condition). Disable to restrict
     // dynamic filters to single-key joins with -Dnitro.dynamicFilter.multiKey=false.
     private static final boolean MULTI_KEY_DYNAMIC_FILTER = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.multiKey", "true"));
+    // Resolve RLE run indices for a monotonic (outer/probe-ordered) output column with a forward hint instead of a
+    // per-position binary search. Set false to force the binary search (for A/B measurement of the two paths).
+    private static final boolean RLE_RUN_INDEX_HINT = Boolean.parseBoolean(System.getProperty("nitro.join.rleRunIndexHint", "true"));
     private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 20);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
@@ -736,9 +739,10 @@ public class HashJoinOperator
     {
         if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
             // wrapComposedDictionary rewrites the ids in place while collapsing nested encodings, so an
-            // encoded source needs a private copy it can mutate.
+            // encoded source needs a private copy it can mutate. The outer positions ascend (one output row per
+            // match, in probe order), so an RLE level resolves run indices with a forward hint instead of binary search.
             int[] ids = Arrays.copyOf(outerDictionaryIds(), currentOutputCount);
-            return wrapComposedDictionary(ids, source);
+            return wrapComposedDictionary(ids, source, true);
         }
         // Flat source: wrapComposedDictionary leaves the ids untouched, so every flat outer column can share
         // the single cached id snapshot instead of allocating a per-column copy.
@@ -1134,7 +1138,22 @@ public class HashJoinOperator
 
     private static DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values)
     {
+        return wrapComposedDictionary(dictionaryIds, values, false);
+    }
+
+    /**
+     * Rewrites {@code dictionaryIds} in place, collapsing nested dictionary/RLE encodings so the result is a single
+     * dictionary over the base values. When {@code idsMonotonic} is set (the ids ascend, as the outer/probe positions
+     * do -- one output row per match, in probe order), an RLE level resolves run indices with a forward-advancing hint
+     * (amortized O(1) per position, O(runs) total) instead of a per-position binary search (O(positions * log runs));
+     * for a many-run RLE that is a large win, and for a few-run RLE it is never worse. A dictionary level remaps
+     * through arbitrary ids and so breaks the ordering; monotonicity is dropped there. Run indices of ascending
+     * positions stay ascending, so a nested RLE keeps the fast path.
+     */
+    private static DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values, boolean idsMonotonic)
+    {
         Vector baseValues = values;
+        boolean monotonic = idsMonotonic;
         while (true) {
             if (baseValues instanceof DictionaryVector dictionary) {
                 int[] baseIds = dictionary.ids();
@@ -1142,12 +1161,22 @@ public class HashJoinOperator
                     dictionaryIds[index] = baseIds[dictionaryIds[index]];
                 }
                 baseValues = dictionary.values();
+                monotonic = false;
                 continue;
             }
 
             if (baseValues instanceof org.weakref.nitro.data.RleVector rle) {
-                for (int index = 0; index < dictionaryIds.length; index++) {
-                    dictionaryIds[index] = rle.runIndex(dictionaryIds[index]);
+                if (monotonic && RLE_RUN_INDEX_HINT) {
+                    int hint = 0;
+                    for (int index = 0; index < dictionaryIds.length; index++) {
+                        hint = rle.runIndexFromHint(dictionaryIds[index], hint);
+                        dictionaryIds[index] = hint;
+                    }
+                }
+                else {
+                    for (int index = 0; index < dictionaryIds.length; index++) {
+                        dictionaryIds[index] = rle.runIndex(dictionaryIds[index]);
+                    }
                 }
                 baseValues = rle.values();
                 continue;
