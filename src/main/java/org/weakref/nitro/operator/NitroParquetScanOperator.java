@@ -73,6 +73,7 @@ public final class NitroParquetScanOperator
     private final boolean allNumeric;
     private final DynamicFilter[] filtersByColumn;
     private boolean hasFilters;
+    private boolean filtersPruned;
     // Per-column decode scratch (grows to high-water mark; reused across batches). A column is decoded into
     // colLong or colInt (by kind) at whatever survivor set it is read at; readPositions records that set so the
     // final emit gathers each column to the surviving rows. Filter columns are read progressively: the most
@@ -92,6 +93,11 @@ public final class NitroParquetScanOperator
     // Order dynamic-filter columns by estimated pass fraction (filter values / column cardinality) rather than raw
     // filter value count, so the genuinely selective filter leads the scan on the fused run-aware path. Opt-out.
     private static final boolean SELECTIVITY_FILTER_ORDER = Boolean.parseBoolean(System.getProperty("nitro.parquet.selectivityFilterOrder", "true"));
+    // Drop a pushed dynamic filter whose build side admits every value in the probe column's dictionary: it prunes
+    // nothing, so activating the eager filter-window path for it would gather every payload column at full row count
+    // and defeat late materialization (a downstream operator's own predicate, e.g. an IS NULL, then drives the real
+    // narrowing). The join still enforces the condition, so dropping it is always semantically safe. Opt-out.
+    private static final boolean DROP_NON_SELECTIVE_FILTERS = Boolean.parseBoolean(System.getProperty("nitro.parquet.dropNonSelectiveFilters", "true"));
     // Densely-packed surviving values for the current window, per column (grown to high-water mark); sliced out.
     private final long[][] windowLong;
     private final int[][] windowInt;
@@ -215,7 +221,7 @@ public final class NitroParquetScanOperator
     @Override
     public boolean hasNext()
     {
-        return hasFilters ? ensureWindow() : nextRow < totalRows;
+        return filtersActive() ? ensureWindow() : nextRow < totalRows;
     }
 
     @Override
@@ -226,12 +232,56 @@ public final class NitroParquetScanOperator
         }
         closeCurrentBatch();
 
-        if (hasFilters) {
+        if (filtersActive()) {
             return emitSlice();
         }
         int count = toIntExact(Math.min(MAX_BATCH_ROWS, totalRows - nextRow));
         nextRow += count;
         return LATE_MATERIALIZATION ? lazyBatch(count) : fullBatch(count);
+    }
+
+    /**
+     * Whether the scan should run the eager filter-window path. On first consultation, if <em>every</em> pushed
+     * dynamic filter is non-selective (each admits about its column's whole dictionary), all are dropped so the scan
+     * reverts to the lazy late-materialization path — there a downstream operator's own predicate (e.g. an IS NULL)
+     * drives the real narrowing, instead of the window path eagerly gathering every payload column at full row count.
+     * Dropping them is safe because each join still enforces its condition.
+     *
+     * <p>The all-or-nothing test is deliberate: the win comes only from a full revert to lazy materialization. If any
+     * filter is selective it leads the window path profitably, and a non-selective filter kept alongside it still
+     * prunes at the margin via skip-decode — dropping only that one would keep the window path yet lose that pruning.
+     */
+    private boolean filtersActive()
+    {
+        if (hasFilters && !filtersPruned) {
+            filtersPruned = true;
+            if (DROP_NON_SELECTIVE_FILTERS && allFiltersNonSelective()) {
+                for (int c = 0; c < filtersByColumn.length; c++) {
+                    filtersByColumn[c] = null;
+                }
+                hasFilters = false;
+            }
+        }
+        return hasFilters;
+    }
+
+    /**
+     * Whether every pushed filter admits at least as many distinct values as its column's dictionary — i.e. none
+     * prunes meaningfully. A plain-encoded column (no dictionary, cardinality unknown) counts as selective: its filter
+     * may prune, so its presence keeps the scan on the window path.
+     */
+    private boolean allFiltersNonSelective()
+    {
+        for (int c = 0; c < filtersByColumn.length; c++) {
+            if (filtersByColumn[c] == null) {
+                continue;
+            }
+            int cardinality = readers[c].peekDictionarySize();
+            if (cardinality <= 0 || filtersByColumn[c].size() < cardinality) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Decode windows until one yields surviving rows (or input is exhausted). Returns whether rows are available. */
