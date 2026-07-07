@@ -99,6 +99,12 @@ final class OperatorCpuProfile
             }
 
             @Override
+            public void pushDynamicFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                delegate.pushDynamicFilter(filter);
+            }
+
+            @Override
             public boolean supportsRetainedBatches()
             {
                 return delegate.supportsRetainedBatches();
