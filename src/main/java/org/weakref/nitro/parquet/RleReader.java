@@ -84,6 +84,33 @@ final class RleReader
         }
     }
 
+    /**
+     * Run-oriented cursor for the predicate-over-dictionary filter. Returns a positive {@code k} when the next
+     * {@code k} values (capped at {@code max}) are a single RLE run — all equal to {@link #currentRleValue()} — and
+     * consumes them; the caller tests the predicate once and emits/skips the whole run. Returns a negative {@code -k}
+     * when the next {@code k} values are bit-packed (heterogeneous): they are left in place for {@link #read} to
+     * decode per value. This turns a rejected homogeneous run from {@code O(run)} per-row tests into {@code O(1)},
+     * which dominates on run-length-encoded key columns (a date column can be one run of tens of millions).
+     */
+    int nextRun(int max)
+    {
+        if (rleRemaining == 0 && bitPackedRemaining == 0) {
+            loadNextRun();
+        }
+        if (rleRemaining > 0) {
+            int n = Math.min(rleRemaining, max);
+            rleRemaining -= n;
+            return n;
+        }
+        return -Math.min(bitPackedRemaining, max);
+    }
+
+    /** The value of the RLE run most recently returned by {@link #nextRun}. Valid only immediately after a positive return. */
+    int currentRleValue()
+    {
+        return rleValue;
+    }
+
     private void readBitPacked(int[] out, int base, int n)
     {
         int width = bitWidth;

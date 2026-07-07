@@ -63,6 +63,15 @@ public final class ColumnReader
     // well-predicted, and the 90%+ rejected rows skip a dict gather + two stores); branchless wins near 50% survival.
     private static final boolean BRANCHLESS_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.branchlessDictFilter", "false"));
 
+    // Fused dict-filter: for a null-free dict page the lead filter unpacks the ids one L1-resident tile at a time and
+    // filters each tile before unpacking the next, instead of the two-pass "unpack the whole page to idBuffer, then
+    // re-read idBuffer to filter". Fusing keeps the unpacked ids in L1 between produce and consume, removing the
+    // page-sized array round-trip to memory (the dominant cost on the 130M-row lead scan is that re-read, not the
+    // filter arithmetic). Opt-out for A/B. TILE fits alongside accept[] + dict in L1 (2048 ints = 8KB).
+    private static final boolean FUSED_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.fusedDictFilter", "true"));
+    private static final int FILTER_TILE = 2048;
+    private final int[] filterTile = new int[FILTER_TILE];
+
     private record Chunk(MemorySegment segment, ColumnMetaData metadata) {}
 
     // Dictionary materialization is a pure gather (out[i] = dictionary[ids[i]]); a Vector-API gather (hardware
@@ -157,6 +166,9 @@ public final class ColumnReader
     private boolean filterScan;
     private boolean pageFilterDict;
     private boolean pageFilterNullable;
+    // Fused null-free dict-filter page: the ids were NOT unpacked to idBuffer; the RleReader is left positioned at the
+    // id stream and the filter loop tile-reads it. Requires forward-only, in-lockstep consumption of pageCursor.
+    private boolean pageFilterFused;
     private boolean[] acceptById = new boolean[0];
     private int acceptByIdChunk = -1;
     private MemorySegment pagePlainBody;
@@ -329,6 +341,49 @@ public final class ColumnReader
                             }
                         }
                     }
+                    else if (pageFilterFused) {
+                        // Fused, run-aware: consume the id stream a homogeneous run at a time. An RLE run tests the
+                        // predicate ONCE and either emits its whole contiguous position range or skips it in O(1) --
+                        // collapsing the per-row accept test that dominates a run-length-encoded key column. Only a
+                        // bit-packed (heterogeneous) run falls back to per-value filtering through an L1 tile. rle stays
+                        // in lockstep with pageCursor (exactly pageRows values consumed) across window boundaries.
+                        int[] tile = filterTile;
+                        int base = 0;
+                        while (base < pageRows) {
+                            int run = rle.nextRun(pageRows - base);
+                            if (run > 0) {
+                                int id = rle.currentRleValue();
+                                if (accept[id]) {
+                                    long value = dict[id];
+                                    int position = windowPos + base;
+                                    for (int i = 0; i < run; i++) {
+                                        valuesOut[sc] = value;
+                                        survivorsOut[sc] = position + i;
+                                        sc++;
+                                    }
+                                }
+                                base += run;
+                            }
+                            else {
+                                int packed = -run;
+                                int offset = 0;
+                                while (offset < packed) {
+                                    int tileRows = Math.min(FILTER_TILE, packed - offset);
+                                    rle.read(tile, 0, tileRows);
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = tile[i];
+                                        if (accept[id]) {
+                                            valuesOut[sc] = dict[id];
+                                            survivorsOut[sc] = windowPos + base + offset + i;
+                                            sc++;
+                                        }
+                                    }
+                                    offset += tileRows;
+                                }
+                                base += packed;
+                            }
+                        }
+                    }
                     else {
                         // Branchless compaction: always stage the value/position, advance the survivor cursor only
                         // when accepted. The per-row `if (accept[id])` is a data-dependent branch the hardware cannot
@@ -408,6 +463,45 @@ public final class ColumnReader
                                 valuesOut[sc] = dict[id];
                                 survivorsOut[sc] = windowPos + i;
                                 sc++;
+                            }
+                        }
+                    }
+                    else if (pageFilterFused) {
+                        // Fused, run-aware; see filterDictLongs.
+                        int[] tile = filterTile;
+                        int base = 0;
+                        while (base < pageRows) {
+                            int run = rle.nextRun(pageRows - base);
+                            if (run > 0) {
+                                int id = rle.currentRleValue();
+                                if (accept[id]) {
+                                    int value = dict[id];
+                                    int position = windowPos + base;
+                                    for (int i = 0; i < run; i++) {
+                                        valuesOut[sc] = value;
+                                        survivorsOut[sc] = position + i;
+                                        sc++;
+                                    }
+                                }
+                                base += run;
+                            }
+                            else {
+                                int packed = -run;
+                                int offset = 0;
+                                while (offset < packed) {
+                                    int tileRows = Math.min(FILTER_TILE, packed - offset);
+                                    rle.read(tile, 0, tileRows);
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = tile[i];
+                                        if (accept[id]) {
+                                            valuesOut[sc] = dict[id];
+                                            survivorsOut[sc] = windowPos + base + offset + i;
+                                            sc++;
+                                        }
+                                    }
+                                    offset += tileRows;
+                                }
+                                base += packed;
                             }
                         }
                     }
@@ -1483,12 +1577,23 @@ public final class ColumnReader
         }
 
         pageFilterDict = false;
+        pageFilterFused = false;
         if (dictionary) {
             int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
             offset += 1;
             rle.init(body, offset, bitWidth);
+            boolean filterDict = filterScan && kind != Kind.BINARY;
+            boolean nullFreePage = !optional || nonNullCount == valueCount;
+            if (filterDict && FUSED_DICT_FILTER && nullFreePage) {
+                // Fused path: leave the ids unpacked. The RleReader stays positioned at the id stream; the filter loop
+                // unpacks and consumes them one L1 tile at a time. No page-sized idBuffer round-trip to memory.
+                pageFilterDict = true;
+                pageFilterNullable = false;
+                pageFilterFused = true;
+                return;
+            }
             rle.read(idBuffer, 0, nonNullCount);
-            if (filterScan && kind != Kind.BINARY) {
+            if (filterDict) {
                 // Predicate-over-dictionary: keep the ids, don't materialize values. The page-position -> id-index
                 // map was built straight from the definition levels above when the page has nulls.
                 pageFilterDict = true;
