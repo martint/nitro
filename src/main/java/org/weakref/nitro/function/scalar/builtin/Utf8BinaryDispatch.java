@@ -591,10 +591,59 @@ public final class Utf8BinaryDispatch
     private static boolean[] evaluateDictionaryMembership(BinaryVector dictionary, BinaryVector[] literals)
     {
         boolean[] dictionaryMatches = new boolean[dictionary.length()];
+        // Fast path: when every IN literal is at most 8 bytes (zip codes, state codes, and most short-string sets),
+        // pack each literal into a little-endian long and test each dictionary entry with a length check plus a few
+        // long compares instead of a per-literal byte loop. This turns the per-entry cost from O(literals x length)
+        // byte compares into a handful of long compares -- decisive on a large dictionary re-tested every batch
+        // (TPC-DS q08's ca_zip IN filter is ~65% of the query: a ~3600-entry dictionary times ~150 batches).
+        if (allShort(literals)) {
+            int literalCount = literals.length;
+            long[] packedLiterals = new long[literalCount];
+            int[] literalLengths = new int[literalCount];
+            for (int index = 0; index < literalCount; index++) {
+                int length = literals[index].length(0);
+                literalLengths[index] = length;
+                packedLiterals[index] = packShort(literals[index].data(), literals[index].startOffset(0), length);
+            }
+            byte[] data = dictionary.data();
+            for (int index = 0; index < dictionaryMatches.length; index++) {
+                int length = dictionary.length(index);
+                if (length <= 8) {
+                    long value = packShort(data, dictionary.startOffset(index), length);
+                    for (int literal = 0; literal < literalCount; literal++) {
+                        if (packedLiterals[literal] == value && literalLengths[literal] == length) {
+                            dictionaryMatches[index] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            return dictionaryMatches;
+        }
         for (int index = 0; index < dictionaryMatches.length; index++) {
             dictionaryMatches[index] = matchesAny(dictionary, index, literals);
         }
         return dictionaryMatches;
+    }
+
+    private static boolean allShort(BinaryVector[] literals)
+    {
+        for (BinaryVector literal : literals) {
+            if (literal.length(0) > 8) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Pack up to 8 bytes into a little-endian long (low byte first); the caller compares length separately. */
+    private static long packShort(byte[] data, int start, int length)
+    {
+        long value = 0;
+        for (int index = 0; index < length; index++) {
+            value |= (data[start + index] & 0xFFL) << (8 * index);
+        }
+        return value;
     }
 
     private static boolean matchesAny(BinaryVector values, int position, BinaryVector[] literals)
