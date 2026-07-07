@@ -147,6 +147,10 @@ public final class Utf8BinaryDispatch
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
+            // Validate the UTF8_STRING trait once per batch here rather than per row inside the comparison kernels: the
+            // trait is a property of the vector, constant across the batch, and the per-row Set.contains check was ~13%
+            // of a dictionary-vs-dictionary string equality (TPC-DS q24).
+            requireUtf8Traits(functionName, left, right);
             Vector outputValues = tryApplySpecializedValues(
                     functionName,
                     allocationContext,
@@ -904,27 +908,24 @@ public final class Utf8BinaryDispatch
         };
     }
 
+    // The per-row compare kernels no longer re-check the UTF8_STRING trait: apply() validates it once per batch.
     private static boolean compareEquals(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
-        requireUtf8Traits(functionName, left, right);
         return binaryEquals(left, leftPosition, right, rightPosition);
     }
 
     private static boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
     {
-        requireUtf8Traits(functionName, left, right);
         return binaryCompare(left, leftPosition, right, rightPosition) < 0;
     }
 
     private static boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
     {
-        requireUtf8Traits(functionName, left, right);
         return binaryStartsWith(left, leftPosition, right, rightPosition);
     }
 
     private static boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
     {
-        requireUtf8Traits(functionName, left, right);
         return binaryContains(left, leftPosition, right, rightPosition);
     }
 
