@@ -684,50 +684,47 @@ public final class Utf8BinaryDispatch
 
     private static void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
-        boolean ascii = useAsciiFastPath(left, right);
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = evaluate(functionName, operation, left, position, right, position, leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, position, right, position, leftNulls, rightNulls, position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = evaluate(functionName, operation, left, position, right, position, leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, position, right, position, leftNulls, rightNulls, position);
         }
     }
 
     private static void applyFlatDictionary(String functionName, Operation operation, BinaryVector left, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
-        boolean ascii = useAsciiFastPath(left, right);
         int[] rightIds = rightDictionary.ids();
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = evaluate(functionName, operation, left, position, right, rightIds[position], leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, position, right, rightIds[position], leftNulls, rightNulls, position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = evaluate(functionName, operation, left, position, right, rightIds[position], leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, position, right, rightIds[position], leftNulls, rightNulls, position);
         }
     }
 
     private static void applyDictionaryFlat(String functionName, Operation operation, DictionaryVector leftDictionary, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
-        boolean ascii = useAsciiFastPath(left, right);
         int[] leftIds = leftDictionary.ids();
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, position, leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, position, leftNulls, rightNulls, position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, position, leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, position, leftNulls, rightNulls, position);
         }
     }
 
@@ -735,25 +732,23 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
-        boolean ascii = useAsciiFastPath(left, right);
         int[] leftIds = leftDictionary.ids();
         int[] rightIds = rightDictionary.ids();
         boolean[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, rightIds[position], leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, rightIds[position], leftNulls, rightNulls, position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, rightIds[position], leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, rightIds[position], leftNulls, rightNulls, position);
         }
     }
 
     private static void applyFlatRle(String functionName, Operation operation, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        boolean ascii = useAsciiFastPath(left, right);
         boolean[] outputValues = output.values();
         int runIndex = 0;
         int runEnd = rightRle.counts()[0];
@@ -763,7 +758,7 @@ public final class Utf8BinaryDispatch
                     runIndex++;
                     runEnd += rightRle.counts()[runIndex];
                 }
-                outputValues[position] = evaluate(functionName, operation, left, position, right, runIndex, leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, position, right, runIndex, leftNulls, rightNulls, position);
             }
             return;
         }
@@ -772,7 +767,7 @@ public final class Utf8BinaryDispatch
                 runIndex++;
                 runEnd += rightRle.counts()[runIndex];
             }
-            outputValues[position] = evaluate(functionName, operation, left, position, right, runIndex, leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, position, right, runIndex, leftNulls, rightNulls, position);
         }
     }
 
@@ -780,7 +775,6 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        boolean ascii = useAsciiFastPath(left, right);
         int[] leftIds = leftDictionary.ids();
         boolean[] outputValues = output.values();
         int runIndex = 0;
@@ -791,7 +785,7 @@ public final class Utf8BinaryDispatch
                     runIndex++;
                     runEnd += rightRle.counts()[runIndex];
                 }
-                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, runIndex, leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, runIndex, leftNulls, rightNulls, position);
             }
             return;
         }
@@ -800,14 +794,13 @@ public final class Utf8BinaryDispatch
                 runIndex++;
                 runEnd += rightRle.counts()[runIndex];
             }
-            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, runIndex, leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, leftIds[position], right, runIndex, leftNulls, rightNulls, position);
         }
     }
 
     private static void applyRleFlat(String functionName, Operation operation, RleVector leftRle, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
-        boolean ascii = useAsciiFastPath(left, right);
         boolean[] outputValues = output.values();
         int runIndex = 0;
         int runEnd = leftRle.counts()[0];
@@ -817,7 +810,7 @@ public final class Utf8BinaryDispatch
                     runIndex++;
                     runEnd += leftRle.counts()[runIndex];
                 }
-                outputValues[position] = evaluate(functionName, operation, left, runIndex, right, position, leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, runIndex, right, position, leftNulls, rightNulls, position);
             }
             return;
         }
@@ -826,7 +819,7 @@ public final class Utf8BinaryDispatch
                 runIndex++;
                 runEnd += leftRle.counts()[runIndex];
             }
-            outputValues[position] = evaluate(functionName, operation, left, runIndex, right, position, leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, runIndex, right, position, leftNulls, rightNulls, position);
         }
     }
 
@@ -834,7 +827,6 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
-        boolean ascii = useAsciiFastPath(left, right);
         int[] rightIds = rightDictionary.ids();
         boolean[] outputValues = output.values();
         int runIndex = 0;
@@ -845,7 +837,7 @@ public final class Utf8BinaryDispatch
                     runIndex++;
                     runEnd += leftRle.counts()[runIndex];
                 }
-                outputValues[position] = evaluate(functionName, operation, left, runIndex, right, rightIds[position], leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, runIndex, right, rightIds[position], leftNulls, rightNulls, position);
             }
             return;
         }
@@ -854,7 +846,7 @@ public final class Utf8BinaryDispatch
                 runIndex++;
                 runEnd += leftRle.counts()[runIndex];
             }
-            outputValues[position] = evaluate(functionName, operation, left, runIndex, right, rightIds[position], leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, runIndex, right, rightIds[position], leftNulls, rightNulls, position);
         }
     }
 
@@ -862,7 +854,6 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        boolean ascii = useAsciiFastPath(left, right);
         boolean[] outputValues = output.values();
         int leftRunIndex = 0;
         int leftRunEnd = leftRle.counts()[0];
@@ -878,7 +869,7 @@ public final class Utf8BinaryDispatch
                     rightRunIndex++;
                     rightRunEnd += rightRle.counts()[rightRunIndex];
                 }
-                outputValues[position] = evaluate(functionName, operation, left, leftRunIndex, right, rightRunIndex, leftNulls, rightNulls, position, ascii);
+                outputValues[position] = evaluate(functionName, operation, left, leftRunIndex, right, rightRunIndex, leftNulls, rightNulls, position);
             }
             return;
         }
@@ -891,20 +882,20 @@ public final class Utf8BinaryDispatch
                 rightRunIndex++;
                 rightRunEnd += rightRle.counts()[rightRunIndex];
             }
-            outputValues[position] = evaluate(functionName, operation, left, leftRunIndex, right, rightRunIndex, leftNulls, rightNulls, position, ascii);
+            outputValues[position] = evaluate(functionName, operation, left, leftRunIndex, right, rightRunIndex, leftNulls, rightNulls, position);
         }
     }
 
-    private static boolean evaluate(String functionName, Operation operation, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int nullPosition, boolean ascii)
+    private static boolean evaluate(String functionName, Operation operation, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int nullPosition)
     {
         if (isNull(leftNulls, nullPosition) || isNull(rightNulls, nullPosition)) {
             return false;
         }
         return switch (operation) {
             case EQUALS -> compareEquals(functionName, left, leftPosition, right, rightPosition);
-            case LESS_THAN -> compareLessThan(functionName, left, leftPosition, right, rightPosition, ascii);
-            case STARTS_WITH -> compareStartsWith(functionName, left, leftPosition, right, rightPosition, ascii);
-            case CONTAINS -> compareContains(functionName, left, leftPosition, right, rightPosition, ascii);
+            case LESS_THAN -> compareLessThan(functionName, left, leftPosition, right, rightPosition);
+            case STARTS_WITH -> compareStartsWith(functionName, left, leftPosition, right, rightPosition);
+            case CONTAINS -> compareContains(functionName, left, leftPosition, right, rightPosition);
         };
     }
 
@@ -914,17 +905,17 @@ public final class Utf8BinaryDispatch
         return binaryEquals(left, leftPosition, right, rightPosition);
     }
 
-    private static boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
+    private static boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryCompare(left, leftPosition, right, rightPosition) < 0;
     }
 
-    private static boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
+    private static boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryStartsWith(left, leftPosition, right, rightPosition);
     }
 
-    private static boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, boolean ascii)
+    private static boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryContains(left, leftPosition, right, rightPosition);
     }
@@ -1034,13 +1025,6 @@ public final class Utf8BinaryDispatch
             case RleVector values -> hasUtf8Traits(values.values());
             default -> false;
         };
-    }
-
-    private static boolean useAsciiFastPath(BinaryVector left, BinaryVector right)
-    {
-        return hasUtf8Traits(left) && hasUtf8Traits(right) &&
-                left.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY) &&
-                right.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
     }
 
     private static boolean hasUtf8Traits(BinaryVector vector)
