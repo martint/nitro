@@ -191,6 +191,14 @@ public final class NitroParquetScanOperator
         if (column < 0 || column >= readers.length) {
             return;
         }
+        // Several joins can push a filter on the same probe column (e.g. this scan's own dimension join and a
+        // downstream join whose key survives through an aggregation). Each is an independent necessary condition, so
+        // keeping the more selective one (fewer distinct values) is correct and prunes hardest; a blind overwrite
+        // could otherwise replace a tight filter with an all-values one.
+        DynamicFilter existing = filtersByColumn[column];
+        if (existing != null && existing.size() <= filter.size()) {
+            return;
+        }
         filtersByColumn[column] = filter;
         hasFilters = true;
     }

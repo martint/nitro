@@ -52,6 +52,9 @@ public class HashJoinOperator
     // default (a non-selective filter self-abandons after a warmup in the scan, so the build-side collection is the
     // only residual cost); disable with -Dnitro.dynamicFilter=false.
     private static final boolean DYNAMIC_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter", "true"));
+    // A multi-key join emits one dynamic filter per key column (each a necessary join condition). Disable to restrict
+    // dynamic filters to single-key joins with -Dnitro.dynamicFilter.multiKey=false.
+    private static final boolean MULTI_KEY_DYNAMIC_FILTER = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.multiKey", "true"));
     private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 20);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
@@ -126,7 +129,12 @@ public class HashJoinOperator
     // Dynamic-filter state: distinct single-column build keys collected during index build, and whether collection
     // is still viable (single long key, inner join, readable vector, under the cap). Pushed to the probe once.
     private final boolean buildKeysViable;
-    private it.unimi.dsi.fastutil.longs.LongOpenHashSet buildKeyValues;
+    // Per join-key column: the distinct build-side values, for a dynamic filter pushed to the matching probe column.
+    // A multi-key join contributes one filter per column — each is a necessary condition (a row joins only if EVERY
+    // key matches), so the per-column membership sets over-approximate the joinable set; the join still does the
+    // exact tuple match. A column is abandoned on its own when its encoding is unsupported or it exceeds the cap.
+    private it.unimi.dsi.fastutil.longs.LongOpenHashSet[] buildKeyValues;
+    private boolean[] buildKeyColumnAbandoned;
     private boolean buildKeysAbandoned;
     private boolean dynamicFilterPushed;
 
@@ -187,7 +195,8 @@ public class HashJoinOperator
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
         this.currentOuterJoinNulls = new Vector[outerJoinColumns.length];
         this.currentOutputs = new Streams[totalOutputCount];
-        this.buildKeysViable = DYNAMIC_FILTER_ENABLED && !probeOuterJoin && innerJoinColumns.length == 1;
+        this.buildKeysViable = DYNAMIC_FILTER_ENABLED && !probeOuterJoin
+                && (innerJoinColumns.length == 1 || MULTI_KEY_DYNAMIC_FILTER);
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
 
@@ -403,44 +412,71 @@ public class HashJoinOperator
             return;
         }
         dynamicFilterPushed = true;
-        if (buildKeyValues != null && !buildKeyValues.isEmpty()) {
-            outer.pushDynamicFilter(DynamicFilter.fromValues(outerJoinColumns[0], buildKeyValues));
+        if (buildKeyValues == null) {
+            return;
+        }
+        for (int column = 0; column < buildKeyValues.length; column++) {
+            if (!buildKeyColumnAbandoned[column] && buildKeyValues[column] != null && !buildKeyValues[column].isEmpty()) {
+                outer.pushDynamicFilter(DynamicFilter.fromValues(outerJoinColumns[column], buildKeyValues[column]));
+            }
         }
     }
 
-    private void collectBuildKey(Vector keyValues, Vector keyNulls, int position)
+    /**
+     * Record one build row's join-key values into the per-column membership sets. A row with any null key can never
+     * match an inner join, so it contributes nothing. Called once per build row while collection is still viable.
+     */
+    private void collectBuildKeys(Vector[] joinValues, Vector[] joinNulls, boolean hasNulls, int position)
     {
         if (buildKeysAbandoned) {
             return;
         }
-        Long value = readKeyLong(keyValues, keyNulls, position);
-        if (value == null) {
-            return;   // null key never matches an inner join; safe to omit
-        }
+        int keyCount = joinValues.length;
         if (buildKeyValues == null) {
-            buildKeyValues = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+            buildKeyValues = new it.unimi.dsi.fastutil.longs.LongOpenHashSet[keyCount];
+            buildKeyColumnAbandoned = new boolean[keyCount];
         }
-        buildKeyValues.add((long) value);
-        if (buildKeyValues.size() > DYNAMIC_FILTER_MAX_VALUES) {
-            buildKeysAbandoned = true;   // build not selective enough to be worth a runtime filter
-            buildKeyValues = null;
+        if (hasNulls) {
+            for (int column = 0; column < keyCount; column++) {
+                if (joinNulls[column] != null && VectorAccess.isNull(joinNulls[column], position)) {
+                    return;   // any null key => this row cannot join; omit all its values
+                }
+            }
+        }
+        boolean allAbandoned = true;
+        for (int column = 0; column < keyCount; column++) {
+            if (buildKeyColumnAbandoned[column]) {
+                continue;
+            }
+            Long value = readKeyLong(joinValues[column], position, column);
+            if (value != null) {
+                if (buildKeyValues[column] == null) {
+                    buildKeyValues[column] = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+                }
+                buildKeyValues[column].add((long) value);
+                if (buildKeyValues[column].size() > DYNAMIC_FILTER_MAX_VALUES) {
+                    buildKeyColumnAbandoned[column] = true;   // not selective enough to be worth a runtime filter
+                    buildKeyValues[column] = null;
+                }
+            }
+            allAbandoned &= buildKeyColumnAbandoned[column];
+        }
+        if (allAbandoned) {
+            buildKeysAbandoned = true;   // every column dropped: stop collecting entirely
         }
     }
 
-    /** Read a single-column build key as a long, or null when null / unsupported (which abandons collection). */
-    private Long readKeyLong(Vector keyValues, Vector keyNulls, int position)
+    /** Read a build key column as a long (nulls already excluded), or null when its encoding abandons that column. */
+    private Long readKeyLong(Vector keyValues, int position, int column)
     {
-        if (keyNulls != null && VectorAccess.isNull(keyNulls, position)) {
-            return null;
-        }
         if (keyValues instanceof I64Vector i64) {
             return i64.values()[position];
         }
         if (keyValues instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector entries) {
             return entries.values()[dictionary.ids()[position]];
         }
-        buildKeysAbandoned = true;   // unsupported key encoding: do not push a (possibly wrong) filter
-        buildKeyValues = null;
+        buildKeyColumnAbandoned[column] = true;   // unsupported key encoding: do not push a (possibly wrong) filter
+        buildKeyValues[column] = null;
         return null;
     }
 
@@ -491,7 +527,7 @@ public class HashJoinOperator
                 joinIndex.addNoNulls(joinValues, sourcePosition, packRowReference(batchIndex, position));
             }
             if (collectKeys) {
-                collectBuildKey(joinValues[0], hasNulls ? joinNulls[0] : null, sourcePosition);
+                collectBuildKeys(joinValues, joinNulls, hasNulls, sourcePosition);
                 collectKeys = !buildKeysAbandoned;
             }
         }
