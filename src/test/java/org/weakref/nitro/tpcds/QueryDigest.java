@@ -34,7 +34,7 @@ public final class QueryDigest
     public static void main(String[] args)
             throws Exception
     {
-        TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
+        TpcdsParquetTables tables = TpcdsParquetTables.requiredActual();
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         int iters = Integer.getInteger("iters", 0);
         for (String name : args) {
