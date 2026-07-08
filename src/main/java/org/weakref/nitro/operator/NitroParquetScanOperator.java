@@ -801,12 +801,16 @@ public final class NitroParquetScanOperator
         currentNulls = new Vector[columnCount];
         Output[] outputs = new Output[columnCount];
         for (int c = 0; c < columnCount; c++) {
+            // Allocate at the fixed window batch capacity, not the (variable) partial-slice length, so the vector pool
+            // hits every time instead of missing on each window's final short slice. Only [0, sliceCount) is written
+            // and only that range is exposed (the batch mask below is sliceCount positions); consumers honor the mask,
+            // never the backing length.
             BooleanVector nullVector = nullable[c]
-                    ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, sliceCount, BooleanVector::new)
+                    ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, MAX_BATCH_ROWS, BooleanVector::new)
                     : null;
             Vector valueVector;
             if (readers[c].kind() == ColumnReader.Kind.INT) {
-                I32Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, sliceCount, I32Vector::new);
+                I32Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, MAX_BATCH_ROWS, I32Vector::new);
                 System.arraycopy(windowInt[c], start, vector.values(), 0, sliceCount);
                 valueVector = vector;
             }
@@ -814,7 +818,7 @@ public final class NitroParquetScanOperator
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount);
             }
             else {
-                I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, sliceCount, I64Vector::new);
+                I64Vector vector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, MAX_BATCH_ROWS, I64Vector::new);
                 System.arraycopy(windowLong[c], start, vector.values(), 0, sliceCount);
                 valueVector = vector;
             }
