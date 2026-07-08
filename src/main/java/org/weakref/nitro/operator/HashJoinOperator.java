@@ -59,6 +59,10 @@ public class HashJoinOperator
     // per-position binary search. Set false to force the binary search (for A/B measurement of the two paths).
     private static final boolean RLE_RUN_INDEX_HINT = Boolean.parseBoolean(System.getProperty("nitro.join.rleRunIndexHint", "true"));
     private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 20);
+    // Skip dynamic-filter key collection when the build side has more rows than the distinct-value cap: the membership
+    // set would overflow the cap (abandoned) or be too large to prune, wasting the per-row insertion. Set to a huge
+    // value to disable the gate (always collect), for A/B measurement.
+    private static final long DYNAMIC_FILTER_BUILD_ROW_LIMIT = Long.getLong("nitro.dynamicFilter.buildRowLimit", DYNAMIC_FILTER_MAX_VALUES);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
@@ -489,6 +493,20 @@ public class HashJoinOperator
         bufferedInner.loadAll(inner, BATCH_SIZE, innerJoinColumns, inner.supportsRetainedBatches(), !inner.supportsRetainedBatches() && inner.supportsConstrainedReborrow());
         ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
+        // A dynamic filter caps at DYNAMIC_FILTER_MAX_VALUES distinct build values. If the build side alone has more
+        // rows than that, its key membership set will either overflow the cap (and be abandoned) or — for a rare
+        // low-cardinality key — yield a value set so large the probe scan discards it as non-selective. Either way the
+        // per-row set insertion is wasted, and it dominates large-build joins (TPC-DS q84). Skip collection up front.
+        // Correctness is unaffected: the join still enforces the condition; the filter is a pure decode-pruning hint.
+        if (buildKeysViable && !buildKeysAbandoned) {
+            long totalInnerRows = 0;
+            for (BufferedJoinInput.InnerBatch batch : bufferedInner.batches()) {
+                totalInnerRows += batch.length();
+            }
+            if (totalInnerRows > DYNAMIC_FILTER_BUILD_ROW_LIMIT) {
+                buildKeysAbandoned = true;
+            }
+        }
         for (int batchIndex = batchCountBefore; batchIndex < bufferedInner.batches().size(); batchIndex++) {
             BufferedJoinInput.InnerBatch batch = bufferedInner.batches().get(batchIndex);
             indexInnerRows(batch, 0, batch.length(), batchIndex);
