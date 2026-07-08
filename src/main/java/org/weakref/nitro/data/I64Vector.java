@@ -126,7 +126,7 @@ public class I64Vector
     @Override
     public void clearForReuse()
     {
-        Arrays.fill(values, 0);
+        // No buffer clearing: consumers must only read positions the producer wrote (see Allocator contract).
     }
 
     @Override

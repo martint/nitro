@@ -169,9 +169,8 @@ public class BooleanVector
     @Override
     public void clearForReuse()
     {
-        Arrays.fill(values, false);
-        // The next producer will write new values; force callers to re-scan rather than reuse our stale
-        // "all false" observation from a previous lifecycle.
+        // No buffer clearing: consumers must only read positions the producer wrote. Reset the derived
+        // observation so a new producer's values are re-scanned rather than reusing a stale "all false".
         isAllFalseCache = null;
     }
 
