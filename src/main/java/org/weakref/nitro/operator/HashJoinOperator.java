@@ -1773,6 +1773,13 @@ public class HashJoinOperator
         private boolean finalized;
         private boolean arrayMode;
         private long[] directRows;
+        // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous slice of
+        // orderedRows[rangeStart[slot] .. +slotCount[slot]) in FIFO order, so a probe reads a sequential range instead
+        // of pointer-chasing chainNext (the one-to-many output loop's cost). Opt-out for A/B.
+        private static final boolean COMPACT_CHAINS = Boolean.parseBoolean(System.getProperty("nitro.join.compactChains", "true"));
+        private boolean rangeCompacted;
+        private long[] orderedRows;
+        private int[] rangeStart;
         private final SingleLongList singleMatch = new SingleLongList();
         private final ChainLongList scalarChain = new ChainLongList();
         private final ChainLongList[] chainMatches = createChainLongLists(BATCH_SIZE);
@@ -2090,10 +2097,42 @@ public class HashJoinOperator
                 return LongLists.emptyList();
             }
             int count = slotCount[slot];
+            if (rangeCompacted) {
+                int base = rangeStart[slot];
+                return count == 1 ? single.withValue(orderedRows[base]) : chain.resetRange(orderedRows, base, count);
+            }
             if (count == 1) {
                 return single.withValue(rowReferences[head]);
             }
             return chain.reset(rowReferences, chainNext, head, count);
+        }
+
+        /**
+         * Compact each key's insertion-ordered chain into a contiguous slice of {@code orderedRows}, recording the
+         * per-slot start in {@code rangeStart}. Walks every chain once (the pointer-chase paid here, at finalize,
+         * instead of on every probe), after which the one-to-many probe reads a sequential range.
+         */
+        private void compactChains()
+        {
+            long[] ordered = new long[rowCount];
+            int[] starts = new int[keys.length];
+            int cursor = 0;
+            for (int slot = 0; slot < keys.length; slot++) {
+                int ordinal = slotHead[slot];
+                if (ordinal == EMPTY) {
+                    continue;
+                }
+                starts[slot] = cursor;
+                while (ordinal != EMPTY) {
+                    ordered[cursor++] = rowReferences[ordinal];
+                    ordinal = chainNext[ordinal];
+                }
+            }
+            orderedRows = ordered;
+            rangeStart = starts;
+            rangeCompacted = true;
+            chainNext = null;
+            rowReferences = null;
         }
 
         // Chooses array mode when the build is unique and its keys form a dense integer range, so the
@@ -2101,7 +2140,15 @@ public class HashJoinOperator
         private void finalizeForProbe()
         {
             finalized = true;
-            if (size == 0 || hasDuplicates) {
+            if (size == 0) {
+                return;
+            }
+            if (hasDuplicates) {
+                // No direct array mode with duplicate keys; compact the multi-row chains so the probe reads a
+                // contiguous range instead of chasing chainNext (the one-to-many output loop's dominant cost).
+                if (COMPACT_CHAINS) {
+                    compactChains();
+                }
                 return;
             }
             long range = maxKey - minKey + 1;
@@ -2963,6 +3010,9 @@ public class HashJoinOperator
         private int length;
         private int cursorIndex;
         private int cursorOrdinal;
+        // Range mode: the key's rows are a contiguous slice {@code rows[base .. base+length)} (compacted at finalize),
+        // so a read is one sequential array index — no {@code next[]} pointer-chase. {@code base} reuses {@code head}.
+        private boolean rangeMode;
 
         public ChainLongList reset(long[] rows, int[] next, int head, int length)
         {
@@ -2972,6 +3022,16 @@ public class HashJoinOperator
             this.length = length;
             this.cursorIndex = 0;
             this.cursorOrdinal = head;
+            this.rangeMode = false;
+            return this;
+        }
+
+        public ChainLongList resetRange(long[] rows, int base, int length)
+        {
+            this.rows = rows;
+            this.head = base;
+            this.length = length;
+            this.rangeMode = true;
             return this;
         }
 
@@ -2980,6 +3040,9 @@ public class HashJoinOperator
         {
             if (index < 0 || index >= length) {
                 throw new IndexOutOfBoundsException("index " + index);
+            }
+            if (rangeMode) {
+                return rows[head + index];
             }
             if (index < cursorIndex) {
                 cursorIndex = 0;
