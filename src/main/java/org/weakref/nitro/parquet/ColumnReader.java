@@ -58,11 +58,6 @@ public final class ColumnReader
     // loads 32 bytes at a group's start, the scalar tail loads 8.
     private static final int SLACK = 32;
 
-    // A/B toggle for the dict-filter compaction: branched (skip the value gather+store for rejected rows) vs
-    // branchless (always stage, advance only on accept). Branched wins when the filter is selective (the branch is
-    // well-predicted, and the 90%+ rejected rows skip a dict gather + two stores); branchless wins near 50% survival.
-    private static final boolean BRANCHLESS_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.branchlessDictFilter", "false"));
-
     // Fused dict-filter: for a null-free dict page the lead filter unpacks the ids one L1-resident tile at a time and
     // filters each tile before unpacking the next, instead of the two-pass "unpack the whole page to idBuffer, then
     // re-read idBuffer to filter". Fusing keeps the unpacked ids in L1 between produce and consume, removing the
@@ -71,6 +66,17 @@ public final class ColumnReader
     private static final boolean FUSED_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.fusedDictFilter", "true"));
     private static final int FILTER_TILE = 2048;
     private final int[] filterTile = new int[FILTER_TILE];
+
+    // Compaction strategy for a bit-packed (heterogeneous) dict run, chosen per chunk from the accepted-entry fraction:
+    //   - branchy   (skip the value gather + two stores for a rejected row) when the filter is selective: the per-row
+    //                accept branch is well-predicted, and skipping the ~90% rejected rows' work dominates.
+    //   - branchless (always stage value/position, advance the survivor cursor via `sc += accept ? 1 : 0`) when a
+    //                larger fraction survives: survivors are scattered, the accept branch mispredicts, and removing it
+    //                collapses the mispredict stall (e.g. TPC-DS q20's cs_sold_date_sk scan, ~14% surviving, -24%).
+    // The crossover sits between the measured branchy-favoring queries (accepted fraction <= 0.09) and q20 (0.144);
+    // 1/9 puts the boundary at ~0.111 with symmetric margin. Below the threshold a query keeps the branchy path, so a
+    // misestimate near the boundary only trades ~equal costs.
+    private static final int BRANCHLESS_COMPACTION_DENOMINATOR = 9;
 
     private record Chunk(MemorySegment segment, ColumnMetaData metadata) {}
 
@@ -171,6 +177,7 @@ public final class ColumnReader
     private boolean pageFilterFused;
     private boolean[] acceptById = new boolean[0];
     private int acceptByIdChunk = -1;
+    private int acceptedCount;
     private MemorySegment pagePlainBody;
     private long pagePlainOffset;
     private int pageValueCursor;
@@ -327,6 +334,7 @@ public final class ColumnReader
                 if (pageFilterDict) {
                     long[] dict = dictionaryLongs;
                     boolean[] accept = acceptByIdLong(predicate);
+                    boolean branchlessCompaction = acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR >= dictionarySize;
                     if (pageFilterNullable) {
                         for (int i = 0; i < pageRows; i++) {
                             int pp = pageCursor + i;
@@ -370,12 +378,25 @@ public final class ColumnReader
                                 while (offset < packed) {
                                     int tileRows = Math.min(FILTER_TILE, packed - offset);
                                     rle.read(tile, 0, tileRows);
-                                    for (int i = 0; i < tileRows; i++) {
-                                        int id = tile[i];
-                                        if (accept[id]) {
+                                    // Compact this heterogeneous tile branchlessly or branchily depending on the
+                                    // accepted-entry fraction (see BRANCHLESS_COMPACTION_DENOMINATOR).
+                                    int positionBase = windowPos + base + offset;
+                                    if (branchlessCompaction) {
+                                        for (int i = 0; i < tileRows; i++) {
+                                            int id = tile[i];
                                             valuesOut[sc] = dict[id];
-                                            survivorsOut[sc] = windowPos + base + offset + i;
-                                            sc++;
+                                            survivorsOut[sc] = positionBase + i;
+                                            sc += accept[id] ? 1 : 0;
+                                        }
+                                    }
+                                    else {
+                                        for (int i = 0; i < tileRows; i++) {
+                                            int id = tile[i];
+                                            if (accept[id]) {
+                                                valuesOut[sc] = dict[id];
+                                                survivorsOut[sc] = positionBase + i;
+                                                sc++;
+                                            }
                                         }
                                     }
                                     offset += tileRows;
@@ -384,27 +405,25 @@ public final class ColumnReader
                             }
                         }
                     }
-                    else {
+                    else if (branchlessCompaction) {
                         // Branchless compaction: always stage the value/position, advance the survivor cursor only
                         // when accepted. The per-row `if (accept[id])` is a data-dependent branch the hardware cannot
                         // predict (survivors are scattered), so removing it collapses the mispredict stall on the
                         // 230M-row lead scan. The overwritten trailing slot is harmless (sc never exceeds count).
-                        if (BRANCHLESS_DICT_FILTER) {
-                            for (int i = 0; i < pageRows; i++) {
-                                int id = idBuffer[pageCursor + i];
+                        for (int i = 0; i < pageRows; i++) {
+                            int id = idBuffer[pageCursor + i];
+                            valuesOut[sc] = dict[id];
+                            survivorsOut[sc] = windowPos + i;
+                            sc += accept[id] ? 1 : 0;
+                        }
+                    }
+                    else {
+                        for (int i = 0; i < pageRows; i++) {
+                            int id = idBuffer[pageCursor + i];
+                            if (accept[id]) {
                                 valuesOut[sc] = dict[id];
                                 survivorsOut[sc] = windowPos + i;
-                                sc += accept[id] ? 1 : 0;
-                            }
-                        }
-                        else {
-                            for (int i = 0; i < pageRows; i++) {
-                                int id = idBuffer[pageCursor + i];
-                                if (accept[id]) {
-                                    valuesOut[sc] = dict[id];
-                                    survivorsOut[sc] = windowPos + i;
-                                    sc++;
-                                }
+                                sc++;
                             }
                         }
                     }
@@ -452,6 +471,7 @@ public final class ColumnReader
                 if (pageFilterDict) {
                     int[] dict = dictionaryInts;
                     boolean[] accept = acceptByIdInt(predicate);
+                    boolean branchlessCompaction = acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR >= dictionarySize;
                     if (pageFilterNullable) {
                         for (int i = 0; i < pageRows; i++) {
                             int pp = pageCursor + i;
@@ -491,12 +511,25 @@ public final class ColumnReader
                                 while (offset < packed) {
                                     int tileRows = Math.min(FILTER_TILE, packed - offset);
                                     rle.read(tile, 0, tileRows);
-                                    for (int i = 0; i < tileRows; i++) {
-                                        int id = tile[i];
-                                        if (accept[id]) {
+                                    // Compact this heterogeneous tile branchlessly or branchily depending on the
+                                    // accepted-entry fraction (see BRANCHLESS_COMPACTION_DENOMINATOR).
+                                    int positionBase = windowPos + base + offset;
+                                    if (branchlessCompaction) {
+                                        for (int i = 0; i < tileRows; i++) {
+                                            int id = tile[i];
                                             valuesOut[sc] = dict[id];
-                                            survivorsOut[sc] = windowPos + base + offset + i;
-                                            sc++;
+                                            survivorsOut[sc] = positionBase + i;
+                                            sc += accept[id] ? 1 : 0;
+                                        }
+                                    }
+                                    else {
+                                        for (int i = 0; i < tileRows; i++) {
+                                            int id = tile[i];
+                                            if (accept[id]) {
+                                                valuesOut[sc] = dict[id];
+                                                survivorsOut[sc] = positionBase + i;
+                                                sc++;
+                                            }
                                         }
                                     }
                                     offset += tileRows;
@@ -505,24 +538,22 @@ public final class ColumnReader
                             }
                         }
                     }
-                    else {
+                    else if (branchlessCompaction) {
                         // Branchless compaction (see filterDictLongs): drop the unpredictable per-row accept branch.
-                        if (BRANCHLESS_DICT_FILTER) {
-                            for (int i = 0; i < pageRows; i++) {
-                                int id = idBuffer[pageCursor + i];
+                        for (int i = 0; i < pageRows; i++) {
+                            int id = idBuffer[pageCursor + i];
+                            valuesOut[sc] = dict[id];
+                            survivorsOut[sc] = windowPos + i;
+                            sc += accept[id] ? 1 : 0;
+                        }
+                    }
+                    else {
+                        for (int i = 0; i < pageRows; i++) {
+                            int id = idBuffer[pageCursor + i];
+                            if (accept[id]) {
                                 valuesOut[sc] = dict[id];
                                 survivorsOut[sc] = windowPos + i;
-                                sc += accept[id] ? 1 : 0;
-                            }
-                        }
-                        else {
-                            for (int i = 0; i < pageRows; i++) {
-                                int id = idBuffer[pageCursor + i];
-                                if (accept[id]) {
-                                    valuesOut[sc] = dict[id];
-                                    survivorsOut[sc] = windowPos + i;
-                                    sc++;
-                                }
+                                sc++;
                             }
                         }
                     }
@@ -561,9 +592,13 @@ public final class ColumnReader
                 acceptById = new boolean[dictionarySize];
             }
             long[] dict = dictionaryLongs;
+            int accepted = 0;
             for (int id = 0; id < dictionarySize; id++) {
-                acceptById[id] = predicate.test(dict[id]);
+                boolean keep = predicate.test(dict[id]);
+                acceptById[id] = keep;
+                accepted += keep ? 1 : 0;
             }
+            acceptedCount = accepted;
             acceptByIdChunk = chunkIndex;
         }
         return acceptById;
@@ -576,9 +611,13 @@ public final class ColumnReader
                 acceptById = new boolean[dictionarySize];
             }
             int[] dict = dictionaryInts;
+            int accepted = 0;
             for (int id = 0; id < dictionarySize; id++) {
-                acceptById[id] = predicate.test(dict[id]);
+                boolean keep = predicate.test(dict[id]);
+                acceptById[id] = keep;
+                accepted += keep ? 1 : 0;
             }
+            acceptedCount = accepted;
             acceptByIdChunk = chunkIndex;
         }
         return acceptById;
