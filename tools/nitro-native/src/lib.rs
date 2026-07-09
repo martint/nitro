@@ -5,6 +5,7 @@
 //! reference via FFM Linker.Option.critical(true); this code only reads them.
 
 mod grouper;
+mod skipdecode;
 use std::arch::x86_64::{
     __m128i, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_prefetch, _mm_set1_epi8,
     _mm_setzero_si128, _MM_HINT_T0,
