@@ -33,25 +33,36 @@ public final class Utf8Support
 
     public static byte[] substring(byte[] data, int offset, int length, long start, long count)
     {
-        if (count <= 0 || length <= 0) {
-            return new byte[0];
-        }
-
-        int end = offset + length;
-        int startCodePoint = Math.max(0, toIntExact(start - 1));
-        int startOffset = offset;
-        for (int index = 0; index < startCodePoint && startOffset < end; index++) {
-            startOffset = nextCodePointOffset(data, startOffset, end);
-        }
-        if (startOffset >= end) {
-            return new byte[0];
-        }
-
-        int endOffset = startOffset;
-        for (long index = 0; index < count && endOffset < end; index++) {
-            endOffset = nextCodePointOffset(data, endOffset, end);
-        }
+        int startOffset = substringStartOffset(data, offset, length, start, count);
+        int endOffset = substringEndOffset(data, offset, length, count, startOffset);
         return java.util.Arrays.copyOfRange(data, startOffset, endOffset);
+    }
+
+    public static boolean substringMatchesAny(byte[] data, int offset, int length, long start, long count, byte[][] values)
+    {
+        int startOffset = substringStartOffset(data, offset, length, start, count);
+        int endOffset = substringEndOffset(data, offset, length, count, startOffset);
+        return matchesAny(data, startOffset, endOffset - startOffset, values);
+    }
+
+    public static boolean substringMatchesAnyAsciiFast(byte[] data, int offset, int length, long start, long count, byte[][] values)
+    {
+        if (count <= 0 || length <= 0) {
+            return matchesAny(data, offset, 0, values);
+        }
+
+        int startCodePoint = Math.max(0, toIntExact(start - 1));
+        long requestedEnd = (long) startCodePoint + count;
+        int checkedLength = requestedEnd < 0 || requestedEnd >= length ? length : (int) requestedEnd;
+        for (int index = 0; index < checkedLength; index++) {
+            if (data[offset + index] < 0) {
+                return substringMatchesAny(data, offset, length, start, count, values);
+            }
+        }
+
+        int startOffset = offset + Math.min(startCodePoint, length);
+        int endOffset = offset + checkedLength;
+        return matchesAny(data, startOffset, endOffset - startOffset, values);
     }
 
     public static byte[] upper(byte[] data, int offset, int length)
@@ -153,6 +164,55 @@ public final class Utf8Support
             throw new IllegalArgumentException("Invalid UTF-8 continuation byte: " + value);
         }
         return value & 0x3F;
+    }
+
+    private static int substringStartOffset(byte[] data, int offset, int length, long start, long count)
+    {
+        if (count <= 0 || length <= 0) {
+            return offset;
+        }
+
+        int end = offset + length;
+        int startCodePoint = Math.max(0, toIntExact(start - 1));
+        int startOffset = offset;
+        for (int index = 0; index < startCodePoint && startOffset < end; index++) {
+            startOffset = nextCodePointOffset(data, startOffset, end);
+        }
+        return Math.min(startOffset, end);
+    }
+
+    private static int substringEndOffset(byte[] data, int offset, int length, long count, int startOffset)
+    {
+        if (count <= 0 || length <= 0) {
+            return startOffset;
+        }
+
+        int end = offset + length;
+        int endOffset = startOffset;
+        for (long index = 0; index < count && endOffset < end; index++) {
+            endOffset = nextCodePointOffset(data, endOffset, end);
+        }
+        return endOffset;
+    }
+
+    private static boolean regionEquals(byte[] left, int leftOffset, byte[] right, int length)
+    {
+        for (int index = 0; index < length; index++) {
+            if (left[leftOffset + index] != right[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean matchesAny(byte[] data, int offset, int length, byte[][] values)
+    {
+        for (byte[] value : values) {
+            if (length == value.length && regionEquals(data, offset, value, length)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int nextCodePointOffset(byte[] data, int offset, int end)

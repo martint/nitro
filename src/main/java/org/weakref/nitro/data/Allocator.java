@@ -34,6 +34,8 @@ import static java.util.Objects.requireNonNull;
 public class Allocator
 {
     private static final int MAX_POOLED_MASKS_PER_BUCKET = 4;
+    private static final boolean COMPLEMENT_DIFFERENCE_MASKS =
+            Boolean.parseBoolean(System.getProperty("nitro.mask.complementDifferenceMasks", "false"));
 
     private final Map<Context, ContextState> states = new HashMap<>();
     private Context lastContext;
@@ -170,7 +172,7 @@ public class Allocator
             mask.selectAll(length);
         }
         else {
-            int[] positions = mask.positionsArray(length);
+            int[] positions = mask.positionsArrayForOverwrite(length);
             for (int index = 0; index < length; index++) {
                 positions[index] = start + index;
             }
@@ -200,6 +202,38 @@ public class Allocator
         return result;
     }
 
+    public Mask constantComparisonMask(Context context, Mask source, long[] values, long literal, Mask.ComparisonOperator operator, boolean[] nulls)
+    {
+        ContextState state = state(context);
+        Mask result = state.borrowMask(source.selectedCount());
+        boolean reused = result != null;
+        if (!reused) {
+            result = source.copy();
+        }
+        else {
+            copyMask(result, source);
+        }
+        result.retainConstantComparison(values, literal, operator, nulls);
+        state.trackMask(result, reused);
+        return result;
+    }
+
+    public Mask constantComparisonMask(Context context, Mask source, int[] values, long literal, Mask.ComparisonOperator operator, boolean[] nulls)
+    {
+        ContextState state = state(context);
+        Mask result = state.borrowMask(source.selectedCount());
+        boolean reused = result != null;
+        if (!reused) {
+            result = source.copy();
+        }
+        else {
+            copyMask(result, source);
+        }
+        result.retainConstantComparison(values, literal, operator, nulls);
+        state.trackMask(result, reused);
+        return result;
+    }
+
     public Mask allocateSparseMask(Context context, int[] activePositions, int selectedCount, int totalPositions)
     {
         ContextState state = state(context);
@@ -220,7 +254,7 @@ public class Allocator
             mask.selectAll(totalPositions);
         }
         else {
-            int[] positions = mask.positionsArray(selectedCount);
+            int[] positions = mask.positionsArrayForOverwrite(selectedCount);
             System.arraycopy(activePositions, 0, positions, 0, selectedCount);
             mask.setSelection(totalPositions, selectedCount, false);
         }
@@ -241,7 +275,7 @@ public class Allocator
             result = mask.and(other);
         }
         else {
-            int[] positions = result.positionsArray(mask.selectedCount());
+            int[] positions = result.positionsArrayForOverwrite(mask.selectedCount());
             int selectedCount = 0;
             if (mask.all()) {
                 for (int position = 0; position < mask.size(); position++) {
@@ -287,7 +321,7 @@ public class Allocator
             copyMask(result, left);
         }
         else {
-            int[] positions = result.positionsArray(Math.min(left.selectedCount(), right.selectedCount()));
+            int[] positions = result.positionsArrayForOverwrite(Math.min(left.selectedCount(), right.selectedCount()));
             int leftIndex = 0;
             int rightIndex = 0;
             int outputIndex = 0;
@@ -320,10 +354,13 @@ public class Allocator
     public Mask differenceMask(Context context, Mask left, Mask right)
     {
         ContextState state = state(context);
-        Mask result = state.borrowMask(left.selectedCount());
+        int requiredCapacity = COMPLEMENT_DIFFERENCE_MASKS && left.all() && !right.all() ? right.selectedCount() : left.selectedCount();
+        Mask result = state.borrowMask(requiredCapacity);
         boolean reused = result != null;
         if (!reused) {
-            result = left.difference(right);
+            result = COMPLEMENT_DIFFERENCE_MASKS || !left.all() || right.all()
+                    ? left.difference(right)
+                    : materializedAllDifference(left, right);
         }
         else if (right.none() || left.none()) {
             copyMask(result, left);
@@ -332,23 +369,19 @@ public class Allocator
             result.clear(left.size());
         }
         else if (left.all()) {
-            int[] positions = result.positionsArray(left.size() - right.selectedCount());
-            int outputIndex = 0;
-            int position = 0;
-            for (int index = 0; index < right.selectedCount(); index++) {
-                int rightPosition = right.position(index);
-                while (position < rightPosition) {
-                    positions[outputIndex++] = position++;
+            if (COMPLEMENT_DIFFERENCE_MASKS) {
+                int[] positions = result.positionsArrayForOverwrite(right.selectedCount());
+                for (int index = 0; index < right.selectedCount(); index++) {
+                    positions[index] = right.position(index);
                 }
-                position++;
+                result.setExclusion(left.size(), right.selectedCount());
             }
-            while (position < left.size()) {
-                positions[outputIndex++] = position++;
+            else {
+                fillMaterializedAllDifference(result, left, right);
             }
-            result.setSelection(left.size(), outputIndex, false);
         }
         else {
-            int[] positions = result.positionsArray(left.selectedCount());
+            int[] positions = result.positionsArrayForOverwrite(left.selectedCount());
             int leftIndex = 0;
             int rightIndex = 0;
             int outputIndex = 0;
@@ -389,7 +422,7 @@ public class Allocator
             result = mask.andNot(other);
         }
         else {
-            int[] positions = result.positionsArray(mask.selectedCount());
+            int[] positions = result.positionsArrayForOverwrite(mask.selectedCount());
             int selectedCount = 0;
             if (mask.all()) {
                 for (int position = 0; position < mask.size(); position++) {
@@ -435,7 +468,7 @@ public class Allocator
             copyMask(result, left);
         }
         else {
-            int[] positions = result.positionsArray(Math.min(left.size(), left.selectedCount() + right.selectedCount()));
+            int[] positions = result.positionsArrayForOverwrite(Math.min(left.size(), left.selectedCount() + right.selectedCount()));
             int leftIndex = 0;
             int rightIndex = 0;
             int outputIndex = 0;
@@ -489,7 +522,7 @@ public class Allocator
             result.clear(mask.size());
         }
         else {
-            int[] positions = result.positionsArray(count);
+            int[] positions = result.positionsArrayForOverwrite(count);
             for (int index = 0; index < count; index++) {
                 positions[index] = mask.position(mask.selectedCount() - count + index);
             }
@@ -520,7 +553,7 @@ public class Allocator
             result.clear(mask.size());
         }
         else {
-            int[] positions = result.positionsArray(count);
+            int[] positions = result.positionsArrayForOverwrite(count);
             for (int index = 0; index < count; index++) {
                 positions[index] = mask.position(index);
             }
@@ -769,6 +802,40 @@ public class Allocator
         return positions;
     }
 
+    private static Mask materializedAllDifference(Mask left, Mask right)
+    {
+        int[] positions = new int[left.size() - right.selectedCount()];
+        int outputIndex = fillMaterializedAllDifference(positions, left, right);
+        if (outputIndex == positions.length) {
+            return Mask.sparseTrusted(positions, outputIndex, left.size());
+        }
+        return Mask.sparse(Arrays.copyOf(positions, outputIndex), left.size());
+    }
+
+    private static void fillMaterializedAllDifference(Mask result, Mask left, Mask right)
+    {
+        int[] positions = result.positionsArrayForOverwrite(left.size() - right.selectedCount());
+        int outputIndex = fillMaterializedAllDifference(positions, left, right);
+        result.setSelection(left.size(), outputIndex, false);
+    }
+
+    private static int fillMaterializedAllDifference(int[] positions, Mask left, Mask right)
+    {
+        int outputIndex = 0;
+        int position = 0;
+        for (int index = 0; index < right.selectedCount(); index++) {
+            int rightPosition = right.position(index);
+            while (position < rightPosition) {
+                positions[outputIndex++] = position++;
+            }
+            position++;
+        }
+        while (position < left.size()) {
+            positions[outputIndex++] = position++;
+        }
+        return outputIndex;
+    }
+
     private static boolean isAllPositions(int[] positions, int selectedCount)
     {
         for (int index = 0; index < selectedCount; index++) {
@@ -786,7 +853,7 @@ public class Allocator
             return;
         }
 
-        int[] positions = target.positionsArray(source.selectedCount());
+        int[] positions = target.positionsArrayForOverwrite(source.selectedCount());
         for (int index = 0; index < source.selectedCount(); index++) {
             positions[index] = source.position(index);
         }

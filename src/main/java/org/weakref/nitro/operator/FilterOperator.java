@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -45,9 +46,25 @@ public class FilterOperator
     {
         this.source = source;
         this.allocator = allocator;
-        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, (reference, currentMask) -> switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatchState.sourceBatch().output(index).borrowOrNull(reference.stream());
-            default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
+        this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, new PlanEvaluator.InputResolver()
+        {
+            @Override
+            public Vector resolve(Reference reference, Mask currentMask)
+            {
+                return switch (reference.producer()) {
+                    case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatchState.sourceBatch().output(index).borrowOrNull(reference.stream(), currentMask);
+                    default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
+                };
+            }
+
+            @Override
+            public Mask resolveMask(Reference reference, Mask currentMask, boolean selectTrue, Allocator resultAllocator, Allocator.Context resultAllocationContext)
+            {
+                return switch (reference.producer()) {
+                    case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> currentBatchState.sourceBatch().output(index).tryBorrowMask(reference.stream(), currentMask, selectTrue, resultAllocator, resultAllocationContext);
+                    default -> null;
+                };
+            }
         }, allocator);
         this.predicateMask = predicateMask;
     }

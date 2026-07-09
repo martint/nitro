@@ -469,7 +469,6 @@ public final class BinaryVector
     {
         clearTraits();
         Arrays.fill(offsets, 0);
-        Arrays.fill(data, (byte) 0);
     }
 
     @Override

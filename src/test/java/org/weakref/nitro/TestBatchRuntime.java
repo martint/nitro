@@ -153,6 +153,19 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testComplementMaskSupportsRandomPositionLookup()
+    {
+        Mask mask = Mask.sparse(new int[] {0, 2, 3, 7, 12, 19}, 20).complement();
+
+        assertThat(mask.size()).isEqualTo(20);
+        assertThat(mask.count()).isEqualTo(14);
+        assertThat(mask.position(5)).isEqualTo(9);
+        assertThat(mask.position(0)).isEqualTo(1);
+        assertThat(mask.position(13)).isEqualTo(18);
+        assertThat(positions(mask)).containsExactly(1, 4, 5, 6, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18);
+    }
+
+    @Test
     void testDictionaryVectorDereferencesBaseValues()
     {
         DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30}));
@@ -161,6 +174,21 @@ public class TestBatchRuntime
         assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[0]]).isEqualTo(30L);
         assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[1]]).isEqualTo(10L);
         assertThat(new DictionaryVector(Arrays.copyOf(dictionary.ids(), 3), dictionary.values()).ids()).containsExactly(2, 0, 1);
+    }
+
+    @Test
+    void testDictionaryVectorSupportsLogicalLengthOverSharedIds()
+    {
+        int[] ids = {2, 0, 1, 2, 99};
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, 4, new I64Vector(new long[] {10, 20, 30}));
+
+        assertThat(dictionary.length()).isEqualTo(4);
+        assertThat(dictionary.ids()).isSameAs(ids);
+        assertThat(((I64Vector) dictionary.values()).values()[dictionary.ids()[0]]).isEqualTo(30L);
+
+        DictionaryVector nested = DictionaryVector.wrap(new int[] {3, 1}, dictionary);
+        assertThat(nested.length()).isEqualTo(2);
+        assertThat(nested.ids()).containsExactly(2, 0);
     }
 
     @Test
@@ -175,6 +203,26 @@ public class TestBatchRuntime
 
         mask.differenceInPlace(Mask.sparse(new int[] {2}, 6));
         assertThat(positions(mask)).containsExactly(1, 4);
+    }
+
+    @Test
+    void testAllocatorDifferenceFromAllKeepsLogicalComplement()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("MaskComplement");
+
+        Mask remaining = allocator.differenceMask(context, Mask.all(8), Mask.sparse(new int[] {1, 3, 6}, 8));
+
+        assertThat(remaining.size()).isEqualTo(8);
+        assertThat(remaining.selectedCount()).isEqualTo(5);
+        assertThat(remaining.all()).isFalse();
+        assertThat(remaining.contains(3)).isFalse();
+        assertThat(remaining.contains(4)).isTrue();
+        assertThat(remaining.position(0)).isEqualTo(0);
+        assertThat(remaining.position(4)).isEqualTo(7);
+        assertThat(positions(remaining)).containsExactly(0, 2, 4, 5, 7);
+        assertThat(positions(remaining.complement())).containsExactly(1, 3, 6);
+        assertThat(allocator.currentBytes(context)).isEqualTo(5L * Integer.BYTES);
     }
 
     @Test

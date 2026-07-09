@@ -32,6 +32,9 @@ import java.util.Set;
 
 final class GroupingState
 {
+    private static final boolean SHARED_DICTIONARY_COMPOSITE_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.sharedDictionaryComposite", "true"));
+
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused
     // find-or-insert per row. A slot is empty iff its id is -1; ids are dense, assigned in first-seen
@@ -55,6 +58,10 @@ final class GroupingState
     private long[] dictionaryGroupsById = new long[0];
     private int[] dictionaryGenerations = new int[0];
     private int dictionaryGeneration;
+    private Vector[] cachedSharedDictionaryValues = new Vector[0];
+    // Packed (generation, group id) entries avoid two independent random cache-array probes by dictionary id.
+    private long[] sharedDictionaryEntriesById = new long[0];
+    private int sharedDictionaryGeneration;
     long nextGroupId;
     private long nullGroup = -1;
     private boolean useLongGrouping;
@@ -62,6 +69,7 @@ final class GroupingState
     private int multiLongArity;
     private int[] densePositionsCache = new int[0];
     private boolean useFlatGrouping;
+    private boolean useSharedDictionaryGrouping;
     private boolean initialized;
     private AbstractMultiLongGroupingTable multiLongTable;
 
@@ -165,6 +173,9 @@ final class GroupingState
             assignFlatGroups(values, nulls, mask, result);
             return;
         }
+        if (useSharedDictionaryGrouping && assignSharedDictionaryGroups(values, nulls, mask, result)) {
+            return;
+        }
         if (values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
             assignDictionaryGroups(dictionary, nulls[0], mask, result);
             return;
@@ -177,6 +188,141 @@ final class GroupingState
             }
             result.values()[position] = groupForKeys(probeKeys);
         }
+    }
+
+    private boolean assignSharedDictionaryGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
+    {
+        int[] ids = sharedDictionaryIds(values);
+        if (ids == null || !sharedDictionaryNullsCompatible(nulls, ids, ((DictionaryVector) values[0]).length())) {
+            return false;
+        }
+
+        Vector[] dictionaryValues = new Vector[values.length];
+        int dictionarySize = 0;
+        for (int index = 0; index < values.length; index++) {
+            dictionaryValues[index] = ((DictionaryVector) values[index]).values();
+            dictionarySize = Math.max(dictionarySize, dictionaryValues[index].length());
+        }
+        ensureSharedDictionaryCacheCapacity(dictionarySize);
+        int generation = currentSharedDictionaryGeneration(dictionaryValues);
+
+        OperatorKeySemantics.Key[] probeKeys = new OperatorKeySemantics.Key[values.length];
+        long[] output = result.values();
+        for (int position : mask) {
+            int dictionaryId = ids[position];
+            long entry = sharedDictionaryEntriesById[dictionaryId];
+            if (sharedDictionaryEntryGeneration(entry) != generation) {
+                for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                    probeKeys[keyIndex] = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
+                }
+                long groupId = groupForKeys(probeKeys);
+                if (!canPackSharedDictionaryGroup(groupId)) {
+                    return false;
+                }
+                entry = sharedDictionaryEntry(generation, groupId);
+                sharedDictionaryEntriesById[dictionaryId] = entry;
+            }
+            output[position] = sharedDictionaryEntryGroup(entry);
+        }
+        return true;
+    }
+
+    private static int[] sharedDictionaryIds(Vector[] values)
+    {
+        if (values.length < 2 || !(values[0] instanceof DictionaryVector first)) {
+            return null;
+        }
+        int[] ids = first.ids();
+        for (int index = 1; index < values.length; index++) {
+            if (!(values[index] instanceof DictionaryVector dictionary) || dictionary.length() != first.length()) {
+                return null;
+            }
+            if (dictionary.ids() != ids && !sameDictionaryIds(dictionary.ids(), ids, first.length())) {
+                return null;
+            }
+        }
+        return ids;
+    }
+
+    private static boolean sharedDictionaryNullsCompatible(Vector[] nulls, int[] ids, int rowCount)
+    {
+        for (Vector nullVector : nulls) {
+            if (VectorAccess.isAllFalseNulls(nullVector)) {
+                continue;
+            }
+            if (!(nullVector instanceof DictionaryVector dictionary) || dictionary.length() != rowCount) {
+                return false;
+            }
+            if (dictionary.ids() != ids && !sameDictionaryIds(dictionary.ids(), ids, rowCount)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean sameDictionaryIds(int[] left, int[] right, int length)
+    {
+        for (int index = 0; index < length; index++) {
+            if (left[index] != right[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void ensureSharedDictionaryCacheCapacity(int size)
+    {
+        if (sharedDictionaryEntriesById.length >= size) {
+            return;
+        }
+        int newSize = Math.max(size, Math.max(16, sharedDictionaryEntriesById.length * 2));
+        sharedDictionaryEntriesById = Arrays.copyOf(sharedDictionaryEntriesById, newSize);
+    }
+
+    private int currentSharedDictionaryGeneration(Vector[] dictionaryValues)
+    {
+        if (!sameVectorIdentities(cachedSharedDictionaryValues, dictionaryValues)) {
+            cachedSharedDictionaryValues = dictionaryValues.clone();
+            if (sharedDictionaryGeneration == Integer.MAX_VALUE) {
+                Arrays.fill(sharedDictionaryEntriesById, 0);
+                sharedDictionaryGeneration = 0;
+            }
+            return ++sharedDictionaryGeneration;
+        }
+        return sharedDictionaryGeneration;
+    }
+
+    private static boolean sameVectorIdentities(Vector[] left, Vector[] right)
+    {
+        if (left.length != right.length) {
+            return false;
+        }
+        for (int index = 0; index < left.length; index++) {
+            if (left[index] != right[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static long sharedDictionaryEntry(int generation, long groupId)
+    {
+        return ((long) generation << Integer.SIZE) | (groupId & 0xFFFF_FFFFL);
+    }
+
+    private static boolean canPackSharedDictionaryGroup(long groupId)
+    {
+        return (groupId & ~0xFFFF_FFFFL) == 0;
+    }
+
+    private static int sharedDictionaryEntryGeneration(long entry)
+    {
+        return (int) (entry >>> Integer.SIZE);
+    }
+
+    private static long sharedDictionaryEntryGroup(long entry)
+    {
+        return entry & 0xFFFF_FFFFL;
     }
 
     private void reserveAdditionalGroups(long additionalGroups)
@@ -227,6 +373,12 @@ final class GroupingState
             return;
         }
 
+        if (SHARED_DICTIONARY_COMPOSITE_GROUPING && values.length > 1 && sharedDictionaryIds(values) != null) {
+            useSharedDictionaryGrouping = true;
+            initializeObjectKeyGrouping(values);
+            return;
+        }
+
         FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys);
         if (flatKeyLayout != null) {
             useFlatGrouping = true;
@@ -234,6 +386,11 @@ final class GroupingState
             return;
         }
 
+        initializeObjectKeyGrouping(values);
+    }
+
+    private void initializeObjectKeyGrouping(Vector[] values)
+    {
         reusableProbeKeys = new OperatorKeySemantics.Key[values.length];
         for (int index = 0; index < values.length; index++) {
             reusableProbeKeys[index] = OperatorKeySemantics.reusableProbeKey(values[index]);

@@ -120,13 +120,13 @@ public final class LessThanI64
     @Override
     public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
     }
 
     @Override
     public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply);
+        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
     }
 
     @Override

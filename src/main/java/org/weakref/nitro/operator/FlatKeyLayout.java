@@ -274,7 +274,7 @@ class FlatKeyLayout
             // more entries than the batch has positions, skip the pre-hash and let fieldHash() hash the referenced
             // entries per row (the same path a non-dictionary field uses). This also sidesteps the per-batch stale
             // cache problem below, since the per-row path always reads the current batch's bytes.
-            if (distinctCount > dictionary.ids().length) {
+            if (distinctCount > dictionary.length()) {
                 dictionaryHashedIds[index] = null;
                 dictionaryEntryHashes[index] = null;
                 dictionaryHashedValues[index] = null;

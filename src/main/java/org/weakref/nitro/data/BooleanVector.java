@@ -67,14 +67,15 @@ public class BooleanVector
     }
 
     /**
-     * Records that every element is false without scanning. The caller guarantees the backing array is
-     * all-false and will not be mutated afterward — Nitro treats a {@link BooleanVector} as immutable
-     * once it has been published through {@link org.weakref.nitro.operator.Streams}. Lets producers of a
-     * known all-false stream make {@link #isAllFalse()} (and hence
+     * Records that every element is false and clears any stale true bits from a pooled backing array.
+     * Nitro treats a {@link BooleanVector} as immutable once it has been published through
+     * {@link org.weakref.nitro.operator.Streams}; this lets producers of a known all-false stream make
+     * {@link #isAllFalse()} (and hence
      * {@link org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}) O(1).
      */
     public void markAllFalse()
     {
+        Arrays.fill(values, false);
         isAllFalseCache = Boolean.TRUE;
     }
 
@@ -169,8 +170,7 @@ public class BooleanVector
     @Override
     public void clearForReuse()
     {
-        // No buffer clearing: consumers must only read positions the producer wrote. Reset the derived
-        // observation so a new producer's values are re-scanned rather than reusing a stale "all false".
+        Arrays.fill(values, false);
         isAllFalseCache = null;
     }
 

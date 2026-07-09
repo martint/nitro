@@ -40,6 +40,16 @@ final class JoinBufferSupport
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
 
+    private static final boolean POSITION_MAPPING_CACHE =
+            Boolean.parseBoolean(System.getProperty("nitro.join.positionMappingCache", "true"));
+    private static final int POSITION_MAPPING_CACHE_SIZE = 8;
+    private static final boolean FUSE_DICTIONARY_POSITION_COPIES =
+            Boolean.parseBoolean(System.getProperty("nitro.join.fuseDictionaryPositionCopies", "true"));
+    private static final boolean COPY_AND_COMPACT_RANGE_SELECTION =
+            Boolean.parseBoolean(System.getProperty("nitro.join.copyAndCompactRangeSelection", "true"));
+    private static final boolean PRESERVE_DICTIONARY_BINARY_POSITION_COPIES =
+            Boolean.parseBoolean(System.getProperty("nitro.join.preserveDictionaryBinaryPositionCopies", "true"));
+
     JoinBufferSupport(Allocator allocator, Allocator.Context allocationContext)
     {
         this.allocator = allocator;
@@ -71,19 +81,44 @@ final class JoinBufferSupport
 
     public Streams copyAndCompact(Output input, Mask mask, int maskStart, Streams existing, int outputStart, int copied, int size)
     {
-        int[] positions = positions(mask, maskStart, copied);
+        SelectedPositions rangePositions = COPY_AND_COMPACT_RANGE_SELECTION && mask.all()
+                ? SelectedPositions.range(maskStart, copied)
+                : null;
+        int[] positions = null;
+        PositionMappingCache positionCache = positionCache(input);
         Streams.Builder result = Streams.builder();
         if (input.hasValues()) {
             Vector existingVector = existing != null ? existing.getOrNull(Stream.VALUES) : null;
-            result.put(Stream.VALUES, copyVectorPositions(existingVector, input.borrow(Stream.VALUES), positions, outputStart, size));
+            Vector source = input.borrow(Stream.VALUES);
+            if (rangePositions != null && canCopyRangeWithoutMaterializing(source)) {
+                result.put(Stream.VALUES, copyVectorPositions(existingVector, source, rangePositions, outputStart, size, false));
+            }
+            else {
+                positions = positions != null ? positions : positions(mask, maskStart, copied);
+                result.put(Stream.VALUES, copyVectorPositions(existingVector, source, positions, 0, positions.length, outputStart, size, false, positionCache));
+            }
         }
         if (hasConcreteStream(input, Stream.NULLS)) {
             Vector existingVector = existing != null ? existing.getOrNull(Stream.NULLS) : null;
-            result.put(Stream.NULLS, copyVectorPositions(existingVector, input.borrow(Stream.NULLS), positions, outputStart, size));
+            Vector source = input.borrow(Stream.NULLS);
+            if (rangePositions != null && canCopyRangeWithoutMaterializing(source)) {
+                result.put(Stream.NULLS, copyVectorPositions(existingVector, source, rangePositions, outputStart, size, false));
+            }
+            else {
+                positions = positions != null ? positions : positions(mask, maskStart, copied);
+                result.put(Stream.NULLS, copyVectorPositions(existingVector, source, positions, 0, positions.length, outputStart, size, false, positionCache));
+            }
         }
         if (hasConcreteStream(input, Stream.ERRORS)) {
             Vector existingVector = existing != null ? existing.getOrNull(Stream.ERRORS) : null;
-            result.put(Stream.ERRORS, copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), positions, outputStart, size));
+            Vector source = input.borrow(Stream.ERRORS);
+            if (rangePositions != null && canCopyRangeWithoutMaterializing(source)) {
+                result.put(Stream.ERRORS, copyVectorPositions(existingVector, source, rangePositions, outputStart, size, false));
+            }
+            else {
+                positions = positions != null ? positions : positions(mask, maskStart, copied);
+                result.put(Stream.ERRORS, copyVectorPositions(existingVector, source, positions, 0, positions.length, outputStart, size, false, positionCache));
+            }
         }
         return result.build();
     }
@@ -105,18 +140,29 @@ final class JoinBufferSupport
 
     public Streams copyPositionsFresh(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
     {
-        return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, true);
+        return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, true, null);
+    }
+
+    Streams copyPositionsFresh(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, PositionMappingCache positionCache)
+    {
+        return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, true, positionCache);
     }
 
     private Streams copyPositions(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
+    {
+        return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, null);
+    }
+
+    private Streams copyPositions(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache sharedPositionCache)
     {
         if (sourceCount == 1) {
             return copySinglePosition(input, existing, size, outputStart, sourcePositions[sourceStart], assumeClearOutputRange);
         }
 
+        PositionMappingCache positionCache = positionCache(input, sharedPositionCache);
         if (input.isValuesOnly()) {
             Vector existingValues = existing != null ? existing.getOrNull(Stream.VALUES) : null;
-            Vector copied = copyVectorPositions(existingValues, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size);
+            Vector copied = copyVectorPositions(existingValues, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache);
             if (existing != null && copied == existingValues) {
                 return existing;
             }
@@ -131,7 +177,7 @@ final class JoinBufferSupport
             boolean changed = false;
             if (input.hasValues()) {
                 Vector existingVector = existing.getOrNull(Stream.VALUES);
-                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size);
+                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.VALUES, copied);
@@ -140,7 +186,7 @@ final class JoinBufferSupport
             }
             if (hasConcreteStream(input, Stream.NULLS)) {
                 Vector existingVector = existing.getOrNull(Stream.NULLS);
-                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.NULLS, copied);
@@ -149,7 +195,7 @@ final class JoinBufferSupport
             }
             if (hasConcreteStream(input, Stream.ERRORS)) {
                 Vector existingVector = existing.getOrNull(Stream.ERRORS);
-                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.ERRORS, copied);
@@ -161,13 +207,13 @@ final class JoinBufferSupport
 
         Streams.Builder result = Streams.builder();
         if (input.hasValues()) {
-            result.put(Stream.VALUES, copyVectorPositions(null, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size));
+            result.put(Stream.VALUES, copyVectorPositions(null, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache));
         }
         if (hasConcreteStream(input, Stream.NULLS)) {
-            result.put(Stream.NULLS, copyVectorPositions(null, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange));
+            result.put(Stream.NULLS, copyVectorPositions(null, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache));
         }
         if (hasConcreteStream(input, Stream.ERRORS)) {
-            result.put(Stream.ERRORS, copyVectorPositions(null, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange));
+            result.put(Stream.ERRORS, copyVectorPositions(null, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache));
         }
         return result.build();
     }
@@ -182,20 +228,35 @@ final class JoinBufferSupport
         return copyPositions(existing, input, sourcePositions, sourceStart, sourceCount, outputStart, size, false);
     }
 
+    Streams copyPositions(Streams existing, Streams input, SelectedPositions sourcePositions, int outputStart, int size)
+    {
+        return copyPositions(existing, input, sourcePositions, outputStart, size, false);
+    }
+
     public Streams copyPositionsFresh(Streams existing, Streams input, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
     {
-        return copyPositions(existing, input, sourcePositions, sourceStart, sourceCount, outputStart, size, true);
+        return copyPositions(existing, input, sourcePositions, sourceStart, sourceCount, outputStart, size, true, null);
+    }
+
+    Streams copyPositionsFresh(Streams existing, Streams input, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, PositionMappingCache positionCache)
+    {
+        return copyPositions(existing, input, sourcePositions, sourceStart, sourceCount, outputStart, size, true, positionCache);
     }
 
     private Streams copyPositions(Streams existing, Streams input, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
     {
-        if (sourceCount == 1) {
-            return copySinglePosition(existing, input, size, outputStart, sourcePositions[sourceStart], assumeClearOutputRange);
+        return copyPositions(existing, input, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, null);
+    }
+
+    private Streams copyPositions(Streams existing, Streams input, SelectedPositions sourcePositions, int outputStart, int size, boolean assumeClearOutputRange)
+    {
+        if (sourcePositions.count() == 1) {
+            return copySinglePosition(existing, input, size, outputStart, sourcePositions.position(0), assumeClearOutputRange);
         }
 
         if (input.isValuesOnly()) {
             Vector existingValues = existing != null ? existing.getOrNull(Stream.VALUES) : null;
-            Vector copied = copyVectorPositions(existingValues, input.values(), sourcePositions, sourceStart, sourceCount, outputStart, size);
+            Vector copied = copyVectorPositions(existingValues, input.values(), sourcePositions, outputStart, size, false);
             if (existing != null && copied == existingValues) {
                 return existing;
             }
@@ -210,7 +271,7 @@ final class JoinBufferSupport
             boolean changed = false;
             if (input.hasValues()) {
                 Vector existingVector = existing.getOrNull(Stream.VALUES);
-                Vector copied = copyVectorPositions(existingVector, input.values(), sourcePositions, sourceStart, sourceCount, outputStart, size);
+                Vector copied = copyVectorPositions(existingVector, input.values(), sourcePositions, outputStart, size, false);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.VALUES, copied);
@@ -219,7 +280,7 @@ final class JoinBufferSupport
             }
             if (input.hasNulls()) {
                 Vector existingVector = existing.getOrNull(Stream.NULLS);
-                Vector copied = copyVectorPositions(existingVector, input.get(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+                Vector copied = copyVectorPositions(existingVector, input.get(Stream.NULLS), sourcePositions, outputStart, size, assumeClearOutputRange);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.NULLS, copied);
@@ -228,7 +289,7 @@ final class JoinBufferSupport
             }
             if (input.hasErrors()) {
                 Vector existingVector = existing.getOrNull(Stream.ERRORS);
-                Vector copied = copyVectorPositions(existingVector, input.get(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+                Vector copied = copyVectorPositions(existingVector, input.get(Stream.ERRORS), sourcePositions, outputStart, size, assumeClearOutputRange);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.ERRORS, copied);
@@ -240,13 +301,78 @@ final class JoinBufferSupport
 
         Streams.Builder result = Streams.builder();
         if (input.hasValues()) {
-            result.put(Stream.VALUES, copyVectorPositions(null, input.values(), sourcePositions, sourceStart, sourceCount, outputStart, size));
+            result.put(Stream.VALUES, copyVectorPositions(null, input.values(), sourcePositions, outputStart, size, false));
         }
         if (input.hasNulls()) {
-            result.put(Stream.NULLS, copyVectorPositions(null, input.get(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange));
+            result.put(Stream.NULLS, copyVectorPositions(null, input.get(Stream.NULLS), sourcePositions, outputStart, size, assumeClearOutputRange));
         }
         if (input.hasErrors()) {
-            result.put(Stream.ERRORS, copyVectorPositions(null, input.get(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange));
+            result.put(Stream.ERRORS, copyVectorPositions(null, input.get(Stream.ERRORS), sourcePositions, outputStart, size, assumeClearOutputRange));
+        }
+        return result.build();
+    }
+
+    private Streams copyPositions(Streams existing, Streams input, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache sharedPositionCache)
+    {
+        if (sourceCount == 1) {
+            return copySinglePosition(existing, input, size, outputStart, sourcePositions[sourceStart], assumeClearOutputRange);
+        }
+
+        PositionMappingCache positionCache = positionCache(input, sharedPositionCache);
+        if (input.isValuesOnly()) {
+            Vector existingValues = existing != null ? existing.getOrNull(Stream.VALUES) : null;
+            Vector copied = copyVectorPositions(existingValues, input.values(), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache);
+            if (existing != null && copied == existingValues) {
+                return existing;
+            }
+            if (existing != null && (existing.hasNulls() || existing.hasErrors())) {
+                return existing.with(Stream.VALUES, copied);
+            }
+            return Streams.ofValues(copied);
+        }
+
+        if (existing != null) {
+            Streams.Builder updated = null;
+            boolean changed = false;
+            if (input.hasValues()) {
+                Vector existingVector = existing.getOrNull(Stream.VALUES);
+                Vector copied = copyVectorPositions(existingVector, input.values(), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache);
+                if (copied != existingVector) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.VALUES, copied);
+                    changed = true;
+                }
+            }
+            if (input.hasNulls()) {
+                Vector existingVector = existing.getOrNull(Stream.NULLS);
+                Vector copied = copyVectorPositions(existingVector, input.get(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
+                if (copied != existingVector) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.NULLS, copied);
+                    changed = true;
+                }
+            }
+            if (input.hasErrors()) {
+                Vector existingVector = existing.getOrNull(Stream.ERRORS);
+                Vector copied = copyVectorPositions(existingVector, input.get(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
+                if (copied != existingVector) {
+                    updated = ensureBuilder(updated, existing);
+                    updated.put(Stream.ERRORS, copied);
+                    changed = true;
+                }
+            }
+            return changed ? updated.build() : existing;
+        }
+
+        Streams.Builder result = Streams.builder();
+        if (input.hasValues()) {
+            result.put(Stream.VALUES, copyVectorPositions(null, input.values(), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache));
+        }
+        if (input.hasNulls()) {
+            result.put(Stream.NULLS, copyVectorPositions(null, input.get(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache));
+        }
+        if (input.hasErrors()) {
+            result.put(Stream.ERRORS, copyVectorPositions(null, input.get(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache));
         }
         return result.build();
     }
@@ -426,6 +552,11 @@ final class JoinBufferSupport
         return sample.materializeRows(allocator, allocationContext, rows);
     }
 
+    PositionMappingCache newPositionMappingCache()
+    {
+        return POSITION_MAPPING_CACHE ? new PositionMappingCache() : null;
+    }
+
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
     {
         return copyPositions(existing, source, sourcePositions, sourcePositions.length, outputStart, size);
@@ -448,13 +579,24 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
     {
+        return copyVectorPositions(existing, source, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, null);
+    }
+
+    private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache positionCache)
+    {
+        if (source instanceof DictionaryVector dictionaryValues) {
+            Vector fused = copyDictionaryPositions(existing, dictionaryValues, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+            if (fused != null) {
+                return fused;
+            }
+        }
         existing = compatibleExisting(existing, source);
         switch (source) {
             case DictionaryVector dictionaryValues -> {
-                return copyVectorPositions(existing, dictionaryValues.values(), dictionaryPositions(dictionaryValues.ids(), sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange);
+                return copyVectorPositions(existing, dictionaryValues.values(), dictionaryPositions(positionCache, dictionaryValues.ids(), sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
             }
             case RleVector rleValues -> {
-                return copyVectorPositions(existing, rleValues.values(), rlePositions(rleValues, sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange);
+                return copyVectorPositions(existing, rleValues.values(), rlePositions(positionCache, rleValues, sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
             }
             case I64Vector longValues -> {
                 return copyLongPositions(longValues, existing, sourcePositions, sourceStart, sourceCount, outputStart, size);
@@ -492,6 +634,15 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, SelectedPositions sourcePositions, int outputStart, int size, boolean assumeClearOutputRange)
     {
+        if (source instanceof DictionaryVector dictionaryValues) {
+            int[] positions = sourcePositions.backingArrayOrNull();
+            if (positions != null) {
+                Vector fused = copyDictionaryPositions(existing, dictionaryValues, positions, sourcePositions.backingArrayOffset(), sourcePositions.count(), outputStart, size, assumeClearOutputRange);
+                if (fused != null) {
+                    return fused;
+                }
+            }
+        }
         existing = compatibleExisting(existing, source);
         switch (source) {
             case DictionaryVector dictionaryValues -> {
@@ -530,6 +681,30 @@ final class JoinBufferSupport
             default -> {}
         }
         return source.copySelectedPositionsInto(allocator, allocationContext, existing, sourcePositions, outputStart, size);
+    }
+
+    boolean canCopyRangeWithoutMaterializing(Streams input)
+    {
+        if (input.hasValues() && !canCopyRangeWithoutMaterializing(input.values())) {
+            return false;
+        }
+        if (input.hasNulls() && !canCopyRangeWithoutMaterializing(input.get(Stream.NULLS))) {
+            return false;
+        }
+        if (input.hasErrors() && !canCopyRangeWithoutMaterializing(input.get(Stream.ERRORS))) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean canCopyRangeWithoutMaterializing(Vector source)
+    {
+        return switch (source) {
+            case I64Vector _, I32Vector _, F64Vector _, BooleanVector _ -> true;
+            case DictionaryVector dictionary -> canCopyRangeWithoutMaterializing(dictionary.values());
+            case RleVector rle -> canCopyRangeWithoutMaterializing(rle.values());
+            default -> false;
+        };
     }
 
     private Vector copyVectorSinglePosition(Vector existing, Vector source, int sourcePosition, int outputPosition, int size)
@@ -576,6 +751,191 @@ final class JoinBufferSupport
             default -> {}
         }
         return source.copySinglePositionInto(allocator, allocationContext, existing, sourcePosition, outputPosition, size);
+    }
+
+    private Vector copyDictionaryPositions(Vector existing, DictionaryVector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
+    {
+        if (!FUSE_DICTIONARY_POSITION_COPIES) {
+            return null;
+        }
+
+        return switch (source.values()) {
+            case I64Vector values -> copyDictionaryLongPositions(values, source.ids(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size);
+            case I32Vector values -> copyDictionaryIntPositions(values, source.ids(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size);
+            case BooleanVector values -> assumeClearOutputRange ?
+                    copyDictionaryBooleanPositionsFresh(values, source.ids(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size) :
+                    copyDictionaryBooleanPositions(values, source.ids(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size);
+            case F64Vector values -> copyDictionaryDoublePositions(values, source.ids(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size);
+            case BinaryVector values -> copyDictionaryBinaryPositions(values, source.ids(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size);
+            default -> null;
+        };
+    }
+
+    private I64Vector copyDictionaryLongPositions(I64Vector source, int[] ids, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        if (existing != null && !(existing instanceof I64Vector)) {
+            return null;
+        }
+        I64Vector output = ensureLongCapacity(existing instanceof I64Vector vector ? vector : null, size);
+        long[] sourceValues = source.values();
+        long[] outputValues = output.values();
+        for (int index = 0; index < sourceCount; index++) {
+            outputValues[outputStart + index] = sourceValues[ids[sourcePositions[sourceStart + index]]];
+        }
+        return output;
+    }
+
+    private I32Vector copyDictionaryIntPositions(I32Vector source, int[] ids, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        if (existing != null && !(existing instanceof I32Vector)) {
+            return null;
+        }
+        I32Vector output = ensureIntCapacity(existing instanceof I32Vector vector ? vector : null, size);
+        int[] sourceValues = source.values();
+        int[] outputValues = output.values();
+        for (int index = 0; index < sourceCount; index++) {
+            outputValues[outputStart + index] = sourceValues[ids[sourcePositions[sourceStart + index]]];
+        }
+        return output;
+    }
+
+    private BooleanVector copyDictionaryBooleanPositions(BooleanVector source, int[] ids, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        if (existing != null && !(existing instanceof BooleanVector)) {
+            return null;
+        }
+        BooleanVector output = ensureBooleanCapacity(existing instanceof BooleanVector vector ? vector : null, size);
+        boolean[] sourceValues = source.values();
+        boolean[] outputValues = output.values();
+        for (int index = 0; index < sourceCount; index++) {
+            outputValues[outputStart + index] = sourceValues[ids[sourcePositions[sourceStart + index]]];
+        }
+        return output;
+    }
+
+    private BooleanVector copyDictionaryBooleanPositionsFresh(BooleanVector source, int[] ids, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        if (existing != null && !(existing instanceof BooleanVector)) {
+            return null;
+        }
+        BooleanVector output = ensureBooleanCapacity(existing instanceof BooleanVector vector ? vector : null, size);
+        boolean[] sourceValues = source.values();
+        boolean[] outputValues = output.values();
+        for (int index = 0; index < sourceCount; index++) {
+            if (sourceValues[ids[sourcePositions[sourceStart + index]]]) {
+                outputValues[outputStart + index] = true;
+            }
+        }
+        return output;
+    }
+
+    private F64Vector copyDictionaryDoublePositions(F64Vector source, int[] ids, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        if (existing != null && !(existing instanceof F64Vector)) {
+            return null;
+        }
+        F64Vector output = ensureDoubleCapacity(existing instanceof F64Vector vector ? vector : null, size);
+        double[] sourceValues = source.values();
+        double[] outputValues = output.values();
+        for (int index = 0; index < sourceCount; index++) {
+            outputValues[outputStart + index] = sourceValues[ids[sourcePositions[sourceStart + index]]];
+        }
+        return output;
+    }
+
+    private Vector copyDictionaryBinaryPositions(BinaryVector source, int[] ids, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        if (existing != null && !(existing instanceof BinaryVector)) {
+            return null;
+        }
+        if (PRESERVE_DICTIONARY_BINARY_POSITION_COPIES && existing == null && outputStart == 0 && sourceCount == size) {
+            Vector encoded = copyCompactDictionaryBinaryPositions(source, ids, sourcePositions, sourceStart, sourceCount);
+            if (encoded != null) {
+                return encoded;
+            }
+        }
+
+        int usedBytes = binaryWriteOffset(existing, outputStart);
+        int byteCapacity = usedBytes;
+        int[] sourceOffsets = source.offsets();
+        for (int index = 0; index < sourceCount; index++) {
+            int sourcePosition = ids[sourcePositions[sourceStart + index]];
+            byteCapacity += sourceOffsets[sourcePosition + 1] - sourceOffsets[sourcePosition];
+        }
+
+        int requestedCapacity = byteCapacity;
+        if (existing == null && outputStart == 0 && size > sourceCount) {
+            requestedCapacity = Math.max(byteCapacity, estimatedBinaryCapacity(source, size));
+        }
+
+        BinaryVector output = BinaryVector.allocateOrGrow(allocator, allocationContext, existing instanceof BinaryVector vector ? vector : null, size, requestedCapacity, usedBytes);
+        if (outputStart == 0) {
+            Arrays.fill(output.offsets(), 0);
+            output.clearTraits();
+            output.addTraits(source.traits());
+        }
+        else {
+            output.addTraits(source.traits());
+        }
+
+        int[] outputOffsets = output.offsets();
+        byte[] outputData = output.data();
+        byte[] sourceData = source.data();
+        int currentOffset = prepareBinaryWriteOffset(output, outputStart);
+        for (int index = 0; index < sourceCount; index++) {
+            int targetPosition = outputStart + index;
+            int sourcePosition = ids[sourcePositions[sourceStart + index]];
+            int startOffset = sourceOffsets[sourcePosition];
+            int endOffset = sourceOffsets[sourcePosition + 1];
+            int length = endOffset - startOffset;
+            outputOffsets[targetPosition] = currentOffset;
+            if (length == 0) {
+                outputOffsets[targetPosition + 1] = currentOffset;
+            }
+            else {
+                System.arraycopy(sourceData, startOffset, outputData, currentOffset, length);
+                currentOffset += length;
+                outputOffsets[targetPosition + 1] = currentOffset;
+            }
+        }
+        return output;
+    }
+
+    private Vector copyCompactDictionaryBinaryPositions(BinaryVector source, int[] ids, int[] sourcePositions, int sourceStart, int sourceCount)
+    {
+        if (sourceCount == 0) {
+            return BinaryVector.allocate(allocator, allocationContext, 0, 0);
+        }
+
+        int dictionarySize = source.length();
+        int[] remap = new int[dictionarySize];
+        Arrays.fill(remap, -1);
+        int[] dictionaryPositions = new int[Math.min(sourceCount, dictionarySize)];
+        int[] outputIds = new int[sourceCount];
+        int[] sourceOffsets = source.offsets();
+        int selectedBytes = 0;
+        int dictionaryBytes = 0;
+        int uniqueCount = 0;
+        for (int index = 0; index < sourceCount; index++) {
+            int sourcePosition = ids[sourcePositions[sourceStart + index]];
+            int length = sourceOffsets[sourcePosition + 1] - sourceOffsets[sourcePosition];
+            selectedBytes += length;
+            int mapped = remap[sourcePosition];
+            if (mapped < 0) {
+                mapped = uniqueCount;
+                remap[sourcePosition] = mapped;
+                dictionaryPositions[uniqueCount++] = sourcePosition;
+                dictionaryBytes += length;
+            }
+            outputIds[index] = mapped;
+        }
+
+        if (dictionaryBytes + (long) uniqueCount * Integer.BYTES >= selectedBytes) {
+            return null;
+        }
+
+        BinaryVector copiedValues = (BinaryVector) source.copy(allocator, allocationContext, Arrays.copyOf(dictionaryPositions, uniqueCount));
+        return DictionaryVector.wrap(outputIds, sourceCount, copiedValues);
     }
 
     private Vector compatibleExisting(Vector existing, Vector source)
@@ -1289,6 +1649,11 @@ final class JoinBufferSupport
         return positions;
     }
 
+    private static int[] dictionaryPositions(PositionMappingCache positionCache, int[] ids, int[] sourcePositions, int sourceStart, int sourceCount)
+    {
+        return positionCache != null ? positionCache.dictionaryPositions(ids, sourcePositions, sourceStart, sourceCount) : dictionaryPositions(ids, sourcePositions, sourceStart, sourceCount);
+    }
+
     private static int[] rlePositions(RleVector values, int[] sourcePositions, int sourceStart, int sourceCount)
     {
         int[] positions = new int[sourceCount];
@@ -1296,6 +1661,11 @@ final class JoinBufferSupport
             positions[index] = rlePosition(values, sourcePositions[sourceStart + index]);
         }
         return positions;
+    }
+
+    private static int[] rlePositions(PositionMappingCache positionCache, RleVector values, int[] sourcePositions, int sourceStart, int sourceCount)
+    {
+        return positionCache != null ? positionCache.rlePositions(values, sourcePositions, sourceStart, sourceCount) : rlePositions(values, sourcePositions, sourceStart, sourceCount);
     }
 
     private static int rlePosition(RleVector values, int sourcePosition)
@@ -1457,5 +1827,109 @@ final class JoinBufferSupport
             return builder;
         }
         return Streams.builder().putAll(existing);
+    }
+
+    private static PositionMappingCache positionCache(Output input)
+    {
+        return positionCache(input, null);
+    }
+
+    private static PositionMappingCache positionCache(Output input, PositionMappingCache sharedPositionCache)
+    {
+        if (!POSITION_MAPPING_CACHE) {
+            return null;
+        }
+        if (sharedPositionCache != null) {
+            return sharedPositionCache;
+        }
+        int streamCount = input.hasValues() ? 1 : 0;
+        if (hasConcreteStream(input, Stream.NULLS)) {
+            streamCount++;
+        }
+        if (hasConcreteStream(input, Stream.ERRORS)) {
+            streamCount++;
+        }
+        return streamCount > 1 ? new PositionMappingCache() : null;
+    }
+
+    private static PositionMappingCache positionCache(Streams input)
+    {
+        return positionCache(input, null);
+    }
+
+    private static PositionMappingCache positionCache(Streams input, PositionMappingCache sharedPositionCache)
+    {
+        if (!POSITION_MAPPING_CACHE) {
+            return null;
+        }
+        if (sharedPositionCache != null) {
+            return sharedPositionCache;
+        }
+        int streamCount = input.hasValues() ? 1 : 0;
+        if (input.hasNulls()) {
+            streamCount++;
+        }
+        if (input.hasErrors()) {
+            streamCount++;
+        }
+        return streamCount > 1 ? new PositionMappingCache() : null;
+    }
+
+    static final class PositionMappingCache
+    {
+        private final Object[] mappings = new Object[POSITION_MAPPING_CACHE_SIZE];
+        private final int[][] sourcePositions = new int[POSITION_MAPPING_CACHE_SIZE][];
+        private final int[] sourceStarts = new int[POSITION_MAPPING_CACHE_SIZE];
+        private final int[] sourceCounts = new int[POSITION_MAPPING_CACHE_SIZE];
+        private final int[][] mappedPositions = new int[POSITION_MAPPING_CACHE_SIZE][];
+        private int next;
+
+        private int[] dictionaryPositions(int[] ids, int[] positions, int sourceStart, int sourceCount)
+        {
+            int[] mapped = get(ids, positions, sourceStart, sourceCount);
+            if (mapped != null) {
+                return mapped;
+            }
+
+            mapped = JoinBufferSupport.dictionaryPositions(ids, positions, sourceStart, sourceCount);
+            put(ids, positions, sourceStart, sourceCount, mapped);
+            return mapped;
+        }
+
+        private int[] rlePositions(RleVector values, int[] positions, int sourceStart, int sourceCount)
+        {
+            int[] mapped = get(values, positions, sourceStart, sourceCount);
+            if (mapped != null) {
+                return mapped;
+            }
+
+            mapped = JoinBufferSupport.rlePositions(values, positions, sourceStart, sourceCount);
+            put(values, positions, sourceStart, sourceCount, mapped);
+            return mapped;
+        }
+
+        private int[] get(Object mapping, int[] positions, int sourceStart, int sourceCount)
+        {
+            for (int index = 0; index < POSITION_MAPPING_CACHE_SIZE; index++) {
+                if (mappings[index] == mapping &&
+                        sourcePositions[index] == positions &&
+                        sourceStarts[index] == sourceStart &&
+                        sourceCounts[index] == sourceCount) {
+                    return mappedPositions[index];
+                }
+            }
+            return null;
+        }
+
+        private void put(Object mapping, int[] positions, int sourceStart, int sourceCount, int[] mapped)
+        {
+            int index = next;
+            mappings[index] = mapping;
+            sourcePositions[index] = positions;
+            sourceStarts[index] = sourceStart;
+            sourceCounts[index] = sourceCount;
+            mappedPositions[index] = mapped;
+            next = (index + 1) & (POSITION_MAPPING_CACHE_SIZE - 1);
+        }
     }
 }

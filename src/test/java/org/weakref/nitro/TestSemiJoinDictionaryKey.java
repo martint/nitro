@@ -68,6 +68,28 @@ public class TestSemiJoinDictionaryKey
         }
     }
 
+    @Test
+    void semiJoinDictionaryMatchCacheResetsForDifferentDictionaryValues()
+    {
+        Allocator allocator = new Allocator();
+        Operator outer = twoBatches(
+                2,
+                new Streams[] {
+                        Streams.ofValues(new DictionaryVector(new int[] {0, 1}, utf8("A", "B"))),
+                        Streams.ofValues(new I64Vector(new long[] {10, 20}))},
+                2,
+                new Streams[] {
+                        Streams.ofValues(new DictionaryVector(new int[] {0, 1}, utf8("B", "C"))),
+                        Streams.ofValues(new I64Vector(new long[] {30, 40}))});
+        Operator inner = singleBatch(1, Streams.ofValues(utf8("B")));
+
+        Operator semiJoin = new SemiJoinOperator(allocator, outer, 0, inner, 0);
+        List<Row> rows = OperatorAssertions.OperatorAssert.toRows(semiJoin);
+        assertThat(rows).containsExactly(
+                new Row("B", 20L),
+                new Row("B", 30L));
+    }
+
     private static BinaryVector utf8(String... values)
     {
         int totalBytes = 0;
@@ -107,6 +129,45 @@ public class TestSemiJoinDictionaryKey
             public Batch next()
             {
                 hasNext = false;
+                Output[] outputs = new Output[columns.length];
+                for (int index = 0; index < columns.length; index++) {
+                    outputs[index] = Output.of(columns[index]);
+                }
+                return new Batch(Mask.all(rows), outputs);
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+    }
+
+    private static Operator twoBatches(int firstRows, Streams[] firstColumns, int secondRows, Streams[] secondColumns)
+    {
+        return new Operator()
+        {
+            private int page;
+
+            @Override
+            public int outputCount()
+            {
+                return firstColumns.length;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return page < 2;
+            }
+
+            @Override
+            public Batch next()
+            {
+                Streams[] columns = page == 0 ? firstColumns : secondColumns;
+                int rows = page == 0 ? firstRows : secondRows;
+                page++;
                 Output[] outputs = new Output[columns.length];
                 for (int index = 0; index < columns.length; index++) {
                     outputs[index] = Output.of(columns[index]);

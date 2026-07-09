@@ -14,13 +14,19 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.function.Function;
@@ -29,6 +35,11 @@ public class SemiJoinOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SemiJoinOperator");
+    private static final boolean DYNAMIC_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter", "true"));
+    private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 13);
+    private static final int SMALL_BINARY_SET_MAX_VALUES = Integer.getInteger("nitro.semiJoin.smallBinarySetMaxValues", 64);
+    private static final boolean CACHE_DICTIONARY_MATCHES =
+            Boolean.parseBoolean(System.getProperty("nitro.semiJoin.cacheDictionaryMatches", "true"));
 
     private final Operator outer;
     private final Operator inner;
@@ -42,6 +53,10 @@ public class SemiJoinOperator
     private boolean loaded;
     private BatchState currentBatchState;
     private I64Vector membershipScratch;
+    private it.unimi.dsi.fastutil.longs.LongOpenHashSet dynamicFilterValues;
+    private boolean dynamicFilterAbandoned;
+    private SmallBinarySet smallBinaryMembership;
+    private boolean smallBinaryMembershipAbandoned;
 
     public SemiJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
@@ -113,8 +128,21 @@ public class SemiJoinOperator
                         }
                         return batchState.borrowMatchValues(this);
                     },
+                    (stream, mask) -> {
+                        if (stream != Stream.VALUES) {
+                            throw new IllegalArgumentException("Unsupported stream: " + stream);
+                        }
+                        return batchState.borrowMatchValues(this, mask);
+                    },
+                    (stream, mask, selectTrue, resultAllocator, resultAllocationContext) -> {
+                        if (stream != Stream.VALUES) {
+                            throw new IllegalArgumentException("Unsupported stream: " + stream);
+                        }
+                        return batchState.borrowMatchMask(this, mask, selectTrue, resultAllocator, resultAllocationContext);
+                    },
                     (stream, vector) -> vector,
                     (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector),
+                    null,
                     (existing, sourcePosition, outputPosition, size) -> {
                         BooleanVector matchValues = batchState.borrowMatchValues(this);
                         BooleanVector outputValues = VectorAccess.writableBooleanVector(
@@ -204,6 +232,8 @@ public class SemiJoinOperator
                 Output output = batch.output(innerJoinColumn);
                 Vector values = output.borrow(Stream.VALUES);
                 Vector nulls = output.borrowOrNull(Stream.NULLS);
+                collectDynamicFilterValues(values, nulls, mask);
+                collectSmallBinaryMembership(values, nulls, mask);
                 membershipScratch = allocator.allocateOrGrow(
                         ALLOCATION_CONTEXT,
                         membershipScratch,
@@ -217,26 +247,119 @@ public class SemiJoinOperator
             }
         }
         inner.close();
+        pushDynamicFilterIfReady();
+    }
+
+    private void collectDynamicFilterValues(Vector values, Vector nulls, Mask mask)
+    {
+        if (!DYNAMIC_FILTER_ENABLED || !includeMatches || outputMatches || dynamicFilterAbandoned) {
+            return;
+        }
+        if (nulls != null && !VectorAccess.isAllFalseNulls(nulls)) {
+            dynamicFilterAbandoned = true;
+            dynamicFilterValues = null;
+            return;
+        }
+        if (dynamicFilterValues == null) {
+            dynamicFilterValues = new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+        }
+        if (values instanceof I64Vector i64) {
+            for (int position : mask) {
+                addDynamicFilterValue(i64.values()[position]);
+                if (dynamicFilterAbandoned) {
+                    return;
+                }
+            }
+            return;
+        }
+        if (values instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector i64) {
+            int[] ids = dictionary.ids();
+            long[] dictionaryValues = i64.values();
+            for (int position : mask) {
+                addDynamicFilterValue(dictionaryValues[ids[position]]);
+                if (dynamicFilterAbandoned) {
+                    return;
+                }
+            }
+            return;
+        }
+        dynamicFilterAbandoned = true;
+        dynamicFilterValues = null;
+    }
+
+    private void collectSmallBinaryMembership(Vector values, Vector nulls, Mask mask)
+    {
+        if (SMALL_BINARY_SET_MAX_VALUES <= 0 || smallBinaryMembershipAbandoned || mask.none()) {
+            return;
+        }
+        if (!SmallBinarySet.supports(values)) {
+            smallBinaryMembershipAbandoned = true;
+            smallBinaryMembership = null;
+            return;
+        }
+        if (smallBinaryMembership == null) {
+            smallBinaryMembership = new SmallBinarySet(SMALL_BINARY_SET_MAX_VALUES);
+        }
+        if (!smallBinaryMembership.addValues(values, nulls, mask)) {
+            smallBinaryMembershipAbandoned = true;
+            smallBinaryMembership = null;
+        }
+    }
+
+    private void addDynamicFilterValue(long value)
+    {
+        dynamicFilterValues.add(value);
+        if (dynamicFilterValues.size() > DYNAMIC_FILTER_MAX_VALUES) {
+            dynamicFilterAbandoned = true;
+            dynamicFilterValues = null;
+        }
+    }
+
+    private void pushDynamicFilterIfReady()
+    {
+        if (dynamicFilterValues != null && !dynamicFilterValues.isEmpty()) {
+            outer.pushDynamicFilter(DynamicFilter.fromValues(outerJoinColumn, dynamicFilterValues));
+        }
     }
 
     private Mask selectRows(Batch sourceBatch)
     {
-        Mask sourceMask = sourceBatch.borrowMask();
+        return selectRows(sourceBatch, sourceBatch.borrowMask(), includeMatches, allocator, ALLOCATION_CONTEXT);
+    }
+
+    private Mask selectRows(Batch sourceBatch, Mask sourceMask, boolean includeMatches, Allocator resultAllocator, Allocator.Context resultAllocationContext)
+    {
         if (sourceMask.none()) {
-            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], sourceMask.size());
+            return resultAllocator.allocateSparseMask(resultAllocationContext, new int[0], sourceMask.size());
         }
 
         Output output = sourceBatch.output(outerJoinColumn);
         Vector values = output.borrow(Stream.VALUES);
         Vector nulls = output.borrowOrNull(Stream.NULLS);
 
-        int[] positions = new int[sourceMask.count()];
+        SmallBinarySet binaryMembership = smallBinaryMembership;
+        if (binaryMembership != null && binaryMembership.supportsProbe(values)) {
+            return binaryMembership.selectRows(resultAllocator, resultAllocationContext, values, nulls, sourceMask, includeMatches);
+        }
+
+        int[] positions = null;
+        boolean allSelected = true;
         int selectedCount = 0;
         membership.beginContainsBatch(values, nulls);
         try {
             for (int position : sourceMask) {
                 if (membership.contains(values, nulls, position) == includeMatches) {
-                    positions[selectedCount++] = position;
+                    if (!allSelected) {
+                        positions = ensurePositionCapacity(positions, selectedCount, sourceMask.count());
+                        positions[selectedCount] = position;
+                    }
+                    selectedCount++;
+                }
+                else if (allSelected) {
+                    allSelected = false;
+                    if (selectedCount > 0) {
+                        positions = selectedPrefix(sourceMask, selectedCount);
+                    }
                 }
             }
         }
@@ -244,28 +367,30 @@ public class SemiJoinOperator
             membership.endContainsBatch();
         }
 
-        if (selectedCount == sourceMask.count()) {
-            return allocator.copyMask(ALLOCATION_CONTEXT, sourceMask);
+        if (allSelected || selectedCount == sourceMask.count()) {
+            return resultAllocator.copyMask(resultAllocationContext, sourceMask);
         }
-        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, positions, selectedCount, sourceMask.size());
+        return resultAllocator.allocateSparseMask(resultAllocationContext, positions == null ? new int[0] : positions, selectedCount, sourceMask.size());
     }
 
-    private BooleanVector computeMatchValues(BatchState batchState)
+    private BooleanVector computeMatchValues(BatchState batchState, BooleanVector matchValues, Mask requestedMask)
     {
-        Mask mask = batchState.mask();
-        BooleanVector matchValues = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask.size(), BooleanVector::new);
-        Arrays.fill(matchValues.values(), false);
-
-        if (mask.none()) {
+        if (requestedMask.none()) {
             return matchValues;
         }
 
         Output output = batchState.sourceBatch().output(outerJoinColumn);
         Vector values = output.borrow(Stream.VALUES);
         Vector nulls = output.borrowOrNull(Stream.NULLS);
+        SmallBinarySet binaryMembership = smallBinaryMembership;
+        if (binaryMembership != null && binaryMembership.supportsProbe(values)) {
+            binaryMembership.writeMatches(values, nulls, requestedMask, matchValues.values());
+            return matchValues;
+        }
+
         membership.beginContainsBatch(values, nulls);
         try {
-            for (int position : mask) {
+            for (int position : requestedMask) {
                 matchValues.values()[position] = membership.contains(values, nulls, position);
             }
         }
@@ -275,11 +400,502 @@ public class SemiJoinOperator
         return matchValues;
     }
 
+    private static int[] selectedPrefix(Mask mask, int selectedCount)
+    {
+        int[] positions = new int[Math.min(mask.count(), Math.max(16, selectedCount + 1))];
+        if (mask.all()) {
+            for (int index = 0; index < selectedCount; index++) {
+                positions[index] = index;
+            }
+            return positions;
+        }
+        int index = 0;
+        for (int position : mask) {
+            if (index == selectedCount) {
+                break;
+            }
+            positions[index++] = position;
+        }
+        return positions;
+    }
+
+    private static int[] ensurePositionCapacity(int[] positions, int selectedCount, int maxCount)
+    {
+        if (positions == null) {
+            return new int[Math.min(maxCount, Math.max(16, selectedCount + 1))];
+        }
+        if (selectedCount < positions.length) {
+            return positions;
+        }
+        return Arrays.copyOf(positions, Math.min(maxCount, positions.length * 2));
+    }
+
+    private static final class SmallBinarySet
+    {
+        private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+
+        private final int maxValues;
+        private byte[][] values = new byte[8][];
+        private int[] lengths = new int[8];
+        private int[] hashes = new int[8];
+        private long[] firstWords = new long[8];
+        private long[] secondWords = new long[8];
+        private int size;
+
+        private boolean[] dictionaryMatches = new boolean[0];
+        private int[] dictionaryGenerations = new int[0];
+        private int dictionaryGeneration;
+        private Vector cachedDictionaryValues;
+        private byte[] cachedDictionaryMatchStates = new byte[0];
+
+        private SmallBinarySet(int maxValues)
+        {
+            this.maxValues = maxValues;
+        }
+
+        private static boolean supports(Vector values)
+        {
+            return switch (values) {
+                case BinaryVector _ -> true;
+                case DictionaryVector dictionary -> supports(dictionary.values());
+                case RleVector rle -> supports(rle.values());
+                default -> false;
+            };
+        }
+
+        private boolean supportsProbe(Vector values)
+        {
+            return supports(values);
+        }
+
+        private boolean addValues(Vector values, Vector nulls, Mask mask)
+        {
+            VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+            for (int position : mask) {
+                if (!nullValues.value(position) && !addValue(values, position)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private boolean addValue(Vector values, int position)
+        {
+            return switch (values) {
+                case BinaryVector binary -> add(binary.data(), binary.startOffset(position), binary.length(position));
+                case DictionaryVector dictionary -> addValue(dictionary.values(), dictionary.ids()[position]);
+                case RleVector rle -> addValue(rle.values(), rle.runIndex(position));
+                default -> false;
+            };
+        }
+
+        private boolean add(byte[] data, int offset, int length)
+        {
+            if (contains(data, offset, length)) {
+                return true;
+            }
+            if (size >= maxValues) {
+                return false;
+            }
+            ensureCapacity(size + 1);
+            byte[] copy = Arrays.copyOfRange(data, offset, offset + length);
+            values[size] = copy;
+            lengths[size] = length;
+            hashes[size] = OperatorVectorSupport.binaryHash(copy, 0, length);
+            firstWords[size] = length <= Long.BYTES ? pack(copy, 0, length) : pack(copy, 0, Long.BYTES);
+            secondWords[size] = length <= Long.BYTES ? 0 : pack(copy, Long.BYTES, Math.min(Long.BYTES, length - Long.BYTES));
+            size++;
+            return true;
+        }
+
+        private void ensureCapacity(int capacity)
+        {
+            if (values.length >= capacity) {
+                return;
+            }
+            int newSize = values.length * 2;
+            while (newSize < capacity) {
+                newSize *= 2;
+            }
+            values = Arrays.copyOf(values, newSize);
+            lengths = Arrays.copyOf(lengths, newSize);
+            hashes = Arrays.copyOf(hashes, newSize);
+            firstWords = Arrays.copyOf(firstWords, newSize);
+            secondWords = Arrays.copyOf(secondWords, newSize);
+        }
+
+        private void writeMatches(Vector values, Vector nulls, Mask mask, boolean[] output)
+        {
+            if (VectorAccess.isAllFalseNulls(nulls)) {
+                writeMatchesNoNulls(values, mask, output);
+                return;
+            }
+            VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+            if (values instanceof DictionaryVector dictionary) {
+                writeDictionaryMatches(dictionary, nullValues, mask, output);
+                return;
+            }
+            if (mask.all()) {
+                for (int position = 0; position < mask.size(); position++) {
+                    output[position] = !nullValues.value(position) && containsValue(values, position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                output[position] = !nullValues.value(position) && containsValue(values, position);
+            }
+        }
+
+        private void writeMatchesNoNulls(Vector values, Mask mask, boolean[] output)
+        {
+            if (values instanceof DictionaryVector dictionary) {
+                writeDictionaryMatchesNoNulls(dictionary, mask, output);
+                return;
+            }
+            if (mask.all()) {
+                for (int position = 0; position < mask.size(); position++) {
+                    output[position] = containsValue(values, position);
+                }
+                return;
+            }
+            for (int position : mask) {
+                output[position] = containsValue(values, position);
+            }
+        }
+
+        private void writeDictionaryMatches(DictionaryVector dictionary, VectorAccess.BooleanValues nullValues, Mask mask, boolean[] output)
+        {
+            int generation = nextDictionaryGeneration();
+            int dictionarySize = dictionary.values().length();
+            ensureDictionaryScratch(dictionarySize);
+            int[] ids = dictionary.ids();
+            Vector dictionaryValues = dictionary.values();
+            if (mask.all()) {
+                for (int position = 0; position < mask.size(); position++) {
+                    output[position] = !nullValues.value(position) && dictionaryMatch(dictionaryValues, ids[position], generation);
+                }
+                return;
+            }
+            for (int position : mask) {
+                output[position] = !nullValues.value(position) && dictionaryMatch(dictionaryValues, ids[position], generation);
+            }
+        }
+
+        private void writeDictionaryMatchesNoNulls(DictionaryVector dictionary, Mask mask, boolean[] output)
+        {
+            int generation = nextDictionaryGeneration();
+            int dictionarySize = dictionary.values().length();
+            ensureDictionaryScratch(dictionarySize);
+            int[] ids = dictionary.ids();
+            Vector dictionaryValues = dictionary.values();
+            if (mask.all()) {
+                for (int position = 0; position < mask.size(); position++) {
+                    output[position] = dictionaryMatch(dictionaryValues, ids[position], generation);
+                }
+                return;
+            }
+            for (int position : mask) {
+                output[position] = dictionaryMatch(dictionaryValues, ids[position], generation);
+            }
+        }
+
+        private Mask selectRows(Allocator allocator, Allocator.Context allocationContext, Vector values, Vector nulls, Mask mask, boolean includeMatches)
+        {
+            if (VectorAccess.isAllFalseNulls(nulls)) {
+                return selectRowsNoNulls(allocator, allocationContext, values, mask, includeMatches);
+            }
+            VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+            int[] positions = null;
+            boolean allSelected = true;
+            int selectedCount = 0;
+            int maskCount = mask.count();
+            if (values instanceof DictionaryVector dictionary) {
+                int generation = nextDictionaryGeneration();
+                int dictionarySize = dictionary.values().length();
+                ensureDictionaryScratch(dictionarySize);
+                int[] ids = dictionary.ids();
+                Vector dictionaryValues = dictionary.values();
+                if (mask.all()) {
+                    for (int position = 0; position < maskCount; position++) {
+                        boolean match = !nullValues.value(position) && dictionaryMatch(dictionaryValues, ids[position], generation);
+                        if (match == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+                else {
+                    int[] maskPositions = mask.selectedPositions();
+                    for (int index = 0; index < maskCount; index++) {
+                        int position = maskPositions[index];
+                        boolean match = !nullValues.value(position) && dictionaryMatch(dictionaryValues, ids[position], generation);
+                        if (match == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                if (mask.all()) {
+                    for (int position = 0; position < maskCount; position++) {
+                        boolean match = !nullValues.value(position) && containsValue(values, position);
+                        if (match == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+                else {
+                    int[] maskPositions = mask.selectedPositions();
+                    for (int index = 0; index < maskCount; index++) {
+                        int position = maskPositions[index];
+                        boolean match = !nullValues.value(position) && containsValue(values, position);
+                        if (match == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+            }
+            if (allSelected || selectedCount == maskCount) {
+                return allocator.copyMask(allocationContext, mask);
+            }
+            return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+        }
+
+        private Mask selectRowsNoNulls(Allocator allocator, Allocator.Context allocationContext, Vector values, Mask mask, boolean includeMatches)
+        {
+            int[] positions = null;
+            boolean allSelected = true;
+            int selectedCount = 0;
+            int maskCount = mask.count();
+            if (values instanceof DictionaryVector dictionary) {
+                int generation = nextDictionaryGeneration();
+                int dictionarySize = dictionary.values().length();
+                ensureDictionaryScratch(dictionarySize);
+                int[] ids = dictionary.ids();
+                Vector dictionaryValues = dictionary.values();
+                if (mask.all()) {
+                    for (int position = 0; position < maskCount; position++) {
+                        if (dictionaryMatch(dictionaryValues, ids[position], generation) == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+                else {
+                    int[] maskPositions = mask.selectedPositions();
+                    for (int index = 0; index < maskCount; index++) {
+                        int position = maskPositions[index];
+                        if (dictionaryMatch(dictionaryValues, ids[position], generation) == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                if (mask.all()) {
+                    for (int position = 0; position < maskCount; position++) {
+                        if (containsValue(values, position) == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+                else {
+                    int[] maskPositions = mask.selectedPositions();
+                    for (int index = 0; index < maskCount; index++) {
+                        int position = maskPositions[index];
+                        if (containsValue(values, position) == includeMatches) {
+                            if (!allSelected) {
+                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions[selectedCount] = position;
+                            }
+                            selectedCount++;
+                        }
+                        else if (allSelected) {
+                            allSelected = false;
+                            if (selectedCount > 0) {
+                                positions = selectedPrefix(mask, selectedCount);
+                            }
+                        }
+                    }
+                }
+            }
+            if (allSelected || selectedCount == maskCount) {
+                return allocator.copyMask(allocationContext, mask);
+            }
+            return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+        }
+
+        private boolean dictionaryMatch(Vector dictionaryValues, int dictionaryId, int generation)
+        {
+            if (CACHE_DICTIONARY_MATCHES) {
+                return cachedDictionaryMatch(dictionaryValues, dictionaryId);
+            }
+            if (dictionaryGenerations[dictionaryId] != generation) {
+                dictionaryMatches[dictionaryId] = containsValue(dictionaryValues, dictionaryId);
+                dictionaryGenerations[dictionaryId] = generation;
+            }
+            return dictionaryMatches[dictionaryId];
+        }
+
+        private boolean cachedDictionaryMatch(Vector dictionaryValues, int dictionaryId)
+        {
+            if (cachedDictionaryValues != dictionaryValues) {
+                cachedDictionaryValues = dictionaryValues;
+                cachedDictionaryMatchStates = new byte[dictionaryValues.length()];
+            }
+            byte state = cachedDictionaryMatchStates[dictionaryId];
+            if (state != 0) {
+                return state > 1;
+            }
+            boolean match = containsValue(dictionaryValues, dictionaryId);
+            cachedDictionaryMatchStates[dictionaryId] = (byte) (match ? 2 : 1);
+            return match;
+        }
+
+        private int nextDictionaryGeneration()
+        {
+            if (dictionaryGeneration == Integer.MAX_VALUE) {
+                Arrays.fill(dictionaryGenerations, 0);
+                dictionaryGeneration = 0;
+            }
+            return ++dictionaryGeneration;
+        }
+
+        private void ensureDictionaryScratch(int size)
+        {
+            if (dictionaryMatches.length >= size) {
+                return;
+            }
+            dictionaryMatches = Arrays.copyOf(dictionaryMatches, size);
+            dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, size);
+        }
+
+        private boolean containsValue(Vector values, int position)
+        {
+            return switch (values) {
+                case BinaryVector binary -> contains(binary, position);
+                case DictionaryVector dictionary -> containsValue(dictionary.values(), dictionary.ids()[position]);
+                case RleVector rle -> containsValue(rle.values(), rle.runIndex(position));
+                default -> false;
+            };
+        }
+
+        private boolean contains(BinaryVector vector, int position)
+        {
+            return contains(vector.data(), vector.startOffset(position), vector.length(position));
+        }
+
+        private boolean contains(byte[] data, int offset, int length)
+        {
+            if (length <= 2 * Long.BYTES) {
+                long firstWord = length <= Long.BYTES ? pack(data, offset, length) : pack(data, offset, Long.BYTES);
+                long secondWord = length <= Long.BYTES ? 0 : pack(data, offset + Long.BYTES, Math.min(Long.BYTES, length - Long.BYTES));
+                for (int index = 0; index < size; index++) {
+                    if (lengths[index] == length && firstWords[index] == firstWord && secondWords[index] == secondWord) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            int hash = OperatorVectorSupport.binaryHash(data, offset, length);
+            for (int index = 0; index < size; index++) {
+                if (hashes[index] == hash
+                        && lengths[index] == length
+                        && OperatorVectorSupport.binaryEquals(values[index], 0, data, offset, length)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static long pack(byte[] data, int offset, int length)
+        {
+            if (length == Long.BYTES) {
+                return (long) LONG_HANDLE.get(data, offset);
+            }
+            long value = 0;
+            for (int index = 0; index < length; index++) {
+                value |= (data[offset + index] & 0xFFL) << (index * Byte.SIZE);
+            }
+            return value;
+        }
+    }
+
     private static final class BatchState
     {
         private final Batch sourceBatch;
         private final Mask[] maskHolder;
         private BooleanVector matchValues;
+        private boolean matchValuesComplete;
 
         private BatchState(Batch sourceBatch, Mask mask)
         {
@@ -305,10 +921,32 @@ public class SemiJoinOperator
 
         private BooleanVector borrowMatchValues(SemiJoinOperator operator)
         {
+            return borrowMatchValues(operator, null);
+        }
+
+        private BooleanVector borrowMatchValues(SemiJoinOperator operator, Mask requestedMask)
+        {
+            Mask effectiveMask = requestedMask == null ? mask() : requestedMask;
             if (matchValues == null) {
-                matchValues = operator.computeMatchValues(this);
+                matchValues = operator.allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask().size(), BooleanVector::new);
             }
-            return matchValues;
+            if (matchValuesComplete) {
+                return matchValues;
+            }
+            if (effectiveMask.none()) {
+                return matchValues;
+            }
+            boolean computesCurrentMask = effectiveMask.containsAll(mask());
+            BooleanVector result = operator.computeMatchValues(this, matchValues, effectiveMask);
+            if (computesCurrentMask) {
+                matchValuesComplete = true;
+            }
+            return result;
+        }
+
+        private Mask borrowMatchMask(SemiJoinOperator operator, Mask requestedMask, boolean selectTrue, Allocator resultAllocator, Allocator.Context resultAllocationContext)
+        {
+            return operator.selectRows(sourceBatch, requestedMask, selectTrue, resultAllocator, resultAllocationContext);
         }
     }
 }

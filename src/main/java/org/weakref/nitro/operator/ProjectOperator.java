@@ -191,7 +191,9 @@ public class ProjectOperator
             // A fused output omits the NULLS/ERRORS stream when it is provably all-false; synthesize it at the values'
             // length on demand, exactly as the interpreter's completeRequestedStreams does.
             Vector values = bundle.getOrNull(Stream.VALUES);
-            return allocator.allocate(allocationContext, BooleanVector.class, values != null ? values.length() : 0, BooleanVector::new);
+            BooleanVector falseVector = allocator.allocate(allocationContext, BooleanVector.class, values != null ? values.length() : 0, BooleanVector::new);
+            falseVector.markAllFalse();
+            return falseVector;
         }
         return bundle.get(stream);
     }

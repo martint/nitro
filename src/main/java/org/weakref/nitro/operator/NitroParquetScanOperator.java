@@ -89,7 +89,10 @@ public final class NitroParquetScanOperator
     // clustered lead filter lets the skip path drop whole non-surviving pages even when a page is larger than an
     // output batch. The window's surviving rows are buffered densely and then sliced into MAX_BATCH_ROWS output
     // batches. The window must comfortably exceed a Parquet page (~100K+ rows) for page-skip to be effective.
-    private static final int FILTER_WINDOW = Integer.getInteger("nitro.parquet.scan.filterWindow", 1 << 20);
+    // Keep the window large enough to span Parquet pages for page-skip, but not so large that every dynamic-filter
+    // scan walks multi-megabyte scratch arrays. 512K keeps q20's page-skip behavior while improving q45 locality.
+    private static final int FILTER_WINDOW = Integer.getInteger("nitro.parquet.scan.filterWindow", 1 << 19);
+    private static final boolean EAGER_FILTER_WINDOW_SCRATCH = Boolean.parseBoolean(System.getProperty("nitro.parquet.scan.eagerFilterWindowScratch", "false"));
     // Order dynamic-filter columns by estimated pass fraction (filter values / column cardinality) rather than raw
     // filter value count, so the genuinely selective filter leads the scan on the fused run-aware path. Opt-out.
     private static final boolean SELECTIVITY_FILTER_ORDER = Boolean.parseBoolean(System.getProperty("nitro.parquet.selectivityFilterOrder", "true"));
@@ -510,8 +513,8 @@ public final class NitroParquetScanOperator
         if (reader.kind() == ColumnReader.Kind.BINARY) {
             // readSelectedBinary returns a position-indexed vector (survivors at their positions, others zero-length)
             // and fills position-indexed nulls, so no scatter is needed.
-            Vector vector = reader.readSelectedBinary(survivors, survivorCount, count, nulls);
-            currentValues[column] = allocator.adopt(ALLOCATION_CONTEXT, vector);
+            Vector vector = reader.readSelectedBinary(allocator, ALLOCATION_CONTEXT, survivors, survivorCount, count, nulls);
+            currentValues[column] = vector;
             currentNulls[column] = nullVector;
             return;
         }
@@ -634,7 +637,7 @@ public final class NitroParquetScanOperator
         while (pending > 0) {
             int rows = (int) Math.min(pending, 1 << 30);
             if (reader.kind() == ColumnReader.Kind.BINARY) {
-                reader.readSelectedBinary(EMPTY, 0, rows, null);
+                reader.skipSelectedBinary(rows);
             }
             else if (longKind) {
                 ensureLazyScratch(0, true);
@@ -699,6 +702,7 @@ public final class NitroParquetScanOperator
             DynamicFilter filter = filtersByColumn[column];
             int kept;
             if (survivors == null) {
+                ensureColumnScratch(column, count);
                 // Lead filter: predicate-over-dictionary. Read ids + test a per-chunk acceptById[] WITHOUT
                 // materializing the column; only survivors get a value. Output is dense, aligned to the survivors
                 // (readPositions records that), so the later gather two-pointers it to the final survivor set.
@@ -709,7 +713,9 @@ public final class NitroParquetScanOperator
                 else {
                     kept = readers[column].filterDictInts(filter::accepts, count, nextSurvivors, colInt[column], cn);
                 }
-                survivors = java.util.Arrays.copyOf(nextSurvivors, kept);
+                survivors = applied + 1 < order.length
+                        ? java.util.Arrays.copyOf(nextSurvivors, kept)
+                        : nextSurvivors;
                 readPositions[column] = survivors;
                 survivorCount = kept;
                 continue;
@@ -732,7 +738,7 @@ public final class NitroParquetScanOperator
                     next[kept++] = survivors[i];
                 }
             }
-            survivors = java.util.Arrays.copyOf(next, kept);
+            survivors = applied + 1 < order.length ? java.util.Arrays.copyOf(next, kept) : next;
             survivorCount = kept;
         }
 
@@ -782,6 +788,18 @@ public final class NitroParquetScanOperator
         // were already read straight into the window buffer above.
         for (int c = 0; c < columnCount; c++) {
             if (filtersByColumn[c] == null) {
+                continue;
+            }
+            if (readPositions[c] == survivors) {
+                if (readers[c].kind() == ColumnReader.Kind.INT) {
+                    windowInt[c] = colInt[c];
+                }
+                else {
+                    windowLong[c] = colLong[c];
+                }
+                if (nullable[c]) {
+                    windowNull[c] = colNull[c];
+                }
                 continue;
             }
             boolean[] nulls = nullable[c] ? ensureWindowNull(c, survivorCount) : null;
@@ -861,6 +879,7 @@ public final class NitroParquetScanOperator
     /** Decode {@code column} into its scratch buffer: full when {@code survivors == null}, else at those positions. */
     private void readColumnInto(int column, int[] survivors, int rows, int batchRows)
     {
+        ensureColumnScratch(column, rows);
         ColumnReader reader = readers[column];
         boolean[] nulls = nullable[column] ? colNull[column] : null;
         if (reader.kind() == ColumnReader.Kind.LONG) {
@@ -972,18 +991,25 @@ public final class NitroParquetScanOperator
         if (nextSurvivors.length < count) {
             nextSurvivors = new int[count];
         }
-        for (int c = 0; c < readers.length; c++) {
-            if (readers[c].kind() == ColumnReader.Kind.LONG) {
-                if (colLong[c] == null || colLong[c].length < count) {
-                    colLong[c] = new long[count];
-                }
+        if (EAGER_FILTER_WINDOW_SCRATCH) {
+            for (int c = 0; c < readers.length; c++) {
+                ensureColumnScratch(c, count);
             }
-            else if (colInt[c] == null || colInt[c].length < count) {
-                colInt[c] = new int[count];
+        }
+    }
+
+    private void ensureColumnScratch(int column, int rows)
+    {
+        if (readers[column].kind() == ColumnReader.Kind.LONG) {
+            if (colLong[column] == null || colLong[column].length < rows) {
+                colLong[column] = new long[rows];
             }
-            if (nullable[c] && (colNull[c] == null || colNull[c].length < count)) {
-                colNull[c] = new boolean[count];
-            }
+        }
+        else if (colInt[column] == null || colInt[column].length < rows) {
+            colInt[column] = new int[rows];
+        }
+        if (nullable[column] && (colNull[column] == null || colNull[column].length < rows)) {
+            colNull[column] = new boolean[rows];
         }
     }
 

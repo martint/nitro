@@ -452,6 +452,64 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupedAggregationOperatorCoalescesSharedDictionaryCompositeKeysByValue()
+    {
+        Allocator allocator = new Allocator();
+        BinaryVector cities = new BinaryVector(5, 10);
+        cities.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        cities.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        cities.setBytes(0, "LA".getBytes(UTF_8));
+        cities.setBytes(1, "NY".getBytes(UTF_8));
+        cities.setBytes(2, "LA".getBytes(UTF_8));
+        cities.setBytes(3, "SF".getBytes(UTF_8));
+        cities.setBytes(4, "NA".getBytes(UTF_8));
+
+        BinaryVector zips = new BinaryVector(5, 25);
+        zips.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        zips.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        zips.setBytes(0, "90001".getBytes(UTF_8));
+        zips.setBytes(1, "10001".getBytes(UTF_8));
+        zips.setBytes(2, "90001".getBytes(UTF_8));
+        zips.setBytes(3, "94101".getBytes(UTF_8));
+        zips.setBytes(4, "00000".getBytes(UTF_8));
+
+        int[] ids = {0, 1, 2, 0, 3, 4};
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new CountAll()),
+                new TableOperator(
+                        2,
+                        List.of(new TableOperator.Page(
+                                ids.length,
+                                new Streams[] {
+                                        Streams.builder()
+                                                .put(Stream.VALUES, DictionaryVector.wrap(Arrays.copyOf(ids, ids.length), cities))
+                                                .put(Stream.NULLS, DictionaryVector.wrap(Arrays.copyOf(ids, ids.length), new BooleanVector(new boolean[] {false, false, false, false, true})))
+                                                .build(),
+                                        Streams.ofValues(DictionaryVector.wrap(Arrays.copyOf(ids, ids.length), zips))},
+                                Mask.all(ids.length)))));
+
+        Batch batch = operator.next();
+        int rowCount = batch.borrowMask().count();
+        BinaryVector groupedCities = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+        BooleanVector groupedCityNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+        BinaryVector groupedZips = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        I64Vector counts = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+
+        assertThat(rowCount).isEqualTo(4);
+        assertThat(utf8(groupedCities, 0)).isEqualTo("LA");
+        assertThat(utf8(groupedZips, 0)).isEqualTo("90001");
+        assertThat(utf8(groupedCities, 1)).isEqualTo("NY");
+        assertThat(utf8(groupedZips, 1)).isEqualTo("10001");
+        assertThat(utf8(groupedCities, 2)).isEqualTo("SF");
+        assertThat(utf8(groupedZips, 2)).isEqualTo("94101");
+        assertThat(groupedCityNulls.values()[3]).isTrue();
+        assertThat(utf8(groupedZips, 3)).isEqualTo("00000");
+        assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(3L, 1L, 1L, 1L);
+    }
+
+    @Test
     void testGroupedAggregationOperatorKeepsAllNullSumGroupsNull()
     {
         Allocator allocator = new Allocator();
@@ -1620,13 +1678,8 @@ public class TestOperatorBatches
         assertThat(longValues(batch.output(2).borrow(Stream.VALUES), rowCount)).containsExactly(10L, firstBatchSize * 10L, (firstBatchSize + secondBatchSize) * 10L);
         assertThat(booleanValues(batch.output(2).borrow(Stream.NULLS), rowCount)).containsExactly(false, true, true);
 
-        // The build's small multiple pages coalesce into a single batch (default
-        // nitro.hash.join.maxCoalescedInnerRows), so the inner null stream materializes as one flat vector rather
-        // than a dictionary over a per-page ConcatenatedBooleanVector. The null values asserted above are the
-        // preserved-across-pages regression check; the larger >cap (non-coalesced) dictionary-wrap path is
-        // exercised by the real-data query suites and verified there byte-identical.
-        Vector nulls = batch.output(2).borrow(Stream.NULLS);
-        assertThat(nulls).isInstanceOf(BooleanVector.class);
+        // The physical side-stream layout is free to be flat or dictionary-wrapped; the regression check is the
+        // logical null values above, including matches from both retained inner pages.
     }
 
     @Test
@@ -1652,6 +1705,56 @@ public class TestOperatorBatches
         assertThat(longValues(batch.output(0).borrow(Stream.VALUES), rowCount)).containsExactly(2L, 2L, 3L);
         assertThat(longValues(batch.output(1).borrow(Stream.VALUES), rowCount)).containsExactly(20L, 20L, 30L);
         assertThat(longValues(batch.output(3).borrow(Stream.VALUES), rowCount)).containsExactly(200L, 201L, 300L);
+    }
+
+    @Test
+    void testHashJoinDenseSingleBatchReferencesFallBackWhenBuildRowsHaveHoles()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(10L),
+                        row(11L),
+                        row(12L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(10L, 100L),
+                        row((Object) null, 999L),
+                        row(11L, 200L),
+                        row(12L, 300L))),
+                0);
+
+        new OperatorAssertions.OperatorAssert(operator).matchesExactly(List.of(
+                row(10L, 10L, 100L),
+                row(11L, 11L, 200L),
+                row(12L, 12L, 300L)));
+    }
+
+    @Test
+    void testHashJoinDenseSingleBatchRangeOutputCompactsMatches()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(0L, 100L),
+                        row(1L, 101L),
+                        row(2L, 102L),
+                        row(3L, 103L),
+                        row(4L, 104L),
+                        row(5L, 105L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2L, 200L),
+                        row(3L, 300L),
+                        row(4L, 400L))),
+                0);
+
+        new OperatorAssertions.OperatorAssert(operator).matchesExactly(List.of(
+                row(2L, 102L, 2L, 200L),
+                row(3L, 103L, 3L, 300L),
+                row(4L, 104L, 4L, 400L)));
     }
 
     @Test
@@ -1727,6 +1830,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSemiJoinOperatorAntiJoinKeepsNullUtf8ProbeKeys()
+    {
+        Allocator allocator = new Allocator();
+        Operator operator = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("alpha", 10L),
+                        row("beta", 20L),
+                        row((Object) null, 30L),
+                        row("gamma", 40L))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row("beta"),
+                        row((Object) null),
+                        row("delta"))),
+                0,
+                false);
+
+        new OperatorAssertions.OperatorAssert(operator).matchesExactly(List.of(
+                row("alpha", 10L),
+                row((Object) null, 30L),
+                row("gamma", 40L)));
+    }
+
+    @Test
     void testSemiJoinOperatorCanProjectMatchColumn()
     {
         Allocator allocator = new Allocator();
@@ -1745,8 +1873,7 @@ public class TestOperatorBatches
                 true,
                 true)) {
             Batch batch = operator.next();
-            assertThat(Arrays.copyOf(((BooleanVector) batch.output(2).borrow(Stream.VALUES)).values(), 3))
-                    .containsExactly(false, true, true);
+            assertThat(booleanValues(batch.output(2).borrow(Stream.VALUES), 3)).containsExactly(false, true, true);
             batch.close();
         }
     }
@@ -2674,10 +2801,10 @@ public class TestOperatorBatches
     {
         Allocator allocator = new Allocator();
         List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
-        for (int index = 0; index < 2_500; index++) {
+        for (int index = 0; index < 4_500; index++) {
             innerRows.add(row(1L, 1000L + index));
         }
-        for (int index = 0; index < 2_500; index++) {
+        for (int index = 0; index < 6_000; index++) {
             innerRows.add(row(2L, 2000L + index));
         }
         innerRows.add(row(3L, 3000L));
@@ -2691,20 +2818,20 @@ public class TestOperatorBatches
                 new ConstantTableOperator(allocator, 2, innerRows),
                 0)) {
             try (Batch first = join.next()) {
-                assertThat(first.borrowMask().count()).isEqualTo(4_096);
-                assertThat(((I64Vector) first.output(1).borrow(Stream.VALUES)).values()[4_095]).isEqualTo(20L);
+                assertThat(first.borrowMask().count()).isEqualTo(10_000);
+                assertThat(((I64Vector) first.output(1).borrow(Stream.VALUES)).values()[9_999]).isEqualTo(20L);
             }
 
             try (Batch second = join.next()) {
-                assertThat(second.borrowMask().count()).isEqualTo(905);
+                assertThat(second.borrowMask().count()).isEqualTo(501);
                 I64Vector outerPayloads = (I64Vector) second.output(1).borrow(Stream.VALUES);
                 I64Vector innerPayloads = (I64Vector) second.output(3).borrow(Stream.VALUES);
 
-                for (int index = 0; index < 904; index++) {
+                for (int index = 0; index < 500; index++) {
                     assertThat(outerPayloads.values()[index]).isEqualTo(20L);
                 }
-                assertThat(outerPayloads.values()[904]).isEqualTo(30L);
-                assertThat(innerPayloads.values()[904]).isEqualTo(3000L);
+                assertThat(outerPayloads.values()[500]).isEqualTo(30L);
+                assertThat(innerPayloads.values()[500]).isEqualTo(3000L);
             }
         }
     }

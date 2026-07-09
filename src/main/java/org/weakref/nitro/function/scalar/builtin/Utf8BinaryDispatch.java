@@ -500,6 +500,22 @@ public final class Utf8BinaryDispatch
 
     private static Vector applyInSetDictionary(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, VectorAccess.BooleanValues leftNulls, List<Streams> literalInputs, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
+        if (leftDictionary.values() instanceof DictionaryVector nestedDictionary && nestedDictionary.values() instanceof BinaryVector nestedValues) {
+            BinaryVector[] literals = literalVectors(functionName, literalInputs);
+            boolean[] nestedMatches = evaluateDictionaryMembership(nestedValues, literals);
+            int[] nestedIds = nestedDictionary.ids();
+            BooleanVector dictionaryValues = context.allocator().allocate(
+                    allocationContext,
+                    BooleanVector.class,
+                    nestedDictionary.length(),
+                    BooleanVector::new);
+            boolean[] dictionaryMatches = dictionaryValues.values();
+            for (int index = 0; index < nestedDictionary.length(); index++) {
+                dictionaryMatches[index] = nestedMatches[nestedIds[index]];
+            }
+            return context.allocator().allocateDictionary(allocationContext, leftDictionary.ids(), dictionaryValues);
+        }
+
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector[] literals = literalVectors(functionName, literalInputs);
         boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
@@ -515,6 +531,29 @@ public final class Utf8BinaryDispatch
 
     private static Mask evaluateInSetDictionaryMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, VectorAccess.BooleanValues leftNulls, List<Streams> literalInputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
+        if (leftDictionary.values() instanceof DictionaryVector nestedDictionary && nestedDictionary.values() instanceof BinaryVector nestedValues) {
+            BinaryVector[] literals = literalVectors(functionName, literalInputs);
+            boolean[] nestedMatches = evaluateDictionaryMembership(nestedValues, literals);
+
+            int[] ids = leftDictionary.ids();
+            int[] nestedIds = nestedDictionary.ids();
+            int selectedCount = 0;
+            for (int position : mask) {
+                if (!isNull(leftNulls, position) && nestedMatches[nestedIds[ids[position]]] == selectMatches) {
+                    selectedCount++;
+                }
+            }
+
+            int[] positions = new int[selectedCount];
+            int outputIndex = 0;
+            for (int position : mask) {
+                if (!isNull(leftNulls, position) && nestedMatches[nestedIds[ids[position]]] == selectMatches) {
+                    positions[outputIndex++] = position;
+                }
+            }
+            return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
+        }
+
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector[] literals = literalVectors(functionName, literalInputs);
         boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);

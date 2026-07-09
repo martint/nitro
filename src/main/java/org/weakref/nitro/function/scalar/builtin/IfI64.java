@@ -293,6 +293,16 @@ public final class IfI64
             return VectorAccess.booleanValues(rle.values()).value(0);
         }
 
+        if (nulls instanceof DictionaryVector dictionary) {
+            int dictionarySize = dictionary.values().length();
+            int[] ids = dictionary.ids();
+            for (int position = 0; position < dictionary.length(); position++) {
+                if (ids[position] < 0 || ids[position] >= dictionarySize) {
+                    return null;
+                }
+            }
+        }
+
         VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
         if (nulls.length() == 1) {
             return nullValues.value(0);

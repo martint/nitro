@@ -32,6 +32,8 @@ public class Mask
     private int selectedCount;
     private boolean allSelected;
     private int[] positions;
+    private int positionCount;
+    private boolean excludedPositions;
 
     public static Mask all(int size)
     {
@@ -72,18 +74,67 @@ public class Mask
         return new Mask(totalPositions, activePositions.length, allSelected, allSelected ? EMPTY_POSITIONS : positions);
     }
 
+    static Mask sparseTrusted(int[] activePositions, int selectedCount, int totalPositions)
+    {
+        checkArgument(totalPositions >= 0, "totalPositions is negative");
+        checkArgument(selectedCount >= 0, "selectedCount is negative");
+        checkArgument(selectedCount <= totalPositions, "More active positions than total positions");
+        checkArgument(activePositions.length >= selectedCount, "activePositions capacity is too small");
+
+        if (selectedCount == 0) {
+            return new Mask(totalPositions, 0, false, EMPTY_POSITIONS);
+        }
+
+        boolean allSelected = selectedCount == totalPositions && isAllPositions(activePositions, selectedCount);
+        return new Mask(totalPositions, selectedCount, allSelected, allSelected ? EMPTY_POSITIONS : activePositions);
+    }
+
+    static Mask allExcept(int[] excludedPositions, int excludedCount, int totalPositions)
+    {
+        checkArgument(totalPositions >= 0, "totalPositions is negative");
+        checkArgument(excludedCount >= 0, "excludedCount is negative");
+        checkArgument(excludedCount <= totalPositions, "More excluded positions than total positions");
+        checkArgument(excludedPositions.length >= excludedCount, "excludedPositions capacity is too small");
+
+        if (excludedCount == 0) {
+            return all(totalPositions);
+        }
+        if (excludedCount == totalPositions && isAllPositions(excludedPositions, excludedCount)) {
+            return new Mask(totalPositions, 0, false, EMPTY_POSITIONS);
+        }
+
+        return new Mask(
+                totalPositions,
+                totalPositions - excludedCount,
+                false,
+                Arrays.copyOf(excludedPositions, excludedCount),
+                excludedCount,
+                true);
+    }
+
     private Mask(int size, int selectedCount, boolean allSelected, int[] positions)
+    {
+        this(size, selectedCount, allSelected, positions, allSelected ? 0 : selectedCount, false);
+    }
+
+    private Mask(int size, int selectedCount, boolean allSelected, int[] positions, int positionCount, boolean excludedPositions)
     {
         checkArgument(size >= 0, "size is negative");
         checkArgument(selectedCount >= 0, "selectedCount is negative");
         checkArgument(selectedCount <= size, "selectedCount exceeds size");
         checkArgument(allSelected == (selectedCount == size), "allSelected must match selectedCount");
-        checkArgument(allSelected || positions.length >= selectedCount, "positions capacity is too small");
+        checkArgument(positionCount >= 0, "positionCount is negative");
+        checkArgument(positionCount <= size, "positionCount exceeds size");
+        checkArgument(allSelected || positions.length >= positionCount, "positions capacity is too small");
+        checkArgument(!excludedPositions || !allSelected, "allSelected mask cannot use excluded positions");
+        checkArgument(allSelected || (excludedPositions ? selectedCount == size - positionCount : positionCount == selectedCount), "positionCount does not match selectedCount");
 
         this.size = size;
         this.selectedCount = selectedCount;
         this.allSelected = allSelected;
         this.positions = allSelected ? EMPTY_POSITIONS : positions;
+        this.positionCount = allSelected ? 0 : positionCount;
+        this.excludedPositions = excludedPositions;
     }
 
     public int size()
@@ -117,6 +168,13 @@ public class Mask
         if (allSelected) {
             return size - 1;
         }
+        if (excludedPositions) {
+            int position = size - 1;
+            for (int index = positionCount - 1; index >= 0 && positions[index] == position; index--) {
+                position--;
+            }
+            return position;
+        }
         return positions[selectedCount - 1];
     }
 
@@ -125,6 +183,16 @@ public class Mask
         checkArgument(index >= 0 && index < selectedCount, "index out of bounds");
         if (allSelected) {
             return index;
+        }
+        if (excludedPositions) {
+            int position = index;
+            while (true) {
+                int selectedBeforeOrAt = position - upperBound(positions, positionCount, position);
+                if (selectedBeforeOrAt == index) {
+                    return position;
+                }
+                position += index - selectedBeforeOrAt;
+            }
         }
         return positions[index];
     }
@@ -137,6 +205,7 @@ public class Mask
      */
     public int[] selectedPositions()
     {
+        materializeSelectedPositions();
         return allSelected ? null : positions;
     }
 
@@ -146,6 +215,8 @@ public class Mask
         this.size = size;
         selectedCount = size;
         allSelected = true;
+        positionCount = 0;
+        excludedPositions = false;
     }
 
     public void clear(int size)
@@ -154,6 +225,8 @@ public class Mask
         this.size = size;
         selectedCount = 0;
         allSelected = false;
+        positionCount = 0;
+        excludedPositions = false;
     }
 
     public void copyFrom(Mask other)
@@ -161,9 +234,11 @@ public class Mask
         size = other.size;
         selectedCount = other.selectedCount;
         allSelected = other.allSelected;
+        positionCount = other.positionCount;
+        excludedPositions = other.excludedPositions;
         if (!allSelected) {
-            ensureCapacity(selectedCount);
-            System.arraycopy(other.positions, 0, positions, 0, selectedCount);
+            ensureCapacity(positionCount);
+            System.arraycopy(other.positions, 0, positions, 0, positionCount);
         }
     }
 
@@ -180,6 +255,11 @@ public class Mask
         }
         if (allSelected) {
             copyFrom(other);
+            return;
+        }
+        if (excludedPositions || other.excludedPositions) {
+            Mask result = difference(difference(other));
+            copyFrom(result);
             return;
         }
 
@@ -217,6 +297,11 @@ public class Mask
         }
         if (other.all()) {
             clear(size);
+            return;
+        }
+        if (excludedPositions || other.excludedPositions) {
+            Mask result = difference(other);
+            copyFrom(result);
             return;
         }
         if (allSelected) {
@@ -271,6 +356,7 @@ public class Mask
         if (none()) {
             return;
         }
+        materializeSelectedPositions();
 
         if (allSelected) {
             int[] positions = positionsArray(size);
@@ -713,6 +799,16 @@ public class Mask
         if (allSelected) {
             return start < size && end >= 0;
         }
+        if (excludedPositions) {
+            int first = Math.max(0, start);
+            int last = Math.min(size - 1, end);
+            for (int position = first; position <= last; position++) {
+                if (!contains(position)) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         for (int index = 0; index < selectedCount; index++) {
             int position = positions[index];
@@ -732,6 +828,14 @@ public class Mask
         if (allSelected) {
             return "ALL(" + size + ")";
         }
+        if (excludedPositions) {
+            int[] selected = new int[selectedCount];
+            int index = 0;
+            for (int position : this) {
+                selected[index++] = position;
+            }
+            return Arrays.toString(selected);
+        }
         return Arrays.toString(Arrays.copyOf(positions, selectedCount));
     }
 
@@ -747,6 +851,11 @@ public class Mask
         if (allSelected) {
             for (int index = 0; index < n; index++) {
                 result[index] = index;
+            }
+        }
+        else if (excludedPositions) {
+            for (int index = 0; index < n; index++) {
+                result[index] = position(index);
             }
         }
         else {
@@ -769,6 +878,12 @@ public class Mask
                 result[index] = size - n + index;
             }
         }
+        else if (excludedPositions) {
+            int firstIndex = selectedCount - n;
+            for (int index = 0; index < n; index++) {
+                result[index] = position(firstIndex + index);
+            }
+        }
         else {
             System.arraycopy(positions, selectedCount - n, result, 0, n);
         }
@@ -781,6 +896,8 @@ public class Mask
         return new Iterator<>()
         {
             private int index;
+            private int nextPosition;
+            private int excludedIndex;
 
             @Override
             public boolean hasNext()
@@ -794,7 +911,18 @@ public class Mask
                 if (!hasNext()) {
                     throw new NoSuchElementException();
                 }
-                return allSelected ? index++ : positions[index++];
+                if (allSelected) {
+                    return index++;
+                }
+                if (!excludedPositions) {
+                    return positions[index++];
+                }
+                while (excludedIndex < positionCount && positions[excludedIndex] == nextPosition) {
+                    nextPosition++;
+                    excludedIndex++;
+                }
+                index++;
+                return nextPosition++;
             }
         };
     }
@@ -810,6 +938,9 @@ public class Mask
         }
         if (allSelected) {
             return other.complement();
+        }
+        if (excludedPositions || other.excludedPositions) {
+            return genericDifference(other);
         }
 
         int[] result = new int[selectedCount];
@@ -848,6 +979,9 @@ public class Mask
         }
         if (none()) {
             return other.copy();
+        }
+        if (excludedPositions || other.excludedPositions) {
+            return genericUnion(other);
         }
 
         int[] result = new int[Math.min(size, selectedCount + other.selectedCount)];
@@ -888,6 +1022,9 @@ public class Mask
         if (allSelected) {
             return true;
         }
+        if (excludedPositions) {
+            return Arrays.binarySearch(positions, 0, positionCount, position) < 0;
+        }
         return Arrays.binarySearch(positions, 0, selectedCount, position) >= 0;
     }
 
@@ -906,6 +1043,14 @@ public class Mask
         }
         if (other.all()) {
             return false;
+        }
+        if (excludedPositions || other.excludedPositions) {
+            for (int position : other) {
+                if (!contains(position)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         int leftIndex = 0;
@@ -936,6 +1081,13 @@ public class Mask
         int outputIndex = 0;
         if (allSelected) {
             for (int position = 0; position < size; position++) {
+                if (other.values()[position]) {
+                    result[outputIndex++] = position;
+                }
+            }
+        }
+        else if (excludedPositions) {
+            for (int position : this) {
                 if (other.values()[position]) {
                     result[outputIndex++] = position;
                 }
@@ -973,6 +1125,13 @@ public class Mask
                 }
             }
         }
+        else if (excludedPositions) {
+            for (int position : this) {
+                if (!other.values()[position]) {
+                    result[outputIndex++] = position;
+                }
+            }
+        }
         else {
             for (int index = 0; index < selectedCount; index++) {
                 int position = positions[index];
@@ -992,20 +1151,11 @@ public class Mask
         if (none()) {
             return all(size);
         }
+        if (excludedPositions) {
+            return create(size, positions, positionCount);
+        }
 
-        int[] result = new int[size - selectedCount];
-        int outputIndex = 0;
-        int position = 0;
-        for (int index = 0; index < selectedCount; index++) {
-            while (position < positions[index]) {
-                result[outputIndex++] = position++;
-            }
-            position++;
-        }
-        while (position < size) {
-            result[outputIndex++] = position++;
-        }
-        return create(size, result, outputIndex);
+        return allExcept(positions, selectedCount, size);
     }
 
     public Mask or(Mask other)
@@ -1017,6 +1167,9 @@ public class Mask
     {
         if (allSelected) {
             return all(size);
+        }
+        if (excludedPositions) {
+            return new Mask(size, selectedCount, false, Arrays.copyOf(positions, positionCount), positionCount, true);
         }
         return new Mask(size, selectedCount, false, Arrays.copyOf(positions, selectedCount));
     }
@@ -1032,6 +1185,73 @@ public class Mask
     int capacity()
     {
         return positions.length;
+    }
+
+    private Mask genericDifference(Mask other)
+    {
+        int[] result = new int[selectedCount];
+        int outputIndex = 0;
+        for (int position : this) {
+            if (!other.contains(position)) {
+                result[outputIndex++] = position;
+            }
+        }
+        return create(size, result, outputIndex);
+    }
+
+    private Mask genericUnion(Mask other)
+    {
+        int[] result = new int[Math.min(size, selectedCount + other.selectedCount)];
+        Iterator<Integer> left = iterator();
+        Iterator<Integer> right = other.iterator();
+        Integer leftPosition = left.hasNext() ? left.next() : null;
+        Integer rightPosition = right.hasNext() ? right.next() : null;
+        int outputIndex = 0;
+        while (leftPosition != null && rightPosition != null) {
+            if (leftPosition < rightPosition) {
+                result[outputIndex++] = leftPosition;
+                leftPosition = left.hasNext() ? left.next() : null;
+            }
+            else if (leftPosition > rightPosition) {
+                result[outputIndex++] = rightPosition;
+                rightPosition = right.hasNext() ? right.next() : null;
+            }
+            else {
+                result[outputIndex++] = leftPosition;
+                leftPosition = left.hasNext() ? left.next() : null;
+                rightPosition = right.hasNext() ? right.next() : null;
+            }
+        }
+        while (leftPosition != null) {
+            result[outputIndex++] = leftPosition;
+            leftPosition = left.hasNext() ? left.next() : null;
+        }
+        while (rightPosition != null) {
+            result[outputIndex++] = rightPosition;
+            rightPosition = right.hasNext() ? right.next() : null;
+        }
+        return create(size, result, outputIndex);
+    }
+
+    private void materializeSelectedPositions()
+    {
+        if (!excludedPositions) {
+            return;
+        }
+
+        int[] selected = new int[selectedCount];
+        int outputIndex = 0;
+        int excludedIndex = 0;
+        for (int position = 0; position < size; position++) {
+            if (excludedIndex < positionCount && positions[excludedIndex] == position) {
+                excludedIndex++;
+                continue;
+            }
+            selected[outputIndex++] = position;
+        }
+        positions = selected;
+        positionCount = selectedCount;
+        excludedPositions = false;
     }
 
     boolean trackedInUse()
@@ -1073,6 +1293,13 @@ public class Mask
 
     int[] positionsArray(int requiredCapacity)
     {
+        materializeSelectedPositions();
+        ensureCapacity(requiredCapacity);
+        return positions;
+    }
+
+    int[] positionsArrayForOverwrite(int requiredCapacity)
+    {
         ensureCapacity(requiredCapacity);
         return positions;
     }
@@ -1088,6 +1315,31 @@ public class Mask
         this.size = size;
         this.selectedCount = selectedCount;
         this.allSelected = allSelected;
+        this.positionCount = allSelected ? 0 : selectedCount;
+        this.excludedPositions = false;
+    }
+
+    void setExclusion(int size, int excludedCount)
+    {
+        checkArgument(size >= 0, "size is negative");
+        checkArgument(excludedCount >= 0, "excludedCount is negative");
+        checkArgument(excludedCount <= size, "excludedCount exceeds size");
+        checkArgument(positions.length >= excludedCount, "positions capacity is too small");
+
+        if (excludedCount == 0) {
+            selectAll(size);
+            return;
+        }
+        if (excludedCount == size && isAllPositions(positions, excludedCount)) {
+            clear(size);
+            return;
+        }
+
+        this.size = size;
+        this.selectedCount = size - excludedCount;
+        this.allSelected = false;
+        this.positionCount = excludedCount;
+        this.excludedPositions = true;
     }
 
     private void checkCompatible(Mask other)
@@ -1124,5 +1376,21 @@ public class Mask
             }
         }
         return true;
+    }
+
+    private static int upperBound(int[] values, int count, int value)
+    {
+        int low = 0;
+        int high = count;
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            if (values[middle] <= value) {
+                low = middle + 1;
+            }
+            else {
+                high = middle;
+            }
+        }
+        return low;
     }
 }

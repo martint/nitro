@@ -2399,61 +2399,61 @@ final class TpcdsParquetSupport
 
     public static Operator query45(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator filtered = factScan(allocator, tables, "web_sales", "ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price");
-        filtered = new HashJoinOperator(
+        Operator filtered = profiled("q45.scan.web_sales", factScan(allocator, tables, "web_sales", "ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price"));
+        filtered = profiled("q45.join.customer", new HashJoinOperator(
                 allocator,
                 filtered,
                 2,
-                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk"),
-                0);
-        filtered = new HashJoinOperator(
+                profiled("q45.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk")),
+                0));
+        filtered = profiled("q45.join.customer_address", new HashJoinOperator(
                 allocator,
                 filtered,
                 5,
-                scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_city", "ca_zip"),
-                0);
-        filtered = new HashJoinOperator(
+                profiled("q45.scan.customer_address", scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_city", "ca_zip")),
+                0));
+        filtered = profiled("q45.join.date_dim", new HashJoinOperator(
                 allocator,
                 filtered,
                 1,
-                filteredProjectedTable(
+                profiled("q45.scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         and(equal(1, 2), equal(2, 2001)),
                         new String[] {"d_date_sk", "d_qoy", "d_year"},
-                        0),
-                0);
-        filtered = new HashJoinOperator(
+                        0)),
+                0));
+        filtered = profiled("q45.join.item", new HashJoinOperator(
                 allocator,
                 filtered,
                 0,
-                scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id"),
-                0);
-        filtered = new SemiJoinOperator(
+                profiled("q45.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id")),
+                0));
+        filtered = profiled("q45.semi.eligible_items", new SemiJoinOperator(
                 allocator,
                 filtered,
                 11,
-                filteredProjectedTable(
+                profiled("q45.scan.prime_item_ids", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "item",
                         query45ItemPredicate(),
                         new String[] {"i_item_sk", "i_item_id"},
-                        1),
+                        1)),
                 0,
                 true,
-                true);
-        filtered = filter(allocator, primitiveRegistry, filtered, query45ZipOrItemPredicate(8, 12));
-        Operator projected = projectInputs(allocator, primitiveRegistry, filtered, 8, 7, 3);
-        Operator aggregated = new GroupedAggregationOperator(
+                true));
+        filtered = profiled("q45.filter.project.sales", filter(allocator, primitiveRegistry, filtered, query45ZipOrItemPredicate(8, 12)));
+        Operator projected = profiled("q45.project.group_inputs", projectInputs(allocator, primitiveRegistry, filtered, 8, 7, 3));
+        Operator aggregated = profiled("q45.group.zip_city", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new Sum(2)),
-                projected);
-        return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, aggregated);
+                projected));
+        return profiled("q45.topn", new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, aggregated));
     }
 
     public static Operator query51(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -4236,9 +4236,11 @@ final class TpcdsParquetSupport
 
     private static Operator projectInputs(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int... inputIndexes)
     {
-        List<Reference> outputs = java.util.Arrays.stream(inputIndexes)
-                .mapToObj(index -> new Reference(new Input(index), Stream.VALUES))
-                .toList();
+        List<Reference> outputs = new ArrayList<>(inputIndexes.length);
+        for (int inputIndex : inputIndexes) {
+            outputs.add(new Reference(new Input(inputIndex), Stream.VALUES));
+        }
+        outputs = List.copyOf(outputs);
         return new ProjectOperator(allocator, new EvaluationPlan(List.of(), outputs), primitiveRegistry, source);
     }
 
@@ -9750,9 +9752,9 @@ final class TpcdsParquetSupport
         for (int index = 8; index < 20; index++) {
             outputs.add(new Reference(new Input(index), Stream.VALUES));
         }
-        outputs.addAll(Arrays.stream(perSquareFoot)
-                .map(variable -> new Reference(variable, Stream.VALUES))
-                .toList());
+        for (Variable variable : perSquareFoot) {
+            outputs.add(new Reference(variable, Stream.VALUES));
+        }
         for (int index = 20; index < 32; index++) {
             outputs.add(new Reference(new Input(index), Stream.VALUES));
         }
@@ -10885,25 +10887,34 @@ final class TpcdsParquetSupport
 
     private static List<Assignment> remap(List<Assignment> assignments, int variableOffset)
     {
-        return assignments.stream()
-                .map(assignment -> new Assignment(
-                        new Variable(assignment.output().id() + variableOffset),
-                        remap(assignment.operation(), variableOffset),
-                        assignment.mask()))
-                .toList();
+        List<Assignment> remapped = new java.util.ArrayList<>(assignments.size());
+        for (Assignment assignment : assignments) {
+            remapped.add(new Assignment(
+                    new Variable(assignment.output().id() + variableOffset),
+                    remap(assignment.operation(), variableOffset),
+                    assignment.mask()));
+        }
+        return List.copyOf(remapped);
     }
 
     private static org.weakref.nitro.operator.evaluator.ir.Operation remap(org.weakref.nitro.operator.evaluator.ir.Operation operation, int variableOffset)
     {
         return switch (operation) {
             case Literal literal -> literal;
-            case Call(String functionName, List<Reference> arguments) -> new Call(functionName, arguments.stream()
-                    .map(argument -> remap(argument, variableOffset))
-                    .toList());
+            case Call(String functionName, List<Reference> arguments) -> new Call(functionName, remapReferences(arguments, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.Copy(Reference source) -> new org.weakref.nitro.operator.evaluator.ir.Copy(remap(source, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.StructField(Reference source, String fieldName) -> new org.weakref.nitro.operator.evaluator.ir.StructField(remap(source, variableOffset), fieldName);
             case org.weakref.nitro.operator.evaluator.ir.Merge _ -> throw new UnsupportedOperationException("Merge remapping is not implemented for TPC-DS helper filters");
         };
+    }
+
+    private static List<Reference> remapReferences(List<Reference> references, int variableOffset)
+    {
+        List<Reference> remapped = new java.util.ArrayList<>(references.size());
+        for (Reference reference : references) {
+            remapped.add(remap(reference, variableOffset));
+        }
+        return List.copyOf(remapped);
     }
 
     private static Reference remap(Reference reference, int variableOffset)
@@ -10932,10 +10943,11 @@ final class TpcdsParquetSupport
 
     private static int maxVariableId(List<Assignment> assignments)
     {
-        return assignments.stream()
-                .mapToInt(assignment -> assignment.output().id())
-                .max()
-                .orElse(-1);
+        int maxVariableId = -1;
+        for (Assignment assignment : assignments) {
+            maxVariableId = Math.max(maxVariableId, assignment.output().id());
+        }
+        return maxVariableId;
     }
 
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate) {}

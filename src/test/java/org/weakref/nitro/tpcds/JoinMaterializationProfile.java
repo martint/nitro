@@ -137,7 +137,7 @@ final class JoinMaterializationProfile
     {
         return switch (vector) {
             case BooleanVector values -> values.values().length == 0 || position >= values.values().length ? false : values.values()[position];
-            case DictionaryVector values -> values.ids().length == 0 || position >= values.ids().length ? false : countTrueAt(values.values(), values.ids()[position]);
+            case DictionaryVector values -> values.length() == 0 || position >= values.length() ? false : countTrueAt(values.values(), values.ids()[position]);
             case RleVector values -> position >= values.length() ? false : countTrueAt(values.values(), values.runIndex(position));
             default -> false;
         };

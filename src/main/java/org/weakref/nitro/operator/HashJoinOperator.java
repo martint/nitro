@@ -25,6 +25,8 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -46,7 +48,20 @@ public class HashJoinOperator
         void record(String operatorName, int outputIndex, Streams streams, int rowCount, long nanos);
     }
 
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 4_096);
+    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
+    private static final int BUILD_DICTIONARY_SPARSE_RATIO = Integer.getInteger("nitro.hash.join.buildDictionarySparseRatio", 8);
+    private static final boolean WRAP_NON_RETAINED_FIXED_WIDTH_BUILD_VALUES =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.wrapNonRetainedFixedWidthBuildValues", "true"));
+    private static final boolean CACHE_INNER_DICTIONARY_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheInnerDictionaryIds", "true"));
+    private static final boolean ALIAS_BATCH_DICTIONARY_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.aliasBatchDictionaryIds", "true"));
+    private static final boolean ALIAS_FULL_BATCH_DICTIONARY_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.aliasFullBatchDictionaryIds", "false"));
+    private static final boolean WRAP_ENCODED_OUTER_DICTIONARIES =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.wrapEncodedOuterDictionaries", "true"));
+    private static final boolean DIRECT_DENSE_SINGLE_MATCH_RANGE_OUTPUT =
+            Boolean.parseBoolean(System.getProperty("nitro.join.directDenseSingleMatchRangeOutput", "true"));
     // Velox-style dynamic filtering: once the (small) build side is materialized, push its single-column key
     // membership down the probe chain so a skip-decode scan can eliminate non-matching rows during decode. On by
     // default (a non-selective filter self-abandons after a warmup in the scan, so the build-side collection is the
@@ -58,12 +73,16 @@ public class HashJoinOperator
     // Resolve RLE run indices for a monotonic (outer/probe-ordered) output column with a forward hint instead of a
     // per-position binary search. Set false to force the binary search (for A/B measurement of the two paths).
     private static final boolean RLE_RUN_INDEX_HINT = Boolean.parseBoolean(System.getProperty("nitro.join.rleRunIndexHint", "true"));
-    private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 20);
-    // Skip dynamic-filter key collection when the build side has more rows than the distinct-value cap: the membership
-    // set would overflow the cap (abandoned) or be too large to prune, wasting the per-row insertion. Set to a huge
-    // value to disable the gate (always collect), for A/B measurement.
-    private static final long DYNAMIC_FILTER_BUILD_ROW_LIMIT = Long.getLong("nitro.dynamicFilter.buildRowLimit", DYNAMIC_FILTER_MAX_VALUES);
+    private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 13);
+    // Skip dynamic-filter key collection for large build sides. These sets are expensive to collect and often
+    // non-selective (e.g. full dimensions), while genuinely useful runtime filters are usually small date/status
+    // domains. Set to a huge value to disable the gate (always collect), for A/B measurement.
+    private static final long DYNAMIC_FILTER_BUILD_ROW_LIMIT = Long.getLong("nitro.dynamicFilter.buildRowLimit", 1L << 16);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
+    private static final int NO_MATCH_COMPACT_ROW_REFERENCE = -1;
+    private static final int VALUES_FLAG = 1;
+    private static final int NULLS_FLAG = 1 << 1;
+    private static final int ERRORS_FLAG = 1 << 2;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
     private final Allocator allocator;
@@ -78,38 +97,40 @@ public class HashJoinOperator
     private final int[] innerJoinColumns;
     private final JoinBufferSupport buffers;
     private final BufferedJoinInput bufferedInner;
-    private final JoinOutputBuffer outputBuffer;
+    private final Streams[] outerSchema;
+    private final Streams[] innerSchema;
     private final Vector[] currentOuterJoinValues;
     private final Vector[] currentOuterJoinNulls;
     private final int[] outputOuterPositions = new int[BATCH_SIZE];
     private final long[] outputInnerRows = new long[BATCH_SIZE];
-    private final int[] outputInnerBatchIndexes = new int[BATCH_SIZE];
     private final int[] outputInnerLogicalPositions = new int[BATCH_SIZE];
-    private final int[] outputInnerSourcePositions = new int[BATCH_SIZE];
     private final int[] outputInnerRunStarts = new int[BATCH_SIZE];
     private final int[] outputInnerRunLengths = new int[BATCH_SIZE];
     private final int[] outputInnerRunBatchIndexes = new int[BATCH_SIZE];
     private final int[] outputInnerRunUniqueStarts = new int[BATCH_SIZE];
     private final int[] outputInnerRunUniqueCounts = new int[BATCH_SIZE];
-    private final int[] outputInnerUniqueSourcePositions = new int[BATCH_SIZE];
-    private final int[] innerPositionsScratch = new int[BATCH_SIZE];
-    private final int[] retainedInnerPositionsScratch = new int[BATCH_SIZE];
-    private final int[] retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
+    private int[] outputInnerSourcePositions;
+    private int[] outputInnerUniqueSourcePositions;
+    private int[] retainedInnerMaskPositionsScratch;
     private final int[] preparedOuterPositions = new int[BATCH_SIZE];
     private final LongList[] preparedOuterMatches = new LongList[BATCH_SIZE];
-    private final SingleLongList[] preparedSingleMatches = createSingleLongLists(BATCH_SIZE);
+    private SingleLongList[] preparedSingleMatches;
     // Flat single-match output: when the build is unique, the probe writes one build row reference per
     // outer row here and produceBatch emits from it without a LongList or per-row virtual dispatch.
     private final long[] preparedSingleRefs = new long[BATCH_SIZE];
+    private final int[] preparedSingleRefs32 = new int[BATCH_SIZE];
     private boolean singleMatchProbe;
+    private boolean singleMatchPositionProbe;
+    private boolean compactSingleMatchProbe;
     private long currentMatchRef;
+    private int currentMatchPosition;
     private final Streams[] currentOutputs;
     private int[] retainedConstraintCountsByBatch = new int[16];
     private int[][] retainedConstraintPositionsByBatch = new int[16][];
     // Lazily built, per (inner batch, inner column) unified dictionary view for non-retained build
-    // columns whose VALUES are a BinaryVector. Built once over the (small) build side; reused to emit
-    // every probe-output batch's matched rows as a DictionaryVector over the shared dictionary instead
-    // of flattening the bytes per output row. Keyed by batchIndex * innerOutputCount + innerOutputIndex.
+    // BinaryVector columns. Built once over the (small) build side; reused to emit every probe-output
+    // batch's matched rows as a DictionaryVector over the shared dictionary instead of flattening the
+    // bytes per output row. Keyed by batchIndex * innerOutputCount + innerOutputIndex.
     private final Map<Integer, BuildDictionary> buildDictionaries = new HashMap<>();
     private JoinIndex joinIndex;
 
@@ -126,8 +147,15 @@ public class HashJoinOperator
     private int currentOutputCount;
     private Mask currentOutputMask;
     private int[] currentOuterDictionaryIds;
+    private int[] currentInnerLogicalDictionaryIds;
+    private int[] currentInnerSourceDictionaryIds;
+    private JoinBufferSupport.PositionMappingCache innerPositionMappingCache;
     private int preparedOuterCount;
     private int preparedOuterIndex;
+    private boolean preparedOuterRange;
+    private int preparedOuterRangeStart;
+    private boolean outputInnerLogicalPositionsReady;
+    private int outputInnerLogicalPositionsBatchIndex;
     private boolean done;
     private boolean outerConstrained;
     private final boolean outerSupportsReborrow;
@@ -198,7 +226,8 @@ public class HashJoinOperator
         this.innerJoinColumns = innerJoinColumns.clone();
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
         this.bufferedInner = new BufferedJoinInput(buffers, innerOutputCount);
-        this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outerOutputCount, innerOutputCount);
+        this.outerSchema = new Streams[outerOutputCount];
+        this.innerSchema = new Streams[innerOutputCount];
         this.currentOuterJoinValues = new Vector[outerJoinColumns.length];
         this.currentOuterJoinNulls = new Vector[outerJoinColumns.length];
         this.currentOutputs = new Streams[totalOutputCount];
@@ -229,6 +258,9 @@ public class HashJoinOperator
         currentOutputMask = batchMask;
         outerConstrained = false;
         currentOuterDictionaryIds = null;
+        currentInnerLogicalDictionaryIds = null;
+        currentInnerSourceDictionaryIds = null;
+        innerPositionMappingCache = buffers.newPositionMappingCache();
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[totalOutputCount];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
@@ -243,6 +275,8 @@ public class HashJoinOperator
 
     private Mask produceBatch()
     {
+        outputInnerLogicalPositionsReady = false;
+        outputInnerLogicalPositionsBatchIndex = -1;
         loadInnerIfNecessary();
         pushDynamicFilterIfReady();
         if ((joinIndex == null || joinIndex.isEmpty()) && !probeOuterJoin) {
@@ -253,6 +287,8 @@ public class HashJoinOperator
         }
 
         int outputPosition = 0;
+        boolean logicalPositionsReady = false;
+        boolean rowReferencesWritten = false;
         Batch outputOuterBatch = currentOuterBatch;
         while (outputPosition < BATCH_SIZE) {
             if (outerRemaining == 0) {
@@ -267,6 +303,14 @@ public class HashJoinOperator
             }
 
             if (!currentOuterPositionReady) {
+                int emitted = tryEmitDirectSingleMatchPositionRange(outputPosition);
+                if (emitted >= 0) {
+                    outputPosition += emitted;
+                    if (emitted > 0 && !rowReferencesWritten) {
+                        logicalPositionsReady = true;
+                    }
+                    continue;
+                }
                 if (preparedOuterIndex >= preparedOuterCount) {
                     if (currentOuterMaskIndex >= currentOuterMask.count()) {
                         outerRemaining = 0;
@@ -278,10 +322,18 @@ public class HashJoinOperator
                     outerRemaining = 0;
                     continue;
                 }
-                currentOuterPosition = preparedOuterPositions[preparedOuterIndex];
+                currentOuterPosition = preparedOuterRange ? preparedOuterRangeStart + preparedOuterIndex : preparedOuterPositions[preparedOuterIndex];
                 if (singleMatchProbe) {
-                    currentMatchRef = preparedSingleRefs[preparedOuterIndex];
-                    currentMatchCount = currentMatchRef == NO_MATCH_ROW_REFERENCE ? 0 : 1;
+                    if (singleMatchPositionProbe) {
+                        currentMatchPosition = preparedSingleRefs32[preparedOuterIndex];
+                        currentMatchCount = currentMatchPosition == NO_MATCH_COMPACT_ROW_REFERENCE ? 0 : 1;
+                    }
+                    else {
+                        currentMatchRef = compactSingleMatchProbe
+                                ? joinIndex.unpackCompactSingleMatchRef(preparedSingleRefs32[preparedOuterIndex])
+                                : preparedSingleRefs[preparedOuterIndex];
+                        currentMatchCount = currentMatchRef == NO_MATCH_ROW_REFERENCE ? 0 : 1;
+                    }
                 }
                 else {
                     currentMatches = preparedOuterMatches[preparedOuterIndex];
@@ -307,7 +359,17 @@ public class HashJoinOperator
 
             while (currentMatchIndex < currentMatchCount && outputPosition < BATCH_SIZE) {
                 outputOuterPositions[outputPosition] = currentOuterPosition;
-                outputInnerRows[outputPosition] = singleMatchProbe ? currentMatchRef : currentMatches.getLong(currentMatchIndex);
+                if (singleMatchPositionProbe) {
+                    outputInnerLogicalPositions[outputPosition] = currentMatchPosition;
+                    if (!rowReferencesWritten) {
+                        logicalPositionsReady = true;
+                    }
+                }
+                else {
+                    outputInnerRows[outputPosition] = singleMatchProbe ? currentMatchRef : currentMatches.getLong(currentMatchIndex);
+                    rowReferencesWritten = true;
+                    logicalPositionsReady = false;
+                }
                 currentMatchIndex++;
                 outputPosition++;
             }
@@ -325,7 +387,48 @@ public class HashJoinOperator
             return allocator.allocateAllMask(allocationContext, 0);
         }
         currentOutputCount = outputPosition;
+        if (logicalPositionsReady && !rowReferencesWritten) {
+            outputInnerLogicalPositionsReady = true;
+            outputInnerLogicalPositionsBatchIndex = joinIndex.singleMatchPositionBatchIndex();
+        }
         return allocator.allocateRangeMask(allocationContext, 0, outputPosition);
+    }
+
+    private int tryEmitDirectSingleMatchPositionRange(int outputPosition)
+    {
+        if (!DIRECT_DENSE_SINGLE_MATCH_RANGE_OUTPUT ||
+                probeOuterJoin ||
+                preparedOuterIndex < preparedOuterCount ||
+                !currentOuterMask.all() ||
+                currentOuterMaskIndex >= currentOuterMask.count()) {
+            return -1;
+        }
+        if (!joinIndex.supportsSingleMatchRefs() ||
+                !joinIndex.supportsSingleMatchPositions() ||
+                !joinIndex.supportsSingleMatchPositionRange() ||
+                !joinIndex.supportsDirectSingleMatchPositionRangeOutput()) {
+            return -1;
+        }
+
+        int probeCount = Math.min(
+                Math.min(currentOuterMask.count() - currentOuterMaskIndex, outerRemaining),
+                BATCH_SIZE - outputPosition);
+        if (probeCount <= 0) {
+            return -1;
+        }
+        int probeStart = currentOuterMaskIndex;
+        int emitted = joinIndex.emitSingleRowsPositionsRange(
+                currentOuterJoinValues,
+                currentOuterJoinNulls,
+                currentOuterJoinHasNulls,
+                probeStart,
+                probeCount,
+                outputOuterPositions,
+                outputInnerLogicalPositions,
+                outputPosition);
+        currentOuterMaskIndex += probeCount;
+        outerRemaining -= probeCount;
+        return emitted;
     }
 
     private void prepareOuterProbeChunk()
@@ -333,17 +436,42 @@ public class HashJoinOperator
         long start = System.nanoTime();
         preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, BATCH_SIZE);
         preparedOuterIndex = 0;
-        for (int index = 0; index < preparedOuterCount; index++) {
-            preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
-        }
-
         singleMatchProbe = joinIndex.supportsSingleMatchRefs();
-        if (singleMatchProbe) {
+        singleMatchPositionProbe = singleMatchProbe && !probeOuterJoin && joinIndex.supportsSingleMatchPositions();
+        preparedOuterRange = singleMatchPositionProbe && currentOuterMask.all() && joinIndex.supportsSingleMatchPositionRange();
+        if (preparedOuterRange) {
+            preparedOuterRangeStart = currentOuterMaskIndex;
+            currentOuterMaskIndex += preparedOuterCount;
+        }
+        else {
+            for (int index = 0; index < preparedOuterCount; index++) {
+                preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
+            }
+        }
+        compactSingleMatchProbe = singleMatchProbe && !singleMatchPositionProbe && joinIndex.supportsCompactSingleMatchRefs();
+        if (preparedOuterRange) {
+            joinIndex.matchSingleRowsPositionsRange(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterRangeStart, preparedOuterCount, preparedSingleRefs32);
+        }
+        else if (singleMatchPositionProbe) {
+            joinIndex.matchSingleRowsPositions(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedSingleRefs32);
+        }
+        else if (compactSingleMatchProbe) {
+            joinIndex.matchSingleRowsCompact(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedSingleRefs32);
+        }
+        else if (singleMatchProbe) {
             joinIndex.matchSingleRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedSingleRefs);
         }
         else {
-            joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches);
+            joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches());
         }
+    }
+
+    private SingleLongList[] preparedSingleMatches()
+    {
+        if (preparedSingleMatches == null) {
+            preparedSingleMatches = createSingleLongLists(BATCH_SIZE);
+        }
+        return preparedSingleMatches;
     }
 
     private String genericProbeKind()
@@ -368,7 +496,7 @@ public class HashJoinOperator
             // capture the schema eagerly now while the batch is live (deferring past the advance
             // would read an already-advanced source).
             if (!outerSupportsReborrow) {
-                outputBuffer.captureOuterSchema(currentOuterBatch);
+                BufferedJoinInput.captureSchema(currentOuterBatch, outerSchema);
             }
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
@@ -492,7 +620,7 @@ public class HashJoinOperator
         int batchCountBefore = bufferedInner.batches().size();
         bufferedInner.loadAll(inner, BATCH_SIZE, innerJoinColumns, inner.supportsRetainedBatches(), !inner.supportsRetainedBatches() && inner.supportsConstrainedReborrow());
         ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
-        outputBuffer.captureInnerSchema(bufferedInner.schema());
+        copySchema(bufferedInner.schema(), innerSchema);
         // A dynamic filter caps at DYNAMIC_FILTER_MAX_VALUES distinct build values. If the build side alone has more
         // rows than that, its key membership set will either overflow the cap (and be abandoned) or — for a rare
         // low-cardinality key — yield a value set so large the probe scan discards it as non-selective. Either way the
@@ -576,7 +704,7 @@ public class HashJoinOperator
     private void captureOuterSchemaIfAvailable()
     {
         while (outer.hasNext()) {
-            outputBuffer.captureOuterSchema(outer.next());
+            BufferedJoinInput.captureSchema(outer.next(), outerSchema);
         }
     }
 
@@ -658,7 +786,7 @@ public class HashJoinOperator
     private Streams outputSchema(int outputIndex)
     {
         if (outputIndex < outerOutputCount) {
-            Streams schema = outputBuffer.outerSchema()[outputIndex];
+            Streams schema = outerSchema[outputIndex];
             if (schema != null) {
                 return schema;
             }
@@ -678,12 +806,45 @@ public class HashJoinOperator
             }
             return null;
         }
-        Streams schema = outputBuffer.innerSchema()[outputIndex - outerOutputCount];
+        Streams schema = innerSchema[outputIndex - outerOutputCount];
         if (schema != null) {
             return probeOuterJoin ? ensureNullStream(schema) : schema;
         }
         Streams bufferedSchema = bufferedInner.outputSchema(outputIndex - outerOutputCount);
         return probeOuterJoin && bufferedSchema != null ? ensureNullStream(bufferedSchema) : bufferedSchema;
+    }
+
+    private static void copySchema(Streams[] source, Streams[] target)
+    {
+        for (int index = 0; index < target.length; index++) {
+            if (target[index] == null && source[index] != null) {
+                target[index] = source[index];
+            }
+        }
+    }
+
+    private int[] innerSourcePositions()
+    {
+        if (outputInnerSourcePositions == null) {
+            outputInnerSourcePositions = new int[BATCH_SIZE];
+        }
+        return outputInnerSourcePositions;
+    }
+
+    private int[] innerUniqueSourcePositions()
+    {
+        if (outputInnerUniqueSourcePositions == null) {
+            outputInnerUniqueSourcePositions = new int[BATCH_SIZE];
+        }
+        return outputInnerUniqueSourcePositions;
+    }
+
+    private int[] retainedInnerMaskPositionsScratch()
+    {
+        if (retainedInnerMaskPositionsScratch == null) {
+            retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
+        }
+        return retainedInnerMaskPositionsScratch;
     }
 
     private Streams materializeOutput(int outputIndex)
@@ -748,7 +909,9 @@ public class HashJoinOperator
     private int[] outerDictionaryIds()
     {
         if (currentOuterDictionaryIds == null) {
-            currentOuterDictionaryIds = Arrays.copyOf(outputOuterPositions, currentOutputCount);
+            currentOuterDictionaryIds = aliasBatchDictionaryIds(outputOuterPositions)
+                    ? outputOuterPositions
+                    : Arrays.copyOf(outputOuterPositions, currentOutputCount);
         }
         return currentOuterDictionaryIds;
     }
@@ -756,6 +919,9 @@ public class HashJoinOperator
     private Vector buildOuterDictionaryStream(Vector source)
     {
         if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
+            if (WRAP_ENCODED_OUTER_DICTIONARIES) {
+                return DictionaryVector.wrapNested(outerDictionaryIds(), currentOutputCount, source);
+            }
             // wrapComposedDictionary rewrites the ids in place while collapsing nested encodings, so an
             // encoded source needs a private copy it can mutate. The outer positions ascend (one output row per
             // match, in probe order), so an RLE level resolves run indices with a forward hint instead of binary search.
@@ -764,7 +930,63 @@ public class HashJoinOperator
         }
         // Flat source: wrapComposedDictionary leaves the ids untouched, so every flat outer column can share
         // the single cached id snapshot instead of allocating a per-column copy.
-        return wrapComposedDictionary(outerDictionaryIds(), source);
+        return DictionaryVector.wrap(outerDictionaryIds(), currentOutputCount, source);
+    }
+
+    private boolean aliasBatchDictionaryIds(int[] positions)
+    {
+        return ALIAS_BATCH_DICTIONARY_IDS
+                || (ALIAS_FULL_BATCH_DICTIONARY_IDS && currentOutputCount == positions.length);
+    }
+
+    private int[] currentBatchPositions(int[] positions)
+    {
+        return aliasBatchDictionaryIds(positions)
+                ? positions
+                : Arrays.copyOf(positions, currentOutputCount);
+    }
+
+    private int[] copyCurrentBatchPositions(int[] positions)
+    {
+        return Arrays.copyOf(positions, currentOutputCount);
+    }
+
+    private int[] innerLogicalDictionaryIds()
+    {
+        if (!CACHE_INNER_DICTIONARY_IDS) {
+            return currentBatchPositions(outputInnerLogicalPositions);
+        }
+        if (currentInnerLogicalDictionaryIds == null) {
+            currentInnerLogicalDictionaryIds = currentBatchPositions(outputInnerLogicalPositions);
+        }
+        return currentInnerLogicalDictionaryIds;
+    }
+
+    private int[] innerSourceDictionaryIds()
+    {
+        if (!CACHE_INNER_DICTIONARY_IDS) {
+            return currentBatchPositions(innerSourcePositions());
+        }
+        if (currentInnerSourceDictionaryIds == null) {
+            currentInnerSourceDictionaryIds = currentBatchPositions(innerSourcePositions());
+        }
+        return currentInnerSourceDictionaryIds;
+    }
+
+    private Vector wrapInnerLogicalDictionary(Vector source)
+    {
+        if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
+            return wrapComposedDictionary(copyCurrentBatchPositions(outputInnerLogicalPositions), source);
+        }
+        return DictionaryVector.wrap(innerLogicalDictionaryIds(), currentOutputCount, source);
+    }
+
+    private Vector wrapInnerSourceDictionary(Vector source)
+    {
+        if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
+            return wrapComposedDictionary(copyCurrentBatchPositions(innerSourcePositions()), source);
+        }
+        return DictionaryVector.wrap(innerSourceDictionaryIds(), currentOutputCount, source);
     }
 
     private void constrainOuterIfNecessary()
@@ -844,13 +1066,13 @@ public class HashJoinOperator
             if (wrapped != null) {
                 return wrapped;
             }
-            Vector dictionaryValues = tryWrapNonRetainedDictionaryValues(innerOutputIndex);
+            Vector dictionaryValues = tryWrapNonRetainedValues(innerOutputIndex);
             if (dictionaryValues != null) {
                 // VALUES are carried as a unified dictionary (no byte copy). The boolean side streams
                 // are wrapped the same way -- a dictionary over the matched logical positions -- rather
                 // than flattened per output row, mirroring the retained and multi-run wrap paths and
                 // matching a build row's whole record (values + nulls + errors) by index. This is a
-                // single-run path (tryWrapNonRetainedDictionaryValues requires preparedInnerRunCount ==
+                // single-run path (tryWrapNonRetainedValues requires preparedInnerRunCount ==
                 // 1), so the whole output draws from one non-retained build batch.
                 Streams.Builder result = Streams.builder();
                 result.put(Stream.VALUES, allocator.adopt(allocationContext, dictionaryValues));
@@ -891,9 +1113,10 @@ public class HashJoinOperator
         // borrowed column has length zero and indexing the sample position throws.
         boolean materializeFullRange = currentOutputMask.none();
         int positionCount = materializeFullRange ? currentOutputCount : currentOutputMask.count();
+        long[] innerRows = outputInnerRows;
         for (int index = 0; index < positionCount; index++) {
             int outputPosition = materializeFullRange ? index : currentOutputMask.position(index);
-            long rowReference = outputInnerRows[outputPosition];
+            long rowReference = innerRows[outputPosition];
             if (rowReference == NO_MATCH_ROW_REFERENCE) {
                 if (nullInnerSchema == null) {
                     nullInnerSchema = outputSchema(innerOutputIndex + outerOutputCount);
@@ -964,8 +1187,9 @@ public class HashJoinOperator
                     return null;
                 }
                 source = output.borrow(stream);
+                int[] innerSourcePositions = innerSourcePositions();
                 for (int index = 0; index < positionCount; index++) {
-                    dictionaryIds[positionStart + index] = segmentOffset + outputInnerSourcePositions[positionStart + index];
+                    dictionaryIds[positionStart + index] = segmentOffset + innerSourcePositions[positionStart + index];
                 }
             }
 
@@ -1003,16 +1227,15 @@ public class HashJoinOperator
     }
 
     /**
-     * Emits a single-run, non-retained build column's VALUES as a {@link DictionaryVector} over a
-     * unified per-build-column dictionary, rather than flattening the (variable-width) bytes once per
-     * matched output row. Restricted to the common, safe shape: the whole output batch draws from one
-     * build batch ({@code preparedInnerRunCount == 1}), the build column is values-only with a
-     * {@link BinaryVector} payload, and there are no NO-MATCH rows. Any other shape (multiple runs,
-     * retained batch, null/error side streams, non-binary payload) returns {@code null} so the caller
-     * falls back to the existing flatten path. Grouping downstream still settles equality by value, so
-     * the unified dictionary only changes representation, never which rows group together.
+     * Emits a single-run, non-retained build column's VALUES as a {@link DictionaryVector} over the
+     * build values rather than flattening once per matched output row. Binary values may use a unified
+     * per-build-column dictionary when cardinality is low; fixed-width flat values wrap the raw build
+     * vector directly. Restricted to the common, safe shape: the whole output batch draws from one
+     * build batch ({@code preparedInnerRunCount == 1}) and there are no NO-MATCH rows. Any other shape
+     * returns {@code null} so the caller falls back to the existing flatten path. Grouping downstream
+     * still settles equality by value, so this only changes representation.
      */
-    private Vector tryWrapNonRetainedDictionaryValues(int innerOutputIndex)
+    private Vector tryWrapNonRetainedValues(int innerOutputIndex)
     {
         if (currentOutputCount == 0 || preparedInnerRunCount != 1) {
             return null;
@@ -1023,8 +1246,19 @@ public class HashJoinOperator
             return null;
         }
         Streams column = innerBatch.columns()[innerOutputIndex];
-        if (column == null || !column.hasValues() || !(column.values() instanceof BinaryVector binarySource)) {
+        if (column == null || !column.hasValues()) {
             return null;
+        }
+        Vector values = column.values();
+        if (!(values instanceof BinaryVector binarySource)) {
+            if (WRAP_NON_RETAINED_FIXED_WIDTH_BUILD_VALUES && isRawWrappableFixedWidthValue(values)) {
+                return wrapRawNonRetainedValues(values);
+            }
+            return null;
+        }
+
+        if ((long) innerBatch.length() > (long) currentOutputCount * BUILD_DICTIONARY_SPARSE_RATIO) {
+            return wrapRawNonRetainedValues(binarySource);
         }
 
         BuildDictionary dictionary = buildDictionaryFor(innerBatchIndex, innerOutputIndex, binarySource, innerBatch.length());
@@ -1035,8 +1269,7 @@ public class HashJoinOperator
             // referenced by id with no byte copy, at any cardinality (mirrors Trino's DictionaryBlock over a
             // build page). Safe for the same single-batch shape the dedup path requires; downstream grouping
             // still settles equality by value, so this only changes representation.
-            int[] rawIds = Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount);
-            return DictionaryVector.wrap(rawIds, binarySource);
+            return wrapRawNonRetainedValues(binarySource);
         }
         int[] sourceIdByPosition = dictionary.idByPosition();
         int[] valueIds = new int[currentOutputCount];
@@ -1044,6 +1277,19 @@ public class HashJoinOperator
             valueIds[index] = sourceIdByPosition[outputInnerLogicalPositions[index]];
         }
         return DictionaryVector.wrap(valueIds, dictionary.values());
+    }
+
+    private static boolean isRawWrappableFixedWidthValue(Vector values)
+    {
+        return values instanceof I64Vector
+                || values instanceof I32Vector
+                || values instanceof F64Vector
+                || values instanceof BooleanVector;
+    }
+
+    private Vector wrapRawNonRetainedValues(Vector source)
+    {
+        return DictionaryVector.wrap(innerLogicalDictionaryIds(), currentOutputCount, source);
     }
 
     private BuildDictionary buildDictionaryFor(int innerBatchIndex, int innerOutputIndex, BinaryVector source, int length)
@@ -1061,23 +1307,23 @@ public class HashJoinOperator
         // is low cardinality: a near-unique build column (e.g. a natural key carried straight to the
         // output and never grouped) gains nothing from dictionary grouping while the dedup scan and the
         // per-output-row id remap are pure overhead. Abandon as soon as the distinct count shows the
-        // column is high cardinality and cache a NOT_DICTIONARY marker so the caller flattens normally.
+        // column is high cardinality and cache a NOT_DICTIONARY marker so the caller wraps the raw
+        // build column directly.
         int distinctLimit = Math.max(16, length / 2);
-        Map<BinaryValue, Integer> distinct = new HashMap<>();
-        java.util.List<Integer> distinctPositions = new java.util.ArrayList<>();
+        ValueIdInterner interner = new ValueIdInterner(distinctLimit);
+        byte[] data = source.data();
         long totalBytes = 0;
         for (int position = 0; position < length; position++) {
-            BinaryValue value = new BinaryValue(source.copyBytes(position));
-            Integer id = distinct.get(value);
-            if (id == null) {
-                if (distinctPositions.size() >= distinctLimit) {
-                    buildDictionaries.put(key, NOT_DICTIONARY);
-                    return NOT_DICTIONARY;
-                }
-                id = distinctPositions.size();
-                distinct.put(value, id);
-                distinctPositions.add(position);
-                totalBytes += value.bytes().length;
+            int start = source.startOffset(position);
+            int valueLength = source.length(position);
+            int distinctBefore = interner.distinctCount();
+            int id = interner.intern(data, start, valueLength);
+            if (id == ValueIdInterner.TOO_MANY) {
+                buildDictionaries.put(key, NOT_DICTIONARY);
+                return NOT_DICTIONARY;
+            }
+            if (interner.distinctCount() > distinctBefore) {
+                totalBytes += valueLength;
             }
             idByPosition[position] = id;
         }
@@ -1086,13 +1332,9 @@ public class HashJoinOperator
             buildDictionaries.put(key, NOT_DICTIONARY);
             return NOT_DICTIONARY;
         }
-        BinaryVector values = BinaryVector.allocate(allocator, allocationContext, distinctPositions.size(), (int) totalBytes);
-        Arrays.fill(values.offsets(), 0);
+        BinaryVector values = interner.toBinaryVector(allocator, allocationContext);
         values.clearTraits();
         values.addTraits(source.traits());
-        for (int id = 0; id < distinctPositions.size(); id++) {
-            values.setBytes(id, source.copyBytes(distinctPositions.get(id)));
-        }
         BuildDictionary dictionary = new BuildDictionary(idByPosition, values);
         buildDictionaries.put(key, dictionary);
         return dictionary;
@@ -1102,21 +1344,6 @@ public class HashJoinOperator
 
     private record BuildDictionary(int[] idByPosition, Vector values) {}
 
-    private record BinaryValue(byte[] bytes)
-    {
-        @Override
-        public boolean equals(Object other)
-        {
-            return other instanceof BinaryValue value && Arrays.equals(bytes, value.bytes);
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return Arrays.hashCode(bytes);
-        }
-    }
-
     private Streams tryWrapRetainedInnerOutput(int innerOutputIndex, BufferedJoinInput.InnerBatch innerBatch)
     {
         if (!innerBatch.retained()) {
@@ -1125,19 +1352,18 @@ public class HashJoinOperator
 
         Output output = innerBatch.retainedBatch().output(innerOutputIndex);
         if (output.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerSourcePositions, currentOutputCount), output.borrow(Stream.VALUES))));
+            return Streams.ofValues(allocator.adopt(allocationContext, wrapInnerSourceDictionary(output.borrow(Stream.VALUES))));
         }
 
         Streams.Builder wrapped = Streams.builder();
-        int[] wrappedPositions = Arrays.copyOf(outputInnerSourcePositions, currentOutputCount);
         if (output.hasValues()) {
-            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.borrow(Stream.VALUES))));
+            wrapped.put(Stream.VALUES, allocator.adopt(allocationContext, wrapInnerSourceDictionary(output.borrow(Stream.VALUES))));
         }
         if (output.hasNulls()) {
-            wrapped.put(Stream.NULLS, allocator.adopt(allocationContext, DictionaryVector.wrap(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.borrow(Stream.NULLS))));
+            wrapped.put(Stream.NULLS, allocator.adopt(allocationContext, wrapInnerSourceDictionary(output.borrow(Stream.NULLS))));
         }
         if (output.hasErrors()) {
-            wrapped.put(Stream.ERRORS, allocator.adopt(allocationContext, DictionaryVector.wrap(Arrays.copyOf(wrappedPositions, wrappedPositions.length), output.borrow(Stream.ERRORS))));
+            wrapped.put(Stream.ERRORS, allocator.adopt(allocationContext, wrapInnerSourceDictionary(output.borrow(Stream.ERRORS))));
         }
         return wrapped.build();
     }
@@ -1220,7 +1446,7 @@ public class HashJoinOperator
             BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
             return allocator.allocateRle(allocationContext, new int[] {currentOutputCount}, sentinel);
         }
-        return allocator.adopt(allocationContext, wrapComposedDictionary(Arrays.copyOf(outputInnerLogicalPositions, currentOutputCount), source));
+        return allocator.adopt(allocationContext, wrapInnerLogicalDictionary(source));
     }
 
     /**
@@ -1266,7 +1492,7 @@ public class HashJoinOperator
             if (input.streams().isEmpty()) {
                 return existing;
             }
-            return buffers.copyPositionsFresh(existing, input, outputInnerLogicalPositions, positionStart, positionCount, positionStart, size);
+            return buffers.copyPositionsFresh(existing, input, outputInnerLogicalPositions, positionStart, positionCount, positionStart, size, innerPositionMappingCache);
         }
 
         constrainRetainedInnerBatch(innerBatchIndex, innerBatch, outputInnerRunUniqueStarts[runIndex], outputInnerRunUniqueCounts[runIndex]);
@@ -1275,7 +1501,7 @@ public class HashJoinOperator
         if (selected == null) {
             return existing;
         }
-        return buffers.copyPositionsFresh(selected, existing, outputInnerSourcePositions, positionStart, positionCount, positionStart, size);
+        return buffers.copyPositionsFresh(selected, existing, innerSourcePositions(), positionStart, positionCount, positionStart, size, innerPositionMappingCache);
     }
 
     private static Streams selectedStreams(Streams input, boolean includeValues, boolean includeNulls, boolean includeErrors)
@@ -1345,21 +1571,22 @@ public class HashJoinOperator
         }
         boolean sorted = true;
         int previousSourcePosition = -1;
+        int[] scratch = retainedInnerMaskPositionsScratch();
         for (int index = 0; index < positionCount; index++) {
             int sourcePosition = innerBatch.sourcePosition(logicalPositions[positionStart + index]);
-            retainedInnerMaskPositionsScratch[index] = sourcePosition;
+            scratch[index] = sourcePosition;
             sorted &= sourcePosition >= previousSourcePosition;
             previousSourcePosition = sourcePosition;
         }
         if (!sorted) {
-            Arrays.sort(retainedInnerMaskPositionsScratch, 0, positionCount);
+            Arrays.sort(scratch, 0, positionCount);
         }
         int uniqueCount = 0;
         int previous = -1;
         for (int index = 0; index < positionCount; index++) {
-            int position = retainedInnerMaskPositionsScratch[index];
+            int position = scratch[index];
             if (position != previous) {
-                retainedInnerMaskPositionsScratch[uniqueCount++] = position;
+                scratch[uniqueCount++] = position;
                 previous = position;
             }
         }
@@ -1367,19 +1594,19 @@ public class HashJoinOperator
         int[] cachedPositions = retainedConstraintPositionsByBatch[innerBatchIndex];
         if (uniqueCount == cachedCount &&
                 cachedPositions != null &&
-                Arrays.equals(retainedInnerMaskPositionsScratch, 0, uniqueCount, cachedPositions, 0, uniqueCount)) {
+                Arrays.equals(scratch, 0, uniqueCount, cachedPositions, 0, uniqueCount)) {
             return;
         }
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
                 allocationContext,
-                retainedInnerMaskPositionsScratch,
+                scratch,
                 uniqueCount,
                 innerBatch.retainedBatch().borrowMask().size()));
         if (cachedPositions == null || cachedPositions.length < uniqueCount) {
             cachedPositions = new int[Math.max(uniqueCount, 4)];
             retainedConstraintPositionsByBatch[innerBatchIndex] = cachedPositions;
         }
-        System.arraycopy(retainedInnerMaskPositionsScratch, 0, cachedPositions, 0, uniqueCount);
+        System.arraycopy(scratch, 0, cachedPositions, 0, uniqueCount);
         retainedConstraintCountsByBatch[innerBatchIndex] = uniqueCount;
     }
 
@@ -1390,33 +1617,36 @@ public class HashJoinOperator
         }
         int cachedCount = retainedConstraintCountsByBatch[innerBatchIndex];
         int[] cachedPositions = retainedConstraintPositionsByBatch[innerBatchIndex];
+        int[] uniqueSourcePositions = innerUniqueSourcePositions();
         if (uniqueCount == cachedCount &&
                 cachedPositions != null &&
-                Arrays.equals(outputInnerUniqueSourcePositions, uniquePositionStart, uniquePositionStart + uniqueCount, cachedPositions, 0, uniqueCount)) {
+                Arrays.equals(uniqueSourcePositions, uniquePositionStart, uniquePositionStart + uniqueCount, cachedPositions, 0, uniqueCount)) {
             return;
         }
-        System.arraycopy(outputInnerUniqueSourcePositions, uniquePositionStart, retainedInnerMaskPositionsScratch, 0, uniqueCount);
+        int[] scratch = retainedInnerMaskPositionsScratch();
+        System.arraycopy(uniqueSourcePositions, uniquePositionStart, scratch, 0, uniqueCount);
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
                 allocationContext,
-                retainedInnerMaskPositionsScratch,
+                scratch,
                 uniqueCount,
                 innerBatch.retainedBatch().borrowMask().size()));
         if (cachedPositions == null || cachedPositions.length < uniqueCount) {
             cachedPositions = new int[Math.max(uniqueCount, 4)];
             retainedConstraintPositionsByBatch[innerBatchIndex] = cachedPositions;
         }
-        System.arraycopy(outputInnerUniqueSourcePositions, uniquePositionStart, cachedPositions, 0, uniqueCount);
+        System.arraycopy(uniqueSourcePositions, uniquePositionStart, cachedPositions, 0, uniqueCount);
         retainedConstraintCountsByBatch[innerBatchIndex] = uniqueCount;
     }
 
     private int copySortedUniquePositions(int[] sourcePositions, int positionStart, int positionCount, int[] targetPositions, int targetStart)
     {
-        System.arraycopy(sourcePositions, positionStart, retainedInnerMaskPositionsScratch, 0, positionCount);
-        Arrays.sort(retainedInnerMaskPositionsScratch, 0, positionCount);
+        int[] scratch = retainedInnerMaskPositionsScratch();
+        System.arraycopy(sourcePositions, positionStart, scratch, 0, positionCount);
+        Arrays.sort(scratch, 0, positionCount);
         int uniqueCount = 0;
         int previous = -1;
         for (int index = 0; index < positionCount; index++) {
-            int position = retainedInnerMaskPositionsScratch[index];
+            int position = scratch[index];
             if (uniqueCount == 0 || position != previous) {
                 targetPositions[targetStart + uniqueCount] = position;
                 previous = position;
@@ -1432,21 +1662,45 @@ public class HashJoinOperator
             return;
         }
 
+        if (outputInnerLogicalPositionsReady) {
+            int batchIndex = outputInnerLogicalPositionsBatchIndex;
+            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
+            outputInnerRunStarts[0] = 0;
+            outputInnerRunLengths[0] = currentOutputCount;
+            outputInnerRunBatchIndexes[0] = batchIndex;
+            outputInnerRunUniqueStarts[0] = 0;
+            if (innerBatch.retained()) {
+                int[] innerSourcePositions = innerSourcePositions();
+                for (int index = 0; index < currentOutputCount; index++) {
+                    innerSourcePositions[index] = innerBatch.sourcePosition(outputInnerLogicalPositions[index]);
+                }
+                outputInnerRunUniqueCounts[0] = copySortedUniquePositions(innerSourcePositions, 0, currentOutputCount, innerUniqueSourcePositions(), 0);
+            }
+            else {
+                outputInnerRunUniqueCounts[0] = 0;
+            }
+            preparedInnerRunCount = 1;
+            return;
+        }
+
+        long[] innerRows = outputInnerRows;
         int runCount = 0;
         int runStart = 0;
         int uniquePositionStart = 0;
         while (runStart < currentOutputCount) {
-            long rowReference = outputInnerRows[runStart];
+            long rowReference = innerRows[runStart];
             int batchIndex = batchIndex(rowReference);
             BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
             boolean retained = innerBatch.retained();
+            int[] innerSourcePositions = retained ? innerSourcePositions() : null;
 
             int runEnd = runStart;
-            while (runEnd < currentOutputCount && batchIndex(outputInnerRows[runEnd]) == batchIndex) {
-                int logicalPosition = rowPosition(outputInnerRows[runEnd]);
-                outputInnerBatchIndexes[runEnd] = batchIndex;
+            while (runEnd < currentOutputCount && batchIndex(innerRows[runEnd]) == batchIndex) {
+                int logicalPosition = rowPosition(innerRows[runEnd]);
                 outputInnerLogicalPositions[runEnd] = logicalPosition;
-                outputInnerSourcePositions[runEnd] = retained ? innerBatch.sourcePosition(logicalPosition) : logicalPosition;
+                if (retained) {
+                    innerSourcePositions[runEnd] = innerBatch.sourcePosition(logicalPosition);
+                }
                 runEnd++;
             }
 
@@ -1454,7 +1708,7 @@ public class HashJoinOperator
             outputInnerRunLengths[runCount] = runEnd - runStart;
             outputInnerRunBatchIndexes[runCount] = batchIndex;
             if (retained) {
-                int uniqueCount = copySortedUniquePositions(outputInnerSourcePositions, runStart, runEnd - runStart, outputInnerUniqueSourcePositions, uniquePositionStart);
+                int uniqueCount = copySortedUniquePositions(innerSourcePositions, runStart, runEnd - runStart, innerUniqueSourcePositions(), uniquePositionStart);
                 outputInnerRunUniqueStarts[runCount] = uniquePositionStart;
                 outputInnerRunUniqueCounts[runCount] = uniqueCount;
                 uniquePositionStart += uniqueCount;
@@ -1482,10 +1736,11 @@ public class HashJoinOperator
                 cachedPositions[0] == sourcePosition) {
             return;
         }
-        retainedInnerMaskPositionsScratch[0] = sourcePosition;
+        int[] scratch = retainedInnerMaskPositionsScratch();
+        scratch[0] = sourcePosition;
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
                 allocationContext,
-                retainedInnerMaskPositionsScratch,
+                scratch,
                 1,
                 innerBatch.retainedBatch().borrowMask().size()));
         if (cachedPositions == null || cachedPositions.length == 0) {
@@ -1533,6 +1788,9 @@ public class HashJoinOperator
 
     private boolean hasNoMatchRows()
     {
+        if (outputInnerLogicalPositionsReady) {
+            return false;
+        }
         for (int index = 0; index < currentOutputCount; index++) {
             if (outputInnerRows[index] == NO_MATCH_ROW_REFERENCE) {
                 return true;
@@ -1566,26 +1824,29 @@ public class HashJoinOperator
             return Set.of();
         }
 
+        int knownFlags = 0;
         if (outputIndex < outerOutputCount) {
             Output sourceOutput = currentOuterBatch.output(outputIndex);
-            EnumSet<Stream> known = EnumSet.noneOf(Stream.class);
-            for (Stream stream : streams) {
-                if (sourceOutput.isKnownAllFalse(stream)) {
-                    known.add(stream);
-                }
+            if (streams.contains(Stream.VALUES) && sourceOutput.isKnownAllFalse(Stream.VALUES)) {
+                knownFlags |= VALUES_FLAG;
             }
-            return known.isEmpty() ? Set.of() : Set.copyOf(known);
+            if (streams.contains(Stream.NULLS) && sourceOutput.isKnownAllFalse(Stream.NULLS)) {
+                knownFlags |= NULLS_FLAG;
+            }
+            if (streams.contains(Stream.ERRORS) && sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
+                knownFlags |= ERRORS_FLAG;
+            }
+            return Streams.streamSet(knownFlags);
         }
 
         int innerOutputIndex = outputIndex - outerOutputCount;
-        EnumSet<Stream> known = EnumSet.noneOf(Stream.class);
         if (streams.contains(Stream.NULLS) && innerOutputKnownAllFalseNulls(innerOutputIndex)) {
-            known.add(Stream.NULLS);
+            knownFlags |= NULLS_FLAG;
         }
         if (streams.contains(Stream.ERRORS) && bufferedInner.outputKnownAllFalse(innerOutputIndex, Stream.ERRORS)) {
-            known.add(Stream.ERRORS);
+            knownFlags |= ERRORS_FLAG;
         }
-        return known.isEmpty() ? Set.of() : Set.copyOf(known);
+        return Streams.streamSet(knownFlags);
     }
 
     private boolean innerOutputKnownAllFalseNulls(int innerOutputIndex)
@@ -1742,6 +2003,56 @@ public class HashJoinOperator
         {
             throw new UnsupportedOperationException();
         }
+
+        default boolean supportsCompactSingleMatchRefs()
+        {
+            return false;
+        }
+
+        default boolean supportsSingleMatchPositions()
+        {
+            return false;
+        }
+
+        default boolean supportsSingleMatchPositionRange()
+        {
+            return false;
+        }
+
+        default int singleMatchPositionBatchIndex()
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        default void matchSingleRowsPositions(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] logicalPositions)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        default void matchSingleRowsPositionsRange(Vector[] values, Vector[] nulls, boolean hasNulls, int startPosition, int positionCount, int[] logicalPositions)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        default boolean supportsDirectSingleMatchPositionRangeOutput()
+        {
+            return false;
+        }
+
+        default int emitSingleRowsPositionsRange(Vector[] values, Vector[] nulls, boolean hasNulls, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        default void matchSingleRowsCompact(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] refs)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        default long unpackCompactSingleMatchRef(int ref)
+        {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class LongJoinIndex
@@ -1749,6 +2060,23 @@ public class HashJoinOperator
     {
         private static final float LOAD_FACTOR = 0.75f;
         private static final int EMPTY = -1;
+        private static final boolean DENSE_BUILD_FAST_PATH = Boolean.parseBoolean(System.getProperty("nitro.join.denseBuildFastPath", "true"));
+        private static final boolean COMPACT_DIRECT_ROW_REFERENCES = Boolean.parseBoolean(System.getProperty("nitro.join.compactDirectRowReferences", "true"));
+        private static final boolean COMPUTE_DENSE_SINGLE_BATCH_ROW_REFERENCES =
+                Boolean.parseBoolean(System.getProperty("nitro.join.computeDenseSingleBatchRowReferences", "true"));
+        private static final boolean DENSE_SINGLE_BATCH_PROBE_SPECIALIZATION =
+                Boolean.parseBoolean(System.getProperty("nitro.join.denseSingleBatchProbeSpecialization", "true"));
+        private static final boolean DENSE_SINGLE_BATCH_MATCH_POSITIONS =
+                Boolean.parseBoolean(System.getProperty("nitro.join.denseSingleBatchMatchPositions", "true"));
+        private static final boolean DENSE_SINGLE_BATCH_RANGE_PROBE =
+                Boolean.parseBoolean(System.getProperty("nitro.join.denseSingleBatchRangeProbe", "true"));
+        private static final boolean COMPACT_DENSE_SINGLE_MATCH_REFS =
+                Boolean.parseBoolean(System.getProperty("nitro.join.compactDenseSingleMatchRefs", "true"));
+        private static final boolean DENSE_DICTIONARY_PROBE_CACHE =
+                Boolean.parseBoolean(System.getProperty("nitro.join.denseDictionaryProbeCache", "true"));
+        private static final int NO_MATCH_ROW_REFERENCE32 = -1;
+        private static final int MAX_PACKED_BATCH_INDEX = 0x7FFF;
+        private static final int MAX_PACKED_ROW_POSITION = 0xFFFF;
 
         // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
         private long[] keys;
@@ -1760,6 +2088,7 @@ public class HashJoinOperator
         private long[] rowReferences;
         private int[] chainNext;
         private int rowCount;
+        private final int initialHashCapacity;
         private int mask;
         private int maxFill;
         private int size;
@@ -1773,6 +2102,17 @@ public class HashJoinOperator
         private boolean finalized;
         private boolean arrayMode;
         private long[] directRows;
+        private int[] directRows32;
+        private boolean rowReferencesFit32 = COMPACT_DIRECT_ROW_REFERENCES;
+        private boolean denseBuildCandidate = DENSE_BUILD_FAST_PATH;
+        private long denseFirstKey;
+        private long denseNextKey;
+        private boolean denseSingleBatchRowReferenceCandidate = COMPUTE_DENSE_SINGLE_BATCH_ROW_REFERENCES;
+        private boolean denseSingleBatchRowReferenceMode;
+        private int denseRowReferenceBatchIndex;
+        private int denseRowReferenceFirstPosition;
+        private long denseRowReferenceBase;
+        private int[] denseDictionaryPositionScratch;
         // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous slice of
         // orderedRows[rangeStart[slot] .. +slotCount[slot]) in FIFO order, so a probe reads a sequential range instead
         // of pointer-chasing chainNext (the one-to-many output loop's cost). Opt-out for A/B.
@@ -1782,7 +2122,7 @@ public class HashJoinOperator
         private int[] rangeStart;
         private final SingleLongList singleMatch = new SingleLongList();
         private final ChainLongList scalarChain = new ChainLongList();
-        private final ChainLongList[] chainMatches = createChainLongLists(BATCH_SIZE);
+        private ChainLongList[] chainMatches;
 
         private LongJoinIndex(int expectedSize)
         {
@@ -1790,13 +2130,7 @@ public class HashJoinOperator
             while (capacity < expectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
-            keys = new long[capacity];
-            slotHead = new int[capacity];
-            Arrays.fill(slotHead, EMPTY);
-            slotTail = new int[capacity];
-            slotCount = new int[capacity];
-            mask = capacity - 1;
-            maxFill = (int) (capacity * LOAD_FACTOR);
+            initialHashCapacity = capacity;
             int initialRows = Math.max(16, expectedSize);
             rowReferences = new long[initialRows];
             chainNext = new int[initialRows];
@@ -1847,6 +2181,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe();
             }
+            chainMatches();
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
             if (!hasNulls || nulls == null) {
@@ -1885,6 +2220,14 @@ public class HashJoinOperator
                     }
                 }
             }
+        }
+
+        private ChainLongList[] chainMatches()
+        {
+            if (chainMatches == null) {
+                chainMatches = createChainLongLists(BATCH_SIZE);
+            }
+            return chainMatches;
         }
 
         private void matchLongRowsNullFree(long[] values, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
@@ -1945,12 +2288,23 @@ public class HashJoinOperator
             }
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
+            if (DENSE_SINGLE_BATCH_PROBE_SPECIALIZATION && denseSingleBatchRowReferenceMode) {
+                matchDenseSingleBatchRows(values, nulls, hasNulls, positions, positionCount, refs);
+                return;
+            }
             if (hasNulls && nulls != null) {
                 VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
-                VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
-                for (int index = 0; index < positionCount; index++) {
-                    int position = positions[index];
-                    refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(rowValues.value(position));
+                switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> matchSingleLongRows(longValues.values(), nullValues, positions, positionCount, refs);
+                    case org.weakref.nitro.data.I32Vector intValues -> matchSingleIntRows(intValues.values(), nullValues, positions, positionCount, refs);
+                    case DictionaryVector dictionary -> matchSingleDictionaryRows(dictionary, nullValues, positions, positionCount, refs);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = positions[index];
+                            refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(rowValues.value(position));
+                        }
+                    }
                 }
                 return;
             }
@@ -1999,11 +2353,1159 @@ public class HashJoinOperator
             }
         }
 
+        @Override
+        public boolean supportsCompactSingleMatchRefs()
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            return COMPACT_DENSE_SINGLE_MATCH_REFS && denseSingleBatchRowReferenceMode && rowReferencesFit32;
+        }
+
+        @Override
+        public boolean supportsSingleMatchPositions()
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            return DENSE_SINGLE_BATCH_MATCH_POSITIONS && denseSingleBatchRowReferenceMode;
+        }
+
+        @Override
+        public boolean supportsSingleMatchPositionRange()
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            return DENSE_SINGLE_BATCH_RANGE_PROBE && denseSingleBatchRowReferenceMode;
+        }
+
+        @Override
+        public int singleMatchPositionBatchIndex()
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            if (!denseSingleBatchRowReferenceMode) {
+                throw new IllegalStateException("Position single-match refs require dense single-batch row references");
+            }
+            return denseRowReferenceBatchIndex;
+        }
+
+        @Override
+        public void matchSingleRowsPositions(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, int[] logicalPositions)
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            if (!denseSingleBatchRowReferenceMode) {
+                throw new IllegalStateException("Position single-match refs require dense single-batch row references");
+            }
+            matchDenseSingleBatchRowsPositions(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, positions, positionCount, logicalPositions);
+        }
+
+        @Override
+        public void matchSingleRowsPositionsRange(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int startPosition, int positionCount, int[] logicalPositions)
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            if (!denseSingleBatchRowReferenceMode) {
+                throw new IllegalStateException("Range position single-match refs require dense single-batch row references");
+            }
+            matchDenseSingleBatchRowsPositionsRange(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, startPosition, positionCount, logicalPositions);
+        }
+
+        @Override
+        public boolean supportsDirectSingleMatchPositionRangeOutput()
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            return denseSingleBatchRowReferenceMode;
+        }
+
+        @Override
+        public int emitSingleRowsPositionsRange(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            if (!denseSingleBatchRowReferenceMode) {
+                throw new IllegalStateException("Direct range output requires dense single-batch row references");
+            }
+            return emitDenseSingleBatchRowsPositionsRange(
+                    valuesArray[0],
+                    nullsArray == null ? null : nullsArray[0],
+                    hasNulls,
+                    startPosition,
+                    positionCount,
+                    outputOuterPositions,
+                    outputInnerLogicalPositions,
+                    outputStart);
+        }
+
+        @Override
+        public void matchSingleRowsCompact(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, int[] refs)
+        {
+            if (!finalized) {
+                finalizeForProbe();
+            }
+            if (!denseSingleBatchRowReferenceMode || !rowReferencesFit32) {
+                throw new IllegalStateException("Compact single-match refs require dense single-batch row references that fit 32 bits");
+            }
+            matchDenseSingleBatchRowsCompact(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, positions, positionCount, refs);
+        }
+
+        @Override
+        public long unpackCompactSingleMatchRef(int ref)
+        {
+            return ref == NO_MATCH_COMPACT_ROW_REFERENCE ? NO_MATCH_ROW_REFERENCE : unpackRowReference32(ref);
+        }
+
+        private void matchDenseSingleBatchRowsPositions(Vector values, Vector nulls, boolean hasNulls, int[] positions, int positionCount, int[] logicalPositions)
+        {
+            if (hasNulls && nulls != null) {
+                VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> matchDenseSingleBatchLongRowsPositions(longValues.values(), nullValues, positions, positionCount, logicalPositions);
+                    case org.weakref.nitro.data.I32Vector intValues -> matchDenseSingleBatchIntRowsPositions(intValues.values(), nullValues, positions, positionCount, logicalPositions);
+                    case DictionaryVector dictionary -> matchDenseSingleBatchDictionaryRowsPositions(dictionary, nullValues, positions, positionCount, logicalPositions);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        long min = minKey;
+                        long max = maxKey;
+                        int firstPosition = denseRowReferenceFirstPosition;
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = positions[index];
+                            if (nullValues.value(position)) {
+                                logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                                continue;
+                            }
+                            long key = rowValues.value(position);
+                            logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                        }
+                    }
+                }
+                return;
+            }
+            switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] vv = longValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[positions[index]];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] vv = intValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[positions[index]];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                case DictionaryVector dictionary -> {
+                    int[] ids = dictionary.ids();
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    switch (dictionary.values()) {
+                        case org.weakref.nitro.data.I64Vector lv -> {
+                            long[] dv = lv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[positions[index]]];
+                                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                            }
+                        }
+                        case org.weakref.nitro.data.I32Vector iv -> {
+                            int[] dv = iv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[positions[index]]];
+                                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                            }
+                        }
+                        default -> {
+                            VectorAccess.LongValues dv = VectorAccess.longValues(dictionary.values());
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv.value(ids[positions[index]]);
+                                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = rowValues.value(positions[index]);
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+            }
+        }
+
+        private void matchDenseSingleBatchRowsPositionsRange(Vector values, Vector nulls, boolean hasNulls, int startPosition, int positionCount, int[] logicalPositions)
+        {
+            if (hasNulls && nulls != null) {
+                VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> matchDenseSingleBatchLongRowsPositionsRange(longValues.values(), nullValues, startPosition, positionCount, logicalPositions);
+                    case org.weakref.nitro.data.I32Vector intValues -> matchDenseSingleBatchIntRowsPositionsRange(intValues.values(), nullValues, startPosition, positionCount, logicalPositions);
+                    case DictionaryVector dictionary -> matchDenseSingleBatchDictionaryRowsPositionsRange(dictionary, nullValues, startPosition, positionCount, logicalPositions);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        long min = minKey;
+                        long max = maxKey;
+                        int firstPosition = denseRowReferenceFirstPosition;
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            if (nullValues.value(position)) {
+                                logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                                continue;
+                            }
+                            long key = rowValues.value(position);
+                            logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                        }
+                    }
+                }
+                return;
+            }
+            switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] vv = longValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[startPosition + index];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] vv = intValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[startPosition + index];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                case DictionaryVector dictionary -> {
+                    int[] ids = dictionary.ids();
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    switch (dictionary.values()) {
+                        case org.weakref.nitro.data.I64Vector lv -> {
+                            long[] dv = lv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[startPosition + index]];
+                                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                            }
+                        }
+                        case org.weakref.nitro.data.I32Vector iv -> {
+                            int[] dv = iv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[startPosition + index]];
+                                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                            }
+                        }
+                        default -> {
+                            VectorAccess.LongValues dv = VectorAccess.longValues(dictionary.values());
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv.value(ids[startPosition + index]);
+                                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = rowValues.value(startPosition + index);
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+            }
+        }
+
+        private int emitDenseSingleBatchRowsPositionsRange(Vector values, Vector nulls, boolean hasNulls, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        {
+            if (hasNulls && nulls != null) {
+                VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                return switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> emitDenseSingleBatchLongRowsPositionsRange(longValues.values(), nullValues, startPosition, positionCount, outputOuterPositions, outputInnerLogicalPositions, outputStart);
+                    case org.weakref.nitro.data.I32Vector intValues -> emitDenseSingleBatchIntRowsPositionsRange(intValues.values(), nullValues, startPosition, positionCount, outputOuterPositions, outputInnerLogicalPositions, outputStart);
+                    case DictionaryVector dictionary -> emitDenseSingleBatchDictionaryRowsPositionsRange(dictionary, nullValues, startPosition, positionCount, outputOuterPositions, outputInnerLogicalPositions, outputStart);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        long min = minKey;
+                        long max = maxKey;
+                        int firstPosition = denseRowReferenceFirstPosition;
+                        int output = outputStart;
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            if (nullValues.value(position)) {
+                                continue;
+                            }
+                            int logicalPosition = denseSingleBatchRowPositionForKey(rowValues.value(position), min, max, firstPosition);
+                            if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                outputOuterPositions[output] = position;
+                                outputInnerLogicalPositions[output] = logicalPosition;
+                                output++;
+                            }
+                        }
+                        yield output - outputStart;
+                    }
+                };
+            }
+            return switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> emitDenseSingleBatchLongRowsPositionsRange(longValues.values(), null, startPosition, positionCount, outputOuterPositions, outputInnerLogicalPositions, outputStart);
+                case org.weakref.nitro.data.I32Vector intValues -> emitDenseSingleBatchIntRowsPositionsRange(intValues.values(), null, startPosition, positionCount, outputOuterPositions, outputInnerLogicalPositions, outputStart);
+                case DictionaryVector dictionary -> emitDenseSingleBatchDictionaryRowsPositionsRange(dictionary, null, startPosition, positionCount, outputOuterPositions, outputInnerLogicalPositions, outputStart);
+                default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                    long min = minKey;
+                    long max = maxKey;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    int output = outputStart;
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = startPosition + index;
+                        int logicalPosition = denseSingleBatchRowPositionForKey(rowValues.value(position), min, max, firstPosition);
+                        if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                            outputOuterPositions[output] = position;
+                            outputInnerLogicalPositions[output] = logicalPosition;
+                            output++;
+                        }
+                    }
+                    yield output - outputStart;
+                }
+            };
+        }
+
+        private void matchDenseSingleBatchRows(Vector values, Vector nulls, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        {
+            if (hasNulls && nulls != null) {
+                VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> matchDenseSingleBatchLongRows(longValues.values(), nullValues, positions, positionCount, refs);
+                    case org.weakref.nitro.data.I32Vector intValues -> matchDenseSingleBatchIntRows(intValues.values(), nullValues, positions, positionCount, refs);
+                    case DictionaryVector dictionary -> matchDenseSingleBatchDictionaryRows(dictionary, nullValues, positions, positionCount, refs);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        long min = minKey;
+                        long max = maxKey;
+                        long base = denseRowReferenceBase;
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = positions[index];
+                            if (nullValues.value(position)) {
+                                refs[index] = NO_MATCH_ROW_REFERENCE;
+                                continue;
+                            }
+                            long key = rowValues.value(position);
+                            refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                        }
+                    }
+                }
+                return;
+            }
+            switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] vv = longValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    long base = denseRowReferenceBase;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[positions[index]];
+                        refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] vv = intValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    long base = denseRowReferenceBase;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[positions[index]];
+                        refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                    }
+                }
+                case DictionaryVector dictionary -> {
+                    int[] ids = dictionary.ids();
+                    long min = minKey;
+                    long max = maxKey;
+                    long base = denseRowReferenceBase;
+                    switch (dictionary.values()) {
+                        case org.weakref.nitro.data.I64Vector lv -> {
+                            long[] dv = lv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[positions[index]]];
+                                refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                            }
+                        }
+                        case org.weakref.nitro.data.I32Vector iv -> {
+                            int[] dv = iv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[positions[index]]];
+                                refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                            }
+                        }
+                        default -> {
+                            VectorAccess.LongValues dv = VectorAccess.longValues(dictionary.values());
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv.value(ids[positions[index]]);
+                                refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                    long min = minKey;
+                    long max = maxKey;
+                    long base = denseRowReferenceBase;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = rowValues.value(positions[index]);
+                        refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                    }
+                }
+            }
+        }
+
+        private void matchDenseSingleBatchRowsCompact(Vector values, Vector nulls, boolean hasNulls, int[] positions, int positionCount, int[] refs)
+        {
+            if (hasNulls && nulls != null) {
+                VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                switch (values) {
+                    case org.weakref.nitro.data.I64Vector longValues -> matchDenseSingleBatchLongRowsCompact(longValues.values(), nullValues, positions, positionCount, refs);
+                    case org.weakref.nitro.data.I32Vector intValues -> matchDenseSingleBatchIntRowsCompact(intValues.values(), nullValues, positions, positionCount, refs);
+                    case DictionaryVector dictionary -> matchDenseSingleBatchDictionaryRowsCompact(dictionary, nullValues, positions, positionCount, refs);
+                    default -> {
+                        VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                        long min = minKey;
+                        long max = maxKey;
+                        int batch = denseRowReferenceBatchIndex;
+                        int firstPosition = denseRowReferenceFirstPosition;
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = positions[index];
+                            if (nullValues.value(position)) {
+                                refs[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                                continue;
+                            }
+                            long key = rowValues.value(position);
+                            refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                        }
+                    }
+                }
+                return;
+            }
+            switch (values) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] vv = longValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    int batch = denseRowReferenceBatchIndex;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[positions[index]];
+                        refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] vv = intValues.values();
+                    long min = minKey;
+                    long max = maxKey;
+                    int batch = denseRowReferenceBatchIndex;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = vv[positions[index]];
+                        refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                    }
+                }
+                case DictionaryVector dictionary -> {
+                    int[] ids = dictionary.ids();
+                    long min = minKey;
+                    long max = maxKey;
+                    int batch = denseRowReferenceBatchIndex;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    switch (dictionary.values()) {
+                        case org.weakref.nitro.data.I64Vector lv -> {
+                            long[] dv = lv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[positions[index]]];
+                                refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                            }
+                        }
+                        case org.weakref.nitro.data.I32Vector iv -> {
+                            int[] dv = iv.values();
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv[ids[positions[index]]];
+                                refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                            }
+                        }
+                        default -> {
+                            VectorAccess.LongValues dv = VectorAccess.longValues(dictionary.values());
+                            for (int index = 0; index < positionCount; index++) {
+                                long key = dv.value(ids[positions[index]]);
+                                refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
+                    long min = minKey;
+                    long max = maxKey;
+                    int batch = denseRowReferenceBatchIndex;
+                    int firstPosition = denseRowReferenceFirstPosition;
+                    for (int index = 0; index < positionCount; index++) {
+                        long key = rowValues.value(positions[index]);
+                        refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                    }
+                }
+            }
+        }
+
+        private void matchDenseSingleBatchLongRows(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, long[] refs)
+        {
+            long min = minKey;
+            long max = maxKey;
+            long base = denseRowReferenceBase;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    refs[index] = NO_MATCH_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+            }
+        }
+
+        private void matchDenseSingleBatchIntRows(int[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, long[] refs)
+        {
+            long min = minKey;
+            long max = maxKey;
+            long base = denseRowReferenceBase;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    refs[index] = NO_MATCH_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+            }
+        }
+
+        private void matchDenseSingleBatchDictionaryRows(DictionaryVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, long[] refs)
+        {
+            int[] ids = values.ids();
+            long min = minKey;
+            long max = maxKey;
+            long base = denseRowReferenceBase;
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            refs[index] = NO_MATCH_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            refs[index] = NO_MATCH_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            refs[index] = NO_MATCH_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues.value(ids[position]);
+                        refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
+                    }
+                }
+            }
+        }
+
+        private int emitDenseSingleBatchLongRowsPositionsRange(long[] values, VectorAccess.BooleanValues nullValues, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            int output = outputStart;
+            if (nullValues == null) {
+                for (int index = 0; index < positionCount; index++) {
+                    int position = startPosition + index;
+                    int logicalPosition = denseSingleBatchRowPositionForKey(values[position], min, max, firstPosition);
+                    if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                        outputOuterPositions[output] = position;
+                        outputInnerLogicalPositions[output] = logicalPosition;
+                        output++;
+                    }
+                }
+                return output - outputStart;
+            }
+            for (int index = 0; index < positionCount; index++) {
+                int position = startPosition + index;
+                if (nullValues.value(position)) {
+                    continue;
+                }
+                int logicalPosition = denseSingleBatchRowPositionForKey(values[position], min, max, firstPosition);
+                if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                    outputOuterPositions[output] = position;
+                    outputInnerLogicalPositions[output] = logicalPosition;
+                    output++;
+                }
+            }
+            return output - outputStart;
+        }
+
+        private int emitDenseSingleBatchIntRowsPositionsRange(int[] values, VectorAccess.BooleanValues nullValues, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            int output = outputStart;
+            if (nullValues == null) {
+                for (int index = 0; index < positionCount; index++) {
+                    int position = startPosition + index;
+                    int logicalPosition = denseSingleBatchRowPositionForKey(values[position], min, max, firstPosition);
+                    if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                        outputOuterPositions[output] = position;
+                        outputInnerLogicalPositions[output] = logicalPosition;
+                        output++;
+                    }
+                }
+                return output - outputStart;
+            }
+            for (int index = 0; index < positionCount; index++) {
+                int position = startPosition + index;
+                if (nullValues.value(position)) {
+                    continue;
+                }
+                int logicalPosition = denseSingleBatchRowPositionForKey(values[position], min, max, firstPosition);
+                if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                    outputOuterPositions[output] = position;
+                    outputInnerLogicalPositions[output] = logicalPosition;
+                    output++;
+                }
+            }
+            return output - outputStart;
+        }
+
+        private int emitDenseSingleBatchDictionaryRowsPositionsRange(DictionaryVector values, VectorAccess.BooleanValues nullValues, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        {
+            int[] ids = values.ids();
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            int output = outputStart;
+            if (nullValues == null) {
+                switch (values.values()) {
+                    case org.weakref.nitro.data.I64Vector longValues -> {
+                        long[] dictionaryValues = longValues.values();
+                        if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
+                            int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                            for (int index = 0; index < positionCount; index++) {
+                                int position = startPosition + index;
+                                int logicalPosition = dictionaryPositions[ids[position]];
+                                if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                    outputOuterPositions[output] = position;
+                                    outputInnerLogicalPositions[output] = logicalPosition;
+                                    output++;
+                                }
+                            }
+                        }
+                        else {
+                            for (int index = 0; index < positionCount; index++) {
+                                int position = startPosition + index;
+                                int logicalPosition = denseSingleBatchRowPositionForKey(dictionaryValues[ids[position]], min, max, firstPosition);
+                                if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                    outputOuterPositions[output] = position;
+                                    outputInnerLogicalPositions[output] = logicalPosition;
+                                    output++;
+                                }
+                            }
+                        }
+                    }
+                    case org.weakref.nitro.data.I32Vector intValues -> {
+                        int[] dictionaryValues = intValues.values();
+                        if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
+                            int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                            for (int index = 0; index < positionCount; index++) {
+                                int position = startPosition + index;
+                                int logicalPosition = dictionaryPositions[ids[position]];
+                                if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                    outputOuterPositions[output] = position;
+                                    outputInnerLogicalPositions[output] = logicalPosition;
+                                    output++;
+                                }
+                            }
+                        }
+                        else {
+                            for (int index = 0; index < positionCount; index++) {
+                                int position = startPosition + index;
+                                int logicalPosition = denseSingleBatchRowPositionForKey(dictionaryValues[ids[position]], min, max, firstPosition);
+                                if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                    outputOuterPositions[output] = position;
+                                    outputInnerLogicalPositions[output] = logicalPosition;
+                                    output++;
+                                }
+                            }
+                        }
+                    }
+                    default -> {
+                        VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            int logicalPosition = denseSingleBatchRowPositionForKey(dictionaryValues.value(ids[position]), min, max, firstPosition);
+                            if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                outputOuterPositions[output] = position;
+                                outputInnerLogicalPositions[output] = logicalPosition;
+                                output++;
+                            }
+                        }
+                    }
+                }
+                return output - outputStart;
+            }
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
+                        int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            if (nullValues.value(position)) {
+                                continue;
+                            }
+                            int logicalPosition = dictionaryPositions[ids[position]];
+                            if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                outputOuterPositions[output] = position;
+                                outputInnerLogicalPositions[output] = logicalPosition;
+                                output++;
+                            }
+                        }
+                    }
+                    else {
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            if (nullValues.value(position)) {
+                                continue;
+                            }
+                            int logicalPosition = denseSingleBatchRowPositionForKey(dictionaryValues[ids[position]], min, max, firstPosition);
+                            if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                outputOuterPositions[output] = position;
+                                outputInnerLogicalPositions[output] = logicalPosition;
+                                output++;
+                            }
+                        }
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
+                        int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            if (nullValues.value(position)) {
+                                continue;
+                            }
+                            int logicalPosition = dictionaryPositions[ids[position]];
+                            if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                outputOuterPositions[output] = position;
+                                outputInnerLogicalPositions[output] = logicalPosition;
+                                output++;
+                            }
+                        }
+                    }
+                    else {
+                        for (int index = 0; index < positionCount; index++) {
+                            int position = startPosition + index;
+                            if (nullValues.value(position)) {
+                                continue;
+                            }
+                            int logicalPosition = denseSingleBatchRowPositionForKey(dictionaryValues[ids[position]], min, max, firstPosition);
+                            if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                                outputOuterPositions[output] = position;
+                                outputInnerLogicalPositions[output] = logicalPosition;
+                                output++;
+                            }
+                        }
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = startPosition + index;
+                        if (nullValues.value(position)) {
+                            continue;
+                        }
+                        int logicalPosition = denseSingleBatchRowPositionForKey(dictionaryValues.value(ids[position]), min, max, firstPosition);
+                        if (logicalPosition != NO_MATCH_COMPACT_ROW_REFERENCE) {
+                            outputOuterPositions[output] = position;
+                            outputInnerLogicalPositions[output] = logicalPosition;
+                            output++;
+                        }
+                    }
+                }
+            }
+            return output - outputStart;
+        }
+
+        private boolean useDenseDictionaryProbeCache(int dictionarySize, int positionCount)
+        {
+            return DENSE_DICTIONARY_PROBE_CACHE && dictionarySize * 2 <= positionCount;
+        }
+
+        private int[] denseDictionaryPositions(long[] dictionaryValues, long min, long max, int firstPosition)
+        {
+            int[] positions = ensureDenseDictionaryPositionScratch(dictionaryValues.length);
+            for (int id = 0; id < dictionaryValues.length; id++) {
+                positions[id] = denseSingleBatchRowPositionForKey(dictionaryValues[id], min, max, firstPosition);
+            }
+            return positions;
+        }
+
+        private int[] denseDictionaryPositions(int[] dictionaryValues, long min, long max, int firstPosition)
+        {
+            int[] positions = ensureDenseDictionaryPositionScratch(dictionaryValues.length);
+            for (int id = 0; id < dictionaryValues.length; id++) {
+                positions[id] = denseSingleBatchRowPositionForKey(dictionaryValues[id], min, max, firstPosition);
+            }
+            return positions;
+        }
+
+        private int[] ensureDenseDictionaryPositionScratch(int dictionarySize)
+        {
+            if (denseDictionaryPositionScratch == null || denseDictionaryPositionScratch.length < dictionarySize) {
+                denseDictionaryPositionScratch = new int[dictionarySize];
+            }
+            return denseDictionaryPositionScratch;
+        }
+
+        private void matchDenseSingleBatchLongRowsPositions(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] logicalPositions)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+            }
+        }
+
+        private void matchDenseSingleBatchIntRowsPositions(int[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] logicalPositions)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+            }
+        }
+
+        private void matchDenseSingleBatchDictionaryRowsPositions(DictionaryVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] logicalPositions)
+        {
+            int[] ids = values.ids();
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues.value(ids[position]);
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+            }
+        }
+
+        private void matchDenseSingleBatchLongRowsPositionsRange(long[] values, VectorAccess.BooleanValues nullValues, int startPosition, int positionCount, int[] logicalPositions)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            for (int index = 0; index < positionCount; index++) {
+                int position = startPosition + index;
+                if (nullValues.value(position)) {
+                    logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+            }
+        }
+
+        private void matchDenseSingleBatchIntRowsPositionsRange(int[] values, VectorAccess.BooleanValues nullValues, int startPosition, int positionCount, int[] logicalPositions)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            for (int index = 0; index < positionCount; index++) {
+                int position = startPosition + index;
+                if (nullValues.value(position)) {
+                    logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+            }
+        }
+
+        private void matchDenseSingleBatchDictionaryRowsPositionsRange(DictionaryVector values, VectorAccess.BooleanValues nullValues, int startPosition, int positionCount, int[] logicalPositions)
+        {
+            int[] ids = values.ids();
+            long min = minKey;
+            long max = maxKey;
+            int firstPosition = denseRowReferenceFirstPosition;
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = startPosition + index;
+                        if (nullValues.value(position)) {
+                            logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = startPosition + index;
+                        if (nullValues.value(position)) {
+                            logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = startPosition + index;
+                        if (nullValues.value(position)) {
+                            logicalPositions[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues.value(ids[position]);
+                        logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
+                    }
+                }
+            }
+        }
+
+        private void matchDenseSingleBatchLongRowsCompact(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] refs)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int batch = denseRowReferenceBatchIndex;
+            int firstPosition = denseRowReferenceFirstPosition;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    refs[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+            }
+        }
+
+        private void matchDenseSingleBatchIntRowsCompact(int[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] refs)
+        {
+            long min = minKey;
+            long max = maxKey;
+            int batch = denseRowReferenceBatchIndex;
+            int firstPosition = denseRowReferenceFirstPosition;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (nullValues.value(position)) {
+                    refs[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                    continue;
+                }
+                long key = values[position];
+                refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+            }
+        }
+
+        private void matchDenseSingleBatchDictionaryRowsCompact(DictionaryVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] refs)
+        {
+            int[] ids = values.ids();
+            long min = minKey;
+            long max = maxKey;
+            int batch = denseRowReferenceBatchIndex;
+            int firstPosition = denseRowReferenceFirstPosition;
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            refs[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            refs[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues[ids[position]];
+                        refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        if (nullValues.value(position)) {
+                            refs[index] = NO_MATCH_COMPACT_ROW_REFERENCE;
+                            continue;
+                        }
+                        long key = dictionaryValues.value(ids[position]);
+                        refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
+                    }
+                }
+            }
+        }
+
+        private void matchSingleLongRows(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, long[] refs)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(values[position]);
+            }
+        }
+
+        private void matchSingleIntRows(int[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, long[] refs)
+        {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(values[position]);
+            }
+        }
+
+        private void matchSingleDictionaryRows(DictionaryVector values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, long[] refs)
+        {
+            int[] ids = values.ids();
+            switch (values.values()) {
+                case org.weakref.nitro.data.I64Vector longValues -> {
+                    long[] dictionaryValues = longValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(dictionaryValues[ids[position]]);
+                    }
+                }
+                case org.weakref.nitro.data.I32Vector intValues -> {
+                    int[] dictionaryValues = intValues.values();
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(dictionaryValues[ids[position]]);
+                    }
+                }
+                default -> {
+                    VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
+                    for (int index = 0; index < positionCount; index++) {
+                        int position = positions[index];
+                        refs[index] = nullValues.value(position) ? NO_MATCH_ROW_REFERENCE : singleRef(dictionaryValues.value(ids[position]));
+                    }
+                }
+            }
+        }
+
         private long singleRef(long key)
         {
             if (arrayMode) {
                 if (key < minKey || key > maxKey) {
                     return NO_MATCH_ROW_REFERENCE;
+                }
+                if (denseSingleBatchRowReferenceMode) {
+                    return denseSingleBatchRowReference((int) (key - minKey));
+                }
+                if (directRows32 != null) {
+                    int rowReference = directRows32[(int) (key - minKey)];
+                    return rowReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : unpackRowReference32(rowReference);
                 }
                 return directRows[(int) (key - minKey)];
             }
@@ -2012,8 +3514,39 @@ public class HashJoinOperator
             return head == EMPTY ? NO_MATCH_ROW_REFERENCE : rowReferences[head];
         }
 
+        private long denseSingleBatchRowReference(int ordinal)
+        {
+            return denseRowReferenceBase + ordinal;
+        }
+
+        private static long denseSingleBatchRowReferenceForKey(long key, long minKey, long maxKey, long base)
+        {
+            if (key < minKey || key > maxKey) {
+                return NO_MATCH_ROW_REFERENCE;
+            }
+            return base + (key - minKey);
+        }
+
+        private static int denseSingleBatchRowPositionForKey(long key, long minKey, long maxKey, int firstPosition)
+        {
+            if (key < minKey || key > maxKey) {
+                return NO_MATCH_COMPACT_ROW_REFERENCE;
+            }
+            return (int) (firstPosition + (key - minKey));
+        }
+
+        private static int denseSingleBatchRowReference32ForKey(long key, long minKey, long maxKey, int batchIndex, int firstPosition)
+        {
+            if (key < minKey || key > maxKey) {
+                return NO_MATCH_COMPACT_ROW_REFERENCE;
+            }
+            int rowPosition = (int) (firstPosition + (key - minKey));
+            return (batchIndex << Short.SIZE) | (rowPosition & MAX_PACKED_ROW_POSITION);
+        }
+
         private int findSlot(long key)
         {
+            ensureHashTable();
             int index = mix(key) & mask;
             while (true) {
                 if (slotHead[index] == EMPTY || keys[index] == key) {
@@ -2021,6 +3554,20 @@ public class HashJoinOperator
                 }
                 index = (index + 1) & mask;
             }
+        }
+
+        private void ensureHashTable()
+        {
+            if (keys != null) {
+                return;
+            }
+            keys = new long[initialHashCapacity];
+            slotHead = new int[initialHashCapacity];
+            Arrays.fill(slotHead, EMPTY);
+            slotTail = new int[initialHashCapacity];
+            slotCount = new int[initialHashCapacity];
+            mask = initialHashCapacity - 1;
+            maxFill = (int) (initialHashCapacity * LOAD_FACTOR);
         }
 
         private void rehash()
@@ -2053,11 +3600,21 @@ public class HashJoinOperator
 
         private void addRow(long key, long rowReference)
         {
+            observeRowReference(rowReference);
             if (key < minKey) {
                 minKey = key;
             }
             if (key > maxKey) {
                 maxKey = key;
+            }
+            if (denseBuildCandidate) {
+                if (rowCount == 0 || key == denseNextKey) {
+                    appendDenseRow(key, rowReference);
+                    return;
+                }
+                materializeDenseBuildAsHash();
+                denseBuildCandidate = false;
+                denseSingleBatchRowReferenceCandidate = false;
             }
             int slot = findSlot(key);
             boolean newKey = slotHead[slot] == EMPTY;
@@ -2088,6 +3645,61 @@ public class HashJoinOperator
             chainNext[slotTail[slot]] = ordinal;
             slotTail[slot] = ordinal;
             slotCount[slot]++;
+        }
+
+        private void appendDenseRow(long key, long rowReference)
+        {
+            observeDenseSingleBatchRowReference(rowReference);
+            if (rowCount == rowReferences.length) {
+                int newCapacity = rowReferences.length * 2;
+                rowReferences = Arrays.copyOf(rowReferences, newCapacity);
+                chainNext = Arrays.copyOf(chainNext, newCapacity);
+            }
+            if (rowCount == 0) {
+                denseFirstKey = key;
+            }
+            rowReferences[rowCount] = rowReference;
+            chainNext[rowCount] = EMPTY;
+            rowCount++;
+            size++;
+            denseNextKey = key + 1;
+        }
+
+        private void observeDenseSingleBatchRowReference(long rowReference)
+        {
+            if (!denseSingleBatchRowReferenceCandidate) {
+                return;
+            }
+            int batchIndex = batchIndex(rowReference);
+            int rowPosition = rowPosition(rowReference);
+            if (rowCount == 0) {
+                denseRowReferenceBatchIndex = batchIndex;
+                denseRowReferenceFirstPosition = rowPosition;
+                denseRowReferenceBase = rowReference;
+                return;
+            }
+            if (batchIndex != denseRowReferenceBatchIndex ||
+                    rowPosition != (long) denseRowReferenceFirstPosition + rowCount) {
+                denseSingleBatchRowReferenceCandidate = false;
+            }
+        }
+
+        private void materializeDenseBuildAsHash()
+        {
+            int previousRows = rowCount;
+            long key = denseFirstKey;
+            size = 0;
+            for (int ordinal = 0; ordinal < previousRows; ordinal++) {
+                int slot = findSlot(key++);
+                keys[slot] = key - 1;
+                slotHead[slot] = ordinal;
+                slotTail[slot] = ordinal;
+                slotCount[slot] = 1;
+                size++;
+                if (size >= maxFill) {
+                    rehash();
+                }
+            }
         }
 
         private LongList rowsForSlot(int slot, SingleLongList single, ChainLongList chain)
@@ -2155,6 +3767,52 @@ public class HashJoinOperator
             if (range <= 0 || range > MAX_ARRAY_RANGE || range > 2L * size) {
                 return;
             }
+            if (denseBuildCandidate && range == size && denseSingleBatchRowReferenceCandidate) {
+                denseSingleBatchRowReferenceMode = true;
+                arrayMode = true;
+                keys = null;
+                slotHead = null;
+                slotTail = null;
+                slotCount = null;
+                chainNext = null;
+                rowReferences = null;
+                return;
+            }
+            if (rowReferencesFit32) {
+                if (denseBuildCandidate && range == size) {
+                    directRows32 = packDenseDirectRows32(rowReferences, rowCount);
+                }
+                else {
+                    int[] direct = new int[(int) range];
+                    Arrays.fill(direct, NO_MATCH_ROW_REFERENCE32);
+                    for (int slot = 0; slot < keys.length; slot++) {
+                        int head = slotHead[slot];
+                        if (head != EMPTY) {
+                            direct[(int) (keys[slot] - minKey)] = packRowReference32(rowReferences[head]);
+                        }
+                    }
+                    directRows32 = direct;
+                }
+                arrayMode = true;
+                keys = null;
+                slotHead = null;
+                slotTail = null;
+                slotCount = null;
+                chainNext = null;
+                rowReferences = null;
+                return;
+            }
+            if (denseBuildCandidate && range == size) {
+                directRows = rowReferences;
+                arrayMode = true;
+                keys = null;
+                slotHead = null;
+                slotTail = null;
+                slotCount = null;
+                chainNext = null;
+                rowReferences = null;
+                return;
+            }
             long[] direct = new long[(int) range];
             Arrays.fill(direct, NO_MATCH_ROW_REFERENCE);
             for (int slot = 0; slot < keys.length; slot++) {
@@ -2180,10 +3838,49 @@ public class HashJoinOperator
                 if (key < minKey || key > maxKey) {
                     return LongLists.emptyList();
                 }
-                long rowReference = directRows[(int) (key - minKey)];
+                long rowReference;
+                if (denseSingleBatchRowReferenceMode) {
+                    rowReference = denseSingleBatchRowReference((int) (key - minKey));
+                }
+                else if (directRows32 != null) {
+                    int compactReference = directRows32[(int) (key - minKey)];
+                    rowReference = compactReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : unpackRowReference32(compactReference);
+                }
+                else {
+                    rowReference = directRows[(int) (key - minKey)];
+                }
                 return rowReference == NO_MATCH_ROW_REFERENCE ? LongLists.emptyList() : single.withValue(rowReference);
             }
             return rowsForSlot(findSlot(key), single, chain);
+        }
+
+        private void observeRowReference(long rowReference)
+        {
+            if (!rowReferencesFit32) {
+                return;
+            }
+            if (batchIndex(rowReference) > MAX_PACKED_BATCH_INDEX || rowPosition(rowReference) > MAX_PACKED_ROW_POSITION) {
+                rowReferencesFit32 = false;
+            }
+        }
+
+        private static int[] packDenseDirectRows32(long[] rowReferences, int rowCount)
+        {
+            int[] packed = new int[rowCount];
+            for (int index = 0; index < rowCount; index++) {
+                packed[index] = packRowReference32(rowReferences[index]);
+            }
+            return packed;
+        }
+
+        private static int packRowReference32(long rowReference)
+        {
+            return (batchIndex(rowReference) << Short.SIZE) | (rowPosition(rowReference) & MAX_PACKED_ROW_POSITION);
+        }
+
+        private static long unpackRowReference32(int rowReference)
+        {
+            return packRowReference(rowReference >>> Short.SIZE, rowReference & MAX_PACKED_ROW_POSITION);
         }
 
         private static int mix(long key)

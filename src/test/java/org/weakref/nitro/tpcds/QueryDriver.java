@@ -13,11 +13,13 @@
  */
 package org.weakref.nitro.tpcds;
 
-import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.lang.reflect.Method;
 
@@ -42,22 +44,81 @@ public final class QueryDriver
                 String.format("query%02d", q), Allocator.class, PrimitiveRegistry.class, TpcdsParquetTables.class);
         method.setAccessible(true);
 
+        boolean rowSink = Boolean.getBoolean("nitro.queryDriver.rowSink");
+        boolean operatorCpuProfile = Boolean.getBoolean("nitro.operatorCpuProfile");
         long sink = 0;
         for (int i = 0; i < warmup; i++) {
-            sink += run(method, registry, tables);
+            sink += run(method, registry, tables, rowSink);
+        }
+        if (operatorCpuProfile) {
+            OperatorCpuProfile profile = new OperatorCpuProfile();
+            long start = System.nanoTime();
+            for (int i = 0; i < measured; i++) {
+                sink += TpcdsParquetSupport.withOperatorCpuProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
+            }
+            long nanos = System.nanoTime() - start;
+            System.out.printf("q%d: %d iters, %.1f ms/iter, rows-sink=%d%n", q, measured, nanos / 1e6 / measured, sink);
+            System.out.println(profile.formatReport());
+            return;
+        }
+        if (Boolean.getBoolean("nitro.joinMaterializationProfile")) {
+            JoinMaterializationProfile profile = new JoinMaterializationProfile();
+            long start = System.nanoTime();
+            for (int i = 0; i < measured; i++) {
+                sink += HashJoinOperator.withMaterializationProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
+            }
+            long nanos = System.nanoTime() - start;
+            System.out.printf("q%d: %d iters, %.1f ms/iter, rows-sink=%d%n", q, measured, nanos / 1e6 / measured, sink);
+            System.out.println(profile.formatReport());
+            return;
         }
         long start = System.nanoTime();
         for (int i = 0; i < measured; i++) {
-            sink += run(method, registry, tables);
+            sink += run(method, registry, tables, rowSink);
         }
         long nanos = System.nanoTime() - start;
         System.out.printf("q%d: %d iters, %.1f ms/iter, rows-sink=%d%n", q, measured, nanos / 1e6 / measured, sink);
     }
 
-    private static long run(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables)
+    private static long run(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables, boolean rowSink)
             throws Exception
     {
         Operator operator = (Operator) method.invoke(null, new Allocator(), registry, tables);
-        return OperatorAssertions.OperatorAssert.toRows(operator).size();
+        if (rowSink) {
+            return org.weakref.nitro.OperatorAssertions.OperatorAssert.toRows(operator).size();
+        }
+        return consume(operator);
+    }
+
+    private static long runUnchecked(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables, boolean rowSink)
+    {
+        try {
+            return run(method, registry, tables, rowSink);
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static long consume(Operator operator)
+    {
+        long sink = 0;
+        try (operator) {
+            while (operator.hasNext()) {
+                try (var batch = operator.next()) {
+                    var mask = batch.borrowMask();
+                    sink += mask.count();
+                    for (int column = 0; column < operator.outputCount(); column++) {
+                        sink += consume(batch.output(column).borrow(Stream.VALUES));
+                    }
+                }
+            }
+        }
+        return sink;
+    }
+
+    private static long consume(Vector vector)
+    {
+        return vector.length();
     }
 }

@@ -18,7 +18,7 @@ import java.util.function.IntUnaryOperator;
 import static java.util.Objects.requireNonNull;
 
 public sealed interface SelectedPositions
-        permits SelectedPositions.ArraySelection, SelectedPositions.MappedSelection
+        permits SelectedPositions.ArraySelection, SelectedPositions.MappedSelection, SelectedPositions.RangeSelection
 {
     int count();
 
@@ -56,6 +56,11 @@ public sealed interface SelectedPositions
     static SelectedPositions single(int position)
     {
         return new ArraySelection(new int[] {position}, 0, 1);
+    }
+
+    static SelectedPositions range(int start, int count)
+    {
+        return new RangeSelection(start, count);
     }
 
     static SelectedPositions map(int[] mapping, SelectedPositions positions)
@@ -167,6 +172,41 @@ public sealed interface SelectedPositions
                 materialized[index] = mapping.applyAsInt(positions.position(index));
             }
             return materialized;
+        }
+    }
+
+    final class RangeSelection
+            implements SelectedPositions
+    {
+        private final int start;
+        private final int count;
+
+        private RangeSelection(int start, int count)
+        {
+            this.start = start;
+            this.count = count;
+        }
+
+        @Override
+        public int count()
+        {
+            return count;
+        }
+
+        @Override
+        public int position(int index)
+        {
+            return start + index;
+        }
+
+        @Override
+        public int[] materialize(int[] target)
+        {
+            int[] positions = target != null && target.length >= count ? target : new int[count];
+            for (int index = 0; index < count; index++) {
+                positions[index] = start + index;
+            }
+            return positions;
         }
     }
 }

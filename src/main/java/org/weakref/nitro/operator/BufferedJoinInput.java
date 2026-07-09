@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -30,6 +31,10 @@ final class BufferedJoinInput
     // high-fan-out joins over dimension tables. Bounded so a fact-table-sized build is never copied wholesale; the
     // one-time coalesce copy pays for itself whenever the join output references the build more than once.
     private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 2_000_000);
+    private static final boolean COALESCE_RANGE_SELECTION =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.coalesceRangeSelection", "true"));
+    private static final boolean BUFFERED_DENSE_POSITIONS_CACHE =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.bufferedDensePositionsCache", "true"));
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
@@ -42,6 +47,7 @@ final class BufferedJoinInput
     private final boolean[] outputKnownAllFalseInitialized;
     private final List<InnerBatch> batches = new ArrayList<>();
     private Batch firstRetainedBatch;
+    private int[] densePositionsCache = new int[0];
 
     private boolean loaded;
     private long rowCount;
@@ -187,11 +193,19 @@ final class BufferedJoinInput
         Streams[] columns = new Streams[columnCount];
         int outputStart = 0;
         for (InnerBatch batch : batches) {
-            int[] sourcePositions = densePositions(batch.length());
+            SelectedPositions sourceRange = batch.retained() ? null : SelectedPositions.range(0, batch.length());
+            int[] sourcePositions = null;
             for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-                columns[columnIndex] = batch.retained()
-                        ? buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], batch.positions(), batch.length(), outputStart, size)
-                        : buffers.copyPositions(columns[columnIndex], batch.columns()[columnIndex], sourcePositions, batch.length(), outputStart, size);
+                if (batch.retained()) {
+                    columns[columnIndex] = buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], batch.positions(), batch.length(), outputStart, size);
+                }
+                else if (COALESCE_RANGE_SELECTION && buffers.canCopyRangeWithoutMaterializing(batch.columns()[columnIndex])) {
+                    columns[columnIndex] = buffers.copyPositions(columns[columnIndex], batch.columns()[columnIndex], sourceRange, outputStart, size);
+                }
+                else {
+                    sourcePositions = sourcePositions != null ? sourcePositions : densePositions(batch.length());
+                    columns[columnIndex] = buffers.copyPositions(columns[columnIndex], batch.columns()[columnIndex], sourcePositions, batch.length(), outputStart, size);
+                }
             }
             outputStart += batch.length();
         }
@@ -321,20 +335,35 @@ final class BufferedJoinInput
         return positions;
     }
 
-    private static int[] densePositions(int length)
+    private int[] densePositions(int length)
     {
-        int[] positions = new int[length];
-        for (int index = 0; index < length; index++) {
-            positions[index] = index;
+        if (!BUFFERED_DENSE_POSITIONS_CACHE) {
+            int[] positions = new int[length];
+            for (int index = 0; index < length; index++) {
+                positions[index] = index;
+            }
+            return positions;
         }
-        return positions;
+        if (densePositionsCache.length < length) {
+            densePositionsCache = new int[length];
+            for (int index = 0; index < length; index++) {
+                densePositionsCache[index] = index;
+            }
+        }
+        return densePositionsCache;
     }
 
     private static int streamFlags(java.util.Set<Stream> streams)
     {
         int flags = 0;
-        for (Stream stream : streams) {
-            flags |= streamFlag(stream);
+        if (streams.contains(Stream.VALUES)) {
+            flags |= VALUES_FLAG;
+        }
+        if (streams.contains(Stream.NULLS)) {
+            flags |= NULLS_FLAG;
+        }
+        if (streams.contains(Stream.ERRORS)) {
+            flags |= ERRORS_FLAG;
         }
         return flags;
     }

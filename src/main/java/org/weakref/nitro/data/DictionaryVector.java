@@ -22,11 +22,12 @@ public final class DictionaryVector
         implements Vector
 {
     private final int[] ids;
+    private final int length;
     private final Vector values;
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, values, true, true);
+        this(ids, ids.length, values, true, true);
     }
 
     /**
@@ -36,13 +37,43 @@ public final class DictionaryVector
      */
     public static DictionaryVector ofTrustedIds(int[] ids, Vector values)
     {
-        return new DictionaryVector(ids, values, true, false);
+        return ofTrustedIds(ids, ids.length, values);
+    }
+
+    public static DictionaryVector ofTrustedIds(int[] ids, int length, Vector values)
+    {
+        return new DictionaryVector(ids, length, values, true, false);
+    }
+
+    /**
+     * Builds a dictionary over the first {@code length} entries in {@code ids}, sharing the backing ids array. This
+     * mirrors Velox's BufferPtr + logical size wrapper and is intended for short-lived operator output mappings whose
+     * producer keeps the backing array stable for the vector lifetime.
+     */
+    public static DictionaryVector wrap(int[] ids, int length, Vector values)
+    {
+        return wrap(ids, length, values, false);
     }
 
     public static DictionaryVector wrap(int[] ids, Vector values)
     {
+        return wrap(ids, ids.length, values, false);
+    }
+
+    /**
+     * Builds a dictionary wrapper without composing through an already encoded value vector. This is useful when the
+     * caller wants to avoid copying/re-writing an output row mapping and all downstream consumers can read nested
+     * dictionary/RLE encodings recursively.
+     */
+    public static DictionaryVector wrapNested(int[] ids, int length, Vector values)
+    {
+        return new DictionaryVector(ids, length, values, false, false);
+    }
+
+    private static DictionaryVector wrap(int[] ids, int length, Vector values, boolean copyIds)
+    {
         if (values instanceof DictionaryVector dictionary) {
-            int[] composedIds = Arrays.copyOf(ids, ids.length);
+            int[] composedIds = Arrays.copyOf(ids, length);
             Vector baseValues = dictionary.values();
             int[] baseIds = dictionary.ids();
             for (int index = 0; index < composedIds.length; index++) {
@@ -56,19 +87,21 @@ public final class DictionaryVector
                 baseValues = nestedDictionary.values();
             }
             // composed ids are derived from already-validated id arrays, so bounds are guaranteed
-            return new DictionaryVector(composedIds, baseValues, false, false);
+            return new DictionaryVector(composedIds, composedIds.length, baseValues, false, false);
         }
         // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
-        return new DictionaryVector(ids, values, false, false);
+        return new DictionaryVector(ids, length, values, copyIds, false);
     }
 
-    private DictionaryVector(int[] ids, Vector values, boolean copyIds, boolean validate)
+    private DictionaryVector(int[] ids, int length, Vector values, boolean copyIds, boolean validate)
     {
-        checkArgument(ids.length >= 0, "ids length is negative");
-        this.ids = copyIds ? Arrays.copyOf(ids, ids.length) : ids;
+        checkArgument(length >= 0, "length is negative");
+        checkArgument(length <= ids.length, "length exceeds ids capacity");
+        this.ids = copyIds ? Arrays.copyOf(ids, length) : ids;
+        this.length = length;
         this.values = values;
         if (validate) {
-            validateIds(ids, values.length());
+            validateIds(ids, length, values.length());
         }
     }
 
@@ -85,7 +118,7 @@ public final class DictionaryVector
     @Override
     public int length()
     {
-        return ids.length;
+        return length;
     }
 
     @Override
@@ -97,7 +130,7 @@ public final class DictionaryVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        return allocator.allocateDictionary(allocationContext, ids, values.copy(allocator, allocationContext));
+        return allocator.allocateDictionary(allocationContext, Arrays.copyOf(ids, length), values.copy(allocator, allocationContext));
     }
 
     @Override
@@ -162,12 +195,13 @@ public final class DictionaryVector
     @Override
     public String toString()
     {
-        return "Dictionary {ids: " + Arrays.toString(ids) + ", values: " + values + "}";
+        return "Dictionary {ids: " + Arrays.toString(Arrays.copyOf(ids, length)) + ", values: " + values + "}";
     }
 
-    private static void validateIds(int[] ids, int valuesLength)
+    private static void validateIds(int[] ids, int length, int valuesLength)
     {
-        for (int id : ids) {
+        for (int index = 0; index < length; index++) {
+            int id = ids[index];
             checkArgument(id >= 0 && id < valuesLength, "Dictionary id %s is out of bounds for values length %s", id, valuesLength);
         }
     }

@@ -33,6 +33,7 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
+import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
@@ -195,6 +196,56 @@ public class TestPlanEvaluator
         assertThat(result.count()).isEqualTo(2);
         assertThat(result.position(0)).isEqualTo(0);
         assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
+    void testReferenceMaskUsesInputMaskResolverWithoutBorrowingValues()
+    {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Boolean.parseBoolean(System.getProperty("nitro.expression.inputMaskResolver", "true")));
+
+        Reference reference = new Reference(new Input(0), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(List.of(), List.of(reference));
+        AtomicInteger vectorResolveCount = new AtomicInteger();
+        AtomicInteger maskResolveCount = new AtomicInteger();
+        Allocator allocator = new Allocator();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                new PlanEvaluator.InputResolver()
+                {
+                    @Override
+                    public org.weakref.nitro.data.Vector resolve(Reference reference, Mask mask)
+                    {
+                        vectorResolveCount.incrementAndGet();
+                        return new BooleanVector(new boolean[] {false, true, false, true, false});
+                    }
+
+                    @Override
+                    public Mask resolveMask(Reference requestedReference, Mask mask, boolean selectTrue, Allocator resultAllocator, Allocator.Context resultAllocationContext)
+                    {
+                        assertThat(requestedReference).isEqualTo(reference);
+                        maskResolveCount.incrementAndGet();
+                        if (selectTrue) {
+                            return resultAllocator.allocateSparseMask(resultAllocationContext, new int[] {1, 3}, 2, mask.size());
+                        }
+                        return resultAllocator.allocateSparseMask(resultAllocationContext, new int[] {0, 2, 4}, 3, mask.size());
+                    }
+                },
+                allocator);
+
+        Mask trueResult = evaluator.evaluate(new ReferenceMask(reference), Mask.all(5));
+        assertThat(trueResult.selectedCount()).isEqualTo(2);
+        assertThat(trueResult.position(0)).isEqualTo(1);
+        assertThat(trueResult.position(1)).isEqualTo(3);
+
+        Mask falseResult = evaluator.evaluate(new NotMask(new ReferenceMask(reference)), Mask.all(5));
+        assertThat(falseResult.selectedCount()).isEqualTo(3);
+        assertThat(falseResult.position(0)).isEqualTo(0);
+        assertThat(falseResult.position(1)).isEqualTo(2);
+        assertThat(falseResult.position(2)).isEqualTo(4);
+
+        assertThat(vectorResolveCount).hasValue(0);
+        assertThat(maskResolveCount).hasValue(2);
     }
 
     @Test
@@ -2607,7 +2658,7 @@ public class TestPlanEvaluator
                                 AllMask.ALL)),
                 List.of());
 
-        BinaryVector dictionary = new BinaryVector(4, 32);
+        BinaryVector dictionary = new BinaryVector(4, 48);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "apple".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -2631,6 +2682,226 @@ public class TestPlanEvaluator
         assertThat(result.position(0)).isEqualTo(0);
         assertThat(result.position(1)).isEqualTo(2);
         assertThat(result.position(2)).isEqualTo(4);
+    }
+
+    @Test
+    void testInUtf8SubstringDictionaryLiteralReferenceMaskUsesPrimitiveTrueMask()
+    {
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        Variable firstLiteral = new Variable(3);
+        Variable secondLiteral = new Variable(4);
+        Variable matches = new Variable(5);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(5L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(firstLiteral, new Literal("80348"), AllMask.ALL),
+                        new Assignment(secondLiteral, new Literal("81792"), AllMask.ALL),
+                        new Assignment(
+                                matches,
+                                new Call("in_utf8", List.of(
+                                        new Reference(substring, Stream.VALUES),
+                                        new Reference(firstLiteral, Stream.VALUES),
+                                        new Reference(secondLiteral, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector dictionary = new BinaryVector(4, 48);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        dictionary.setBytes(0, "80348-1234".getBytes(UTF_8));
+        dictionary.setBytes(1, "99999-1234".getBytes(UTF_8));
+        dictionary.setBytes(2, "81792-1234".getBytes(UTF_8));
+        dictionary.setBytes(3, "80348-9999".getBytes(UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 2}, dictionary);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(3);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
+        assertThat(result.position(2)).isEqualTo(4);
+
+        Mask falseResult = evaluator.evaluate(new NotMask(new ReferenceMask(new Reference(matches, Stream.VALUES))), Mask.all(5));
+        assertThat(falseResult.selectedCount()).isEqualTo(1);
+        assertThat(falseResult.position(0)).isEqualTo(1);
+    }
+
+    @Test
+    void testInUtf8SubstringNestedDictionaryLiteralReferenceMaskUsesPrimitiveTrueMaskInPlace()
+    {
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        Variable firstLiteral = new Variable(3);
+        Variable secondLiteral = new Variable(4);
+        Variable matches = new Variable(5);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(5L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(firstLiteral, new Literal("80348"), AllMask.ALL),
+                        new Assignment(secondLiteral, new Literal("81792"), AllMask.ALL),
+                        new Assignment(
+                                matches,
+                                new Call("in_utf8", List.of(
+                                        new Reference(substring, Stream.VALUES),
+                                        new Reference(firstLiteral, Stream.VALUES),
+                                        new Reference(secondLiteral, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector dictionary = new BinaryVector(3, 32);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        dictionary.setBytes(0, "80348-1234".getBytes(UTF_8));
+        dictionary.setBytes(1, "99999-1234".getBytes(UTF_8));
+        dictionary.setBytes(2, "81792-1234".getBytes(UTF_8));
+
+        DictionaryVector nested = DictionaryVector.wrap(new int[] {0, 1, 2, 1}, dictionary);
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 0}, nested);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, true});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        Mask result = evaluator.evaluateInPlace(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
+    void testInUtf8SubstringDoubleNestedDictionaryLiteralReferenceMaskUsesPrimitiveTrueMaskInPlace()
+    {
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        Variable firstLiteral = new Variable(3);
+        Variable secondLiteral = new Variable(4);
+        Variable matches = new Variable(5);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(5L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(firstLiteral, new Literal("11111"), AllMask.ALL),
+                        new Assignment(secondLiteral, new Literal("33333"), AllMask.ALL),
+                        new Assignment(
+                                matches,
+                                new Call("in_utf8", List.of(
+                                        new Reference(substring, Stream.VALUES),
+                                        new Reference(firstLiteral, Stream.VALUES),
+                                        new Reference(secondLiteral, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector base = new BinaryVector(3, 48);
+        base.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        base.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        base.setBytes(0, "11111-0000".getBytes(UTF_8));
+        base.setBytes(1, "22222-0000".getBytes(UTF_8));
+        base.setBytes(2, "33333-0000".getBytes(UTF_8));
+
+        DictionaryVector inner = DictionaryVector.wrap(new int[] {2, 0, 1}, base);
+        DictionaryVector middle = DictionaryVector.wrapNested(new int[] {1, 2, 0, 1}, 4, inner);
+        DictionaryVector values = DictionaryVector.wrapNested(new int[] {3, 0, 1, 2, 3}, 5, middle);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        Mask result = evaluator.evaluateInPlace(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
+        assertThat(result.selectedCount()).isEqualTo(4);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(1);
+        assertThat(result.position(2)).isEqualTo(3);
+        assertThat(result.position(3)).isEqualTo(4);
+    }
+
+    @Test
+    void testInUtf8SubstringDictionaryMaskFallsBackForMultibyteUtf8()
+    {
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        Variable literal = new Variable(3);
+        Variable matches = new Variable(4);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(2L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(literal, new Literal("éc"), AllMask.ALL),
+                        new Assignment(
+                                matches,
+                                new Call("in_utf8", List.of(
+                                        new Reference(substring, Stream.VALUES),
+                                        new Reference(literal, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        BinaryVector dictionary = new BinaryVector(2, 16);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.setBytes(0, "éclair".getBytes(UTF_8));
+        dictionary.setBytes(1, "ecole".getBytes(UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0}, dictionary);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(3));
+        assertThat(result.selectedCount()).isEqualTo(2);
+        assertThat(result.position(0)).isEqualTo(0);
+        assertThat(result.position(1)).isEqualTo(2);
     }
 
     @Test
@@ -2670,9 +2941,160 @@ public class TestPlanEvaluator
                 new Allocator());
 
         org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
+        assertThat(result).isInstanceOf(DictionaryVector.class);
         assertThat(decodeUtf8(result, 0)).isEqualTo("10");
         assertThat(decodeUtf8(result, 1)).isEqualTo("81");
         assertThat(decodeUtf8(result, 2)).isEqualTo("70");
+    }
+
+    @Test
+    void testSubstringUtf8KeepsDictionaryEncodingForSparseMask()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(2L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(substring, Stream.VALUES)));
+
+        BinaryVector dictionary = new BinaryVector(4, 32);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        dictionary.setBytes(0, "70000".getBytes(UTF_8));
+        dictionary.setBytes(1, "81111".getBytes(UTF_8));
+        dictionary.setBytes(2, "92222".getBytes(UTF_8));
+        dictionary.setBytes(3, "10333".getBytes(UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {3, 1, 0}, dictionary);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.sparse(new int[] {0, 2}, 3)).get(Stream.VALUES);
+        assertThat(result).isInstanceOf(DictionaryVector.class);
+        assertThat(decodeUtf8(result, 0)).isEqualTo("10");
+        assertThat(decodeUtf8(result, 2)).isEqualTo("70");
+    }
+
+    @Test
+    void testSubstringUtf8CompactsSparseDictionaryBackingEvenWithAllMask()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(2L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(substring, Stream.VALUES)));
+
+        BinaryVector dictionary = new BinaryVector(50, 512);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        for (int position = 0; position < 50; position++) {
+            dictionary.setBytes(position, ("9" + position + "000").getBytes(UTF_8));
+        }
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {49, 1, 0}, dictionary);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
+        assertThat(result).isInstanceOf(DictionaryVector.class);
+        assertThat(((DictionaryVector) result).values()).isInstanceOf(BinaryVector.class);
+        assertThat(((BinaryVector) ((DictionaryVector) result).values()).length()).isEqualTo(3);
+        assertThat(decodeUtf8(result, 0)).isEqualTo("94");
+        assertThat(decodeUtf8(result, 1)).isEqualTo("91");
+        assertThat(decodeUtf8(result, 2)).isEqualTo("90");
+    }
+
+    @Test
+    void testSubstringUtf8KeepsRleEncodingForConstantSubstring()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(2L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(substring, Stream.VALUES)));
+
+        BinaryVector runValues = new BinaryVector(2, 16);
+        runValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        runValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        runValues.setBytes(0, "70000".getBytes(UTF_8));
+        runValues.setBytes(1, "81111".getBytes(UTF_8));
+
+        RleVector values = new RleVector(new int[] {2, 3}, runValues);
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator());
+
+        org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(5)).get(Stream.VALUES);
+        assertThat(result).isInstanceOf(RleVector.class);
+        assertThat(((RleVector) result).counts()).containsExactly(2, 3);
+        assertThat(decodeUtf8(result, 0)).isEqualTo("70");
+        assertThat(decodeUtf8(result, 1)).isEqualTo("70");
+        assertThat(decodeUtf8(result, 2)).isEqualTo("81");
+        assertThat(decodeUtf8(result, 4)).isEqualTo("81");
+    }
+
+    @Test
+    void testSubstringUtf8NullsOnlyDoesNotRequireValues()
+    {
+        BooleanVector valueNulls = new BooleanVector(new boolean[] {false, true, false});
+        BooleanVector startNulls = new BooleanVector(new boolean[] {false, false, true});
+        BooleanVector lengthNulls = new BooleanVector(new boolean[] {false, false, false});
+
+        Streams result = new SubstringUtf8().apply(
+                List.of(
+                        Streams.of(Stream.NULLS, valueNulls),
+                        Streams.of(Stream.NULLS, startNulls),
+                        Streams.of(Stream.NULLS, lengthNulls)),
+                Mask.all(3),
+                Set.of(Stream.NULLS),
+                Streams.empty(),
+                new PrimitiveExecutionContext(new Allocator()));
+
+        assertThat(result.has(Stream.VALUES)).isFalse();
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, true);
     }
 
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)

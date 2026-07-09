@@ -392,8 +392,8 @@ public final class FusedProjectionCompiler
                     .append(") { nul").append(slot).append(" = bv").append(slot).append(".values(); }\n");
             out.append("    else if (nv").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector ndv").append(slot)
                     .append(" && ndv").append(slot).append(".values() instanceof BooleanVector nbase").append(slot)
-                    .append(") { int[] nids = ndv").append(slot).append(".ids(); boolean[] nb = nbase").append(slot).append(".values();")
-                    .append(" nul").append(slot).append(" = new boolean[nids.length]; for (int j = 0; j < nids.length; j++) { nul").append(slot)
+                    .append(") { int[] nids = ndv").append(slot).append(".ids(); int nlen = ndv").append(slot).append(".length(); boolean[] nb = nbase").append(slot).append(".values();")
+                    .append(" nul").append(slot).append(" = new boolean[nlen]; for (int j = 0; j < nlen; j++) { nul").append(slot)
                     .append("[j] = nb[nids[j]]; } }\n");
             out.append("    else { return null; }\n");
         }
@@ -458,9 +458,9 @@ public final class FusedProjectionCompiler
         // per-row loop stays monomorphic (and auto-vectorizable) instead of the interpreter's per-position peel.
         out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
                 .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
-                .append(" col").append(slot).append(" = new long[ids.length];")
-                .append(" if (base instanceof I64Vector bi) { long[] bv = bi.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
-                .append(" else if (base instanceof I32Vector bw) { int[] bv = bw.values(); for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(" int len = dv").append(slot).append(".length(); col").append(slot).append(" = new long[len];")
+                .append(" if (base instanceof I64Vector bi) { long[] bv = bi.values(); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(" else if (base instanceof I32Vector bw) { int[] bv = bw.values(); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
                 .append(" else { return null; } }\n");
         out.append("    else { return null; }\n");
     }
@@ -474,7 +474,7 @@ public final class FusedProjectionCompiler
         out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
                 .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
                 .append(" if (base instanceof F64Vector bf) { double[] bv = bf.values(); col").append(slot)
-                .append(" = new double[ids.length]; for (int j = 0; j < ids.length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(" = new double[dv").append(slot).append(".length()]; for (int j = 0; j < col").append(slot).append(".length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
                 .append(" else { return null; } }\n");
         out.append("    else { return null; }\n");
     }

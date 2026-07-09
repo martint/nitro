@@ -80,7 +80,12 @@ public final class SkipDecodeScanOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SkipDecodeScanOperator");
-    private static final int BATCH_SIZE = 8192;
+    private static final String BATCH_SIZE_PROPERTY = System.getProperty("nitro.skipScan.batchSize");
+    private static final int BASE_BATCH_SIZE = Math.max(1, Integer.getInteger("nitro.skipScan.batchSize", 8192));
+    private static final int FILTERED_BATCH_SIZE = Math.max(1, Integer.getInteger(
+            "nitro.skipScan.filteredBatchSize",
+            BATCH_SIZE_PROPERTY == null ? 12288 : BASE_BATCH_SIZE));
+    private static final int SCRATCH_BATCH_SIZE = Math.max(BASE_BATCH_SIZE, FILTERED_BATCH_SIZE);
 
     /**
      * Selectivity guard: skip-decode the non-filter columns only when the surviving fraction of the batch is below
@@ -224,7 +229,7 @@ public final class SkipDecodeScanOperator
     private boolean initialized;
     // Per-column scratch reused across batches: the decoded values/nulls for a column are gathered into the (pooled)
     // output vectors in emit(), so the scratch is free to overwrite next batch. Avoids a fresh new long[]/boolean[]
-    // per column per batch (gigabytes/query of short-lived garbage). Sized to BATCH_SIZE once.
+    // per column per batch (gigabytes/query of short-lived garbage). Sized to the largest possible batch once.
     private long[][] valueScratch;
     private boolean[][] nullScratch;
     private int[] nextScratch;
@@ -354,9 +359,9 @@ public final class SkipDecodeScanOperator
     {
         Profile.rowsScanned += batchRows;
         if (valueScratch == null) {
-            valueScratch = new long[columnCount][BATCH_SIZE];
-            nullScratch = new boolean[columnCount][BATCH_SIZE];
-            nextScratch = new int[BATCH_SIZE];
+            valueScratch = new long[columnCount][SCRATCH_BATCH_SIZE];
+            nullScratch = new boolean[columnCount][SCRATCH_BATCH_SIZE];
+            nextScratch = new int[SCRATCH_BATCH_SIZE];
         }
         int[] survivors;     // batch-relative positions, sorted ascending; null means "all rows"
         long[][] values = new long[columnCount][];
@@ -506,6 +511,10 @@ public final class SkipDecodeScanOperator
                 }
             }
         }
+        else if (nullVector != null) {
+            java.util.Arrays.fill(nullVector.values(), 0, count, false);
+            nullVector.markAllFalse();
+        }
 
         // Preserve dictionary/RLE encoding (like the shared Trino scan) so downstream scalar, filter and grouping
         // ops stay encoding-aware (per-entry / per-run instead of per-row). Nulls are carried in the separate
@@ -618,6 +627,13 @@ public final class SkipDecodeScanOperator
             }
             return;
         }
+        if (readPositions == survivors) {
+            System.arraycopy(columnValues, 0, outValues, 0, survivorCount);
+            if (outNulls != null) {
+                System.arraycopy(columnNulls, 0, outNulls, 0, survivorCount);
+            }
+            return;
+        }
         // readPositions and survivors are both sorted ascending; survivors ⊆ readPositions. Walk together.
         int r = 0;
         for (int j = 0; j < survivorCount; j++) {
@@ -648,6 +664,21 @@ public final class SkipDecodeScanOperator
 
     private void extract(Block block, int count, long[] outValues, boolean[] outNulls)
     {
+        long[] rawValues = rawValues(block);
+        if (!block.mayHaveNull()) {
+            if (rawValues != null) {
+                System.arraycopy(rawValues, rawValuesOffset(block), outValues, 0, count);
+            }
+            else {
+                for (int i = 0; i < count; i++) {
+                    outValues[i] = BIGINT.getLong(block, i);
+                }
+            }
+            if (outNulls != null) {
+                java.util.Arrays.fill(outNulls, 0, count, false);
+            }
+            return;
+        }
         for (int i = 0; i < count; i++) {
             boolean isNull = block.isNull(i);
             if (outNulls != null) {
@@ -775,7 +806,8 @@ public final class SkipDecodeScanOperator
             }
             openRowGroup(rowGroupIndex);
         }
-        batchRows = Math.min(BATCH_SIZE, rowsInRowGroup - batchStart);
+        int targetBatchSize = hasFilters ? FILTERED_BATCH_SIZE : BASE_BATCH_SIZE;
+        batchRows = Math.min(targetBatchSize, rowsInRowGroup - batchStart);
         return batchRows > 0;
     }
 

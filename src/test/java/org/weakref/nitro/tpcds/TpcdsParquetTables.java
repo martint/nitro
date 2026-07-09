@@ -18,7 +18,9 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -33,6 +35,7 @@ public final class TpcdsParquetTables
 
     private final Path rootDirectory;
     private final String schema;
+    private final Map<String, List<Path>> tableFiles = new HashMap<>();
 
     private TpcdsParquetTables(Path rootDirectory, String schema)
     {
@@ -101,7 +104,17 @@ public final class TpcdsParquetTables
     }
 
     @Override
-    public List<Path> tableFiles(String tableName)
+    public synchronized List<Path> tableFiles(String tableName)
+    {
+        List<Path> files = tableFiles.get(tableName);
+        if (files == null) {
+            files = loadTableFiles(tableName);
+            tableFiles.put(tableName, files);
+        }
+        return files;
+    }
+
+    private List<Path> loadTableFiles(String tableName)
     {
         Path tableDirectory = tableDirectory(tableName);
         if (!Files.isDirectory(tableDirectory)) {

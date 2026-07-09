@@ -28,6 +28,9 @@ import java.util.List;
 
 final class LongComparisonMaskSupport
 {
+    private static final boolean RETURNED_CONSTANT_COMPARISON_MASKS =
+            Boolean.parseBoolean(System.getProperty("nitro.longComparison.returnedConstantMasks", "true"));
+
     private LongComparisonMaskSupport() {}
 
     @FunctionalInterface
@@ -254,10 +257,15 @@ final class LongComparisonMaskSupport
                 context.allocator().allocateSparseMask(allocationContext, errorPositions, errorPositions.length, mask.size()));
     }
 
-    public static Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel)
+    public static Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel, Mask.ComparisonOperator operator)
     {
         if (!supportsLongComparison(inputs)) {
             return null;
+        }
+
+        Mask constantMask = tryConstantComparisonMask(inputs, mask, context, allocationContext, operator, true);
+        if (constantMask != null) {
+            return constantMask;
         }
 
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
@@ -283,10 +291,15 @@ final class LongComparisonMaskSupport
         return context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex[0], mask.size());
     }
 
-    public static Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel)
+    public static Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel, Mask.ComparisonOperator operator)
     {
         if (!supportsLongComparison(inputs)) {
             return null;
+        }
+
+        Mask constantMask = tryConstantComparisonMask(inputs, mask, context, allocationContext, operator, false);
+        if (constantMask != null) {
+            return constantMask;
         }
 
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
@@ -447,6 +460,57 @@ final class LongComparisonMaskSupport
 
         applyConstantComparison(mask, column, literal, effectiveOperator(operator, wantTrue), nulls);
         return true;
+    }
+
+    private static Mask tryConstantComparisonMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, Mask.ComparisonOperator baseOperator, boolean wantTrue)
+    {
+        if (!RETURNED_CONSTANT_COMPARISON_MASKS || baseOperator == null) {
+            return null;
+        }
+
+        Vector left = inputs.get(0).values();
+        Vector right = inputs.get(1).values();
+
+        Vector column;
+        long literal;
+        Mask.ComparisonOperator operator;
+        Long rightConstant = singleRunLong(right);
+        if (rightConstant != null && isFlatInteger(left)) {
+            column = left;
+            literal = rightConstant;
+            operator = baseOperator;
+        }
+        else {
+            Long leftConstant = singleRunLong(left);
+            if (leftConstant == null || !isFlatInteger(right)) {
+                return null;
+            }
+            column = right;
+            literal = leftConstant;
+            operator = swapOperands(baseOperator);
+        }
+
+        boolean columnOnLeft = column == left;
+        Streams columnInput = columnOnLeft ? inputs.get(0) : inputs.get(1);
+        Streams literalInput = columnOnLeft ? inputs.get(1) : inputs.get(0);
+        if (!isNullAndErrorFree(literalInput) || !isErrorFree(columnInput)) {
+            return null;
+        }
+
+        boolean[] nulls = null;
+        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        if (!VectorAccess.isAllFalseNulls(columnNulls)) {
+            nulls = VectorAccess.flatBooleans(columnNulls);
+            if (nulls == null) {
+                return null;
+            }
+        }
+
+        Mask.ComparisonOperator effectiveOperator = effectiveOperator(operator, wantTrue);
+        if (column instanceof I32Vector values) {
+            return context.allocator().constantComparisonMask(allocationContext, mask, values.values(), literal, effectiveOperator, nulls);
+        }
+        return context.allocator().constantComparisonMask(allocationContext, mask, ((I64Vector) column).values(), literal, effectiveOperator, nulls);
     }
 
     private static boolean isErrorFree(Streams input)

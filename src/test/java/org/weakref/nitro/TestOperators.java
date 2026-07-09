@@ -62,6 +62,7 @@ import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
+import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
@@ -364,6 +365,20 @@ public class TestOperators
         assertThat(((I64Vector) nested.values()).values()[nested.ids()[1]]).isEqualTo(30L);
         assertThat(((I64Vector) nested.values()).values()[nested.ids()[2]]).isEqualTo(10L);
         assertThat(((I64Vector) nested.values()).values()[nested.ids()[3]]).isEqualTo(20L);
+    }
+
+    @Test
+    void testDictionaryWrapNestedPreservesNestedIdsAndLogicalLength()
+    {
+        DictionaryVector base = DictionaryVector.wrap(new int[] {2, 1, 0, 1}, new I64Vector(new long[] {10, 20, 30}));
+        DictionaryVector nested = DictionaryVector.wrapNested(new int[] {3, 0, 2, 1}, 3, base);
+
+        assertThat(nested.length()).isEqualTo(3);
+        assertThat(nested.values()).isSameAs(base);
+        assertThat(nested.ids()).containsExactly(3, 0, 2, 1);
+        assertThat(((I64Vector) base.values()).values()[base.ids()[nested.ids()[0]]]).isEqualTo(20L);
+        assertThat(((I64Vector) base.values()).values()[base.ids()[nested.ids()[1]]]).isEqualTo(30L);
+        assertThat(((I64Vector) base.values()).values()[base.ids()[nested.ids()[2]]]).isEqualTo(10L);
     }
 
     @Test
@@ -1448,6 +1463,76 @@ public class TestOperators
     }
 
     @Test
+    void testFilterOperatorPassesCurrentPredicateMaskToLazyInputs()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        AtomicReference<int[]> lazyInputMask = new AtomicReference<>();
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                BooleanVector first = new BooleanVector(new boolean[] {true, false, true, false});
+                BooleanVector second = new BooleanVector(new boolean[] {false, true, false, true});
+                return new Batch(
+                        Mask.all(4),
+                        new Output(Set.of(Stream.VALUES), _ -> first),
+                        new Output(
+                                Set.of(Stream.VALUES),
+                                _ -> second,
+                                (_, mask) -> {
+                                    int[] positions = new int[mask.selectedCount()];
+                                    for (int index = 0; index < positions.length; index++) {
+                                        positions[index] = mask.position(index);
+                                    }
+                                    lazyInputMask.set(positions);
+                                    return second;
+                                },
+                                (_, vector) -> vector,
+                                (_, _) -> {},
+                                null,
+                                null));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (FilterOperator filter = new FilterOperator(
+                source,
+                new EvaluationPlan(List.of(), List.of()),
+                primitiveRegistry,
+                new OrMask(List.of(
+                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                        new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
+                allocator)) {
+            try (Batch batch = filter.next()) {
+                assertThat(batch.borrowMask()).containsExactly(0, 1, 2, 3);
+            }
+        }
+
+        assertThat(lazyInputMask.get()).containsExactly(1, 3);
+    }
+
+    @Test
     void testFilterOverLimit()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
@@ -2303,6 +2388,58 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(1L, "alpha", 10L, 1L, "alpha", 100L),
                         row(1L, "beta", 20L, 1L, "beta", 200L)));
+    }
+
+    @Test
+    void testHashJoinDeduplicatesNonRetainedBinaryBuildOutput()
+    {
+        Operator inner = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(
+                        row(1L, "alpha"),
+                        row(2L, "beta"),
+                        row(3L, "alpha"),
+                        row(4L, "beta")))
+        {
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return false;
+            }
+        };
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(
+                                row(1L),
+                                row(3L),
+                                row(4L))),
+                0,
+                inner,
+                0)) {
+            Batch batch = join.next();
+            try {
+                assertThat(batch.borrowMask()).containsExactly(0, 1, 2);
+
+                Vector values = batch.output(2).borrow(Stream.VALUES);
+                assertThat(values).isInstanceOf(DictionaryVector.class);
+                DictionaryVector dictionary = (DictionaryVector) values;
+                assertThat(dictionary.ids()).containsExactly(0, 0, 1);
+                assertThat(dictionary.values()).isInstanceOf(BinaryVector.class);
+
+                BinaryVector base = (BinaryVector) dictionary.values();
+                assertThat(base.length()).isEqualTo(2);
+                assertThat(new String(base.copyBytes(0), UTF_8)).isEqualTo("alpha");
+                assertThat(new String(base.copyBytes(1), UTF_8)).isEqualTo("beta");
+            }
+            finally {
+                batch.close();
+            }
+        }
     }
 
     @Test

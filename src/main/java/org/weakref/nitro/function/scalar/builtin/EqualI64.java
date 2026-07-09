@@ -114,13 +114,13 @@ public final class EqualI64
     @Override
     public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual, Mask.ComparisonOperator.EQUAL);
     }
 
     @Override
     public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
-        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual);
+        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("EqualI64"), EqualI64::compareEqual, Mask.ComparisonOperator.EQUAL);
     }
 
     @Override
