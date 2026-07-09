@@ -284,6 +284,10 @@ public final class NitroParquetScanOperator
         return true;
     }
 
+    private static final boolean DEBUG_ROW_COUNTS = Boolean.getBoolean("nitro.debug.rowcounts");
+    private long debugRawRows;
+    private long debugSurvivors;
+
     /** Decode windows until one yields surviving rows (or input is exhausted). Returns whether rows are available. */
     private boolean ensureWindow()
     {
@@ -295,6 +299,10 @@ public final class NitroParquetScanOperator
             nextRow += windowCount;
             decodeFilterWindow(windowCount);
             windowSurvivorCursor = 0;
+            if (DEBUG_ROW_COUNTS) {
+                debugRawRows += windowCount;
+                debugSurvivors += windowSurvivorCount;
+            }
             if (windowSurvivorCount > 0) {
                 return true;
             }
@@ -1080,6 +1088,9 @@ public final class NitroParquetScanOperator
             return;
         }
         closed = true;
+        if (DEBUG_ROW_COUNTS && hasFilters) {
+            System.err.println("[rowcounts] " + columnNames + " raw=" + debugRawRows + " survivors=" + debugSurvivors);
+        }
         closeCurrentBatch();
         for (ColumnReader reader : readers) {
             reader.close();
